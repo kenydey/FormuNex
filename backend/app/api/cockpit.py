@@ -69,6 +69,33 @@ def conformal_intervals(body: ConformalIn) -> dict[str, Any]:
     return {"metric": body.metric, "calibration": cal, "intervals": intervals, "monitor": mon}
 
 
+class ConformalFromLabIn(BaseModel):
+    metric: str = Field(min_length=1, max_length=80)
+    doe_plan_id: str | None = None
+    project_id: str | None = None
+    alpha: float = Field(default=0.1, gt=0, lt=1)
+    normalized: bool = False
+    window: int = Field(default=20, ge=5, le=500)
+    predict: list[PredictIn] = Field(default_factory=list, max_length=1000)
+
+
+@router.post("/conformal/from-lab")
+def conformal_from_lab(body: ConformalFromLabIn) -> dict[str, Any]:
+    """Conformal intervals calibrated on lab tasks dispatched with predictions and their reviewed results."""
+    from ..services.lab.candidates import conformal_pairs
+
+    with _session() as session:
+        pairs = conformal_pairs(session, body.metric, doe_plan_id=body.doe_plan_id, project_id=body.project_id)
+    if not pairs:
+        raise HTTPException(status_code=422, detail="没有带预测值且已复核的实验数据")
+    if body.normalized:
+        pairs = [p for p in pairs if p.get("sigma")]
+    out = conformal_intervals(ConformalIn(metric=body.metric, pairs=[PairIn(**p) for p in pairs], alpha=body.alpha,
+                                          normalized=body.normalized, window=body.window, predict=body.predict))
+    out["source"] = {"pairs": len(pairs), "doe_plan_id": body.doe_plan_id, "project_id": body.project_id}
+    return out
+
+
 class ObjectiveIn(BaseModel):
     metric: str
     direction: Literal["maximize", "minimize", "match_target"] = "maximize"

@@ -626,3 +626,15 @@ def audit_log(entity_type: str | None = None, entity_id: str | None = None, limi
                 "records": [{"seq": r.seq, "ts": r.ts.isoformat(), "actor": r.actor, "action": r.action,
                              "entity_type": r.entity_type, "entity_id": r.entity_id, "detail": r.detail,
                              "hash": r.hash} for r in rows]}
+
+
+@router.get("/revisions/{revision_id}/property-candidates")
+def property_candidates(revision_id: str) -> dict[str, Any]:
+    """SDS section 9 values from the winning experiment's reviewed measurements (pass them as ``sds_properties``)."""
+    from ..services.lab.candidates import sds_property_candidates
+
+    with _session() as session:
+        try:
+            return sds_property_candidates(session, revision_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="产品修订版不存在") from None

@@ -114,6 +114,60 @@ class ElnLinkRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class MeasurementAmendmentRow(Base):
+    """A change to a recorded measurement (alembic 0061): the original value is never lost.
+
+    Amending a reviewed value sends it back to review; every amendment is also in the audit chain.
+    """
+
+    __tablename__ = "measurement_amendments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    measurement_id: Mapped[str] = mapped_column(ForeignKey("measurements.id", ondelete="CASCADE"), index=True)
+    field: Mapped[str] = mapped_column(String(32))  # value | unit | method_id | instrument_id | note
+    old_value: Mapped[str] = mapped_column(String(200), default="")
+    new_value: Mapped[str] = mapped_column(String(200), default="")
+    reason: Mapped[str] = mapped_column(Text)
+    amended_by: Mapped[str] = mapped_column(String(36))
+    amended_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class MeasurementPickRow(Base):
+    """Manual choice of which reviewed measurement represents a test point (alembic 0061).
+
+    Repeated measurements of one metric on one experiment are all kept; the value
+    used downstream follows ``lab_value_strategy`` (latest / mean) unless a person
+    picked one here.
+    """
+
+    __tablename__ = "measurement_picks"
+    __table_args__ = (UniqueConstraint("experiment_id", "metric", name="uq_measurement_pick"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    experiment_id: Mapped[int] = mapped_column(Integer, index=True)
+    metric: Mapped[str] = mapped_column(String(80))
+    measurement_id: Mapped[str] = mapped_column(ForeignKey("measurements.id", ondelete="CASCADE"))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    picked_by: Mapped[str] = mapped_column(String(36))
+    picked_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class ElnSyncConflictRow(Base):
+    """A record changed on both sides since the last sync (alembic 0061): queued for a person."""
+
+    __tablename__ = "eln_sync_conflicts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    link_id: Mapped[str] = mapped_column(ForeignKey("eln_links.id", ondelete="CASCADE"), index=True)
+    local_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    remote_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)  # open | resolved
+    resolution: Mapped[str] = mapped_column(String(16), default="")  # keep_local | take_remote
+    resolved_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 # Columns 0059 adds to the existing ``measurements`` table; mirrored on
 # ``MeasurementRow`` in models.py and soft-added for unmigrated legacy DBs.
 MEASUREMENT_LAB_COLUMNS: dict[str, str] = {

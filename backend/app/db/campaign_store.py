@@ -1107,10 +1107,9 @@ def get_campaign_store(settings: Settings | None = None) -> CampaignStoreInterfa
         _store = SqliteCampaignStore(factory)
         return _store
 
-    if s.environment == "production":
-        logger.warning(
-            "SqliteCampaignStore is deprecated for production; set FORMUNEX_CAMPAIGN_BACKEND=datalab"
-        )
+    # native (default) / sqlite: FormuNex's own database is the system of record (方案 v1.1 §5.3.1).
+    if backend not in ("native", "sqlite"):
+        logger.warning("Unknown campaign_backend %r; using the native store", backend)
     _store = SqliteCampaignStore(factory)
     return _store
 

@@ -38,11 +38,11 @@ def test_wiki_grayscale_product_defaults_on():
 
 
 def test_datalab_soft_degrade_defaults():
-    """Top-5″ #2: Field defaults are auto + REQUIRED=false (conftest may override env)."""
+    """Top-5″ #2 kept REQUIRED=false; FormuNex M7 made the native store the default (Datalab is opt-in)."""
     fields = Settings.model_fields
     assert fields["datalab_required"].default is False
-    assert fields["campaign_backend"].default == "auto"
-    assert fields["experiment_backend"].default == "auto"
+    assert fields["campaign_backend"].default == "native"
+    assert fields["experiment_backend"].default == "native"
 
 
 def test_kb_search_deny_flag_registered():

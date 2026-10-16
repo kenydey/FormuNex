@@ -96,9 +96,11 @@ services:
       FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
       # The nginx in the frontend container is the one proxy in front of the API: rate-limit per real client, not per proxy.
       FORMUNEX_TRUSTED_PROXY_HOPS: ${FORMUNEX_TRUSTED_PROXY_HOPS:-1}
-      FORMUNEX_CAMPAIGN_BACKEND: datalab
-      FORMUNEX_EXPERIMENT_BACKEND: datalab
-      FORMUNEX_DATALAB_REQUIRED: "true"
+      # FormuNex M7: experiments live in FormuNex's own database (native). Datalab is opt-in through
+      # docker-compose.eln.yml, which sets datalab + REQUIRED=true; external ELNs otherwise sync via connectors.
+      FORMUNEX_CAMPAIGN_BACKEND: ${FORMUNEX_CAMPAIGN_BACKEND:-native}
+      FORMUNEX_EXPERIMENT_BACKEND: ${FORMUNEX_EXPERIMENT_BACKEND:-native}
+      FORMUNEX_DATALAB_REQUIRED: ${FORMUNEX_DATALAB_REQUIRED:-false}
       FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
       # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
       # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。
@@ -146,9 +148,11 @@ services:
       FORMUNEX_CELERY_EAGER: "false"
       FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
       FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
-      FORMUNEX_CAMPAIGN_BACKEND: datalab
-      FORMUNEX_EXPERIMENT_BACKEND: datalab
-      FORMUNEX_DATALAB_REQUIRED: "true"
+      # FormuNex M7: experiments live in FormuNex's own database (native). Datalab is opt-in through
+      # docker-compose.eln.yml, which sets datalab + REQUIRED=true; external ELNs otherwise sync via connectors.
+      FORMUNEX_CAMPAIGN_BACKEND: ${FORMUNEX_CAMPAIGN_BACKEND:-native}
+      FORMUNEX_EXPERIMENT_BACKEND: ${FORMUNEX_EXPERIMENT_BACKEND:-native}
+      FORMUNEX_DATALAB_REQUIRED: ${FORMUNEX_DATALAB_REQUIRED:-false}
       FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
       # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
       # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。
@@ -228,9 +232,11 @@ services:
       FORMUNEX_CELERY_EAGER: "false"
       FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
       FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
-      FORMUNEX_CAMPAIGN_BACKEND: datalab
-      FORMUNEX_EXPERIMENT_BACKEND: datalab
-      FORMUNEX_DATALAB_REQUIRED: "true"
+      # FormuNex M7: experiments live in FormuNex's own database (native). Datalab is opt-in through
+      # docker-compose.eln.yml, which sets datalab + REQUIRED=true; external ELNs otherwise sync via connectors.
+      FORMUNEX_CAMPAIGN_BACKEND: ${FORMUNEX_CAMPAIGN_BACKEND:-native}
+      FORMUNEX_EXPERIMENT_BACKEND: ${FORMUNEX_EXPERIMENT_BACKEND:-native}
+      FORMUNEX_DATALAB_REQUIRED: ${FORMUNEX_DATALAB_REQUIRED:-false}
       FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
       # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
       # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。

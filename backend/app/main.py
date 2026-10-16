@@ -37,6 +37,7 @@ from .api import pageindex as pageindex_router
 from .api import cockpit as cockpit_router
 from .api import doe_designs as doe_designs_router
 from .api import identity as identity_router
+from .api import lab as lab_router
 from .api import plm as plm_router
 from .api import ops as ops_router
 from .api import session as session_router
@@ -304,6 +305,7 @@ app.include_router(plm_router.router, prefix="/api")
 app.include_router(identity_router.router, prefix="/api")
 app.include_router(doe_designs_router.router, prefix="/api")
 app.include_router(cockpit_router.router, prefix="/api")
+app.include_router(lab_router.router, prefix="/api")
 app.include_router(embedding_models_router.router, prefix="/api")
 app.include_router(wiki_router.router, prefix="/api")
 app.include_router(session_router.router)

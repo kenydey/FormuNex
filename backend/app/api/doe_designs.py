@@ -132,7 +132,10 @@ def _plan(design: str, factors: list[dict[str, Any]], runs: list[dict[str, Any]]
                 half = (f.high - f.low) / 2 or 1.0
                 coded[f.name] = round((float(natural[f.name]) - (f.low + f.high) / 2) / half, 6)
         out_runs.append(DOERun(run_id=i, coded=coded, natural=natural))
-    plan = DOEPlan(design=design, factors=fs, runs=out_runs, notes="\n".join(notes))
+    import uuid
+
+    # The id is assigned here (not by the store) so the response can name the plan for lab-task dispatch (M7).
+    plan = DOEPlan(design=design, factors=fs, runs=out_runs, notes="\n".join(notes), plan_id=uuid.uuid4().hex)
     _persist_doe_plan(plan, project_id=project_id)
     return plan.model_dump()
 

@@ -65,6 +65,7 @@ def test_every_credential_like_settings_field_is_either_settable_or_deliberately
         "surechembl_base_url": "public endpoint, no credential is sent to it",
         "auth_jwt_secret": "session signing key: deployment secret, rotating it signs every user out",
         "plm_publish_webhook_secret": "set with the publish connector (admin.connectors) in the deployment env",
+        "lab_elabftw_api_key": "eLabFTW connector key: set in the deployment env with FORMUNEX_LAB_ELABFTW_URL",
     }
     pattern = re.compile(r"(api_key|_secret|secret_key|password|mailto|_token$|consumer_)", re.I)
     missing = sorted(

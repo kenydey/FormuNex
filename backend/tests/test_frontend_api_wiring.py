@@ -52,6 +52,11 @@ _DOE_LAB = (
     "Pareto / 设为定型 panels arrive with the Ant Design frontend rewrite (plan §3.4, F3)"
 )
 
+_LAB = (
+    "lab execution (FormuNex M7): the task board, RevoGrid batch entry, review queue and ELN screens arrive with "
+    "the Ant Design frontend rewrite (plan §3.4, F3)"
+)
+
 # Documented backend routes the frontend does not call, and why that is fine.
 API_ONLY_ROUTES: dict[str, str] = {
     "/api/artifacts/versions/{}": "version metadata; screens read versions through the lineage listing and the diff",
@@ -111,6 +116,33 @@ API_ONLY_ROUTES: dict[str, str] = {
     "/api/cockpit/conformal": _DOE_LAB,
     "/api/cockpit/pareto": _DOE_LAB,
     "/api/cockpit/winning": _DOE_LAB,
+    "/api/lab/methods": _LAB,
+    "/api/lab/methods/seed": _LAB,
+    "/api/lab/methods/{}": _LAB,
+    "/api/lab/instruments": _LAB,
+    "/api/lab/instruments/{}": _LAB,
+    "/api/lab/tasks/dispatch": _LAB,
+    "/api/lab/tasks": _LAB,
+    "/api/lab/tasks/{}": _LAB,
+    "/api/lab/tasks/{}/claim": _LAB,
+    "/api/lab/tasks/{}/submit": _LAB,
+    "/api/lab/tasks/{}/cancel": _LAB,
+    "/api/lab/samples/{}": _LAB,
+    "/api/lab/tasks/{}/measurements": _LAB,
+    "/api/lab/parsers": _LAB,
+    "/api/lab/measurements/import": _LAB,
+    "/api/lab/review-queue": _LAB,
+    "/api/lab/measurements/{}/review": _LAB,
+    "/api/lab/measurements/{}/amend": _LAB,
+    "/api/lab/measurements/{}/pick": _LAB,
+    "/api/lab/measurements/{}/history": _LAB,
+    "/api/lab/eln/connectors": _LAB,
+    "/api/lab/eln/{}/push": _LAB,
+    "/api/lab/eln/{}/pull": _LAB,
+    "/api/lab/eln/conflicts": _LAB,
+    "/api/lab/eln/conflicts/{}/resolve": _LAB,
+    "/api/cockpit/conformal/from-lab": _DOE_LAB,
+    "/api/plm/revisions/{}/property-candidates": _LAB,
     "/api/kb/sources/{}/toc-tree": _PAGEINDEX,
     "/api/kb/sources/{}/toc-tree/rebuild": _PAGEINDEX,
     "/api/kb/golden-questions": "lists the curated golden retrieval set; the quality screen only runs it (/api/kb/golden-eval/run)",

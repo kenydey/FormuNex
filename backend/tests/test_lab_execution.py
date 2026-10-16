@@ -1,0 +1,407 @@
+"""M7: lab execution — methods, instruments, tasks from DOE plans, entry checks, review, amendments,
+value picks, instrument files, SDS / conformal feeds, eLabFTW sync and conflicts, Datalab migration."""
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from datetime import datetime, timedelta
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import get_settings
+from app.services.lab import parsers
+from app.services.lab.methods import LabError
+
+PW = "Fx-Lab-2026-ok"
+USERS = {"tech": ["lab_technician"], "tech2": ["lab_technician"], "qa": ["quality"], "lead": ["project_lead"],
+         "rd": ["rd_engineer"]}
+
+
+@pytest.fixture()
+def lab(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORMUNEX_DB_URL", f"sqlite:///{tmp_path / 'lab.db'}")
+    monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "false")
+    monkeypatch.setenv("FORMUNEX_AUTH_JWT_SECRET", "lab-secret-" + "z" * 40)
+    monkeypatch.setenv("FORMUNEX_PLM_STORAGE_DIR", str(tmp_path / "files"))
+    get_settings.cache_clear()
+    from app.db.database import default_session_factory
+    from app.services.identity import accounts
+    from app.services.identity.rbac import sync_builtin_roles
+
+    with default_session_factory()() as s:
+        sync_builtin_roles(s)
+        s.flush()
+        ids = {n: accounts.create_user(s, username=n, password=PW, roles=r).id for n, r in USERS.items()}
+        s.commit()
+    from app.main import app
+
+    c = TestClient(app)
+    h = {n: {"Authorization": "Bearer " + c.post("/api/identity/login", json={"username": n, "password": PW}).json()[
+        "access_token"]} for n in USERS}
+    assert c.post("/api/lab/methods/seed", headers=h["qa"]).json()["added"] >= 15
+    yield {"c": c, "h": h, "ids": ids}
+    get_settings.cache_clear()
+
+
+def _plan(c, factors=2):
+    body = {"factors": [{"name": f"F{i}", "levels": [10 * i, 20 * i]} for i in range(1, factors + 1)], "persist": True}
+    r = c.post("/api/doe/designs/orthogonal", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()["plan"]["plan_id"]
+
+
+def _dispatch(lab, plan_id, metrics=("density_g_cm3", "salt_spray_hours"), predictions=None):
+    r = lab["c"].post("/api/lab/tasks/dispatch", headers=lab["h"]["lead"], json={
+        "doe_plan_id": plan_id, "metrics": list(metrics), "domain": "anticorrosion_coating",
+        "predictions": predictions or {}})
+    assert r.status_code == 201, r.text
+    return r.json()["created"]
+
+
+def _record(lab, who, task_id, *entries):
+    return lab["c"].post(f"/api/lab/tasks/{task_id}/measurements", headers=lab["h"][who],
+                         json={"measurements": list(entries)})
+
+
+DENSITY = {"metric": "density_g_cm3", "value": 1.347, "method_code": "GB/T 6750"}
+SALT = {"metric": "salt_spray_hours", "value": 480, "method_code": "GB/T 10125"}
+
+
+# --------------------------------------------------------------------------- methods / tasks
+
+
+def test_method_library_and_permissions(lab):
+    c, h = lab["c"], lab["h"]
+    codes = {m["code"] for m in c.get("/api/lab/methods").json()}
+    assert {"GB/T 10125", "GB/T 9286", "GB/T 6750", "GB/T 261"} <= codes
+    assert c.post("/api/lab/methods/seed", headers=h["qa"]).json()["added"] == 0  # idempotent
+    body = {"code": "Q/FX 001", "name_zh": "企业标准 耐酸性", "metric": "acid_resistance_h", "unit": "h",
+            "valid_min": 0, "valid_max": 2000}
+    assert c.post("/api/lab/methods", headers=h["tech"], json=body).status_code == 403
+    assert c.post("/api/lab/methods", headers=h["qa"], json=body).status_code == 201
+    assert c.post("/api/lab/methods", headers=h["qa"], json=body).status_code == 422
+
+
+def test_dispatch_is_one_task_per_run_and_idempotent(lab):
+    c = lab["c"]
+    plan_id = _plan(c)
+    tasks = _dispatch(lab, plan_id)
+    assert len(tasks) == 4 and {t["run_index"] for t in tasks} == {1, 2, 3, 4}
+    t = tasks[0]
+    assert re.fullmatch(r"LT-\d{8}-\d{4}", t["task_no"]) and t["sample_no"] == t["task_no"] + "-S1"
+    assert t["status"] == "open" and t["experiment_id"] and set(t["factors"]) == {"F1", "F2"}
+    again = c.post("/api/lab/tasks/dispatch", headers=lab["h"]["lead"], json={
+        "doe_plan_id": plan_id, "metrics": ["density_g_cm3"], "domain": "anticorrosion_coating"}).json()
+    assert again["created"] == [] and len(again["skipped"]) == 4
+    assert c.post("/api/lab/tasks/dispatch", headers=lab["h"]["tech"], json={
+        "doe_plan_id": plan_id, "metrics": ["x"], "domain": "anticorrosion_coating"}).status_code == 403
+    scanned = c.get(f"/api/lab/samples/{t['sample_no']}").json()
+    assert scanned["task"]["id"] == t["id"]
+
+
+# --------------------------------------------------------------------------- entry checks
+
+
+def test_entry_validation_rounding_and_ownership(lab):
+    c, h = lab["c"], lab["h"]
+    task = _dispatch(lab, _plan(c))[0]
+    r = _record(lab, "tech", task["id"], DENSITY)
+    assert r.status_code == 201, r.text
+    m = r.json()["measurements"][0]
+    assert m["value"] == 1.35 and "GB/T 8170" in m["note"] and m["unit"] == "g/cm³" and m["operator"] == "tech"
+    assert m["review_status"] == "unreviewed"
+    assert c.get(f"/api/lab/tasks/{task['id']}").json()["status"] == "in_progress"  # claimed on first entry
+    bad = [({**DENSITY, "unit": "kg/m³"}, "单位"), ({**DENSITY, "value": 9.0}, "有效范围"),
+           ({**DENSITY, "metric": "ph"}, "测定的是"), ({**DENSITY, "method_code": "GB/T 0000"}, "未知检测方法")]
+    for entry, msg in bad:
+        r = _record(lab, "tech", task["id"], entry)
+        assert r.status_code == 422 and msg in r.json()["detail"], (entry, r.text)
+    assert _record(lab, "tech2", task["id"], DENSITY).status_code == 403  # someone else's task
+
+
+def test_instrument_calibration_blocks_or_flags(lab, monkeypatch):
+    c, h = lab["c"], lab["h"]
+    task = _dispatch(lab, _plan(c))[0]
+    past = (datetime.now() - timedelta(days=3)).isoformat()
+    instr = c.post("/api/lab/instruments", headers=h["qa"], json={"asset_no": "BZP-01", "name": "比重瓶",
+                                                                   "calibration_due": past}).json()
+    assert instr["calibration_state"] == "overdue"
+    r = _record(lab, "tech", task["id"], {**DENSITY, "instrument_id": instr["id"]})
+    assert r.status_code == 422 and "校准" in r.json()["detail"]
+    monkeypatch.setenv("FORMUNEX_LAB_BLOCK_UNCALIBRATED", "false")
+    get_settings.cache_clear()
+    r = _record(lab, "tech", task["id"], {**DENSITY, "instrument_id": instr["id"]})
+    assert r.status_code == 201 and any("过期" in w for w in r.json()["warnings"])
+
+
+def test_outliers_are_flagged_within_the_plan(lab):
+    c = lab["c"]
+    tasks = _dispatch(lab, _plan(c, factors=4), metrics=["density_g_cm3"])  # L8: eight tasks
+    for t, v in zip(tasks[:6], [1.30, 1.31, 1.32, 1.31, 1.30, 1.32], strict=True):
+        assert not _record(lab, "tech", t["id"], {**DENSITY, "value": v}).json()["warnings"]
+    r = _record(lab, "tech", tasks[6]["id"], {**DENSITY, "value": 1.95}).json()
+    assert any("疑似异常值" in w for w in r["warnings"]) and "疑似异常值" in r["measurements"][0]["note"]
+
+
+# --------------------------------------------------------------------------- review / amend / pick
+
+
+def test_review_flow_mirror_amendment_and_picks(lab, monkeypatch):
+    c, h = lab["c"], lab["h"]
+    task = _dispatch(lab, _plan(c))[0]
+    d = _record(lab, "tech", task["id"], DENSITY).json()["measurements"][0]
+    r = c.post(f"/api/lab/tasks/{task['id']}/submit", headers=h["tech"])
+    assert r.status_code == 422 and "salt_spray_hours" in r.json()["detail"]
+    s = _record(lab, "tech", task["id"], SALT).json()["measurements"][0]
+    assert c.post(f"/api/lab/tasks/{task['id']}/submit", headers=h["tech"]).json()["status"] == "pending_review"
+    assert len(c.get("/api/lab/review-queue").json()) == 2
+
+    # The operator cannot review their own values; the technician role has no review permission anyway.
+    assert c.post(f"/api/lab/measurements/{d['id']}/review", headers=h["tech"], json={"decision": "accept"}).status_code == 403
+    assert c.post(f"/api/lab/measurements/{d['id']}/review", headers=h["qa"],
+                  json={"decision": "reject"}).status_code == 422  # reason required
+    assert c.post(f"/api/lab/measurements/{d['id']}/review", headers=h["qa"], json={"decision": "accept"}).status_code == 200
+    detail = c.get(f"/api/lab/tasks/{task['id']}").json()
+    assert detail["measured"] == {"density_g_cm3": 1.35} and detail["status"] == "pending_review"
+    c.post(f"/api/lab/measurements/{s['id']}/review", headers=h["qa"], json={"decision": "accept"})
+    detail = c.get(f"/api/lab/tasks/{task['id']}").json()
+    assert detail["status"] == "done" and detail["measured"]["salt_spray_hours"] == 480
+
+    # Amending a reviewed value keeps the original and sends it back to review.
+    r = c.post(f"/api/lab/measurements/{d['id']}/amend", headers=h["tech"], json={"value": 1.36, "reason": "抄写错误"})
+    assert r.status_code == 200 and r.json()["review_status"] == "unreviewed" and r.json()["value"] == 1.36
+    hist = c.get(f"/api/lab/measurements/{d['id']}/history").json()
+    assert hist == [{**hist[0], "field": "value", "old": "1.35", "new": "1.36", "reason": "抄写错误"}]
+    assert "density_g_cm3" not in c.get(f"/api/lab/tasks/{task['id']}").json()["measured"]
+    assert c.post(f"/api/lab/measurements/{d['id']}/amend", headers=h["tech2"],
+                  json={"value": 1.4, "reason": "x"}).status_code == 403
+
+    # Repeated measurements: all kept; latest by default, mean by setting, a manual pick wins.
+    c.post(f"/api/lab/measurements/{d['id']}/review", headers=h["qa"], json={"decision": "accept"})
+    assert c.post(f"/api/lab/tasks/{task['id']}/measurements", headers=h["tech"],
+                  json={"measurements": [DENSITY]}).status_code == 422  # task is done
+    from app.db.database import default_session_factory
+    from app.db.models_lab import LabTaskRow
+
+    with default_session_factory()() as sess:
+        sess.get(LabTaskRow, task["id"]).status = "in_progress"
+        sess.commit()
+    d2 = _record(lab, "tech", task["id"], {**DENSITY, "value": 1.40}).json()["measurements"][0]
+    c.post(f"/api/lab/measurements/{d2['id']}/review", headers=h["qa"], json={"decision": "accept"})
+    assert c.get(f"/api/lab/tasks/{task['id']}").json()["measured"]["density_g_cm3"] == 1.40
+    monkeypatch.setenv("FORMUNEX_LAB_VALUE_STRATEGY", "mean")
+    get_settings.cache_clear()
+    out = c.post(f"/api/lab/measurements/{d['id']}/pick", headers=h["qa"], json={"reason": "第二次读数气泡"}).json()
+    assert out["values"]["density_g_cm3"]["basis"] == "manual" and out["values"]["density_g_cm3"]["value"] == 1.36
+
+
+def test_rejection_returns_the_task_to_the_operator(lab):
+    c, h = lab["c"], lab["h"]
+    task = _dispatch(lab, _plan(c), metrics=["density_g_cm3"])[0]
+    d = _record(lab, "tech", task["id"], DENSITY).json()["measurements"][0]
+    c.post(f"/api/lab/tasks/{task['id']}/submit", headers=h["tech"])
+    r = c.post(f"/api/lab/measurements/{d['id']}/review", headers=h["qa"], json={"decision": "reject", "reason": "比重瓶未恒温"})
+    assert r.json()["review_status"] == "rejected"
+    assert c.get(f"/api/lab/tasks/{task['id']}").json()["status"] == "in_progress"
+    assert _record(lab, "tech", task["id"], DENSITY).status_code == 201
+
+
+# --------------------------------------------------------------------------- instrument files
+
+
+def test_parsers_layouts_encodings_and_aggregation():
+    csv_gbk = "Sample,L*,a*,b*,dE\nS-1,90.1,0.2,1.1,0.5\nS-1,90.3,0.2,1.3,0.7\nS-2,88,0.1,2,1.2\n".encode("gb18030")
+    readings, warnings = parsers.parse(csv_gbk, parsers.BUILTIN_TEMPLATES["colorimeter_lab"])
+    by = {(r.sample_no, r.metric): r for r in readings}
+    assert by[("S-1", "color_l")].value == pytest.approx(90.2) and by[("S-1", "color_l")].readings == 2
+    assert by[("S-1", "delta_e")].value == pytest.approx(0.6) and not warnings
+    long_csv = "sample_no;metric;value;unit\nA;density_g_cm3;1,35;g/cm³\nA;ph;x;\n".encode()
+    readings, warnings = parsers.parse(long_csv, {**parsers.BUILTIN_TEMPLATES["generic_long"], "decimal_comma": True})
+    assert [(r.metric, r.value) for r in readings] == [("density_g_cm3", 1.35)] and warnings
+    with pytest.raises(LabError):
+        parsers.parse(b"foo,bar\n1,2\n", parsers.BUILTIN_TEMPLATES["colorimeter_lab"])
+    from openpyxl import Workbook
+    import io
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Sample ID", "Viscosity (cP)", "Temperature"])
+    ws.append(["V-1", 1200, 25])
+    ws.append(["V-1", 1250, 25])
+    buf = io.BytesIO()
+    wb.save(buf)
+    readings, _w = parsers.parse(buf.getvalue(), parsers.BUILTIN_TEMPLATES["viscometer_rotational"], filename="v.xlsx")
+    assert [(r.sample_no, r.metric, r.value) for r in readings] == [("V-1", "viscosity_mpas", 1250)]
+
+
+def test_instrument_file_import_records_per_sample(lab):
+    c, h = lab["c"], lab["h"]
+    tasks = _dispatch(lab, _plan(c), metrics=["delta_e"])
+    rows = "\n".join(f"{t['sample_no']},90,0.1,1,{0.4 + i / 10}" for i, t in enumerate(tasks[:2]))
+    data = f"Sample,L*,a*,b*,ΔE\n{rows}\nNOPE-S1,1,1,1,1\n".encode("gb18030")
+    r = c.post("/api/lab/measurements/import", headers=h["tech"], files={"file": ("cm.csv", data, "text/csv")},
+               data={"template": "colorimeter_lab", "methods": json.dumps({"delta_e": "GB/T 11186.3"})})
+    assert r.status_code == 201, r.text
+    out = r.json()
+    recorded = {m["metric"] for m in out["measurements"]}
+    assert recorded == {"delta_e"} and len(out["measurements"]) == 2  # only metrics given a method are recorded
+    assert any("已跳过 color_a, color_b, color_l" in w for w in out["warnings"])
+    assert any(e["sample_no"] == "NOPE-S1" for e in out["errors"])
+    assert all(m["raw_file_key"] == out["raw_file_key"] for m in out["measurements"])
+
+
+# --------------------------------------------------------------------------- feeds
+
+
+def test_sds_candidates_and_conformal_from_lab(lab):
+    c, h = lab["c"], lab["h"]
+    preds = {i: {"salt_spray_hours": {"predicted": 500 + 10 * i, "sigma": 20}} for i in range(1, 9)}
+    tasks = _dispatch(lab, _plan(c, factors=4), metrics=["salt_spray_hours", "density_g_cm3"], predictions=preds)
+    for i, t in enumerate(tasks, start=1):
+        ms = _record(lab, "tech", t["id"], {**SALT, "value": 500 + 10 * i + (-1) ** i * 8},
+                     DENSITY).json()["measurements"]
+        for m in ms:
+            c.post(f"/api/lab/measurements/{m['id']}/review", headers=h["qa"], json={"decision": "accept"})
+    r = c.post("/api/cockpit/conformal/from-lab", json={"metric": "salt_spray_hours", "doe_plan_id": tasks[0]["doe_plan_id"],
+                                                        "predict": [{"predicted": 600}]})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["source"]["pairs"] == 8 and out["calibration"]["n"] == 8
+    assert c.post("/api/cockpit/conformal/from-lab", json={"metric": "nope"}).status_code == 422
+
+    from app.db.database import default_session_factory
+    from app.db.models import FormulationVersion
+
+    with default_session_factory()() as s:
+        s.add(FormulationVersion(id="fv-lab", lineage_id="l", version=1, domain="coating", name="v",
+                                 created_at=datetime(2026, 10, 1), snapshot={"ingredients": []}))
+        s.commit()
+    pid = c.post("/api/plm/products", json={"code": "FX-LAB", "name_zh": "x"}).json()["id"]
+    win = c.post("/api/cockpit/winning", headers=h["lead"], json={
+        "product_id": pid, "formulation_version_id": "fv-lab", "experiment_id": tasks[0]["experiment_id"]}).json()
+    cand = c.get(f"/api/plm/revisions/{win['revision_id']}/property-candidates").json()
+    dens = cand["sds_properties"]["density_g_cm3"]
+    assert dens["value"] == 1.35 and dens["source"] == "measured" and dens["method"] == "GB/T 6750"
+    assert cand["not_sds_properties"] == ["salt_spray_hours"]
+
+
+# --------------------------------------------------------------------------- ELN
+
+
+class FakeElab:
+    def __init__(self):
+        self.experiments: dict[int, dict] = {}
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "elab-key"
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v2/experiments":
+            eid = len(self.experiments) + 1
+            self.experiments[eid] = {"id": eid, "metadata": "{}", **json.loads(request.content)}
+            return httpx.Response(201, headers={"Location": f"https://elab.local/api/v2/experiments/{eid}"})
+        m = re.fullmatch(r"/api/v2/experiments/(\d+)", path)
+        if m:
+            exp = self.experiments[int(m.group(1))]
+            if request.method == "PATCH":
+                exp.update(json.loads(request.content))
+                return httpx.Response(200, json=exp)
+            return httpx.Response(200, json=exp)
+        if path == "/api/v2/info":
+            return httpx.Response(200, json={"elabftw_version": "5.1"})
+        return httpx.Response(404)
+
+    def fill(self, eid: int, metric: str, value: str) -> None:
+        meta = json.loads(self.experiments[eid]["metadata"])
+        meta["extra_fields"][metric]["value"] = value
+        self.experiments[eid]["metadata"] = json.dumps(meta)
+
+
+def test_elabftw_push_pull_and_conflicts(lab, monkeypatch):
+    from app.services.eln import sync
+    from app.services.eln.connectors.elabftw import ElabftwConnector
+
+    c, h = lab["c"], lab["h"]
+    fake = FakeElab()
+    conn = ElabftwConnector("https://elab.local", "elab-key",
+                            client_factory=lambda: httpx.Client(transport=httpx.MockTransport(fake.handler)))
+    monkeypatch.setattr(sync, "get_connector", lambda name: conn)
+    assert conn.health()["version"] == "5.1"
+    tasks = _dispatch(lab, _plan(c), metrics=["density_g_cm3"])
+    r = c.post("/api/lab/eln/elabftw/push", headers=h["lead"], json={"task_ids": [t["id"] for t in tasks[:2]]}).json()
+    assert len(r["pushed"]) == 2 and r["errors"] == []
+    meta = json.loads(fake.experiments[1]["metadata"])
+    assert meta["extra_fields"]["density_g_cm3"]["description"] == "GB/T 6750"
+    again = c.post("/api/lab/eln/elabftw/push", headers=h["lead"], json={"task_ids": [tasks[0]["id"]]}).json()
+    assert again["skipped"] == [tasks[0]["task_no"]]
+
+    pull = lambda: c.post("/api/lab/eln/elabftw/pull", headers=h["qa"], json={}).json()  # noqa: E731
+    assert pull()["unchanged"] == 2
+    fake.fill(1, "density_g_cm3", "1.33")
+    out = pull()
+    assert out["recorded"] == 1 and out["conflicts"] == 0
+    queue = c.get("/api/lab/review-queue").json()
+    assert queue[0]["operator"] == "elabftw" and queue[0]["external_ref"].startswith("elabftw:1:")
+    assert pull()["unchanged"] == 2  # idempotent
+
+    # Changed on both sides → conflict queue.
+    c.post(f"/api/lab/measurements/{queue[0]['id']}/amend", headers=h["qa"], json={"value": 1.34, "reason": "复测"})
+    fake.fill(1, "density_g_cm3", "1.31")
+    assert pull()["conflicts"] == 1
+    conflicts = c.get("/api/lab/eln/conflicts").json()
+    assert conflicts[0]["local"] == {"density_g_cm3": 1.34} and conflicts[0]["remote"] == {"density_g_cm3": 1.31}
+    r = c.post(f"/api/lab/eln/conflicts/{conflicts[0]['id']}/resolve", headers=h["qa"], json={"resolution": "take_remote"})
+    assert r.json()["status"] == "resolved"
+    assert pull()["unchanged"] == 2 and c.get("/api/lab/eln/conflicts").json() == []
+
+
+def test_datalab_is_read_only_and_migration_moves_records(lab):
+    from app.db.database import default_session_factory
+    from app.db.models import ExperimentRow, MeasurementRow
+    from app.db.models_lab import ElnLinkRow
+    from app.services.eln.connectors.base import ConnectorError
+    from app.services.eln.connectors.datalab import DatalabConnector
+    from app.services.lab.datalab_migration import migrate
+    from app.services.lab.measurements import sync_mirror
+
+    with pytest.raises(ConnectorError):
+        DatalabConnector("http://dl").push_task({})
+    items = {"fm_1": {"blocks_obj": {"formumind_training": {"blockype": "x", "data": {
+        "domain": "anticorrosion_coating", "project_id": "p1", "factors": {"T": 150},
+        "measured": {"salt_spray_hours": 720, "note": "text"}, "label": "旧实验"}}}}}
+    with default_session_factory()() as s:
+        s.add_all([ExperimentRow(item_id="fm_1", domain="anticorrosion_coating", project_id="", factors={}, measured={}),
+                   ExperimentRow(item_id="fm_gone", domain="anticorrosion_coating", project_id="", factors={},
+                                 measured={})])
+        s.commit()
+        dry = migrate(s, items.get, dry_run=True)
+        s.rollback()
+        assert dry["migrated"] == 1 and dry["missing"] == ["fm_gone"] and dry["measurements"] == 1
+        report = migrate(s, items.get)
+        s.commit()
+        row = s.query(ExperimentRow).filter_by(label="旧实验").one()
+        assert row.item_id is None and row.measured == {"salt_spray_hours": 720} and row.factors == {"T": 150}
+        m = s.query(MeasurementRow).filter_by(experiment_id=row.id).one()
+        assert m.review_status == "legacy" and m.external_ref == "datalab:fm_1:salt_spray_hours"
+        assert s.query(ElnLinkRow).filter_by(connector="datalab", local_id=str(row.id)).count() == 1
+        sync_mirror(s, row.id)  # legacy values stay in the mirror the optimiser reads
+        assert row.measured == {"salt_spray_hours": 720}
+        assert migrate(s, items.get)["candidates"] == 1  # only the missing one is left
+        assert report["migrated"] == 1
+
+
+def test_native_backend_is_the_default(monkeypatch):
+    from app.config import Settings
+    from app.db.store import SqlExperimentStore, get_experiment_store, reset_experiment_store
+
+    assert Settings.model_fields["experiment_backend"].default == "native"
+    reset_experiment_store(None)
+    try:
+        store = get_experiment_store(Settings(experiment_backend="native", campaign_backend="native"))
+        assert isinstance(store, SqlExperimentStore)
+    finally:
+        reset_experiment_store(None)
+
+

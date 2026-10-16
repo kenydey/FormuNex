@@ -455,10 +455,9 @@ def get_experiment_store(settings: Settings | None = None) -> ExperimentStore:
             )
             _store = SqlExperimentStore(factory)
     else:
-        if s.environment == "production":
-            logger.warning(
-                "SqlExperimentStore is deprecated for production; set FORMUNEX_EXPERIMENT_BACKEND=datalab"
-            )
+        # native (default) / sqlite: FormuNex's own database is the system of record (方案 v1.1 §5.3.1).
+        if backend not in ("native", "sqlite"):
+            logger.warning("Unknown experiment_backend %r; using the native store", backend)
         _store = SqlExperimentStore(factory)
     return _store
 

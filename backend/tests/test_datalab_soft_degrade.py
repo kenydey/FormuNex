@@ -28,8 +28,9 @@ def test_soft_degrade_product_defaults():
     """Field defaults (ignore conftest sqlite env override)."""
     fields = Settings.model_fields
     assert fields["datalab_required"].default is False
-    assert fields["campaign_backend"].default == "auto"
-    assert fields["experiment_backend"].default == "auto"
+    # FormuNex M7: the native store is the default; Datalab (auto / datalab) is opt-in.
+    assert fields["campaign_backend"].default == "native"
+    assert fields["experiment_backend"].default == "native"
     assert fields["wiki_dossier_auto_patch"].default is False
 
 

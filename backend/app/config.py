@@ -956,6 +956,16 @@ class Settings(BaseSettings):
     plm_company_phone: str = ""
     plm_company_email: str = ""
     plm_emergency_phone: str = ""
+    # Lab execution (方案 §5.3.1, M7).
+    # Which reviewed value represents a repeated measurement downstream: latest | mean (a manual pick overrides).
+    lab_value_strategy: str = "latest"
+    # Refuse measurements from an instrument whose calibration is overdue (False = accept and flag).
+    lab_block_uncalibrated: bool = True
+    # Robust z-score (median / MAD) above which a value is flagged as a possible outlier.
+    lab_anomaly_z: float = 3.5
+    # eLabFTW connector (REST API v2); empty URL = not configured.
+    lab_elabftw_url: str = ""
+    lab_elabftw_api_key: str = ""
     # Release gate (方案 §5.5.10): documents that must exist and be approved, as "type:lang" ("*" = any language).
     plm_release_required_docs: str = "sds:zh-CN,sds:en-US,tds:zh-CN,tds:en-US,label:zh-CN,coa:*"
     # Optional publish webhook (HMAC-SHA256 signed with the secret); empty = delivery ZIP only.
@@ -1063,7 +1073,10 @@ class Settings(BaseSettings):
     # ``auto`` 探测 Datalab，可达则以其为 SSOT；不可达且 ``datalab_required=false``
     # 时回退 sqlite「本地台账」。Docker ELN 栈仍显式 ``datalab`` + REQUIRED=true。
     # 显式 ``sqlite`` 仍主要用于 CI/单测隔离。
-    campaign_backend: str = "auto"  # datalab | auto | sqlite
+    # FormuNex M7 (方案 v1.1 §5.3.1): ``native`` is the default — FormuNex's own database is the system of record
+    # for experiments (``sqlite`` is the older name of the same local store). ``datalab`` / ``auto`` keep Datalab
+    # as an external store for existing installations; new ones sync external ELNs through connectors instead.
+    campaign_backend: str = "native"  # native | datalab | auto | sqlite
     datalab_api_url: str = "http://localhost:5001"
     datalab_api_token: str = ""  # DATALAB-API-KEY header（平台非 TESTING 模式必需）
     datalab_timeout_seconds: float = 30.0
@@ -1073,7 +1086,7 @@ class Settings(BaseSettings):
     datalab_required: bool = False
 
     # Experiment training persistence (Headless ELN) — same auto semantics.
-    experiment_backend: str = "auto"  # datalab | auto | sqlite（sqlite = CI only）
+    experiment_backend: str = "native"  # native | datalab | auto | sqlite
 
     # API security — unset env defers to environment: off in dev/test, on in production.
     api_auth_enabled: bool | None = None
