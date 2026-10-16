@@ -197,6 +197,10 @@ def ingest_document_tx(
                     _sync_source_fts(source_id, rows, settings)
                 except Exception:  # noqa: BLE001
                     pass
+                # PageIndex: ToC tree for stage-2 retrieval (fail-open, after commit).
+                from .pageindex.two_stage import build_tree_on_ingest
+
+                build_tree_on_ingest(source_id)
 
             return IngestTxResult(
                 source_id=source_id, chunk_count=chunk_count, already_existed=False

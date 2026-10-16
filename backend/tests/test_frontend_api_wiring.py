@@ -27,6 +27,11 @@ UNCALLED_WRAPPERS: dict[str, str] = {}
 _AGENT_DRIVEN = "agent-driven: the chat / MCP agent calls it, no screen drives it"
 _OPS = "operations diagnostic (curl / scripts/ monitoring); deliberately no screen"
 
+_PAGEINDEX = (
+    "PageIndex (FormuNex M3): consumed server-side by deep research and embodiment drafts; the Knowledge Hub "
+    "tree / reasoning-trace screen arrives with the Ant Design frontend rewrite (plan §3.4, F2)"
+)
+
 # Documented backend routes the frontend does not call, and why that is fine.
 API_ONLY_ROUTES: dict[str, str] = {
     "/api/artifacts/versions/{}": "version metadata; screens read versions through the lineage listing and the diff",
@@ -42,6 +47,9 @@ API_ONLY_ROUTES: dict[str, str] = {
     "/api/connectors/mcp/call": f"MCP tool-call proxy: {_AGENT_DRIVEN}",
     "/api/formulation-skills": "read server-side by the recommender; the skills screen uses the merged /api/skills catalog",
     "/api/formulation-skills/{}": "read server-side by the recommender; the skills screen uses the merged /api/skills catalog",
+    "/api/kb/pageindex/search": _PAGEINDEX,
+    "/api/kb/sources/{}/toc-tree": _PAGEINDEX,
+    "/api/kb/sources/{}/toc-tree/rebuild": _PAGEINDEX,
     "/api/kb/golden-questions": "lists the curated golden retrieval set; the quality screen only runs it (/api/kb/golden-eval/run)",
     "/api/kb/acquisition-stats": "全文获取质量监控（v2 P0-4）：供运维/评估脚本读取 acquisition 分布，无前端页面",
     "/api/kb/relevance-shadow/stats": _OPS,

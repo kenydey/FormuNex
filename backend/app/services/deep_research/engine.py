@@ -177,6 +177,7 @@ class DeepResearchEngine:
         """RAG：ColBERT search + LLM rerank → grounded synthesis."""
         from .. import colbert_store
 
+        evidence = list(evidence) + self.pageindex_evidence(retrieval_query)
         if evidence:
             colbert_store.index_evidence(evidence)
         hits = colbert_store.search(retrieval_query, k=min(k * 2, max(k, len(evidence) or k)))
@@ -184,6 +185,27 @@ class DeepResearchEngine:
         ranked = rag.llm_rerank(topic, ranked, k=k)
         answer, citations = llm.answer_question(topic, ranked, domain)
         return answer, citations
+
+    def pageindex_evidence(self, query: str, *, project_id: str | None = None) -> list[Evidence]:
+        """Stage-2 PageIndex reads from long KB documents (patents, standards), page-anchored.
+
+        Fail-open: an empty list when PageIndex is off, the KB is empty or anything fails.
+        """
+        if not self._settings.pageindex_enabled:
+            return []
+        try:
+            from ...db.source_store import get_source_store
+            from ..pageindex.two_stage import navigation_evidence, two_stage_retrieve
+
+            result = two_stage_retrieve(query, project_id=project_id)
+            store = get_source_store()
+            titles = {}
+            for d in result.documents:
+                doc = store.get(d.source_id)
+                titles[d.source_id] = (doc.title if doc else "") or d.source_id
+            return navigation_evidence(result.documents, titles=titles)
+        except Exception:  # noqa: BLE001
+            return []
 
     def report_agent(
         self,

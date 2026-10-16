@@ -753,6 +753,16 @@ def _tables_to_markdown(tables: list) -> str:
     return "\n".join(parts)
 
 
+def _drop_toc_tree(source_id: str) -> None:
+    """The source lost its chunks: its PageIndex tree would point at nothing."""
+    try:
+        from ..db.toc_tree_store import get_toc_tree_store
+
+        get_toc_tree_store().delete(source_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def index_source(
     source_id: str, full_text: str, *, embed: bool = True, fail_soft: bool = True,
     tables: list | None = None,
@@ -794,6 +804,7 @@ def index_source(
             record_gate_drop("ingest", "blocked_domain")
             get_chunk_store().replace_for_source(source_id, [])
             _sync_source_fts(source_id, [], settings)
+            _drop_toc_tree(source_id)
             # v17-5: 扣减旧计数
             # v21-fix: 补 bm25_fallback 扣减。
             _bump_kb_coverage_for_rows([], _old_counts)
@@ -812,6 +823,7 @@ def index_source(
         if not rows:
             get_chunk_store().replace_for_source(source_id, [])
             _sync_source_fts(source_id, [], settings)
+            _drop_toc_tree(source_id)
             # v17-5: 扣减旧计数
             # v21-fix: 补 bm25_fallback 扣减。
             _bump_kb_coverage_for_rows([], _old_counts)
@@ -833,6 +845,10 @@ def index_source(
                 pass
         # v16 P2-7: DB 写成功后再 bump 覆盖率（写失败不虚增）。
         _bump_kb_coverage_for_rows(rows, _old_counts)
+        # PageIndex: ToC tree for stage-2 retrieval (fail-open; never blocks indexing).
+        from .pageindex.two_stage import build_tree_on_ingest
+
+        build_tree_on_ingest(source_id, tables)
         # ``kg_link_on_ingest`` is the legacy master switch kept as a compat
         # alias: False still disables linking even if the split flags are on.
         if n and settings.kg_enabled and settings.kg_link_on_ingest and (

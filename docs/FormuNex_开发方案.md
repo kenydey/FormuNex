@@ -816,3 +816,19 @@ deploy/helm/formunex/**（新）
 3. **M3**：`services/pageindex/` 建树 + 两阶段检索 + `test_pageindex_two_stage_rag.py`。
 
 > 注：原提示中要求的 `0051_materials_regulatory_ghs` / `0052_plm_product_releases` / `0053_plm_regulatory_documents` 三个迁移，在本方案中因引入「物质 / 原料两层模型」与 RBAC、审计而拆分为 0051~0058 八个迁移，内容是原三项的超集；v1.1 再增加 `0059_lab_execution`。
+
+---
+
+## 附录 A：实施进度（2026-10-16）
+
+| 里程碑 | 状态 | 交付内容 | 验证 |
+|--------|------|----------|------|
+| **M0 迁仓与品牌** | ✅ 完成 | FormuMind 迁入并更名 FormuNex；`FORMUMIND_*` → `FORMUNEX_*`（`backend/app/env_compat.py` 兼容旧前缀并告警；Datalab 记录标识保持不变）；`docker-compose.yml` 新增 PostgreSQL 并作为主库；历史文档归档至 `docs/archive/formumind/` | 后端全量测试通过；前端 687 项 vitest 通过、tsc 无错误 |
+| **M1 数据底座** | ✅ 完成（服务层） | 迁移 0051~0059（冻结表结构、幂等，自 0050 旧库升级后与模型零漂移）；法规库导入 `backend/scripts/seed_regulatory_db.py`：131,516 种物质、7,986 条分类、373 条 GBZ 2.1 限值；CAS 校验与 Excel 损坏修复（日期 / 日期序列号，共 92 条）；《危险化学品目录》中文分类文本解析（94% 无需复核，其余进复核队列）；RBAC 权限矩阵、argon2id 密码、哈希链审计日志 + 数据库只追加触发器 | 迁移、导入、解析、RBAC、审计专项测试 |
+| **M3 PageIndex** | ✅ 完成（服务层 + API） | `services/pageindex/`：入库即建目录树（标题层级、专利章节/实施例/表题标记、表格 sidecar、交叉引用边，不调用 LLM）；两阶段检索（hybrid_search → 目录树导航，LLM 模式 + 启发式回退，预算控制，可审计 `node_path` / `reasoning_trace`）；挂载深度研究（`pageindex_evidence`）与实施例草稿（配方表 ↔ 性能表关联）；API：`GET /api/kb/sources/{id}/toc-tree`、`POST …/toc-tree/rebuild`、`POST /api/kb/pageindex/search` | 合成长专利评估集（3 篇 / 4 问）：跨页关联覆盖率 第二阶段 4/4，仅第一阶段 3/4 |
+
+**尚未完成、留待后续里程碑的部分：**
+- 认证中间件仍为原 Bearer Token；账号登录 / JWT / 接口级 RBAC 鉴权随 M5（签批）与前端重写一并接入。
+- `ghs_statements` 目前只有中文文本，英文 H/P 语句待补；GB 12268 仅 10 条，全表待补；IECSC 名录未导入（`iecsc_listed` 保持未知）。
+- PageIndex 节点摘要（`summaries_status`）的延迟生成任务、Chat「深度模式」开关与知识中心目录树界面随前端重写（F2）交付。
+- 真实长专利标注集（方案 §5.1.1 的 30 篇）尚需收集；当前评估集为合成数据，仅证明机制可用，不代表真实准确率。

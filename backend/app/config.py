@@ -936,6 +936,15 @@ class Settings(BaseSettings):
     kb_recommend_top_k: int = 4
     # 探针 ↔ 推荐 ↔ 会话 BM25FAISSStore 共享：BM25 权重 α（默认 0.85）。
     kb_hybrid_alpha: float = 0.85
+    # PageIndex（方案 §5.1.1）：入库时从标题层级 / 表题 / 实施例标记构建文档目录树
+    # （不调用 LLM），检索第二阶段在长文档上沿目录树做跨章节寻址。
+    pageindex_enabled: bool = True
+    pageindex_build_on_ingest: bool = True
+    # 第二阶段只对至少这么多页的文档自动触发（显式 deep=True 时不受限）。
+    pageindex_min_pages: int = 20
+    # 每篇文档的寻址预算：最多跳数，以及交给 LLM 的节点正文总字符数（约 16k token）。
+    pageindex_max_hops: int = 6
+    pageindex_max_input_chars: int = 48000
     # S-1: 跨语言查询扩展。中文查询自动翻译为英文并行检索，结果融合。
     # 成本约 ¥0.00031/中文查询，失败自动降级。默认开启（2026-10-11 Cheng 批准）。
     crosslingual_expand_enabled: bool = True

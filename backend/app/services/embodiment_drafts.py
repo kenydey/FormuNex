@@ -817,8 +817,22 @@ def extract_embodiment_draft(
         },
         "ingredients_detail": ingredients,
         "chemistry_count": len(ingredients),
+        # PageIndex: recipe tables paired with the performance tables that report on
+        # them, even pages apart (review aid; empty when the source has no tree).
+        "pageindex_links": _pageindex_table_links(source_id),
     }
     return {"ok": True, "draft": draft, "eligibility": elig}
+
+
+def _pageindex_table_links(source_id: str) -> list[dict[str, Any]]:
+    try:
+        from ..db.toc_tree_store import get_toc_tree_store
+        from .pageindex.table_links import link_recipe_performance
+
+        row = get_toc_tree_store().get(source_id)
+        return link_recipe_performance(row.tree) if row is not None else []
+    except Exception:  # noqa: BLE001 - optional enrichment never blocks a draft
+        return []
 
 
 # ── KG helpers (Slice D) ──────────────────────────────────────────────

@@ -51,6 +51,13 @@ def delete_kb_source(source_id: str) -> dict[str, Any]:
             _sync_source_fts(sid, [], get_settings())
         except Exception:  # noqa: BLE001
             pass
+        # PageIndex tree points at the deleted chunks.
+        try:
+            from ..db.toc_tree_store import get_toc_tree_store
+
+            get_toc_tree_store().delete(sid)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001
         logger.exception("kb delete: chunks failed for %s: %s", sid, exc)
 

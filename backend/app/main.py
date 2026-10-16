@@ -33,6 +33,7 @@ from .api import chemistry as chemistry_router
 from .api import doe, experiments, formulations, optimize, research, tasks
 from .api import search as search_router, ingest as ingest_router, chat as chat_router, settings as settings_router
 from .api import qc as qc_router
+from .api import pageindex as pageindex_router
 from .api import ops as ops_router
 from .api import session as session_router
 from .api import ip_analysis as ip_router
@@ -294,6 +295,7 @@ app.include_router(search_router.router, prefix="/api")
 app.include_router(ingest_router.router, prefix="/api")
 app.include_router(chat_router.router, prefix="/api")
 app.include_router(kb_router.router, prefix="/api")
+app.include_router(pageindex_router.router, prefix="/api")
 app.include_router(embedding_models_router.router, prefix="/api")
 app.include_router(wiki_router.router, prefix="/api")
 app.include_router(session_router.router)
