@@ -3,7 +3,9 @@
 > AI 驱动的产品研发与生命周期管理平台（R&D + PLM）
 > 融合 FormuMind（AI 研发寻优）与 MSDS-Generator（化学品安全合规与文档生成）
 >
-> 版本：v1.0（方案评审稿） · 日期：2026-10-16 · 状态：待评审，评审通过后进入 Phase 1 编码
+> 版本：v1.1（方案评审稿） · 日期：2026-10-16 · 状态：待评审，评审通过后进入 Phase 1 编码
+>
+> v1.1 变更：ELN 方案由「Datalab 为实验数据唯一真源」调整为「FormuNex 内置实验执行模块为真源 + 外部 ELN 连接器（eLabFTW 首选、Datalab 保留）」，详见 §5.3.1。
 
 ---
 
@@ -14,7 +16,7 @@
 | 1 | 仓库策略 | 以 **FormuMind 为底座**迁入 FormuNex 仓库；MSDS-Generator 的 `src/` 引擎重构为 `backend/app/services/plm/`，**丢弃 PySide6 GUI** |
 | 2 | 前端交付形态 | **React Web + Tauri 2**：同一套前端代码同时交付浏览器版与 Windows / macOS 桌面版 |
 | 3 | 部署模式 | **双模**：单机桌面 + 服务器多人协作；桌面端可切换连接远程服务器 |
-| 4 | 重依赖 | **所有版本都要求完整组件**（PostgreSQL / Redis / Celery / Neo4j / Datalab ELN）；桌面版依赖 **Docker Desktop** |
+| 4 | 重依赖 | **所有版本都要求完整组件**（PostgreSQL / Redis / Celery / Neo4j）；桌面版依赖 **Docker Desktop** |
 | 5 | 法规范围 | **仅中国国标**：GB 30000.2~29、GB/T 16483、GB/T 17519、GB 15258、GB 12268 / GB 6944、GBZ 2.1、IECSC、《危险化学品目录》 |
 | 6 | 文档格式 | **PDF + Word**，模板可配置（Logo / 页眉页脚 / 版式） |
 | 7 | 语言 | **中文 + 英文**（界面与 SDS/TDS/COA/标签） |
@@ -28,6 +30,7 @@
 | 15 | LLM 策略 | **多供应商可配 + 敏感数据路由**（含精确配比的请求只走私有模型） |
 | 16 | 外部对接 | ERP、企业文档系统 / 官网**预留接口，本期不开发** |
 | 17 | 本次交付 | **先出方案，确认后再写代码** |
+| 18 | ELN（v1.1） | **内置实验执行模块为真源 + 外部 ELN 连接器**（eLabFTW 首选，Datalab 降级为可选连接器），见 §5.3.1 |
 
 ---
 
@@ -106,7 +109,7 @@
 │  docxtpl · ReportLab · PubChem · LLM（9 家 + 私有 OpenAI 兼容端点）       │
 ├──────────────────────────────────────────────────────────────────────────┤
 │  持久化：PostgreSQL 16（主库，含 pg_trgm / pgvector）· Redis 7 ·          │
-│          Neo4j 5 · Datalab ELN · 对象存储（MinIO / 本地卷）               │
+│          Neo4j 5 · 对象存储（MinIO / 本地卷）· 外部 ELN（可选连接器）     │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -122,7 +125,7 @@
 
 | 形态 | 组成 | 说明 |
 |------|------|------|
-| **桌面单机版** | Tauri 安装包 + `docker-compose.desktop.yml`（postgres、redis、neo4j、datalab、api、worker、beat、minio） | 首启向导：检测 Docker Desktop → 拉镜像（支持离线镜像包 `formunex-images.tar`）→ 初始化库 → 创建管理员。资源要求：16 GB 内存起 |
+| **桌面单机版** | Tauri 安装包 + `docker-compose.desktop.yml`（postgres、redis、neo4j、api、worker、beat、minio） | 首启向导：检测 Docker Desktop → 拉镜像（支持离线镜像包 `formunex-images.tar`）→ 初始化库 → 创建管理员。资源要求：约 12 GB 内存起（待实测） |
 | **服务器版** | `docker-compose.prod.yml` / Helm Chart；Nginx + TLS | 多人协作、审批流、集中审计 |
 | **桌面客户端连服务器** | Tauri 壳，仅连接远程 URL，不启本地栈 | 设置中切换「本机 / 服务器」 |
 | **纯 Web** | 浏览器访问服务器版 | 与桌面端同一构建产物 |
@@ -133,7 +136,7 @@
 SourceDocument ─(证据)─► ProjectSpec / ObjectiveContract ─► FormulationVersion
       │                         │  (目标、成本、禁用清单)        │  (RevoGrid 编辑, 实时 GHS)
       ▼                         ▼                                ▼
-  ToC Tree / KG            DOEPlan ─► Experiment / Measurement (ELN 双向同步)
+  ToC Tree / KG            DOEPlan ─► LabTask / Sample / Measurement (内置实验执行，可选外部 ELN 同步)
                                 │              │
                                 ▼              ▼
                        BayBE Campaign ─► Pareto / 定型配方 (winning)
@@ -184,7 +187,7 @@ ProLayout 左侧「**生命周期五步导航**」，顶部为项目切换器、
 ```
 ① 知识与情报中心    /knowledge   检索 · 结构式 · 表格提取 · Wiki · 知识图谱
 ② 研发需求工作台    /spec        项目规格 · 目标契约 · 工艺窗口 · 合规红线
-③ 配方与 DOE 实验室 /lab         配方编辑 · 替换推荐 · DOE 矩阵 · ELN 同步
+③ 配方与 DOE 实验室 /lab         配方编辑 · 替换推荐 · DOE 矩阵 · 实验任务与录入
 ④ AI 寻优驾驶舱     /cockpit     BayBE 迭代 · 偏差校正 · 帕累托 · 专项分析
 ⑤ PLM 文档与发布    /plm         产品 · SDS · TDS · COA · 标签 · 门禁 · 签批
 ──────────────
@@ -334,6 +337,7 @@ API 统一加 `/api/v1` 前缀；旧路径在一个版本内保留 307 重定向
 | `0056_plm_documents` | doc_templates、regulatory_documents、batches、batch_qc_results |
 | `0057_release_approvals_audit` | release_packages、approval_flows / steps、e_signatures、audit_log（含防篡改触发器） |
 | `0058_pg_extensions` | pg_trgm、pgvector 索引（仅 PostgreSQL；SQLite CI 跳过） |
+| `0059_lab_execution` | lab_tasks、samples、test_methods、instruments、eln_links；measurements 扩展（方法、仪器、复核状态） |
 
 种子脚本：`backend/scripts/seed_regulatory_db.py`（幂等、可增量，记录 `data_release` 版本，见 §5.5.1）。
 
@@ -459,10 +463,46 @@ API 统一加 `/api/v1` 前缀；旧路径在一个版本内保留 307 重定向
 
 DOE 生成后对每个试验点**预跑合规评估**，命中红线的点标红，可一键剔除或替换。
 
-**Datalab ELN 双向同步**
-- 推送：DOE 计划 → ELN 样品 / 实验项（复用 `datalab_client`、`datalab_sync`）。
-- 回流：ELN 实测值 → `measurement_store`（单位换算、测试方法标准号、操作人、仪器），触发：BayBE 下一轮、偏差校正、**SDS 第 9 节理化值候选更新**。
+**实验记录（ELN）：内置实验执行模块 + 外部 ELN 连接器**（v1.1 调整，评估见 §5.3.1）
+- **内置「实验执行」模块为唯一真源（SSOT）**：DOE 计划一键下发为实验任务单 → 实验员在 FormuNex 中领取、按任务单录入实测值（RevoGrid 批量录入 / 扫码样品号 / 仪器文件解析）→ 写入 PostgreSQL `measurement_store`，触发：BayBE 下一轮、偏差校正、**SDS 第 9 节理化值候选更新**。
 - 冲突处理：同一测点多次测量保留全部，取值策略（最新 / 均值 / 人工指定）可配。
+- **外部 ELN 为可选连接器**：已在用独立 ELN 的企业，通过 `ElnConnector` 双向同步；首推 eLabFTW 连接器，保留 Datalab 连接器（复用 `datalab_client`、`datalab_sync`）。外部 ELN 中的记录以「镜像 + 来源链接」形式进入 FormuNex，**发布门禁只认 FormuNex 库内、已复核的测量数据**。
+
+#### 5.3.1 ELN 方案评估：Datalab 是否最佳？
+
+**结论：Datalab 不是 FormuNex 的最佳方案。** 它适合学术材料实验室做轻量化的样品/表征记录，但 FormuMind 当前把它作为 Campaign 与实验数据的**唯一真源**（`campaign_backend` / `experiment_backend = datalab`，Docker ELN 栈 `DATALAB_REQUIRED=true`），这与 FormuNex 的 PLM 定位冲突：
+
+| 问题 | 说明 |
+|------|------|
+| 真源割裂 | 实验与测量数据存于 Datalab（MongoDB），而发布门禁、哈希链审计、电子签名、数据溯源、RBAC 都在 FormuNex（PostgreSQL）。跨库无事务，门禁无法对「签批时刻的数据」做一致性快照 |
+| 权限与审计两套 | Datalab 有独立的用户与权限体系，无法与 FormuNex 的项目级商业机密授权、四级签批、电子签名统一 |
+| 合规能力弱 | 无电子签名含义、无可信时间戳、无防篡改审计；不满足受控 COA / 定型数据的追溯要求 |
+| 领域不匹配 | 面向电池 / 材料表征（XRD、电化学等数据块），无涂料配方、批次 QC、出厂指标的概念 |
+| 运维负担 | 额外的 Flask + MongoDB + Vue 栈；在「桌面版也要求完整组件」的前提下，每台研发电脑多跑 2~3 个容器 |
+| 生态 | 学术项目，社区和长期维护力量有限 |
+
+**候选方案对比**
+
+| 方案 | 许可 / 形态 | 优点 | 不足 | 评价 |
+|------|------------|------|------|------|
+| **A. FormuNex 内置实验执行模块 + 连接器** | 自研（复用 FormuMind 现有 `experiments` / `measurement_store` / sqlite「本地台账」代码） | 单一真源、事务一致；RBAC / 审计 / 签名统一；DOE→实测→寻优→SDS/COA 零同步延迟；少一套容器；可按涂料 / 表面处理领域定制录入模板 | 需要自研录入 UI、仪器文件解析、附件管理（约 3~4 周） | **推荐** |
+| B. eLabFTW（作为外部 ELN） | AGPL-3.0，PHP + MySQL，Docker | 成熟、工业界用户多；REST API v2；RFC 3161 可信时间戳、签名、模板、物品库存；支持中文界面 | 通用 ELN，无配方 / DOE 概念；仍是第二真源 | **外部 ELN 首选连接器** |
+| C. 继续使用 Datalab | MIT，Flask + MongoDB | 已有适配代码（41 个源文件、35 个测试文件引用） | 见上表 | 降级为可选连接器 |
+| D. Chemotion ELN | AGPL，Ruby | 化学合成（反应、分子）能力强 | 面向合成化学，配方 / 批次支持弱，部署重 | 不推荐 |
+| E. openBIS | Apache-2.0，Java | ELN + LIMS 一体，适合大型机构 | 很重，学习与运维成本高 | 不推荐 |
+| F. Kadi4Mat | Apache-2.0，Python | 材料科学研究数据管理 | 偏科研数据仓库，ELN 交互弱 | 不推荐 |
+| G. 商业 ELN / LIMS（国产：鹰谷 InELN、创腾等；国际：Revvity Signals、LabArchives 等） | 商业授权 | 合规成熟（部分支持 21 CFR Part 11 / GMP）、厂商支持 | 授权费用；集成依赖厂商 API；配方寻优仍需 FormuNex | 企业已采购时走连接器 |
+| H. 配方信息学平台（Uncountable、Albert Invent、Citrine 等） | 商业 SaaS | 自带配方 + 实验 + AI | 与 FormuNex 功能高度重叠（实际是竞品）；数据出境 | 不适用 |
+
+**推荐方案（A + 连接器）设计要点**
+
+1. **数据模型**（新增迁移 `0059_lab_execution`）：`lab_tasks`（由 DOE 试验点生成：任务单号、样品号、指派人、状态 待领取 / 进行中 / 待复核 / 已完成）、`samples`（样品号、批号、制备记录、条码）、`test_methods`（方法库：标准号如 GB/T 10125 / GB/T 9286 / GB/T 6750，单位，修约规则，有效范围）、`measurements` 扩展（`method_id`、`instrument_id`、`operator_id`、`raw_file_key`、`review_status`、`reviewed_by`、`external_ref`）、`instruments`（设备台账、校准有效期）、`eln_links`（外部 ELN 记录映射）。
+2. **录入体验**：任务看板（按人 / 按项目）；RevoGrid 批量录入（按 DOE 矩阵行列）；扫码定位样品；常见仪器导出文件（CSV / Excel，如流变仪、色差仪、粘度计）解析模板可配置；附件与照片上传至对象存储。
+3. **数据质量**：录入即校验（单位、合理范围、方法有效范围）；异常值提示（复用 `doe_anomaly`）；**测量复核**（录入人 ≠ 复核人）后才可用于 BayBE 训练、SDS 第 9 节和 COA。
+4. **合规**：测量记录纳入哈希链审计；修改留痕（保留原值与修改原因）；仪器校准过期时阻止录入或标记。
+5. **连接器框架**：`services/eln/connectors/{base,elabftw,datalab}.py`。`ElnConnector` 接口包括 `push_plan()`、`pull_measurements(since)`、`link(record)`、`health()`；幂等同步（基于外部记录 ID + 内容哈希），冲突进人工处理队列。
+6. **迁移路径**：FormuMind 现有 Datalab 数据通过一次性脚本 `scripts/migrate_datalab_to_native.py` 导入 PostgreSQL；`campaign_backend` / `experiment_backend` 默认值改为 `native`，`datalab` 仅作为连接器配置保留。
+7. **部署收益**：桌面 / 服务器 compose 栈移除 datalab-api、datalab-app、MongoDB 三个容器，桌面版内存需求预计从 16 GB 降到约 12 GB（需实测确认）。
 
 ### 5.4 W4 AI 寻优驾驶舱（Optimization & Trade-off Cockpit）
 
@@ -550,7 +590,7 @@ ghs/
 - **第 2 节**：分类结果、标签要素、其他危害。
 - **第 3 节**：物质展开后列出需披露组分；**商业机密区间化**：按可配置区间表（默认 `<1%`、`1–5%`、`5–10%`、`10–20%`、`20–30%`…）把精确值转区间，商业机密组分可用通用化学名替代 CAS（须符合 GB/T 17519 要求，且保留内部映射供审计）。
 - **第 8 节**：GBZ 2.1 职业接触限值（MAC / PC-TWA / PC-STEL）。
-- **第 9 节**：优先回填 ELN 实测值（闪点、pH、密度、黏度、固含、初沸点），标注测试方法；无实测时用计算或原料数据并标注。
+- **第 9 节**：优先回填已复核的实测值（闪点、pH、密度、黏度、固含、初沸点），标注测试方法；无实测时用计算或原料数据并标注。
 - **第 11 / 12 节**：组分毒理 / 生态数据 + 混合物计算值（ATEmix）。
 - **第 14 节**：运输分类结果。
 - **第 15 节**：中国法规清单自动匹配（《危险化学品安全管理条例》《危险化学品目录》、重点监管、易制毒、易制爆、IECSC 状态、GBZ 2.1 等）。
@@ -662,9 +702,13 @@ backend/app/services/approvals/{state_machine,signatures}.py
 backend/app/services/audit/hash_chain.py
 backend/app/services/{llm_router,lineage}.py
 backend/app/services/connectors/{base,webhook}.py
+backend/app/services/eln/{lab_tasks,samples,test_methods,instrument_parsers,review}.py
+backend/app/services/eln/connectors/{base,elabftw,datalab}.py
+backend/app/api/v1/lab_execution.py
+backend/scripts/migrate_datalab_to_native.py
 backend/app/agents/regulatory.py
 backend/app/resources/plm/{templates/**,pictograms/*.svg,fonts/README（思源字体获取说明）}
-backend/app/db/alembic/versions/0051 ~ 0058（见 §4.3）
+backend/app/db/alembic/versions/0051 ~ 0059（见 §4.3）
 backend/scripts/seed_regulatory_db.py
 backend/data/regulatory/{common_chemicals,hazard_chemical_info,oel_gbz2_2019,hazard_statements,precaution_statements,gb12268_2025,cn_hazard_text_map}.json
 backend/tests/{plm/**,pageindex/**,identity/**,doe_designs/**}
@@ -703,6 +747,7 @@ frontend/e2e/**
 
 ```
 docker-compose.desktop.yml（新）、docker-compose.prod.yml（改，含 minio）
+docker-compose.eln.yml（删除；外部 ELN 改为连接器配置）、deploy/eln/（改为 eLabFTW / Datalab 连接器部署说明）
 deploy/helm/formunex/**（新）
 .github/workflows/{backend,frontend,desktop-build,e2e}.yml
 ```
@@ -718,7 +763,7 @@ deploy/helm/formunex/**（新）
 | 单元测试 | 沿用 FormuMind 586 个测试并保持全绿；GHS 规则每类别边界测试；PageIndex 建树测试 |
 | 黄金案例 | ≥ 60 个 GB 30000 分类案例（EHS 专员签字）；10 份完整 SDS 人工审定基线 |
 | 集成测试 | `test_pageindex_two_stage_rag.py`（长专利配对准确率）；`test_gb30000_ghs_calculator.py`；`test_release_gate.py` |
-| 端到端 | `test_plm_lifecycle_e2e.py`：文献检索 → 设定契约 → DOE → BayBE 一轮 → 定型 → 分类 → 生成 SDS / TDS / 标签 / COA → 门禁 → 4 级签批 → 发布；Playwright 前端主路径 |
+| 端到端 | `test_plm_lifecycle_e2e.py`：文献检索 → 设定契约 → DOE → 实验任务录入与复核 → BayBE 一轮 → 定型 → 分类 → 生成 SDS / TDS / 标签 / COA → 门禁 → 4 级签批 → 发布；Playwright 前端主路径 |
 | 桌面 | Win 11 / macOS 14 安装、启动栈、导出 PDF、打印冒烟测试 |
 | 安全 | RBAC 越权测试；审计日志防篡改测试；LLM 敏感路由测试（secret 请求绝不发往外部供应商） |
 | 性能 | 实时合规 < 150 ms（50 组分）；13 万物质名模糊检索 < 100 ms；SDS 渲染 < 5 s |
@@ -732,12 +777,13 @@ deploy/helm/formunex/**（新）
 | 阶段 | 内容 | 周期 |
 |------|------|------|
 | **M0 迁仓与品牌** | FormuMind 迁入、改名、环境变量兼容、PG 默认、CI 绿 | 1 周 |
-| **M1 数据底座** | 0051~0058 迁移、法规库种子、物质 / 原料两层模型、RBAC 与审计 | 3 周 |
+| **M1 数据底座** | 0051~0059 迁移、法规库种子、物质 / 原料两层模型、RBAC 与审计 | 3 周 |
 | **M2 GHS 引擎** | GB 30000 全类别规则、黄金案例、运输分类、实时评估 API | 4 周（与 M1 后半重叠） |
 | **M3 PageIndex + W1 缺口** | 建树、两阶段检索、multimodal_fusion、评估集 | 3 周（并行） |
 | **M4 文档引擎** | SDS / TDS / COA / 标签生成、模板、渲染、Diff | 4 周 |
 | **M5 发布门禁与签批** | 门禁、状态机、电子签名、交付包、连接器接口 | 2 周 |
 | **M6 DOE 与驾驶舱补强** | 正交表、约束混料、D-最优、Conformal | 2 周（并行） |
+| **M7 实验执行模块** | 任务单、样品、方法库、仪器解析、测量复核、eLabFTW / Datalab 连接器、Datalab 数据迁移 | 3~4 周（并行） |
 | **F1~F4 前端重写** | 应用壳与共享组件（3 周）→ W1/W2（4 周）→ W3/W4（5 周）→ W5 与标签设计器（5 周）；与后端并行 | 约 17 周 |
 | **D1 Tauri 桌面** | 壳、Docker 编排、首启向导、签名与公证 | 3 周（与前端后期并行） |
 | **QA 与发布** | E2E、黄金案例审定、桌面冒烟、文档 | 3 周 |
@@ -758,6 +804,7 @@ deploy/helm/formunex/**（新）
 | 字体授权 | 侵权 | 只用思源 / Noto（SIL OFL） |
 | 敏感配方外泄到外部 LLM | 商业机密 | secret 级强制私有路由，无私有模型时拒绝；审计 |
 | PageIndex 延迟与成本 | 体验 / 费用 | 限定场景、跳数 / token 预算、摘要延迟生成、结果缓存 |
+| 内置实验执行模块替代 Datalab 后实验员不适应 | 采纳率 | 录入界面按 DOE 矩阵设计、支持扫码与仪器文件导入；已有 ELN 的企业继续通过连接器使用原系统 |
 | 国标版本更新（如 GB 30000 修订、GB/T 16483 修订） | 合规时效 | 规则集版本化（`rule_set_version`），新规则集上线时批量复算并提示受影响产品 |
 
 ---
@@ -765,7 +812,7 @@ deploy/helm/formunex/**（新）
 ## 10. 待你确认后启动的第一批编码任务
 
 1. **M0**：FormuMind 迁入 FormuNex 仓库、品牌重塑、`FORMUNEX_` 环境变量兼容、PostgreSQL 默认、CI 全绿。
-2. **M1**：迁移 0051~0058 + `seed_regulatory_db.py`（含中文分类文本解析器及其测试）。
+2. **M1**：迁移 0051~0059 + `seed_regulatory_db.py`（含中文分类文本解析器及其测试）。
 3. **M3**：`services/pageindex/` 建树 + 两阶段检索 + `test_pageindex_two_stage_rag.py`。
 
-> 注：原提示中要求的 `0051_materials_regulatory_ghs` / `0052_plm_product_releases` / `0053_plm_regulatory_documents` 三个迁移，在本方案中因引入「物质 / 原料两层模型」与 RBAC、审计而拆分为 0051~0058 八个迁移，内容是原三项的超集。
+> 注：原提示中要求的 `0051_materials_regulatory_ghs` / `0052_plm_product_releases` / `0053_plm_regulatory_documents` 三个迁移，在本方案中因引入「物质 / 原料两层模型」与 RBAC、审计而拆分为 0051~0058 八个迁移，内容是原三项的超集；v1.1 再增加 `0059_lab_execution`。
