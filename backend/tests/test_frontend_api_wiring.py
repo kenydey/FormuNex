@@ -47,6 +47,11 @@ _IDENTITY = (
     "frontend rewrite (plan §3.4, F1); the current SPA still uses the service API token"
 )
 
+_DOE_LAB = (
+    "DOE designs and optimisation cockpit (FormuNex M6): the DOE Lab design wizard and the cockpit's conformal / "
+    "Pareto / 设为定型 panels arrive with the Ant Design frontend rewrite (plan §3.4, F3)"
+)
+
 # Documented backend routes the frontend does not call, and why that is fine.
 API_ONLY_ROUTES: dict[str, str] = {
     "/api/artifacts/versions/{}": "version metadata; screens read versions through the lineage listing and the diff",
@@ -98,6 +103,14 @@ API_ONLY_ROUTES: dict[str, str] = {
     "/api/identity/roles": _IDENTITY,
     "/api/identity/users": _IDENTITY,
     "/api/identity/users/{}/roles": _IDENTITY,
+    "/api/doe/designs/orthogonal-arrays": _DOE_LAB,
+    "/api/doe/designs/orthogonal": _DOE_LAB,
+    "/api/doe/designs/mixture": _DOE_LAB,
+    "/api/doe/designs/d-optimal": _DOE_LAB,
+    "/api/doe/designs/screen": _DOE_LAB,
+    "/api/cockpit/conformal": _DOE_LAB,
+    "/api/cockpit/pareto": _DOE_LAB,
+    "/api/cockpit/winning": _DOE_LAB,
     "/api/kb/sources/{}/toc-tree": _PAGEINDEX,
     "/api/kb/sources/{}/toc-tree/rebuild": _PAGEINDEX,
     "/api/kb/golden-questions": "lists the curated golden retrieval set; the quality screen only runs it (/api/kb/golden-eval/run)",
