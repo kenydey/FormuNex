@@ -1,0 +1,387 @@
+import { useEffect, useState } from "react";
+import {
+  api,
+  formatApiError,
+  type KGContradictionResponse,
+  type KGEntityResolveResponse,
+  type KgPathResponse,
+  type KGRelationView,
+  type KGSubstituteDiscoverResponse,
+} from "../api";
+
+const RELATION_LABELS: Record<string, string> = {
+  substitutes: "替代",
+  synergizes: "协同",
+  inhibits: "抑制",
+  correlates_pos: "正相关",
+  correlates_neg: "负相关",
+  requires: "依赖",
+};
+
+function relationLabel(type: string): string {
+  return RELATION_LABELS[type] ?? type;
+}
+
+function RelationRow({ rel }: { rel: KGRelationView }) {
+  const evidence = rel.evidence[0];
+  const method = (rel.extraction_method || evidence?.extraction_method || "rule").toLowerCase();
+  const methodBadge =
+    method === "measured"
+      ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+      : method === "llm"
+        ? "bg-violet-500/20 text-violet-300 border-violet-500/40"
+        : method === "vision_table"
+          ? "bg-teal-500/20 text-teal-300 border-teal-500/40"
+          : "bg-slate-700/40 text-slate-400 border-slate-600/40";
+  const methodLabel = method === "measured" ? "实测" : method === "vision_table" ? "表格" : method;
+  const sourceId = evidence?.source_id || "";
+  const campaignMatch = /^measured:campaign_(\d+)$/.exec(sourceId);
+  const campaignId = campaignMatch ? campaignMatch[1] : null;
+  return (
+    <li className="text-[10px] text-slate-400 leading-relaxed border-l border-violet-500/30 pl-2">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-violet-300">{relationLabel(rel.relation_type)}</span>
+        <span className={`inline-flex px-1 py-0 rounded border text-[8px] font-mono ${methodBadge}`}>{methodLabel}</span>
+        {campaignId && (
+          <span
+            className="inline-flex px-1 py-0 rounded border border-amber-500/30 text-[8px] font-mono text-amber-200/90"
+            data-testid="measured-campaign-ref"
+            title={`来自台账 campaign #${campaignId}`}
+          >
+            台账#{campaignId}
+          </span>
+        )}
+        <span className="text-slate-500 mx-1">·</span>
+        <span className="font-mono text-slate-500">{rel.source_entity_id.slice(0, 18)}</span>
+        <span className="text-slate-600 mx-0.5">→</span>
+        <span className="font-mono text-slate-500">{rel.target_entity_id.slice(0, 18)}</span>
+      </div>
+      {evidence?.sentence && (
+        <p className="mt-0.5 text-slate-500 italic truncate" title={evidence.sentence}>
+          “{evidence.sentence}”
+        </p>
+      )}
+    </li>
+  );
+}
+
+export default function KgRelationPanel({ query }: { query: string }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [resolved, setResolved] = useState<KGEntityResolveResponse | null>(null);
+  const [substitutes, setSubstitutes] = useState<KGSubstituteDiscoverResponse | null>(null);
+  const [contradictions, setContradictions] = useState<KGContradictionResponse | null>(null);
+  const [fullRelations, setFullRelations] = useState<KGRelationView[] | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [methodFilter, setMethodFilter] = useState<string>("all");
+  const [reportAlert, setReportAlert] = useState<string | null>(null);
+  const [feedbackStats, setFeedbackStats] = useState<{
+    measured_total: number;
+    measured_performance: number;
+    measured_material?: number;
+    measured_domain?: number;
+  } | null>(null);
+  const [pathSrc, setPathSrc] = useState("");
+  const [pathDst, setPathDst] = useState("");
+  const [pathBusy, setPathBusy] = useState(false);
+  const [pathResult, setPathResult] = useState<KgPathResponse | null>(null);
+  const [pathError, setPathError] = useState<string | null>(null);
+
+  async function runPathFind() {
+    const src = pathSrc.trim();
+    const dst = pathDst.trim();
+    if (!src || !dst) {
+      setPathError("请填写起点与终点实体 id");
+      return;
+    }
+    setPathBusy(true);
+    setPathError(null);
+    try {
+      const r = await api.kgPath(src, dst, 4);
+      setPathResult(r);
+    } catch (e) {
+      setPathResult(null);
+      setPathError(formatApiError(e));
+    } finally {
+      setPathBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    api
+      .kgFeedbackReport()
+      .then((r) => {
+        if (r.alert) setReportAlert(r.alert);
+      })
+      .catch(() => {});
+    api
+      .kgFeedbackStats()
+      .then((r) => {
+        setFeedbackStats({
+          measured_total: r.measured_total,
+          measured_performance: r.measured_performance,
+          measured_material: r.measured_material,
+          measured_domain: r.measured_domain,
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResolved(null);
+      setSubstitutes(null);
+      setContradictions(null);
+      setFullRelations(null);
+      setError(null);
+      // A request for the previous query may still be in flight; its cleanup has just
+      // cancelled it, so its ``finally`` will not clear the flag — do it here, or the
+      // panel is stuck on 加载中… for an empty search box.
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      setError(null);
+      void (async () => {
+        try {
+          const resolveResp = await api.kgResolve(q);
+          if (cancelled) return;
+          setResolved(resolveResp);
+          const primaryId =
+            resolveResp.chemicals[0]?.id ?? resolveResp.trade_products[0]?.id ?? null;
+          if (primaryId) {
+            const [subResp, contraResp, relResp] = await Promise.all([
+              api.kgSubstitutes({ entityId: primaryId, limit: 5 }),
+              api.kgContradictions({ entityId: primaryId }),
+              api.kgRelations(primaryId, "both", 40).catch(() => null),
+            ]);
+            if (!cancelled) {
+              setSubstitutes(subResp);
+              setContradictions(contraResp);
+              setFullRelations(relResp);
+            }
+          } else {
+            setSubstitutes(null);
+            setContradictions(null);
+            setFullRelations(null);
+          }
+        } catch (err) {
+          if (!cancelled) {
+            const msg = formatApiError(err);
+            if (!msg.includes("409") && !msg.includes("知识图谱未启用")) {
+              setError(msg);
+            }
+            setResolved(null);
+            setSubstitutes(null);
+            setContradictions(null);
+            setFullRelations(null);
+          }
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      })();
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
+  const relations =
+    fullRelations && fullRelations.length > 0
+      ? fullRelations
+      : (resolved?.top_relations ?? []);
+  const filteredRelations = methodFilter === "all" ? relations : relations.filter((r) => {
+    const m = (r.extraction_method || r.evidence[0]?.extraction_method || "rule").toLowerCase();
+    return m === methodFilter;
+  });
+  const measuredCount = relations.filter((r) => (r.extraction_method || r.evidence[0]?.extraction_method || "").toLowerCase() === "measured").length;
+  const hasContent =
+    loading ||
+    error ||
+    (resolved && (resolved.chemicals.length > 0 || resolved.trade_products.length > 0));
+
+  if (!hasContent) return null;
+
+  const primary =
+    resolved?.chemicals[0]?.canonical_name ??
+    resolved?.trade_products[0]?.trade_name ??
+    query.trim();
+
+  return (
+    <div className="shrink-0 rounded-lg border border-violet-500/25 bg-violet-500/5 px-3 py-2 text-[11px]">
+      <button
+        type="button"
+        onClick={() => setExpanded((o) => !o)}
+        className="w-full flex items-center justify-between gap-2 text-left"
+      >
+        <span className="text-violet-300 uppercase tracking-widest">
+          🕸 知识图谱关系
+          {loading && <span className="text-slate-500 normal-case ml-1">加载中…</span>}
+        </span>
+        <span className="text-slate-500 shrink-0">{expanded ? "▴" : "▾"}</span>
+      </button>
+
+      {error && (
+        <p className="mt-1 text-rose-300/90 text-[10px]">{error}</p>
+      )}
+
+      {reportAlert && (
+        <p className="mt-1 text-amber-300/90 text-[10px] border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">⚠ {reportAlert}</p>
+      )}
+
+      {feedbackStats && feedbackStats.measured_total > 0 && (
+        <p className="mt-1 text-[10px] text-slate-500" data-testid="kg-feedback-stats">
+          实测反馈库：{feedbackStats.measured_total} 条
+          {feedbackStats.measured_performance > 0 &&
+            ` · 性能 ${feedbackStats.measured_performance}`}
+          {typeof feedbackStats.measured_material === "number" &&
+            feedbackStats.measured_material > 0 &&
+            ` · 材料级 ${feedbackStats.measured_material}`}
+          {typeof feedbackStats.measured_domain === "number" &&
+            feedbackStats.measured_domain > 0 &&
+            ` · 领域级 ${feedbackStats.measured_domain}`}
+        </p>
+      )}
+
+      {!expanded && !loading && relations.length > 0 && (
+        <p className="mt-1 text-slate-400">
+          {primary}：{relations.length} 条语义关系
+          {measuredCount > 0 && <span className="ml-1 text-amber-300">· {measuredCount} 条实测</span>}
+          {substitutes && substitutes.substitutes.length > 0 && (
+            <span> · {substitutes.substitutes.length} 个替代品候选</span>
+          )}
+          {contradictions && contradictions.contradictions.length > 0 && (
+            <span className="ml-1 text-rose-300">· ⚠ {contradictions.contradictions.length} 处矛盾</span>
+          )}
+        </p>
+      )}
+
+      {expanded && resolved && (
+        <div className="mt-2 space-y-2 border-t border-edge/40 pt-2">
+          <div className="text-slate-400">
+            实体：<span className="text-slate-200">{primary}</span>
+            {resolved.chemicals[0]?.cas_no && (
+              <span className="ml-1 font-mono text-teal-300/80">{resolved.chemicals[0].cas_no}</span>
+            )}
+          </div>
+
+          {relations.length > 0 ? (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-violet-300/90 font-medium">语义关系 ({filteredRelations.length}/{relations.length})</span>
+                <select value={methodFilter} onChange={(e) => setMethodFilter(e.target.value)} className="bg-ink border border-edge rounded px-1 py-0.5 text-[10px] text-slate-400">
+                  <option value="all">全部</option>
+                  <option value="measured">实测</option>
+                  <option value="rule">文献(rule)</option>
+                  <option value="llm">LLM</option>
+                </select>
+              </div>
+              <ul className="space-y-1 max-h-28 overflow-y-auto">
+                {filteredRelations.map((rel) => (
+                  <RelationRow key={rel.id} rel={rel} />
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-slate-500">暂无已抽取的语义关系（需开启 KG 关系抽取并重建链接）。</p>
+          )}
+
+          {substitutes && substitutes.substitutes.length > 0 && (
+            <div>
+              <div className="text-teal-300/90 font-medium mb-1">替代品发现</div>
+              <ul className="space-y-1 max-h-24 overflow-y-auto text-slate-400">
+                {substitutes.substitutes.map((c) => (
+                  <li key={c.entity_id}>
+                    <span className="text-teal-200">{c.entity_name || c.entity_id}</span>
+                    <span className="text-slate-600 ml-1">
+                      ({relationLabel(c.relation_type)}, {Math.round(c.confidence * 100)}%)
+                    </span>
+                    {c.contradiction_flag && (
+                      <span
+                        className="ml-1 inline-flex items-center px-1 py-0 rounded border text-[8px] font-mono bg-rose-500/20 text-rose-300 border-rose-500/40"
+                        title={c.contradiction_detail || "文献关系与实测矛盾"}
+                      >
+                        ⚠ 实测反驳
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div
+            className="border border-violet-500/20 rounded p-2 space-y-1.5 bg-ink/40"
+            data-testid="kg-path-panel"
+          >
+            <div className="text-[10px] text-slate-500 flex items-center justify-between gap-2">
+              <span>实体路径 · /api/kg/path</span>
+              {resolved.chemicals[0]?.id && (
+                <button
+                  type="button"
+                  className="text-[9px] text-violet-300 hover:underline"
+                  onClick={() => setPathSrc(resolved.chemicals[0].id)}
+                  title="用当前主实体作起点"
+                >
+                  用当前实体作起点
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              <input
+                value={pathSrc}
+                onChange={(e) => setPathSrc(e.target.value)}
+                placeholder="起点 entity id"
+                className="flex-1 min-w-[7rem] bg-ink border border-edge rounded px-1.5 py-0.5 text-[10px] font-mono"
+                data-testid="kg-path-src"
+              />
+              <input
+                value={pathDst}
+                onChange={(e) => setPathDst(e.target.value)}
+                placeholder="终点 entity id"
+                className="flex-1 min-w-[7rem] bg-ink border border-edge rounded px-1.5 py-0.5 text-[10px] font-mono"
+                data-testid="kg-path-dst"
+              />
+              <button
+                type="button"
+                disabled={pathBusy || !pathSrc.trim() || !pathDst.trim()}
+                onClick={() => void runPathFind()}
+                className="text-[10px] border border-violet-500/40 text-violet-300 rounded px-2 py-0.5 disabled:opacity-40"
+                data-testid="kg-path-btn"
+              >
+                {pathBusy ? "…" : "寻路"}
+              </button>
+            </div>
+            {pathError && <p className="text-[10px] text-rose-300">{pathError}</p>}
+            {pathResult && (
+              <div className="text-[10px] text-slate-400" data-testid="kg-path-result">
+                {pathResult.found ? (
+                  <div className="space-y-1">
+                    <div className="text-violet-300">
+                      找到路径 · {pathResult.hops} 跳
+                    </div>
+                    <ol className="list-decimal list-inside space-y-0.5 font-mono text-slate-500">
+                      {pathResult.steps.map((s, i) => (
+                        <li key={`${s.entity_id}-${i}`}>
+                          {s.relation?.relation_type ?? "?"} → {s.entity_name || s.entity_id}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : (
+                  <span>未找到路径（关系层可能为空）</span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

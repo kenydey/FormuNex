@@ -1,0 +1,326 @@
+"""Formulation optimization service.
+
+Drives a closed loop that adjusts continuous formulation levers to maximise a
+predicted objective. Every engine exposes the same sequential
+``suggest`` / ``observe`` / ``best`` / ``ranked`` interface, so a real
+Bayesian engine (BoTorch, Optuna) can be swapped in without changing callers.
+
+The default offline strategy is a lightweight Bayesian-style optimizer:
+Latin-hypercube exploration seeds a surrogate, then candidates are scored by an
+upper-confidence-bound over a nearest-neighbour Gaussian estimate. It uses only
+numpy and converges reliably for the low-dimensional formulation spaces here.
+"""
+from __future__ import annotations
+
+import logging
+from .errors import log_handled_exception
+from dataclasses import dataclass, field
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class _ObservedHistoryMixin:
+    """Shared ``best``/``ranked`` over the observed ``(_X, _y)`` history.
+
+    Extracted (code review 2026-09-28): ``BayesianOptimizer``,
+    ``OptunaOptimizer`` and ``BotorchOptimizer`` (and the since-removed Summit
+    adapter) all carried a character-identical copy of these two members. Every adapter
+    appends to ``self._X``/``self._y`` in ``observe()``, so one base
+    implementation keeps them in lockstep.
+
+    Not a dataclass itself: the subclass ``@dataclass``es declare their own
+    fields, and dataclass field collection ignores plain (non-dataclass)
+    base-class annotations, so subclass construction is unchanged.
+    """
+
+    _X: list[list[float]]
+    _y: list[float]
+
+    @property
+    def best(self) -> tuple[list[float], float] | None:
+        if not self._y:
+            return None
+        i = int(np.argmax(self._y))
+        return self._X[i], self._y[i]
+
+    def ranked(self, top_n: int) -> list[tuple[list[float], float]]:
+        order = np.argsort(self._y)[::-1][:top_n]
+        return [(self._X[i], self._y[i]) for i in order]
+
+    def should_stop_early(self, patience: int = 5, min_delta: float = 1e-4) -> bool:
+        """早停检查：连续 patience 轮无显著提升时返回 True。
+
+        用于节约实验成本。fail-open：数据不足时返回 False。
+        """
+        try:
+            if len(self._y) < patience + 1:
+                return False
+            # 比较最近 patience 轮的最佳 vs 之前最佳
+            prev_best = max(self._y[:-patience])
+            recent_best = max(self._y[-patience:])
+            return (recent_best - prev_best) < min_delta
+        except Exception:
+            return False
+
+
+@dataclass
+class Factor:
+    name: str
+    low: float
+    high: float
+
+    def __post_init__(self) -> None:
+        # 倒置边界时 np.clip(min>max) 静默返回 max，错得离谱。fail-fast。
+        if self.low > self.high:
+            raise ValueError(f"Factor {self.name!r}: low ({self.low}) > high ({self.high})")
+
+    def clip(self, x: float) -> float:
+        return float(np.clip(x, self.low, self.high))
+
+
+@dataclass
+class BayesianOptimizer(_ObservedHistoryMixin):
+    """Sequential model-based optimizer over a box-constrained space."""
+
+    factors: list[Factor]
+    seed: int = 0
+    _X: list[list[float]] = field(default_factory=list)
+    _y: list[float] = field(default_factory=list)
+    _rng: np.random.Generator = field(default=None)  # type: ignore
+
+    def __post_init__(self) -> None:
+        self._rng = np.random.default_rng(self.seed)
+
+    def _random_point(self) -> list[float]:
+        return [self._rng.uniform(f.low, f.high) for f in self.factors]
+
+    def _surrogate(self, x: np.ndarray) -> tuple[float, float]:
+        """Distance-weighted mean and spread over observed points (a cheap GP stand-in)."""
+        if not self._X:
+            return 0.0, 1.0
+        X = np.array(self._X)
+        scales = np.array([f.high - f.low for f in self.factors])
+        scales[scales == 0] = 1.0
+        d = np.linalg.norm((X - x) / scales, axis=1)
+        w = np.exp(-(d**2) / 0.5)
+        if w.sum() < 1e-9:
+            return float(np.mean(self._y)), float(np.std(self._y) + 1.0)
+        mean = float(np.average(self._y, weights=w))
+        var = float(np.average((np.array(self._y) - mean) ** 2, weights=w))
+        uncertainty = (var**0.5) + 1.0 / (1.0 + w.sum())
+        return mean, uncertainty
+
+    def suggest(self, n_candidates: int = 64, kappa: float = 1.5) -> list[float]:
+        """Suggest the next experiment by maximising the UCB acquisition."""
+        if len(self._X) < max(4, len(self.factors) + 1):
+            return self._random_point()
+        best_x, best_acq = None, -np.inf
+        for _ in range(n_candidates):
+            cand = np.array(self._random_point())
+            mean, unc = self._surrogate(cand)
+            acq = mean + kappa * unc
+            if acq > best_acq:
+                best_acq, best_x = acq, cand
+        return [self.factors[i].clip(v) for i, v in enumerate(best_x)]
+
+    def observe(self, x: list[float], y: float) -> None:
+        self._X.append(list(x))
+        self._y.append(float(y))
+
+
+
+    @property
+    def engine(self) -> str:
+        return "numpy-ucb"
+
+
+# ── Optional real-engine adapters ────────────────────────────────────────────
+# Both expose the same suggest()/observe()/ranked()/best interface as
+# BayesianOptimizer, so the workflow can swap them in transparently. Each is
+# gated behind an availability probe; build_optimizer() picks the best one
+# installed and silently falls back to the numpy optimizer otherwise.
+
+
+def _optuna_available() -> bool:
+    try:
+        import optuna  # noqa: F401
+
+        return True
+    except Exception as exc:
+        log_handled_exception(logger, exc, "optional feature check")
+        return False
+
+
+def _botorch_available() -> bool:
+    try:
+        import botorch  # noqa: F401
+        import gpytorch  # noqa: F401
+        import torch  # noqa: F401
+
+        return True
+    except Exception as exc:
+        log_handled_exception(logger, exc, "optional feature check")
+        return False
+
+
+@dataclass
+class OptunaOptimizer(_ObservedHistoryMixin):
+    """Optuna ask/tell optimizer (TPE sampler) over the scalar objective.
+
+    A pure-CPU, pip-installable upgrade over the random-UCB search: the TPE
+    sampler models the objective and concentrates sampling in promising
+    regions. Maximises the same aggregated score the workflow already computes,
+    so it is a drop-in replacement.
+    """
+
+    factors: list[Factor]
+    seed: int = 0
+    _X: list[list[float]] = field(default_factory=list)
+    _y: list[float] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        import optuna
+
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        self._study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=self.seed),
+        )
+        self._pending: dict[tuple, object] = {}
+
+    @staticmethod
+    def _key(x: list[float]) -> tuple:
+        return tuple(round(float(v), 6) for v in x)
+
+    def suggest(self, n_candidates: int = 64, kappa: float = 1.5) -> list[float]:
+        trial = self._study.ask()
+        x = [trial.suggest_float(f.name, f.low, f.high) for f in self.factors]
+        self._pending[self._key(x)] = trial
+        return x
+
+    def observe(self, x: list[float], y: float) -> None:
+        trial = self._pending.pop(self._key(x), None)
+        if trial is not None:
+            self._study.tell(trial, float(y))
+        else:
+            # x did not come from suggest() — a warm start (the baseline recipe)
+            # or a prior measurement. Record the REAL (x, y) pair as a finished
+            # trial. The previous fallback did ``ask()`` and ``suggest_float`` on
+            # a fresh trial, which draws *new* parameter values, so the study
+            # learned y against points that were never x.
+            import optuna
+
+            params = {f.name: f.clip(v) for f, v in zip(self.factors, x)}
+            distributions = {
+                f.name: optuna.distributions.FloatDistribution(f.low, f.high)
+                for f in self.factors
+            }
+            self._study.add_trial(
+                optuna.trial.create_trial(
+                    params=params, distributions=distributions, value=float(y)
+                )
+            )
+        self._X.append(list(x))
+        self._y.append(float(y))
+
+
+
+    @property
+    def engine(self) -> str:
+        return "optuna-tpe"
+
+
+@dataclass
+class BotorchOptimizer(_ObservedHistoryMixin):
+    """BoTorch Gaussian-process optimizer with Expected-Improvement acquisition.
+
+    Fits a ``SingleTaskGP`` to the observed (x, score) pairs and maximises a
+    log-Expected-Improvement acquisition each step — a true GP posterior with
+    calibrated uncertainty, unlike the numpy UCB stand-in or Optuna's TPE. Keeps
+    the same scalar suggest/observe/ranked interface, so the workflow swaps it in
+    transparently. Any per-step modelling failure degrades to a random draw.
+
+    Honesty (P1 #21): this is **scalarized** LogEI on a weighted score — not a
+    Pareto/qNEHVI multi-objective optimizer. True Pareto remains on the BayBE path.
+    """
+
+    factors: list[Factor]
+    seed: int = 0
+    _X: list[list[float]] = field(default_factory=list)
+    _y: list[float] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        import torch
+
+        torch.manual_seed(self.seed)
+        self._rng = np.random.default_rng(self.seed)
+        self._bounds = np.array(
+            [[f.low for f in self.factors], [f.high for f in self.factors]], dtype=float
+        )
+
+    def _random_point(self) -> list[float]:
+        return [self._rng.uniform(f.low, f.high) for f in self.factors]
+
+    def suggest(self, n_candidates: int = 64, kappa: float = 1.5) -> list[float]:
+        if len(self._X) < max(4, len(self.factors) + 1):
+            return self._random_point()
+        try:
+            import torch
+            from botorch.acquisition.analytic import LogExpectedImprovement
+            from botorch.fit import fit_gpytorch_mll
+            from botorch.models import SingleTaskGP
+            from botorch.optim import optimize_acqf
+            from botorch.utils.transforms import normalize, unnormalize
+            from gpytorch.mlls import ExactMarginalLogLikelihood
+
+            bounds = torch.tensor(self._bounds, dtype=torch.double)
+            X = normalize(torch.tensor(self._X, dtype=torch.double), bounds)
+            Y = torch.tensor(self._y, dtype=torch.double).unsqueeze(-1)
+            Y = (Y - Y.mean()) / (Y.std() + 1e-9)  # standardize for stable GP fit
+            gp = SingleTaskGP(X, Y)
+            fit_gpytorch_mll(ExactMarginalLogLikelihood(gp.likelihood, gp))
+            acq = LogExpectedImprovement(gp, best_f=Y.max())
+            d = len(self.factors)
+            unit = torch.stack(
+                [torch.zeros(d, dtype=torch.double), torch.ones(d, dtype=torch.double)]
+            )
+            cand, _ = optimize_acqf(acq, bounds=unit, q=1, num_restarts=5, raw_samples=64)
+            x = unnormalize(cand.detach(), bounds).squeeze(0).tolist()
+            return [self.factors[i].clip(v) for i, v in enumerate(x)]
+        except Exception:
+            return self._random_point()
+
+    def observe(self, x: list[float], y: float) -> None:
+        self._X.append(list(x))
+        self._y.append(float(y))
+
+
+
+    @property
+    def engine(self) -> str:
+        return "botorch-ei"
+
+
+def build_optimizer(factors: list[Factor], seed: int = 0):
+    """Return the best available optimizer, falling back to the numpy engine.
+
+    Priority: BoTorch GP-EI (bo extra) > Optuna (optimize) > numpy UCB.
+    Construction-time failures degrade gracefully to the next tier.
+
+    (A Summit SOBO adapter used to sit between BoTorch and Optuna. It was removed: Summit pins
+    ``torch<2.0`` so no extra of this project could install it, no CI job ever exercised it, and
+    it fed the strategy only the *last* observation — the surrogate never saw more than one point.)
+    """
+    if _botorch_available():
+        try:
+            return BotorchOptimizer(factors=factors, seed=seed)
+        except Exception as exc:
+            log_handled_exception(logger, exc, "handled exception")
+    if _optuna_available():
+        try:
+            return OptunaOptimizer(factors=factors, seed=seed)
+        except Exception as exc:
+            log_handled_exception(logger, exc, "handled exception")
+    return BayesianOptimizer(factors=factors, seed=seed)

@@ -1,0 +1,341 @@
+"""KB P3 tests — recommendation grounding via persistent KB + DOE parameter fusion."""
+from __future__ import annotations
+
+import pytest
+
+from app.config import get_settings
+from app.db.chunk_store import ChunkStore
+from app.db.database import Base, make_engine, make_session_factory
+from app.domain.schemas import Evidence, Requirement
+from app.services import kb_index
+
+
+@pytest.fixture(autouse=True)
+def _fresh(monkeypatch):
+    monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
+def stores(tmp_path, monkeypatch):
+    import app.db.chunk_store as chunk_store_mod
+    import app.db.source_store as source_store_mod
+    from app.db.source_store import SourceStore
+
+    engine = make_engine(f"sqlite:///{tmp_path}/kb.db")
+    Base.metadata.create_all(engine)
+    factory = make_session_factory(engine)
+    src = SourceStore(factory)
+    chk = ChunkStore(factory)
+    monkeypatch.setattr(source_store_mod, "_store", src)
+    monkeypatch.setattr(chunk_store_mod, "_store", chk)
+    return src, chk
+
+
+# ── retrieve_node KB fusion ──────────────────────────────────────────────────
+
+
+def _kb_hit(ident: str = "kb:s1#c0") -> Evidence:
+    return Evidence(
+        source="patent", identifier=ident, title="专利 · 实施例 1",
+        snippet="环氧底漆磷酸锌十五份，盐雾七百二十小时。", relevance=0.85,
+    )
+
+
+def test_retrieve_node_merges_kb_chunks(monkeypatch, stores):
+    from app.pipeline.research_graph import retrieve_node
+
+    monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
+    get_settings.cache_clear()
+    hit = _kb_hit()
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks_hybrid",
+        lambda q, k=4, **kwargs: [hit],
+    )
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks", lambda q, k=4, project_id=None: [hit]
+    )
+    state = retrieve_node({"topic": "环氧防腐底漆", "query": "环氧防腐底漆"})
+    ids = [e.identifier for e in state["evidence"]]
+    assert "kb:s1#c0" in ids
+
+
+def test_retrieve_node_dedupes_kb_against_colbert(monkeypatch, stores):
+    from app.pipeline.research_graph import retrieve_node
+
+    monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
+    get_settings.cache_clear()
+    hit = _kb_hit()
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks_hybrid",
+        lambda q, k=4, **kwargs: [hit],
+    )
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks", lambda q, k=4, project_id=None: [hit]
+    )
+    state = retrieve_node(
+        {"topic": "环氧防腐底漆", "query": "环氧防腐底漆", "pre_index": [hit]}
+    )
+    ids = [e.identifier for e in state["evidence"]]
+    assert ids.count("kb:s1#c0") == 1
+
+
+def test_retrieve_node_kb_disabled_no_call(monkeypatch, stores):
+    # v6 起 KG 默认开启：KG 语义检索会调 search_chunks。要验证「检索层
+    # 完全禁用时零调用」，须同时关 KG 与 KB 两个开关（KG 是新的调用者）。
+    monkeypatch.setenv("FORMUNEX_KB_V2_ENABLED", "false")
+    monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
+    get_settings.cache_clear()
+    from app.pipeline.research_graph import retrieve_node
+
+    called = []
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks", lambda q, k=4, project_id=None: called.append(q) or []
+    )
+    retrieve_node({"topic": "环氧防腐底漆", "query": "环氧防腐底漆"})
+    assert called == []
+
+
+def test_retrieve_node_kb_topk_zero_no_call(monkeypatch, stores):
+    # 同 kb_disabled：KG 默认开时是 search_chunks 的调用者，须同时关掉。
+    monkeypatch.setenv("FORMUNEX_KB_RECOMMEND_TOP_K", "0")
+    monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
+    get_settings.cache_clear()
+    from app.pipeline.research_graph import retrieve_node
+
+    called = []
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks", lambda q, k=4, project_id=None: called.append(q) or []
+    )
+    retrieve_node({"topic": "环氧防腐底漆", "query": "环氧防腐底漆"})
+    assert called == []
+
+
+# ── parameter-space aggregation ──────────────────────────────────────────────
+
+
+def _guide(space: dict) -> dict:
+    return {
+        "summary": "s", "key_entities": ["e"], "parameter_space": space,
+        "faqs": ["q"], "status": "verified",
+    }
+
+
+def test_aggregate_parameter_space_unions_ranges(stores):
+    src, _ = stores
+    with src._session_factory() as session:
+        from app.db.models import SourceDocument
+
+        session.add(SourceDocument(
+            id="a", filename="a", title="a", source_kind="local", content_hash="ha",
+            full_text="x", raw_text_chars=1,
+            source_guide=_guide({"固化温度": {"min_value": 60, "max_value": 80, "unit": "°C"}}),
+        ))
+        session.add(SourceDocument(
+            id="b", filename="b", title="b", source_kind="patent", content_hash="hb",
+            full_text="x", raw_text_chars=1,
+            source_guide=_guide({"固化温度": {"min_value": 70, "max_value": 120, "unit": "°C"},
+                                 "磷酸锌": {"min_value": 5, "max_value": 20, "unit": "wt%"}}),
+        ))
+        session.commit()
+
+    fused = kb_index.aggregate_parameter_space()
+    assert fused["固化温度"]["min"] == 60
+    assert fused["固化温度"]["max"] == 120
+    assert fused["固化温度"]["sources"] == 2
+    assert fused["磷酸锌"]["unit"] == "wt%"
+
+
+def test_aggregate_parameter_space_empty_and_disabled(monkeypatch, stores):
+    assert kb_index.aggregate_parameter_space() == {}
+    monkeypatch.setenv("FORMUNEX_KB_V2_ENABLED", "false")
+    get_settings.cache_clear()
+    assert kb_index.aggregate_parameter_space() == {}
+
+
+def test_doe_parameter_hints_match_factor_names(monkeypatch, stores):
+    monkeypatch.setattr(
+        kb_index, "aggregate_parameter_space",
+        lambda: {"固化温度": {"min": 60, "max": 120, "unit": "°C", "sources": 2}},
+    )
+    hints = kb_index.doe_parameter_hints(["固化温度", "磷酸锌用量"])
+    assert len(hints) == 1
+    assert "固化温度" in hints[0]
+    assert "60–120 °C" in hints[0]
+    assert "2 个来源" in hints[0]
+
+
+def test_doe_parameter_hints_no_match_is_silent(monkeypatch, stores):
+    monkeypatch.setattr(
+        kb_index, "aggregate_parameter_space",
+        lambda: {"烘烤时间": {"min": 10, "max": 30, "unit": "min", "sources": 1}},
+    )
+    assert kb_index.doe_parameter_hints(["固化温度"]) == []
+
+
+def test_build_doe_appends_kb_hints(monkeypatch, stores):
+    from app.pipeline.workflow import build_doe
+
+    monkeypatch.setattr(
+        "app.services.kb_index.doe_parameter_hints",
+        lambda names: [f"知识库文献范围：{names[0]} ≈ 1–2 %（1 个来源）"] if names else [],
+    )
+    req = Requirement(domain="anticorrosion_coating", description="环氧防腐底漆")
+    plan = build_doe(req)
+    assert "知识库文献范围" in plan.notes
+
+
+def test_build_doe_unchanged_without_kb_hints(monkeypatch, stores):
+    from app.pipeline.workflow import build_doe
+
+    monkeypatch.setattr("app.services.kb_index.doe_parameter_hints", lambda names: [])
+    req = Requirement(domain="anticorrosion_coating", description="环氧防腐底漆")
+    plan = build_doe(req)
+    assert "知识库文献范围" not in (plan.notes or "")
+
+
+# ── probe → recommend hybrid fuse ────────────────────────────────────────────
+
+
+def test_resolve_grounded_evidence_fuses_hybrid(monkeypatch, stores):
+    from app.pipeline.research_graph import resolve_grounded_evidence
+
+    monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
+    get_settings.cache_clear()
+
+    class _Hit:
+        def __init__(self, ev):
+            self.evidence = ev
+
+    colbert_ev = Evidence(
+        source="literature",
+        identifier="lit:1",
+        title="文献命中",
+        snippet="colbert",
+        relevance=0.7,
+    )
+    kb_ev = _kb_hit("kb:hybrid#c0")
+
+    monkeypatch.setattr(
+        "app.services.colbert_store.search",
+        lambda q, k=8, settings=None: [_Hit(colbert_ev)],
+    )
+    monkeypatch.setattr(
+        "app.services.colbert_store.index_evidence",
+        lambda *a, **k: None,
+    )
+    called = {}
+
+    def _hybrid(q, k=4, **kw):
+        called.update(kw)
+        called["k"] = k
+        called["q"] = q
+        return [kb_ev]
+
+    monkeypatch.setattr("app.services.kb_index.search_chunks_hybrid", _hybrid)
+
+    req = Requirement(
+        domain="anticorrosion_coating",
+        description="环氧防腐",
+        project_id="proj-1",
+    )
+    out = resolve_grounded_evidence(req, "环氧防腐底漆")
+    ids = [e.identifier for e in out.evidence]
+    assert "lit:1" in ids
+    assert "kb:hybrid#c0" in ids
+    assert called.get("project_id") == "proj-1"
+    assert called.get("include_global") is True
+
+
+def test_resolve_grounded_evidence_topk_zero_skips_hybrid(monkeypatch, stores):
+    from app.pipeline.research_graph import resolve_grounded_evidence
+
+    monkeypatch.setenv("FORMUNEX_KB_RECOMMEND_TOP_K", "0")
+    monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
+    get_settings.cache_clear()
+
+    class _Hit:
+        def __init__(self, ev):
+            self.evidence = ev
+
+    monkeypatch.setattr(
+        "app.services.colbert_store.search",
+        lambda q, k=8, settings=None: [
+            _Hit(
+                Evidence(
+                    source="literature",
+                    identifier="lit:1",
+                    title="t",
+                    snippet="s",
+                    relevance=0.5,
+                )
+            )
+        ],
+    )
+    monkeypatch.setattr("app.services.colbert_store.index_evidence", lambda *a, **k: None)
+    called = []
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks_hybrid",
+        lambda *a, **k: called.append(1) or [],
+    )
+    out = resolve_grounded_evidence(
+        Requirement(domain="anticorrosion_coating", description="x"), "x"
+    )
+    assert called == []
+    assert [e.identifier for e in out.evidence] == ["lit:1"]
+
+
+def test_retrieve_node_uses_hybrid_when_enabled(monkeypatch, stores):
+    from app.pipeline.research_graph import retrieve_node
+
+    monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
+    monkeypatch.setenv("FORMUNEX_KB_RECOMMEND_USE_HYBRID", "true")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr(
+        "app.pipeline.research_graph._search_one",
+        lambda *a, **k: [],
+    )
+    monkeypatch.setattr(
+        "app.pipeline.research_graph.llm_rerank",
+        lambda q, ev, k=8: ev,
+    )
+    hybrid_called = []
+    legacy_called = []
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks_hybrid",
+        lambda q, k=4, **kw: hybrid_called.append(kw) or [_kb_hit()],
+    )
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks",
+        lambda q, k=4, project_id=None: legacy_called.append(q) or [],
+    )
+    state = retrieve_node({"topic": "环氧防腐底漆", "query": "环氧防腐底漆"})
+    assert hybrid_called
+    assert legacy_called == []
+    assert "kb:s1#c0" in [e.identifier for e in state["evidence"]]
+
+
+def test_retrieve_node_falls_back_to_search_chunks_when_hybrid_off(monkeypatch, stores):
+    from app.pipeline.research_graph import retrieve_node
+
+    monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
+    monkeypatch.setenv("FORMUNEX_KB_RECOMMEND_USE_HYBRID", "false")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr("app.pipeline.research_graph._search_one", lambda *a, **k: [])
+    monkeypatch.setattr("app.pipeline.research_graph.llm_rerank", lambda q, ev, k=8: ev)
+    hybrid_called = []
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks_hybrid",
+        lambda *a, **k: hybrid_called.append(1) or [],
+    )
+    monkeypatch.setattr(
+        "app.services.kb_index.search_chunks",
+        lambda q, k=4, project_id=None: [_kb_hit("kb:legacy#c0")],
+    )
+    state = retrieve_node({"topic": "环氧防腐底漆", "query": "环氧防腐底漆"})
+    assert hybrid_called == []
+    assert "kb:legacy#c0" in [e.identifier for e in state["evidence"]]

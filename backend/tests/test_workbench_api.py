@@ -1,0 +1,274 @@
+"""Tests for DOE workbench campaign persistence and sync API."""
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import get_settings
+from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.database import make_engine, make_session_factory
+from app.domain.schemas import DOEPlan, DOERun, ProductDomain, Requirement, ObjectiveSpec
+from app.main import app
+
+
+def _plan() -> DOEPlan:
+    return DOEPlan(
+        design="lhs",
+        factors=[],
+        runs=[
+            DOERun(run_id=1, coded={}, natural={"Zinc phosphate": 8.0, "cure_temperature_c": 80.0}),
+            DOERun(run_id=2, coded={}, natural={"Zinc phosphate": 10.0, "cure_temperature_c": 85.0}),
+        ],
+        notes="test",
+        plan_id="abc12345",
+        domain=ProductDomain.anticorrosion_coating,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _sqlite_campaign_backend(monkeypatch):
+    monkeypatch.setenv("FORMUNEX_CAMPAIGN_BACKEND", "sqlite")
+    get_settings.cache_clear()
+    yield
+    reset_campaign_store(None)
+    get_settings.cache_clear()
+
+
+def _client_with_memory_db(tmp_path):
+    db_path = tmp_path / "workbench.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    factory = make_session_factory(engine)
+    reset_campaign_store(SqliteCampaignStore(factory))
+    return TestClient(app)
+
+
+def _requirement() -> Requirement:
+    return Requirement(
+        domain=ProductDomain.anticorrosion_coating,
+        objectives=[
+            ObjectiveSpec(metric="salt_spray_hours", weight=0.6, direction="maximize"),
+            ObjectiveSpec(metric="cost_cny_per_kg", weight=0.4, direction="minimize"),
+        ],
+    )
+
+
+def test_create_workbench_campaign_with_objectives_snapshot(tmp_path):
+    client = _client_with_memory_db(tmp_path)
+    req = _requirement()
+    res = client.post(
+        "/api/experiments/workbench/campaigns",
+        json={"plan": _plan().model_dump(), "requirement": req.model_dump()},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["objectives_snapshot"]) == 2
+    assert body["primary_metric"] == "salt_spray_hours"
+    assert "salt_spray_hours" in body["rows"][0]["measurements"]
+    assert "cost_cny_per_kg" in body["rows"][0]["measurements"]
+
+
+def test_create_workbench_campaign(tmp_path):
+    client = _client_with_memory_db(tmp_path)
+    res = client.post("/api/experiments/workbench/campaigns", json={"plan": _plan().model_dump()})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["campaign_id"] >= 1
+    assert len(body["rows"]) == 2
+    assert body["rows"][0]["status"] == "Pending"
+    assert body["rows"][0]["planned_params"]["Zinc phosphate"] == 8.0
+    assert body["rows"][0]["item_id"]
+
+
+def test_sync_workbench_marks_completed(tmp_path):
+    client = _client_with_memory_db(tmp_path)
+    created = client.post("/api/experiments/workbench/campaigns", json={"plan": _plan().model_dump()}).json()
+    campaign_id = created["campaign_id"]
+    row = created["rows"][0]
+
+    sync = client.put(
+        "/api/experiments/workbench/sync",
+        json={
+            "campaign_id": campaign_id,
+            "rows": [
+                {
+                    "id": row["id"],
+                    "status": "Pending",
+                    "actual_params": {"Zinc phosphate": 8.5, "cure_temperature_c": 81.0},
+                    "measurements": {"salt_spray_hours": 860.0},
+                }
+            ],
+        },
+    )
+    assert sync.status_code == 200
+    updated = sync.json()
+    assert updated["updated"] == 1
+    assert updated["rows"][0]["status"] == "Completed"
+    assert updated["rows"][0]["measurements"]["salt_spray_hours"] == 860.0
+
+
+def test_fetch_campaign_data_for_baybe_multi_metric(tmp_path):
+    # pandas ships with the `baybe` extra, not the offline baseline.
+    pd = pytest.importorskip("pandas", reason="pandas is in the baybe extra")
+
+    from app.services.engines.baybe_engine import fetch_campaign_data_for_baybe
+
+    client = _client_with_memory_db(tmp_path)
+    req = _requirement()
+    created = client.post(
+        "/api/experiments/workbench/campaigns",
+        json={"plan": _plan().model_dump(), "requirement": req.model_dump()},
+    ).json()
+    campaign_id = created["campaign_id"]
+    row = created["rows"][0]
+    client.put(
+        "/api/experiments/workbench/sync",
+        json={
+            "campaign_id": campaign_id,
+            "rows": [
+                {
+                    "id": row["id"],
+                    "actual_params": {"Zinc phosphate": 9.0, "cure_temperature_c": 82.0},
+                    "measurements": {"salt_spray_hours": 900.0, "cost_cny_per_kg": 18.5},
+                }
+            ],
+        },
+    )
+
+    from app.db.campaign_store import get_campaign_store
+
+    actual_X, measurements_Y = fetch_campaign_data_for_baybe(
+        campaign_id, req, store=get_campaign_store()
+    )
+    assert list(measurements_Y.columns) == ["salt_spray_hours", "cost_cny_per_kg"]
+    assert float(measurements_Y.iloc[0]["salt_spray_hours"]) == 900.0
+    assert float(measurements_Y.iloc[0]["cost_cny_per_kg"]) == 18.5
+    merged = pd.concat([actual_X, measurements_Y], axis=1)
+    assert "salt_spray_hours" in merged.columns
+    assert "cost_cny_per_kg" in merged.columns
+
+
+def test_fetch_campaign_data_for_baybe(tmp_path):
+    pd = pytest.importorskip("pandas", reason="pandas is in the baybe extra")
+
+    from app.services.engines.baybe_engine import fetch_campaign_data_for_baybe
+    from app.db.campaign_store import get_campaign_store
+
+    client = _client_with_memory_db(tmp_path)
+    created = client.post("/api/experiments/workbench/campaigns", json={"plan": _plan().model_dump()}).json()
+    campaign_id = created["campaign_id"]
+    row = created["rows"][0]
+    client.put(
+        "/api/experiments/workbench/sync",
+        json={
+            "campaign_id": campaign_id,
+            "rows": [
+                {
+                    "id": row["id"],
+                    "actual_params": {"Zinc phosphate": 9.0, "cure_temperature_c": 82.0},
+                    "measurements": {"salt_spray_hours": 900.0},
+                }
+            ],
+        },
+    )
+
+    actual_X, measurements_Y = fetch_campaign_data_for_baybe(
+        campaign_id, _requirement(), store=get_campaign_store()
+    )
+    assert not actual_X.empty
+    assert not measurements_Y.empty
+    assert float(actual_X.iloc[0]["Zinc phosphate"]) == 9.0
+    assert float(measurements_Y.iloc[0]["salt_spray_hours"]) == 900.0
+    merged = pd.concat([actual_X, measurements_Y], axis=1)
+    assert "salt_spray_hours" in merged.columns
+
+
+def test_search_experiments_local_scan(tmp_path, monkeypatch):
+    """Regression: the local-SQLite-scan fallback imported from the
+    nonexistent app.api.database module and crashed with ModuleNotFoundError
+    on every request that reached it (the default config with no live
+    Datalab, or campaign_backend=sqlite as set here)."""
+    from app.db.database import default_session_factory
+    from app.db.models import Campaign
+
+    db_path = tmp_path / "search.db"
+    monkeypatch.setenv("FORMUNEX_DB_URL", f"sqlite:///{db_path}")
+    with default_session_factory()() as session:
+        session.add(
+            Campaign(
+                name="c1",
+                sample_refs=[
+                    {
+                        "id": 1,
+                        "item_id": "fm_c1_r1",
+                        "status": "Pending",
+                        "tags": ["urgent"],
+                        "planned_params": {},
+                        "measurements": {},
+                    }
+                ],
+            )
+        )
+        session.commit()
+
+    client = TestClient(app)
+    res = client.get("/api/experiments/search", params={"q": "urgent"})
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["item_id"] == "fm_c1_r1"
+
+
+def test_put_row_tags_field_only(tmp_path):
+    """P6: dedicated tags endpoint must update tags without wiping other fields."""
+    client = _client_with_memory_db(tmp_path)
+    created = client.post(
+        "/api/experiments/workbench/campaigns", json={"plan": _plan().model_dump()}
+    ).json()
+    campaign_id = created["campaign_id"]
+    row = created["rows"][0]
+
+    # Seed note via field endpoint (avoids sync→training migrate side effects).
+    note_seed = client.put(
+        f"/api/experiments/workbench/{campaign_id}/rows/{row['id']}/note",
+        json={"note": "keep-me"},
+    )
+    assert note_seed.status_code == 200, note_seed.text
+
+    tags_res = client.put(
+        f"/api/experiments/workbench/{campaign_id}/rows/{row['id']}/tags",
+        json={"tags": ["urgent", "pilot"]},
+    )
+    assert tags_res.status_code == 200, tags_res.text
+    body = tags_res.json()
+    assert body["tags"] == ["urgent", "pilot"]
+    assert body["note"] == "keep-me"
+
+    # Missing row → 404
+    missing = client.put(
+        f"/api/experiments/workbench/{campaign_id}/rows/99999/tags",
+        json={"tags": ["x"]},
+    )
+    assert missing.status_code == 404
+
+
+def test_put_row_note_field_only(tmp_path):
+    """P6: dedicated note endpoint must not clobber tags/params."""
+    client = _client_with_memory_db(tmp_path)
+    created = client.post(
+        "/api/experiments/workbench/campaigns", json={"plan": _plan().model_dump()}
+    ).json()
+    campaign_id = created["campaign_id"]
+    row = created["rows"][0]
+
+    client.put(
+        f"/api/experiments/workbench/{campaign_id}/rows/{row['id']}/tags",
+        json={"tags": ["keep"]},
+    )
+    note_res = client.put(
+        f"/api/experiments/workbench/{campaign_id}/rows/{row['id']}/note",
+        json={"note": "field-only note"},
+    )
+    assert note_res.status_code == 200, note_res.text
+    body = note_res.json()
+    assert body["note"] == "field-only note"
+    assert body["tags"] == ["keep"]

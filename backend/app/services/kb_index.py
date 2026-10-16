@@ -1,0 +1,1826 @@
+"""Persistent knowledge-base index — chunk, embed and retrieve across restarts.
+
+Every ingested/fetched SourceDocument gets structure-aware chunk rows in
+``document_chunks`` (see ``db.chunk_store``).  When sentence-transformers is
+installed the chunks carry normalized embeddings, so chat retrieval is true
+semantic search over the *whole* accumulated corpus — not just the sources a
+client happens to send with one request.  Without embeddings, retrieval
+degrades to token-overlap scoring over the same rows.
+
+Gated by ``FORMUNEX_KB_V2_ENABLED`` (default on; pure-local, no network).
+"""
+from __future__ import annotations
+
+import logging
+import re
+import time
+from typing import TYPE_CHECKING
+
+from ..config import get_settings
+from ..domain.schemas import Evidence
+from .errors import degrade_return, log_handled_exception
+from .metadata_tags import extract_patent_tags
+
+if TYPE_CHECKING:  # v10: 仅类型注解用，避免运行时导入开销
+    from collections.abc import Callable
+
+    from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+# ── P3-5: ingest-time embedding coverage counters (process-local) ──────────
+# Bump on every index_source() embed pass; read by /api/ops/evidence-stats.
+# B-3: the counters persist in the ``kb_coverage_counters`` SQLite table
+# (source of truth across restarts/processes); the process-local dict is
+# only a fail-open fallback when the DB is unavailable.
+import threading as _threading
+
+# v16 P2-8: embedding 模型熔断 —— 连续失败 N 次后跳过该模型（走 BM25），
+# 避免每次 ingest 都付失败成本；进程重启自动恢复。
+_EMBED_BREAKER_LOCK = _threading.Lock()
+_EMBED_FAIL_COUNT: dict[str, int] = {}
+_EMBED_BREAKER_THRESHOLD = 5
+_EMBED_BROKEN: dict[str, float] = {}  # v22: 模型名 → 熔断时间戳（含 TTL，超时自动半开重试）
+_EMBED_BREAKER_COOLDOWN_S = 600.0  # v22: 熔断冷却时间（秒），超时后允许一次半开重试
+
+def reset_embed_breaker() -> None:
+    """Close every embedding-model breaker (test seam; a restart does the same in production).
+
+    The breaker is process-global, and an environment without sentence-transformers fails every real embedding call: five
+    ingests in one test process open it, after which every later test that mocks ``_embed_texts`` is skipped by the
+    breaker instead of reaching its mock - whether such a test passes then depends on which files ran before it.
+    """
+    with _EMBED_BREAKER_LOCK:
+        _EMBED_FAIL_COUNT.clear()
+        _EMBED_BROKEN.clear()
+
+
+_KB_COVERAGE_LOCK = _threading.Lock()
+# v15: 按语言分桶（en/zh 有向量；bm25_fallback 无向量走 BM25）
+_KB_COVERAGE = {
+    "kb_chunks_embedded": 0,
+    "kb_chunks_total": 0,
+    "kb_chunks_embedded_en": 0,
+    "kb_chunks_embedded_zh": 0,
+    "kb_chunks_bm25_fallback": 0,
+}
+_KB_COVERAGE_KEYS = (
+    "kb_chunks_embedded",
+    "kb_chunks_total",
+    "kb_chunks_embedded_en",
+    "kb_chunks_embedded_zh",
+    "kb_chunks_bm25_fallback",
+)
+
+
+def _coverage_session_factory():
+    from ..db.database import default_session_factory
+
+    return default_session_factory()
+
+
+def _read_kb_coverage_db() -> dict[str, int] | None:
+    """Read counters from SQLite. None when the table/DB is unavailable."""
+    from sqlalchemy import text as _text
+
+    try:
+        with _coverage_session_factory()() as session:
+            rows = session.execute(
+                _text("SELECT key, value FROM kb_coverage_counters")
+            ).all()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("kb coverage read failed, using process-local: %s", exc)
+        return None
+    out = {k: 0 for k in _KB_COVERAGE_KEYS}
+    for k, v in rows:
+        if k in out:
+            out[k] = int(v or 0)
+    return out
+
+
+def get_kb_coverage_stats() -> dict[str, int]:
+    """Snapshot of the ingest embedding-coverage counters (B-3: DB-backed)."""
+    db_vals = _read_kb_coverage_db()
+    if db_vals is not None:
+        return db_vals
+    with _KB_COVERAGE_LOCK:
+        return dict(_KB_COVERAGE)
+
+
+def _count_source_chunks(source_id: str) -> tuple[int, int, int, int]:
+    """v16 P1-7: 统计某 source 的 (total, embedded, embedded_en, embedded_zh)。
+
+    用于 re-ingest 前扣减旧计数。语言从 embedding_model 名推断
+    （bge/zh → zh，其余 → en）；fail-open 返回全零。
+    v18-4: 同时统计 embedding_blob（P0-1 backfill 产物），与
+    delete_for_source 同口径，否则删除扣减不足。
+    """
+    try:
+        from ..db.chunk_store import get_chunk_store
+
+        store = get_chunk_store()
+        rows = store.get_by_source(source_id, limit=100000)
+        total = len(rows)
+        embedded = 0
+        en = 0
+        zh = 0
+        for r in rows:
+            # v18-4: 向量可能在 embedding (JSON) 或 embedding_blob (BLOB)
+            if getattr(r, "embedding", None) or getattr(r, "embedding_blob", None):
+                embedded += 1
+                # v22-fix: 优先按 DB lang 列分桶（与 bump 侧口径一致），NULL 时回退模型名推断。
+                lang = (getattr(r, "lang", "") or "").lower()
+                if not lang:
+                    mname = (getattr(r, "embedding_model", "") or "").lower()
+                    lang = "zh" if ("bge" in mname or "zh" in mname) else "en"
+                if lang == "zh":
+                    zh += 1
+                else:
+                    en += 1
+        return total, embedded, en, zh
+    except Exception:  # noqa: BLE001
+        return 0, 0, 0, 0
+
+
+def _bump_kb_coverage(
+    *,
+    embedded: int,
+    total: int,
+    embedded_en: int = 0,
+    embedded_zh: int = 0,
+    bm25_fallback: int = 0,
+) -> None:
+    """v15: 支持按语言分桶（en/zh/bm25_fallback）；旧调用方只传 embedded/total 仍兼容。"""
+    deltas = {
+        "kb_chunks_embedded": embedded,
+        "kb_chunks_total": total,
+        "kb_chunks_embedded_en": embedded_en,
+        "kb_chunks_embedded_zh": embedded_zh,
+        "kb_chunks_bm25_fallback": bm25_fallback,
+    }
+    with _KB_COVERAGE_LOCK:
+        for key, delta in deltas.items():
+            _KB_COVERAGE[key] += delta
+    # B-3: write-through to SQLite (atomic increment, cross-process safe via
+    # the shared sqlite write lock). Failure never breaks ingest.
+    try:
+        from sqlalchemy import text as _text
+
+        from ..db.session_utils import commit_session
+
+        with commit_session(_coverage_session_factory()) as session:
+            for key, delta in deltas.items():
+                session.execute(
+                    _text(
+                        "INSERT INTO kb_coverage_counters (key, value, updated_at) "
+                        "VALUES (:k, :v, CURRENT_TIMESTAMP) "
+                        "ON CONFLICT(key) DO UPDATE SET "
+                        "value = kb_coverage_counters.value + excluded.value, "
+                        "updated_at = excluded.updated_at"
+                    ),
+                    {"k": key, "v": int(delta)},
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("kb coverage persist failed: %s", exc)
+
+
+def _bump_kb_coverage_for_rows(rows: list[dict], old_counts: tuple[int, int, int, int] = (0, 0, 0, 0)) -> None:
+    """Net coverage change of replacing a source's ``old_counts`` (total, embedded, en, zh) with ``rows``.
+
+    ``rows=[]`` is the delete / blocked-source case: it just subtracts the old counts. Rows are bucketed by their own
+    ``lang`` (default en), the same as ``index_source``.
+    """
+    old_total, old_emb, old_en, old_zh = old_counts
+    embedded = [r for r in rows if r.get("embedding")]
+    n_en = sum(1 for r in embedded if (r.get("lang") or "en") == "en")
+    n_zh = sum(1 for r in embedded if (r.get("lang") or "en") == "zh")
+    _bump_kb_coverage(
+        embedded=len(embedded) - old_emb,
+        total=len(rows) - old_total,
+        embedded_en=n_en - old_en,
+        embedded_zh=n_zh - old_zh,
+        bm25_fallback=(len(rows) - len(embedded)) - (old_total - old_emb),
+    )
+
+
+def reset_kb_coverage_stats() -> None:
+    """Test seam: zero both the DB counters and the process-local fallback."""
+    # v16: 遍历 _KB_COVERAGE_KEYS —— v15-5 加了新分桶但 reset 漏了，硬编码必再漏。
+    with _KB_COVERAGE_LOCK:
+        for key in _KB_COVERAGE_KEYS:
+            _KB_COVERAGE[key] = 0
+    try:
+        from sqlalchemy import text as _text
+
+        from ..db.session_utils import commit_session
+
+        with commit_session(_coverage_session_factory()) as session:
+            session.execute(_text("DELETE FROM kb_coverage_counters"))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("kb coverage reset failed: %s", exc)
+
+
+
+def _sync_source_fts(source_id: str, rows: list[dict], settings) -> None:
+    """W2-1 (P1-6): mirror KB chunk rows into the chunk-level FTS5 index.
+
+    Fail-open by construction (``index_source_chunks`` never raises); an empty
+    ``rows`` clears stale FTS rows for the source.
+    """
+    if not settings.source_fts_enabled:
+        return
+    try:
+        from .source_fts import index_source_chunks
+
+        index_source_chunks(source_id, rows or [])
+    except Exception as exc:  # noqa: BLE001 — belt and suspenders
+        degrade_return(logger, exc, "source FTS sync failed", None)
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]")
+
+
+def kb_enabled() -> bool:
+    return get_settings().kb_v2_enabled
+
+
+# ── embedding helpers (optional sentence-transformers) ───────────────────────
+
+
+def _embed_texts(texts: list[str], model_name: str | None = None) -> list[list[float]] | None:
+    """Normalized embeddings via the shared rag model, or None when unavailable.
+
+    ``model_name`` 缺省 = ``rag.embed_model_name()``(全局配置/默认 MiniLM);
+    双语路由传具体子库模型(zh → bge)。bge 查询指令前缀在调用方处理。
+    """
+    if not texts:
+        return []
+    try:
+        from .rag import _load_model, embed_model_name
+
+        model = _load_model(model_name or embed_model_name())
+        vectors = model.encode(texts, normalize_embeddings=True)
+        return [[float(x) for x in v] for v in vectors]
+    except Exception as exc:
+        return degrade_return(logger, exc, "kb embedding unavailable", None)
+
+
+def _embed_model_name() -> str:
+    from .rag import embed_model_name
+
+    return embed_model_name()
+
+
+def _dot(a: list[float], b: list[float]) -> float:
+    """Dot product of two equal-length, already-normalised vectors.
+
+    Callers must have established comparability first (see
+    ``comparable_embedding``) — this deliberately does not tolerate a length
+    mismatch, because the tolerant version is what silently produced garbage
+    scores.
+
+    Kept in plain Python after measuring: at 5000 chunks, numpy per-row is
+    ~68→62 ms at 384 dims and ~276→232 ms at 1536, and a batched matmul is
+    *slower* at 384 (128 ms) because materialising the matrix from JSON lists
+    dominates. The multiply was never the cost, so the dependency and the
+    conversion churn would buy ~16% at the top end and nothing typical.
+    """
+    return sum(x * y for x, y in zip(a, b))
+
+
+def chunk_embedding_list(chunk) -> list[float] | None:
+    """Read a chunk's embedding, BLOB-first (``embedding_blob``), JSON-fallback.
+
+    P0-1 backfill wrote vectors to ``embedding_blob`` only; the legacy JSON
+    ``embedding`` column is empty for those rows (2087 chunks: 88 JSON vs
+    2085 BLOB). All brute-force scoring must go through this helper, never
+    ``chunk.embedding`` directly. Never raises.
+    """
+    try:
+        raw = getattr(chunk, "embedding_blob", None)
+        if raw:
+            import struct
+
+            buf = bytes(raw)
+            n = len(buf) // 4
+            if n:
+                return list(struct.unpack(f"<{n}f", buf[: n * 4]))
+        js = getattr(chunk, "embedding", None)
+        if js:
+            return [float(x) for x in js]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def comparable_embedding(
+    chunk, query_dim: int, model_name: str
+) -> tuple[bool, list[float] | None]:
+    """Whether *chunk*'s vector can be dot-producted against the query vector.
+
+    Two vectors are only comparable when they came out of the same model. The
+    scoring loops used to express this as ``zip(query_vec, c.embedding)``,
+    which does not compare — it *truncates to the shorter one* and returns a
+    perfectly plausible number. A 384-dim query against 1536-dim stored
+    vectors yields scores that sort confidently and mean nothing, with no
+    exception and no log line. That is the failure this guard exists for, and
+    it becomes reachable the moment the embedding model is changed.
+
+    Dimension is the hard check. The model name is the subtle one: two
+    different 384-dim models occupy different semantic spaces, so equal length
+    is not sufficient.
+
+    Rows whose ``embedding_model`` is NULL predate the column being populated.
+    They are judged on dimension alone rather than excluded — excluding them
+    would silently gut retrieval on every existing corpus, which is the same
+    class of harm this guard is meant to prevent.
+
+    Returns ``(ok, vec)`` — the deserialized vector is returned alongside the
+    verdict so callers don't deserialize the BLOB twice (U-2).
+    """
+    vec = chunk_embedding_list(chunk)
+    if not vec or len(vec) != query_dim:
+        return False, None
+    stored = getattr(chunk, "embedding_model", None)
+    if stored and stored != model_name:
+        return False, None
+    return True, vec
+
+
+def _embedding_probe() -> bool:
+    """Importability check only — never loads model weights."""
+    from .rag import _embedding_available
+
+    return _embedding_available()
+
+
+def _vector_health(total: int, embedded: int, stale: int = 0) -> dict:
+    """Whether retrieval is *actually* semantic, plus what to do if it is not.
+
+    ``embedding_available`` is import-only by design (loading weights inside a
+    stats call would be absurd), but that makes it a promise the corpus may not
+    keep: the library imports, the model download fails, ``_embed_texts``
+    swallows it and returns None, and every chunk lands with a NULL vector while
+    the flag still says yes. Retrieval silently becomes token-set overlap.
+
+    So the honest signal is not "is the library installed" but "are there
+    vectors". ``vector_mode`` answers that:
+
+    ``semantic``  — vectors exist, retrieval is embedding-based
+    ``stale``     — vectors exist but were produced by a different embedding
+                    model, so they are not comparable to anything this model
+                    encodes. Those rows fall back to keyword scoring, and
+                    counting them as ``semantic`` was the last way this probe
+                    could still report green over a corpus it cannot search.
+    ``degraded``  — the library is installed but nothing got embedded; this is
+                    the case worth shouting about, because it looks fine
+    ``keyword``   — no embedding library; expected, not a fault
+    ``empty``     — nothing indexed yet, so there is nothing to say
+    """
+    from .rag import active_rag_backend
+
+    available = _embedding_probe()
+    if total <= 0:
+        mode, hint = "empty", ""
+    elif stale > 0 and stale >= embedded:
+        # Every vector belongs to another model — retrieval is keyword-only in
+        # practice, whatever the embedded count says.
+        mode = "stale"
+        hint = (
+            f"{stale} 个切块由其他 embedding 模型生成，无法与当前模型比较，"
+            "这些行已退回关键词匹配。点「重建索引」用当前模型重新向量化。"
+        )
+    elif stale > 0:
+        mode = "stale"
+        hint = (
+            f"{embedded - stale}/{embedded} 个切块可用于语义检索，"
+            f"另有 {stale} 个由其他 embedding 模型生成、已退回关键词匹配。"
+            "点「重建索引」可恢复全部语义排序。"
+        )
+    elif embedded > 0:
+        mode, hint = "semantic", ""
+    elif available:
+        mode = "degraded"
+        hint = (
+            "已安装向量库但没有任何切块被向量化——通常是模型权重未能下载。"
+            "检索当前退化为关键词匹配。请检查服务端网络后点「重建索引」。"
+        )
+    else:
+        mode = "keyword"
+        hint = "未安装 sentence-transformers，检索为关键词匹配。可在下方一键安装 Embedding 后点「重建索引」。"
+    return {"vector_mode": mode, "vector_hint": hint, "rag_backend": active_rag_backend()}
+
+
+def kb_vector_notice() -> dict | None:
+    """B-1: fail-open 降级提示位的数据源。
+
+    返回 ``_vector_health`` 的 ``{"vector_mode", "vector_hint", ...}`` 字典，
+    供 chat 响应在 KB 检索实际退化为关键词匹配（degraded/keyword/stale）时
+    透出可见提示。失败时返回 None（不阻断问答）。
+    """
+    try:
+        from ..db.chunk_store import get_chunk_store
+
+        total, embedded = get_chunk_store().counts()
+        stale = get_chunk_store().count_foreign_model(_embed_model_name())
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("kb_vector_notice unavailable: %s", exc)
+        return None
+    return _vector_health(total, embedded, stale)
+
+
+def kb_health_snapshot() -> dict:
+    """B-9: KB 健康仪表盘 v1 数据源。
+
+    返回 parser 分布、embedding 覆盖率（chunk 表实测，非 ingest 计数器）、
+    空文档率（零切块文档占比）。失败时返回 ``{"available": False}``
+    （fail-open，不阻断调用方）。
+    """
+    try:
+        from sqlalchemy import text as _text
+
+        from ..db.chunk_store import get_chunk_store
+
+        with _coverage_session_factory()() as session:
+            parser_rows = session.execute(
+                _text(
+                    "SELECT COALESCE(parser, 'unknown'), COUNT(*) "
+                    "FROM source_documents GROUP BY COALESCE(parser, 'unknown')"
+                )
+            ).all()
+            total_docs = session.execute(
+                _text("SELECT COUNT(*) FROM source_documents")
+            ).scalar() or 0
+            docs_with_chunks = session.execute(
+                _text("SELECT COUNT(DISTINCT source_id) FROM document_chunks")
+            ).scalar() or 0
+        chunk_total, chunk_embedded = get_chunk_store().counts()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("kb_health_snapshot unavailable: %s", exc)
+        return {"available": False}
+    empty_docs = max(0, total_docs - docs_with_chunks)
+    return {
+        "available": True,
+        "total_documents": total_docs,
+        "total_chunks": chunk_total,
+        "parser_distribution": {str(k): int(v) for k, v in parser_rows},
+        "embedding_coverage": {
+            "embedded_chunks": chunk_embedded,
+            "total_chunks": chunk_total,
+            "rate": (chunk_embedded / chunk_total) if chunk_total else None,
+        },
+        "empty_doc_rate": {
+            "empty_documents": empty_docs,
+            "total_documents": total_docs,
+            "rate": (empty_docs / total_docs) if total_docs else None,
+        },
+    }
+
+
+# ── indexing ─────────────────────────────────────────────────────────────────
+
+
+def ingest_full_document(source_id: str, text: str, metadata: dict | None = None) -> int:
+    """Full ingest: chunk + index + store offset info into document_chunks.
+
+    Idempotent: if ``document_chunks`` already contains rows for *source_id*,
+    skip and return 0.  Otherwise delegates to ``index_source`` for the full
+    chunking + embedding + store pipeline and returns the chunk count.
+
+    Never raises — ingest must not break callers.
+    """
+    if not kb_enabled() or not (text or "").strip():
+        return 0
+    try:
+        from ..db.chunk_store import get_chunk_store
+
+        # Idempotency guard: already ingested → skip
+        existing = get_chunk_store().get_by_source(source_id)
+        if existing:
+            logger.info(
+                "ingest_full_document: source %s already has %d chunks, skipping",
+                source_id, len(existing),
+            )
+            return 0
+
+        return index_source(source_id, text)
+    except Exception as exc:
+        return degrade_return(logger, exc, "ingest_full_document failed", 0)
+
+
+def _is_patent_source(source_id: str) -> bool:
+    """v2 P1-10: 是否为专利源（Example N 感知切分的开关）。fail-open → False。"""
+    try:
+        from ..db.source_store import get_source_store
+
+        doc = get_source_store().get(source_id)
+        return bool(doc and str(doc.source_kind or "").lower() == "patent")
+    except Exception:
+        return False
+
+
+def prepare_chunk_rows(
+    full_text: str,
+    source_id: str,
+    *,
+    embed: bool = True,
+    session: Session | None = None,
+    gate_fn: Callable[[list[dict]], tuple[list[dict], str | None]] | None = None,
+) -> list[dict] | None:
+    """U-1: 双写入路径的公共 chunk 准备逻辑.
+
+    `index_source`（上传/URL/wiki）和 `ingest_document_tx`（/api/kb/ingest）
+    都调它，使 chunking → gate → lang → entity → embedding → dedupe 六步在
+    双路径下保持一致（v10: 原"永远一致"夸大 —— gate_fn 由调用方传入，
+    传 None 时该步为空操作）。
+
+    `gate_fn`: 可选质量门 `rows -> (kept_rows, reason)`，在 embedding/dedupe
+    **之前**执行（v9：原 U-1 把 gate 放到 dedupe 之后，会造成
+    dedupe 以垃圾 chunk 为保留对象丢掉好 chunk 的数据丢失边角，
+    且垃圾 chunk 先 embedding 浪费计算）。
+
+    返回 rows；文本为空或全被过滤时返回 None（调用方标记 failed）。
+    不做 DB 写入、不 commit。`session` 透传给 dedupe（tx 路径用 caller session）。
+    """
+    from .chunking import chunk_markdown
+    from . import ingest_timing as timing
+
+    settings = get_settings()
+    with timing.span("chunk"):
+        # v2 P1-10: 专利 Example N 感知切分 —— 专利源按示例边界切分。
+        chunks = chunk_markdown(
+            full_text,
+            max_chars=settings.ingest_chunk_max_chars,
+            overlap=settings.ingest_chunk_overlap,
+            example_aware=_is_patent_source(source_id),
+        )
+        from .kb_retrieval_gate import chunk_floor, is_formula_text
+
+        # A formula is atomic and short by nature (``$$k = A e^{-E_a / (RT)}$$`` is 24 characters), so it is held to
+        # the gate's own floor instead of the 30-character one that suits running text.
+        formula_floor = chunk_floor()
+        chunks = [
+            c for c in chunks
+            if len(c.text.strip()) > 30
+            or (is_formula_text(c.text, c.block_type) and len(c.text.strip()) >= formula_floor)
+        ]
+        # P2-5: 超长文档截断记 warning（此前静默丢弃尾部 chunk）。
+        _cap = int(settings.kb_max_chunks_per_source or 0)
+        if _cap > 0 and len(chunks) > _cap:
+            logger.warning(
+                "kb index_source: %s chunk 数 %d 超上限 %d，截断尾部 %d 个",
+                source_id, len(chunks), _cap, len(chunks) - _cap,
+            )
+            chunks = chunks[:_cap]
+        if not chunks:
+            return None
+
+        rows: list[dict] = []
+        for c in chunks:
+            # Phase 0: rule-based patent tags（claim_no / example_no / section_title）
+            tags = extract_patent_tags(c.text, c.heading_path)
+            rows.append(
+                {
+                    "text": c.text,
+                    "heading_path": c.heading_path,
+                    "page_no": c.page_no,
+                    "page_end": c.page_end,  # PageIndex 借鉴 A5: 跨页末页
+                    "paragraph_idx": c.paragraph_idx,
+                    "offset_start": c.offset_start,
+                    "offset_end": c.offset_end,
+                    "bbox": c.bbox,
+                    "block_type": c.block_type,
+                    "meta": {"patent_tags": tags} if tags else None,
+                }
+            )
+
+        # v9: 质量门前置 —— 与原 index_source 顺序一致（gate 在 embed/dedupe 之前）。
+        if gate_fn is not None:
+            rows, _gate_reason = gate_fn(rows)
+            if not rows:
+                return None
+
+    # v16 P3-17: L1 exact-dedupe 前移到 embedding 之前 —— 重复 chunk 不再浪费向量计算。
+    # L2 near-dedupe 仍需向量，保留在 embedding 之后。
+    from .kb_dedup import l1_dedupe_chunk_rows
+
+    rows = l1_dedupe_chunk_rows(rows, source_id, session)
+    if not rows:
+        return None
+
+    # 双语分流：嵌入前预标 lang（与 chunk_store 写入判定同源）
+    from ..db.chunk_store import _detect_chunk_lang
+
+    for _r in rows:
+        _r["lang"] = _detect_chunk_lang(_r.get("text") or "")
+
+    with timing.span("entities"):
+        _attach_entities(source_id, rows)
+
+    if embed:
+        # 双语 embedding：zh chunks 用 bge(512维)，其余用全局模型(MiniLM 384维)
+        from .rag import embed_model_name as _model_for_lang
+
+        def _lang_of(r: dict) -> str:
+            return r.get("lang") or "en"
+
+        group_idxs: dict[str, list[int]] = {}
+        for _i, _r in enumerate(rows):
+            group_idxs.setdefault(_lang_of(_r), []).append(_i)
+        model_per_row: dict[int, str] = {}
+        vec_map: dict[int, list[float]] = {}
+        # v14-4: 单语言组失败只丢该组（走 BM25），不再整源丢弃向量。
+        failed_langs: set[str] = set()
+        with timing.span("embed"):
+            for lang, idxs in group_idxs.items():
+                mname = _model_for_lang(lang)
+                # v16 P2-8: 熔断检查 —— 已熔断模型直接跳过（走 BM25）。
+                # v22: 加 TTL，冷却超时后摘除并允许一次半开重试。
+                with _EMBED_BREAKER_LOCK:
+                    _broken_ts = _EMBED_BROKEN.get(mname)
+                    if _broken_ts is not None:
+                        if time.monotonic() - _broken_ts >= _EMBED_BREAKER_COOLDOWN_S:
+                            del _EMBED_BROKEN[mname]
+                            _EMBED_FAIL_COUNT[mname] = 0
+                            logger.info(
+                                "kb embedding circuit half-open: model %s cooldown expired, retrying",
+                                mname,
+                            )
+                        else:
+                            failed_langs.add(lang)
+                            logger.warning(
+                                "kb embedding skipped for lang %s (source %s): "
+                                "model %s circuit-broken",
+                                lang, source_id, mname,
+                            )
+                            continue
+                texts = [rows[i]["text"] for i in idxs]
+                try:
+                    vecs = _embed_texts(texts, mname)
+                except Exception:
+                    vecs = None
+                if not vecs or len(vecs) != len(idxs):
+                    failed_langs.add(lang)
+                    # v16 P2-8: 失败计数，达阈值熔断。
+                    with _EMBED_BREAKER_LOCK:
+                        _EMBED_FAIL_COUNT[mname] = _EMBED_FAIL_COUNT.get(mname, 0) + 1
+                        if _EMBED_FAIL_COUNT[mname] >= _EMBED_BREAKER_THRESHOLD:
+                            _EMBED_BROKEN[mname] = time.monotonic()
+                            logger.error(
+                                "kb embedding CIRCUIT-BROKEN: model %s failed %d times — "
+                                "skipping for %.0fs (cooldown)",
+                                mname, _EMBED_FAIL_COUNT[mname], _EMBED_BREAKER_COOLDOWN_S,
+                            )
+                    logger.error(
+                        "kb embedding failed for lang %s (source %s) — "
+                        "%d rows fall back to BM25",
+                        lang, source_id, len(idxs),
+                    )
+                    continue
+                # 成功则清零失败计数。
+                with _EMBED_BREAKER_LOCK:
+                    _EMBED_FAIL_COUNT.pop(mname, None)
+                for j, i in enumerate(idxs):
+                    vec_map[i] = vecs[j]
+                    model_per_row[id(rows[i])] = mname
+        if failed_langs:
+            logger.error(
+                "kb embedding partial failure for source %s: langs=%s",
+                source_id, sorted(failed_langs),
+            )
+        vectors = [vec_map.get(i) for i in range(len(rows))]
+        if vectors:
+            for row, vec in zip(rows, vectors):
+                # v14-4: 失败组 vec 为 None，不写 embedding（走 BM25）
+                if vec is None:
+                    continue
+                row["embedding"] = vec
+                row["embedding_model"] = model_per_row.get(id(row)) or _embed_model_name()
+        # embedding 缺失结构化告警（dedupe 前计数仅用于告警；覆盖率统计后移）
+        n_embedded = sum(1 for r in rows if r.get("embedding"))
+        if n_embedded == 0:
+            logger.warning(
+                "kb_embedding_missing event=kb_embedding_missing source=%s "
+                "chunks=%d — sentence-transformers unavailable, retrieval "
+                "degraded to BM25-only",
+                source_id,
+                len(rows),
+            )
+
+    from .kb_dedup import dedupe_chunk_rows
+
+    # v16 P3-17: L1 已在 embedding 前做过，此处仅做 L2。
+    rows = dedupe_chunk_rows(rows, source_id, session, skip_l1=True)
+    # v16 P2-7: 覆盖率 bump 不在此处 —— 移到 index_source 的 DB 写成功之后，
+    # 否则写失败会导致计数虚增。dedupe 后的 rows 由调用方负责 bump。
+    # 元数据丰富化：自动标签（fail-open）
+    try:
+        from .kb_enrich import enrich_chunk_metadata
+        rows = enrich_chunk_metadata(rows)
+    except Exception:
+        pass
+    return rows if rows else None
+
+
+def _tables_to_markdown(tables: list) -> str:
+    """Phase 1 P0-1b: TableAsset 列表转 GFM markdown（fail-open）。
+
+    P-4: 复杂表格保持 —— rowspan/colspan 时加 HTML 注释标记合并信息。
+    """
+    parts = []
+    for i, t in enumerate(tables):
+        try:
+            # TableAsset: 尝试取 markdown / rows / data
+            md = getattr(t, "markdown", None)
+            if md:
+                parts.append(f"\n\n### 表 {i+1}\n\n{md}")
+                continue
+            rows = getattr(t, "rows", None) or getattr(t, "data", None)
+            # P-4: 检查合并单元格元数据
+            merges = getattr(t, "merges", None) or getattr(t, "spans", None)
+            if rows and isinstance(rows, list) and len(rows) > 0:
+                header = rows[0]
+                lines = ["\n\n### 表 {0}\n".format(i+1)]
+                if merges:
+                    lines.append(f"<!-- 合并单元格: {len(merges)} 处 -->")
+                lines.append("| " + " | ".join(str(c) for c in header) + " |")
+                lines.append("| " + " | ".join("---" for _ in header) + " |")
+                for r in rows[1:]:
+                    if isinstance(r, (list, tuple)):
+                        lines.append("| " + " | ".join(str(c) for c in r) + " |")
+                parts.append("\n".join(lines))
+        except Exception:
+            continue
+    return "\n".join(parts)
+
+
+def index_source(
+    source_id: str, full_text: str, *, embed: bool = True, fail_soft: bool = True,
+    tables: list | None = None,
+) -> int:
+    """(Re)chunk one source document into persistent KB rows.
+
+    Returns the number of chunks written; 0 when disabled or text is empty.
+
+    By default (``fail_soft=True``) never raises — KB indexing must not break
+    callers that treat the SourceDocument as the primary artifact. Pass
+    ``fail_soft=False`` from ingest paths that create the SourceDocument in the
+    same request so a hard failure can roll back the orphan row.
+
+    2026-10-11 Phase 1 P0-1b: ``tables`` — TableAsset 列表，转 markdown 后
+    追加到文本参与 chunking（确保表格内容可检索）。
+    """
+    # Phase 1 P0-1b: 表格转 markdown 注入
+    if tables:
+        try:
+            table_md = _tables_to_markdown(tables)
+            if table_md:
+                full_text = (full_text or "") + "\n\n" + table_md
+        except Exception:
+            pass
+    if not kb_enabled() or not (full_text or "").strip():
+        return 0
+    try:
+        from ..db.chunk_store import get_chunk_store
+        from .kb_retrieval_gate import gate_ingest_rows, ingest_block_reason_for_source
+
+        settings = get_settings()
+        # v17-5: _old_counts 前移 —— 提前 return 分支清空旧 chunk 时也需要扣减覆盖率。
+        _old_counts = _count_source_chunks(source_id)
+        # Ingest-time quality gate (same rules as hybrid #111): blocked origin
+        # never becomes document_chunks — clear any prior rows and stop early.
+        if ingest_block_reason_for_source(source_id):
+            from .kb_retrieval_gate import record_gate_drop
+
+            record_gate_drop("ingest", "blocked_domain")
+            get_chunk_store().replace_for_source(source_id, [])
+            _sync_source_fts(source_id, [], settings)
+            # v17-5: 扣减旧计数
+            # v21-fix: 补 bm25_fallback 扣减。
+            _bump_kb_coverage_for_rows([], _old_counts)
+            return 0
+        # U-1: 公共 chunk 准备（chunking → gate → lang → entity → embedding → dedupe）
+        # 与 ingest_document_tx 共用，保证双写入路径永远一致。
+        # v9: gate_fn 前置到 embedding/dedupe 之前（原顺序），避免 dedupe 丢好 chunk。
+        # v10: 去掉外层 "prepare" span —— ingest_timing.finish 只读
+        # parse/chunk/entities/embed 四个 span，"prepare" 只写不读。
+        rows = prepare_chunk_rows(
+            full_text,
+            source_id,
+            embed=embed,
+            gate_fn=lambda r: gate_ingest_rows(r, source_id=source_id),
+        )
+        if not rows:
+            get_chunk_store().replace_for_source(source_id, [])
+            _sync_source_fts(source_id, [], settings)
+            # v17-5: 扣减旧计数
+            # v21-fix: 补 bm25_fallback 扣减。
+            _bump_kb_coverage_for_rows([], _old_counts)
+            return 0
+        # v16 P1-7: re-ingest 扣减旧计数（调用方在 DB 写成功后 bump）。
+        n = get_chunk_store().replace_for_source(source_id, rows)
+        # W2-1 (P1-6): chunk-level FTS5 mirrors the persisted KB rows.
+        _sync_source_fts(source_id, rows, settings)
+        # P1-3: 结构指纹索引（fail-open，不影响主流程；批量单事务）
+        if rows:
+            try:
+                from .structure_index import index_chunks_structures, rdkit_available
+                if rdkit_available():
+                    batch = [(r.get("id"), source_id, r.get("text", ""))
+                             for r in rows if r.get("id")]
+                    if batch:
+                        index_chunks_structures(batch)
+            except Exception:
+                pass
+        # v16 P2-7: DB 写成功后再 bump 覆盖率（写失败不虚增）。
+        _bump_kb_coverage_for_rows(rows, _old_counts)
+        # ``kg_link_on_ingest`` is the legacy master switch kept as a compat
+        # alias: False still disables linking even if the split flags are on.
+        if n and settings.kg_enabled and settings.kg_link_on_ingest and (
+            settings.kg_entities_on_ingest or settings.kg_relations_on_ingest
+        ):
+            try:
+                from .kg.entity_linker import link_source
+
+                link_source(source_id, settings=settings)
+            except Exception as link_exc:
+                degrade_return(logger, link_exc, "kg link_on_ingest failed", None)
+        if n and settings.prune_source_fulltext:
+            # 入库收尾：切块成功 → full_text 冗余，清空省空间（保留行元数据）。
+            try:
+                from ..db.source_store import get_source_store
+
+                get_source_store().clear_full_text(source_id)
+            except Exception as exc:
+                degrade_return(logger, exc, "prune full_text failed", None)
+        # W2: after successful chunk write, enqueue LLM Wiki compile (best-effort).
+        if (
+            n
+            and settings.wiki_enabled
+            and settings.wiki_compile_on_ingest
+        ):
+            try:
+                from ..worker.tasks import dispatch_wiki_compile
+
+                dispatch_wiki_compile(source_id)
+            except Exception as wiki_exc:
+                degrade_return(logger, wiki_exc, "wiki compile dispatch failed", None)
+        # P4.2: optional project-dossier S2 patch (default OFF via wiki_dossier_auto_patch).
+        if n and settings.wiki_enabled and settings.wiki_project_dossier_enabled:
+            try:
+                from ..db.source_store import get_source_store
+                from .wiki.dossier import notify_dossier_event
+
+                doc = get_source_store().get(source_id)
+                pid = getattr(doc, "project_id", None) if doc is not None else None
+                if pid:
+                    notify_dossier_event(str(pid), "literature_ingested")
+            except Exception as dossier_exc:
+                degrade_return(logger, dossier_exc, "dossier notify on ingest failed", None)
+        return n
+    except Exception as exc:
+        if not fail_soft:
+            log_handled_exception(logger, exc, "kb index_source failed (hard)")
+            raise
+        return degrade_return(logger, exc, "kb index_source failed", 0)
+
+
+def _attach_entities(source_id: str, rows: list[dict]) -> None:
+    """Chunk-level chemistry/product entity extraction → row meta + registry."""
+    settings = get_settings()
+    if not settings.chem_extract_enabled or not rows:
+        return
+    try:
+        from .chem_extract import extract_entities
+
+        all_products: list[dict] = []
+        for row in rows:
+            meta = extract_entities(row["text"])
+            if meta:
+                # v9: 合并而非覆盖 —— prepare_chunk_rows 已写 patent_tags，
+                # 直接赋值会静默丢掉专利结构标签。
+                row["meta"] = {**(row.get("meta") or {}), **meta}
+                all_products.extend(meta.get("products") or [])
+        if all_products and settings.product_extract_enabled:
+            from ..db.product_store import get_product_store
+
+            # `link_structures=False`: resolving 牌号 → CAS/SMILES is a network
+            # round trip per product, and this runs inside the serial index
+            # phase, so it dominated the whole build. Measured on one coating
+            # patent: 3.57s with linking, 0.19s without — and a non-chemistry
+            # patent 2.6x longer was unaffected either way, because the cost
+            # tracks chemistry density rather than size.
+            #
+            # The registry itself is still written here; only the lookup moves.
+            # `ProductStore.backfill_structures()` picks it up afterwards, where
+            # `kb_products` being unique by norm_key means one lookup per
+            # product instead of up to five per document.
+            get_product_store().upsert_mentions(source_id, all_products, link_structures=False)
+            # Semi-auto catalog expansion: CAS/SMILES → materials; else pending queue.
+            try:
+                from .material_promote import propose_many
+
+                promo_items = []
+                for p in all_products:
+                    if not isinstance(p, dict):
+                        continue
+                    name = (
+                        str(p.get("generic_name") or p.get("name") or p.get("trade_name") or "")
+                        .strip()
+                    )
+                    if not name:
+                        continue
+                    promo_items.append(
+                        {
+                            "name": name,
+                            "role": p.get("role") or "",
+                            "cas_no": p.get("cas") or p.get("cas_no"),
+                            "smiles": p.get("smiles"),
+                            "supplier": p.get("supplier"),
+                        }
+                    )
+                if promo_items:
+                    propose_many(promo_items, source="kb_promoted", source_ref=source_id or "")
+            except Exception as promo_exc:
+                degrade_return(logger, promo_exc, "material promote after extract failed", None)
+    except Exception as exc:
+        degrade_return(logger, exc, "kb entity extraction failed", None)
+
+
+def reindex_all(*, embed: bool = True) -> dict:
+    """Rebuild chunk rows for every stored source (backfill / after upgrades)."""
+    return _reindex_filtered(embed=embed, only_changed=False)
+
+
+def reindex_changed(*, embed: bool = True) -> dict:
+    """增量 #4: 只重建未成功索引的 source（ingest_status 非 indexed）。
+
+    新增文档入库后调用，比全量 reindex_all 快一个数量级。
+    Fail-open: 查询失败时回退全量。
+    """
+    return _reindex_filtered(embed=embed, only_changed=True)
+
+
+def _reindex_filtered(*, embed: bool = True, only_changed: bool = False) -> dict:
+    from ..db.chunk_store import get_chunk_store
+    from ..db.models import SourceDocument
+    from ..db.source_store import get_source_store
+
+    store = get_source_store()
+    chunk_store = get_chunk_store()
+    sources = 0
+    chunks = 0
+    with store._session_factory() as session:
+        # v7 KB-4: 排除 wiki —— wiki 页是单 summary chunk + meta.wiki 结构，
+        # 通用重切会摧毁它。
+        _q = (
+            session.query(SourceDocument.id, SourceDocument.full_text)
+            .filter(SourceDocument.source_kind != "wiki")
+        )
+        # 增量 #4: 只取未成功索引的（ingest_status 非 indexed）。
+        if only_changed:
+            _q = _q.filter(
+                (SourceDocument.ingest_status.is_(None))
+                | (SourceDocument.ingest_status != "indexed")
+            )
+        rows = _q.all()
+    for source_id, full_text in rows:
+        text = (full_text or "").strip()
+        if not text:
+            # P1-5: 默认 prune_source_fulltext=True 会清空 full_text ——
+            # 从现存 chunk 行按 ord 拼回原文，而非静默跳过（否则默认
+            # 配置下 reindex 恒返回 0）。
+            # C-1: 拼回时按 chunk 的 heading_path 补标题行 —— chunk 文本
+            # 不含 "#" 标题标记（被 _split_sections 消费为分隔符），
+            # 否则重切后全部 chunk 的 heading_path 丢失。
+            _parts = []
+            for c in chunk_store.get_by_source(source_id):
+                _t = (c.text or "").strip()
+                if not _t:
+                    continue
+                _hp = getattr(c, "heading_path", None)
+                if _hp:
+                    _parts.append(f"# {_hp}")
+                _parts.append(_t)
+            text = "\n\n".join(_parts)
+        if not text:
+            continue
+        n = index_source(source_id, text, embed=embed)
+        if n:
+            sources += 1
+            chunks += n
+            # v7 KB-8: reindex 成功回写 ingest_status，否则 failed 行状态撒谎。
+            try:
+                store.update_fields(source_id, ingest_status="indexed", ingest_error=None)
+            except Exception:  # noqa: BLE001
+                pass
+    total, embedded = get_chunk_store().counts()
+    return {
+        "reindexed_sources": sources,
+        "reindexed_chunks": chunks,
+        "total_chunks": total,
+        "embedded_chunks": embedded,
+    }
+
+
+# ── retrieval ────────────────────────────────────────────────────────────────
+
+
+def _tokens(text: str) -> set[str]:
+    # P1-1: unified tokenizer (was ASCII-only regex; Chinese never matched).
+    from .text_tokenize import tokenize
+    return set(tokenize(text))
+
+
+def _keyword_score(query_tokens: set[str], text: str) -> float:
+    if not query_tokens:
+        return 0.0
+    hits = query_tokens & _tokens(text)
+    return len(hits) / len(query_tokens)
+
+
+def _chunk_to_evidence(chunk, source_meta: dict, score: float) -> Evidence:
+    meta = source_meta.get(chunk.source_id) or {}
+    title = meta.get("title") or "知识库文档"
+    if chunk.heading_path:
+        title = f"{title} · {chunk.heading_path}"
+    if getattr(chunk, "page_no", None):
+        title = f"{title} · P{chunk.page_no}"
+    page = getattr(chunk, "page_no", None)
+    # PageIndex 借鉴 A5: 跨页末页透传
+    page_end = getattr(chunk, "page_end", None)
+    paragraph = getattr(chunk, "paragraph_idx", None)
+    return Evidence(
+        source=meta.get("source_kind") or "kb",
+        identifier=f"kb:{chunk.source_id}#c{chunk.ord}",
+        title=title[:200],
+        snippet=chunk_snippet(chunk.text),
+        # P2-1: 去掉 relevance 下限钳制（0.05 遗留自 RRF 时代，weighted 下抹平尾部区分度）
+        relevance=max(0.0, min(1.0, round(score, 4))),
+        page=int(page) if page is not None else None,
+        # PageIndex 借鉴 A5: 跨页末页（None = 单页）
+        page_end=int(page_end) if page_end is not None else None,
+        paragraph=int(paragraph) if paragraph is not None else None,
+    )
+
+
+def chunk_snippet(text: str) -> str:
+    """A retrieved chunk as the LLM will see it.
+
+    Chunks are stored at ``ingest_chunk_max_chars`` (1600). This used to clip
+    them to a hardcoded 600 on the way out, which threw away two thirds of text
+    that had already been fetched, parsed, chunked and persisted — the expensive
+    part was done and the cheap part discarded it. 0 means no clip.
+    """
+    limit = int(get_settings().kb_snippet_max_chars or 0)
+    return text[:limit] if limit > 0 else text
+
+
+def _source_meta() -> dict:
+    from ..db.models import SourceDocument
+    from ..db.source_store import get_source_store
+
+    with get_source_store()._session_factory() as session:
+        rows = session.query(
+            SourceDocument.id, SourceDocument.title, SourceDocument.source_kind
+        ).all()
+    return {rid: {"title": title, "source_kind": kind} for rid, title, kind in rows}
+
+
+def _query_chem_context(query: str) -> dict:
+    """Chemical entities + product expansion terms extracted from the query.
+
+    * CAS / formulas / SMILES in the question → exact-entity boost targets;
+    * trade names known to the product registry → the linked generic name /
+      CAS / supplier become extra query terms (牌号 ↔ 通用名 双向打通);
+    * generic material names that map to registry products → trade names
+      become extra terms (reverse direction).
+    """
+    ctx: dict = {"cas": set(), "formulas": set(), "smiles": [], "products": set(), "terms": []}
+    if not (query or "").strip():
+        return ctx
+    try:
+        from .chem_extract import extract_cas, extract_formulas, extract_products, extract_smiles
+
+        ctx["cas"] = set(extract_cas(query))
+        ctx["formulas"] = set(extract_formulas(query))
+        ctx["smiles"] = [s["canonical"] for s in extract_smiles(query)]
+
+        from ..db.product_store import get_product_store, norm_key
+
+        store = get_product_store()
+        for p in extract_products(query):
+            ctx["products"].add(norm_key(p["trade_name"], p.get("grade", "")))
+            for row in store.search(p["trade_name"], limit=3):
+                for term in (row.generic_name, row.cas, row.supplier):
+                    if term:
+                        ctx["terms"].append(term)
+                if row.cas:
+                    ctx["cas"].add(row.cas)
+    except Exception as exc:
+        degrade_return(logger, exc, "query chem context failed", None)
+    return ctx
+
+
+def _entity_boost(chunk, qctx: dict) -> float:
+    """Additive score boost when chunk metadata shares entities with the query."""
+    meta = getattr(chunk, "meta", None) or {}
+    chem = meta.get("chem") or []
+    if not chem and not meta.get("products"):
+        return 0.0
+    values = {e.get("value") for e in chem}
+    boost = 0.0
+    if qctx["cas"] & values:
+        boost += 0.3
+    if qctx["formulas"] & values:
+        boost += 0.2
+    if qctx["products"]:
+        try:
+            from ..db.product_store import norm_key
+
+            chunk_products = {
+                norm_key(p.get("trade_name", ""), p.get("grade", ""))
+                for p in meta.get("products") or []
+            }
+            if qctx["products"] & chunk_products:
+                boost += 0.25
+        except Exception:
+            pass
+    if qctx["smiles"]:
+        chunk_smiles = [e.get("value") for e in chem if e.get("type") == "smiles"]
+        if chunk_smiles:
+            try:
+                from . import chemtools
+
+                best = max(
+                    (
+                        chemtools.mol_similarity(q, c) or 0.0
+                        for q in qctx["smiles"][:2]
+                        for c in chunk_smiles[:4]
+                    ),
+                    default=0.0,
+                )
+                boost += 0.25 * best
+            except Exception:
+                pass
+    return min(boost, 0.6)
+
+
+def search_chunks(
+    query: str,
+    k: int = 6,
+    *,
+    project_id: str | None = None,
+    include_global: bool = False,
+    langs: list[str] | None = None,
+    keyword_only: bool = False,
+) -> list[Evidence]:
+    """Retrieve the top-k KB chunks for a query (chemistry-aware hybrid).
+
+    Base score: cosine over stored embeddings when both sides can embed,
+    token-overlap otherwise. P2: ``keyword_only=True`` forces pure
+    token-overlap (probe "keyword" mode) even when embeddings exist.
+    On top of that, chunks sharing chemical
+    entities with the question (CAS / formula / 牌号 / structure similarity
+    via Tanimoto) get an additive boost, and trade names in the question are
+    expanded with their registry-linked generic names.  Empty list when
+    disabled, empty KB, or on any failure.
+
+    双语分流 (2026-09-04): ``langs`` 限制子库语言("zh"/"en")——chunks 先
+    按 lang 列过滤(乱码/未标 chunk 在双语模式下不参与); 打分按
+    embedding_model 分组: 每种子库模型编码一次查询(bge 加查询指令),
+    该模型的 chunk 用对应向量 cosine, 其余 keyword 兜底。``langs=None``
+    保持现状(全库单模型)。跨语(中文问查英文库)由上层先翻译再带
+    ``langs=["en"]`` 调用。
+    """
+    if not kb_enabled() or not (query or "").strip() or k <= 0:
+        return []
+    try:
+        from ..db.chunk_store import get_chunk_store
+
+        chunks = get_chunk_store().all_chunks(
+            limit=get_settings().kb_search_scan_limit,
+            project_id=project_id,
+            include_global=include_global,
+        )
+        if not chunks:
+            return []
+
+        # Dual-track: Wiki summary chunks are Track A only (Phase 3).
+        try:
+            from .wiki.embed import list_wiki_source_ids
+
+            wiki_ids = list_wiki_source_ids()
+            if wiki_ids:
+                chunks = [c for c in chunks if c.source_id not in wiki_ids]
+                if not chunks:
+                    return []
+        except Exception:
+            pass
+
+        if langs:
+            chunks = [c for c in chunks if (getattr(c, "lang", "") or "") in langs]
+            if not chunks:
+                return []
+
+        qctx = _query_chem_context(query)
+        expanded_query = query
+        if qctx["terms"]:
+            expanded_query = f"{query} {' '.join(qctx['terms'][:8])}"
+
+        scored: list[tuple[float, object]] = []
+        embedded = [
+            c
+            for c in chunks
+            if getattr(c, "embedding_blob", None) or getattr(c, "embedding", None)
+        ]
+        # 每组模型编码一次查询(双语: zh→bge+指令, en→MiniLM)。
+        vec_by_model: dict[str, list[float]] = {}
+        if embedded and not keyword_only:
+            from .rag import bge_query_prefix, embed_model_name
+
+            if langs:
+                seen: set[str] = set()
+                for lang in langs:
+                    mname = embed_model_name(lang)
+                    if mname in seen:
+                        continue
+                    seen.add(mname)
+                    prefix = bge_query_prefix(mname)
+                    vecs = _embed_texts([prefix + expanded_query], mname)
+                    if vecs and vecs[0]:
+                        vec_by_model[mname] = vecs[0]
+            else:
+                mname = _embed_model_name()
+                prefix = bge_query_prefix(mname)
+                vecs = _embed_texts([prefix + expanded_query], mname)
+                if vecs and vecs[0]:
+                    vec_by_model[mname] = vecs[0]
+
+        if vec_by_model:
+            qt = _tokens(expanded_query)
+            for c in chunks:
+                m = getattr(c, "embedding_model", None)
+                vec = vec_by_model.get(m) if m else None
+                # U-2: comparable_embedding 返回 (ok, vec)，直接用返回的向量
+                ok, cemb = comparable_embedding(c, len(vec), m or "") if vec else (False, None)
+                if cemb and vec and ok:
+                    scored.append((_dot(vec, cemb), c))
+                else:
+                    # 该 chunk 模型未参与本组编码(双语另一侧/脏数据/纯文本)
+                    # → keyword 竞争, rescaled below cosine range。
+                    scored.append((_keyword_score(qt, f"{c.heading_path} {c.text}") * 0.5, c))
+        else:
+            qt = _tokens(expanded_query)
+            for c in chunks:
+                scored.append((_keyword_score(qt, f"{c.heading_path} {c.text}"), c))
+
+        has_chem_query = bool(
+            qctx["cas"] or qctx["formulas"] or qctx["smiles"] or qctx["products"]
+        )
+        if has_chem_query:
+            scored = [(s + _entity_boost(c, qctx), c) for s, c in scored]
+
+        scored = [(s, c) for s, c in scored if s > 0.05]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        # v7 检索-1: legacy 路径同样走质量门（blocked 域名/垃圾文本），
+        # 否则 deep research 证据池被污染。
+        # v8: 补 source_meta —— 否则 blocked_domain 检查永不触发。
+        try:
+            from .kb_retrieval_gate import (
+                _load_source_meta,
+                drop_reason_for_chunk,
+                record_gate_drop,
+            )
+
+            _meta = _load_source_meta([getattr(c, "source_id", "") for _, c in scored])
+            filtered: list[tuple[float, object]] = []
+            for s, c in scored:
+                reason = drop_reason_for_chunk(c, source_meta=_meta)
+                if reason:
+                    record_gate_drop("retrieval", reason)
+                    continue
+                filtered.append((s, c))
+                if len(filtered) >= k:
+                    break
+            scored = filtered
+        except Exception:  # noqa: BLE001
+            pass
+        meta = _source_meta()
+        return [_chunk_to_evidence(c, meta, s) for s, c in scored[:k]]
+    except Exception as exc:
+        return degrade_return(logger, exc, "kb search failed", [])
+
+
+def search_chunks_hybrid(
+    query: str,
+    k: int = 4,
+    *,
+    alpha: float | None = None,
+    project_id: str | None = None,
+    include_global: bool = True,
+    children: bool = False,
+    # v10: 允许调用方传入已查好的 source meta，避免一次检索多次全表扫描。
+    source_meta: dict | None = None,
+) -> list[Evidence]:
+    """Probe-aligned hybrid retrieval as Evidence (for recommend / research fuse).
+
+    Uses ``hybrid_search_scored`` with shared ``kb_hybrid_alpha`` when ``alpha``
+    is omitted. Safe empty list when KB is off or hybrid fails.
+
+    P2 语义分叉说明：本路径**不**套用 legacy ``search_chunks`` 的
+    ``_entity_boost``（CAS/分子式/牌号加成）。原因（v9 更新）：默认
+    ``kb_hybrid_fusion="weighted"`` 下融合分是 0-1 尺度，0.2/0.3 的加成
+    量级上是兼容的 —— 原文档"RRF 尺度 ~0.02、加成会主导排序"的推理
+    只在 RRF 模式下成立。如需化学实体加成，应在融合前对 BM25/cosine
+    分量做，而非融合后相加 —— ``kb_hybrid_entity_boost``
+    开关已实现该语义（融合前加性，默认关）。
+
+    A/B（2026-10-02，见 scripts/hybrid_entity_boost_ab_report.md）：
+    inconclusive → 保持关闭。53 道 golden 题 0 题含实体；回填 1163 chunk
+    chem 元数据后，实体题 A/B 仍 Δ=0 —— 含实体的 chunk 全是 wiki chunk，
+    被检索质量门按设计排除；非 wiki 语料是合成文本无实体。实现经代码验证
+    正确（108 chunk 确实 +0.3），待真实实体语料入库后重测。
+
+    ``children=True``: Phase 2 retrieval_by_children — score sentence-level
+    children at query time, present the parent block (see
+    services/children_retrieval.py). Parent pool is k * candidate_mult.
+    """
+    if not kb_enabled() or k <= 0 or not (query or "").strip():
+        return []
+    try:
+        from .children_retrieval import children_rerank
+        from .hybrid_search import hybrid_search_scored
+
+        settings = get_settings()
+        if alpha is None:
+            alpha = settings.kb_hybrid_alpha
+        if children:
+            mult = max(1, int(settings.kb_children_candidate_mult or 3))
+            scored = hybrid_search_scored(
+                query,
+                top_k=k * mult,
+                alpha=alpha,
+                project_id=project_id or None,
+                include_global=bool(include_global),
+            )
+            scored = children_rerank(query, scored, candidate_mult=mult, top_k=k)
+        else:
+            scored = hybrid_search_scored(
+                query,
+                top_k=k,
+                alpha=alpha,
+                project_id=project_id or None,
+                include_global=bool(include_global),
+            )
+        if not scored:
+            return []
+        # v10: 调用方已传 meta 则复用，否则自己查（_source_meta 是全表扫描）。
+        meta = source_meta if source_meta is not None else _source_meta()
+        # v10: RRF 模式 hybrid_score ~0.01-0.03，按本次 batch max 归一化后再转 Evidence，
+        # 保留相对排序。默认 weighted 下分数 0-1，此分支不执行。
+        scores = [float(s.hybrid_score) for s in scored]
+        if (settings.kb_hybrid_fusion or "weighted").strip().lower() == "rrf":
+            _mx = max(scores) if scores else 0.0
+            if _mx > 0:
+                scores = [x / _mx for x in scores]
+        return [
+            _chunk_to_evidence(s.chunk, meta, sc)
+            for s, sc in zip(scored, scores)
+        ]
+    except Exception as exc:
+        return degrade_return(logger, exc, "kb hybrid search failed", [])
+
+
+_IDENT_RE = re.compile(r"^kb:([^#]+)#c(\d+)$")
+
+
+def format_inline_citation(ev: "Evidence", n: int) -> str:
+    """Render one evidence as an inline citation: ``[n] title · 第p页``.
+
+    Reuses ``CitationLocator`` (P0-15) — no new citation infra. ``page`` comes
+    from ``_chunk_to_evidence`` (P1 #16 page anchors).
+    """
+    from ..domain.citations import CitationLocator
+
+    loc = CitationLocator(page=ev.page)
+    base = f"[{n}] {ev.title}"
+    if loc is not None and loc.page:
+        return f"{base} · 第{loc.page}页"
+    return base
+
+
+def format_evidence_citations(evidence: list) -> str:
+    """Numbered inline-citation block for synthesis prompts."""
+    return "\n".join(
+        format_inline_citation(ev, i + 1) for i, ev in enumerate(evidence or [])
+    )
+
+
+def _stitch_patent_siblings(
+    evidence: list, *, max_siblings: int, meta: dict
+) -> list:
+    """Phase 2 — patent tag context stitching (Claims<->Examples).
+
+    When a hit chunk carries ``meta.patent_tags`` (claim_no/example_no stamped
+    at ingest by ``metadata_tags.extract_patent_tags``), pull sibling chunks
+    from the same source with the same tag into the context. Zero LLM cost:
+    plain attribute match. Fail-open on any store error.
+    """
+    if not evidence or max_siblings <= 0:
+        return list(evidence)
+    try:
+        from ..db.chunk_store import get_chunk_store
+
+        store = get_chunk_store()
+    except Exception as exc:
+        return degrade_return(logger, exc, "patent stitch store failed", list(evidence))
+    out = list(evidence)
+    seen = {ev.identifier for ev in out if ev.identifier}
+    source_cache: dict[str, list] = {}
+    for ev in evidence:
+        m = _IDENT_RE.match(ev.identifier or "")
+        if not m:
+            continue
+        source_id = m.group(1)
+        try:
+            ord_no = int(m.group(2))
+        except ValueError:
+            continue
+        if source_id not in source_cache:
+            try:
+                source_cache[source_id] = store.get_by_source(source_id)
+            except Exception as exc:
+                degrade_return(logger, exc, "patent stitch fetch failed", None)
+                source_cache[source_id] = []
+        rows = source_cache[source_id]
+        self_row = next((r for r in rows if r.ord == ord_no), None)
+        if self_row is None:
+            continue
+        tags = (self_row.meta or {}).get("patent_tags") or {}
+        keys = [
+            (k, tags.get(k))
+            for k in ("claim_no", "example_no")
+            if tags.get(k) is not None
+        ]
+        if not keys:
+            continue
+        added = 0
+        for r in rows:
+            if added >= max_siblings:
+                break
+            if r.ord == ord_no:
+                continue
+            rtags = (r.meta or {}).get("patent_tags") or {}
+            if not any(rtags.get(k) == v for k, v in keys):
+                continue
+            ident = f"kb:{r.source_id}#c{r.ord}"
+            if ident in seen:
+                continue
+            seen.add(ident)
+            sib = _chunk_to_evidence(r, meta, max(0.05, (ev.relevance or 0.0) * 0.9))
+            sib.title = f"{sib.title} · 同专利串联"
+            out.append(sib)
+            added += 1
+    # v10: sibling 追加到末尾后按 relevance 重排 —— 否则低相关度的原文会
+    # 排在高相关度的 sibling 之前。stable sort，同分保持原有相对顺序。
+    out.sort(key=lambda e: (e.relevance or 0.0), reverse=True)
+    return out
+
+
+def retrieve_evidence(
+    query: str,
+    k: int = 6,
+    *,
+    project_id: str | None = None,
+    include_global: bool = True,
+    mode: str = "hybrid",
+    langs: list[str] | None = None,
+    alpha: float | None = None,
+    children: bool | None = None,
+) -> list[Evidence]:
+    """Single persistent-KB retrieval façade (Wave A — anti-Frankenstein).
+
+    Default ``mode=\"hybrid\"`` routes through ``hybrid_search_scored`` (same
+    stack as Hub probe / recommend). Use ``mode=\"legacy\"`` or pass ``langs``
+    for bilingual dual-model partitions that still need ``search_chunks``.
+
+    ``children=None`` → ``kb_children_retrieval_enabled`` setting (Phase 2).
+    Patent tag stitching (Phase 2) applies when ``kb_patent_stitch_enabled``.
+    """
+    if not kb_enabled() or k <= 0 or not (query or "").strip():
+        return []
+    use_legacy = (mode or "hybrid").strip().lower() in ("legacy", "chunks", "search_chunks")
+    if langs is not None or use_legacy:
+        return search_chunks(
+            query,
+            k=k,
+            project_id=project_id,
+            include_global=include_global,
+            langs=langs,
+        )
+    settings = get_settings()
+    if children is None:
+        children = settings.kb_children_retrieval_enabled
+    # Round 3 Wave 1 — agentic iterative retrieval. Root-cause note: the plan
+    # named paperqa_engine as the split point, but paperqa_engine only
+    # *synthesizes* from provided sources; this façade is the actual single-shot
+    # retrieval entry, so the split belongs here. Downstream rerank /
+    # compression / synthesis are untouched. Fail-open: any loop error falls
+    # back to the single-shot path below.
+    # v10: _source_meta() 是 SourceDocument 全表扫描 —— 一次检索只查一次，
+    # 复用于 hybrid 转换与 patent stitch（旧代码一次检索最多查两次）。
+    meta = _source_meta()
+    try:
+        from .agent_search_loop import agent_search, agent_search_enabled
+
+        if agent_search_enabled():
+            def _single_shot(q: str, kk: int, **kw: object) -> list:
+                return search_chunks_hybrid(
+                    q, k=kk, alpha=alpha,
+                    project_id=kw.get("project_id"),
+                    include_global=bool(kw.get("include_global")),
+                    children=bool(children),
+                    source_meta=meta,
+                )
+
+            result = agent_search(
+                query, _single_shot, k=k,
+                project_id=project_id, include_global=include_global,
+            )
+            evidence = result.evidence
+        else:
+            evidence = search_chunks_hybrid(
+                query,
+                k=k,
+                alpha=alpha,
+                project_id=project_id,
+                include_global=include_global,
+                children=bool(children),
+                source_meta=meta,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("agent search split failed, single-shot fallback: %s", exc)
+        evidence = search_chunks_hybrid(
+            query,
+            k=k,
+            alpha=alpha,
+            project_id=project_id,
+            include_global=include_global,
+            children=bool(children),
+            source_meta=meta,
+        )
+    if settings.kb_patent_stitch_enabled:
+        evidence = _stitch_patent_siblings(
+            evidence,
+            max_siblings=int(
+                settings.kb_patent_stitch_max_siblings or 2
+            ),
+            meta=meta,
+        )
+    return evidence
+
+
+def aggregate_parameter_space() -> dict[str, dict]:
+    """Fuse the LLM-extracted parameter spaces of all stored source guides.
+
+    Returns {parameter_name: {min, max, unit, sources}} where min/max span the
+    union of documented ranges (literature-supported envelope) and ``sources``
+    counts how many documents mention the parameter.  Empty dict when the KB
+    is disabled/empty or no guide carries a parameter space.
+    """
+    if not kb_enabled():
+        return {}
+    try:
+        from ..db.models import SourceDocument
+        from ..db.source_store import get_source_store
+
+        with get_source_store()._session_factory() as session:
+            rows = session.query(SourceDocument.source_guide).filter(
+                SourceDocument.source_guide.isnot(None)
+            ).all()
+
+        fused: dict[str, dict] = {}
+        for (guide,) in rows:
+            space = (guide or {}).get("parameter_space") or {}
+            if not isinstance(space, dict):
+                continue
+            for name, bound in space.items():
+                if not isinstance(bound, dict):
+                    continue
+                lo, hi = bound.get("min_value"), bound.get("max_value")
+                unit = (bound.get("unit") or "").strip()
+                key = str(name).strip()
+                if not key:
+                    continue
+                entry = fused.setdefault(
+                    key, {"min": None, "max": None, "unit": unit, "sources": 0}
+                )
+                entry["sources"] += 1
+                if lo is not None:
+                    entry["min"] = lo if entry["min"] is None else min(entry["min"], lo)
+                if hi is not None:
+                    entry["max"] = hi if entry["max"] is None else max(entry["max"], hi)
+                if not entry["unit"] and unit:
+                    entry["unit"] = unit
+        return {k: v for k, v in fused.items() if v["min"] is not None or v["max"] is not None}
+    except Exception as exc:
+        return degrade_return(logger, exc, "kb parameter-space aggregation failed", {})
+
+
+def product_hints(materials: list) -> list[str]:
+    """Corpus-derived commercial product lines for recommend prompts.
+
+    For each requirement material, look up registry products whose generic
+    name (or CAS) matches — the LLM then recommends against real purchasable
+    grades instead of abstract chemistries.  Advisory; [] offline/empty.
+    """
+    if not kb_enabled() or not get_settings().product_extract_enabled:
+        return []
+    try:
+        from ..db.product_store import get_product_store
+
+        store = get_product_store()
+        lines: list[str] = []
+        seen: set[str] = set()
+        for m in materials or []:
+            name = (getattr(m, "name", "") or "").strip()
+            if not name:
+                continue
+            for row in store.find_for_material(name):
+                key = row.norm_key
+                if key in seen or len(lines) >= 8:
+                    continue
+                seen.add(key)
+                label = f"{row.trade_name} {row.grade}".strip()
+                detail = "，".join(
+                    x for x in (row.supplier, row.generic_name, row.role) if x
+                )
+                line = f"- {label}（{detail}）" if detail else f"- {label}"
+                lines.append(f"{line} — 语料提及 {row.mention_count} 次")
+        return lines
+    except Exception as exc:
+        return degrade_return(logger, exc, "kb product hints failed", [])
+
+
+def doe_parameter_hints(factor_names: list[str]) -> list[str]:
+    """Literature-envelope notes for DOE factors whose names match KB parameters.
+
+    Advisory only — factor bounds are never mutated; the researcher decides."""
+    space = aggregate_parameter_space()
+    if not space:
+        return []
+    notes: list[str] = []
+    lowered = {name.lower(): name for name in factor_names}
+    for param, entry in space.items():
+        match = next(
+            (
+                orig
+                for low, orig in lowered.items()
+                if low == param.lower() or param.lower() in low or low in param.lower()
+            ),
+            None,
+        )
+        if match is None:
+            continue
+        lo = entry["min"] if entry["min"] is not None else "?"
+        hi = entry["max"] if entry["max"] is not None else "?"
+        unit = f" {entry['unit']}" if entry["unit"] else ""
+        notes.append(
+            f"知识库文献范围：{match} ≈ {lo}–{hi}{unit}（{entry['sources']} 个来源）"
+        )
+    try:
+        from .wiki.constraints import wiki_doe_hint_lines
+
+        notes.extend(wiki_doe_hint_lines(factor_names))
+    except Exception:
+        pass
+    return notes
+
+
+def kb_stats() -> dict:
+    """Corpus counters for the UI / API."""
+    from ..db.chunk_store import get_chunk_store
+    from ..db.models import SourceDocument
+    from ..db.source_store import get_source_store
+    from ..config import get_settings
+
+    try:
+        settings = get_settings()
+        total, embedded = get_chunk_store().counts()
+        try:
+            chunks_active, chunks_archived = get_chunk_store().counts_active_archived()
+        except Exception as exc:
+            chunks_active, chunks_archived = degrade_return(
+                logger, exc, "active/archived chunk count failed", (total, 0)
+            )
+        try:
+            stale = get_chunk_store().count_foreign_model(_embed_model_name())
+        except Exception as exc:
+            stale = degrade_return(logger, exc, "stale-vector count failed", 0)
+        src_store = get_source_store()
+        with src_store._session_factory() as session:
+            from sqlalchemy import func
+
+            sources = session.query(func.count(SourceDocument.id)).scalar() or 0
+            by_kind = dict(
+                session.query(SourceDocument.source_kind, func.count(SourceDocument.id))
+                .group_by(SourceDocument.source_kind)
+                .all()
+            )
+        try:
+            sources_active, sources_archived = src_store.count_archived_split()
+        except Exception as exc:
+            sources_active, sources_archived = degrade_return(
+                logger, exc, "active/archived source count failed", (int(sources), 0)
+            )
+        try:
+            from ..db.product_store import get_product_store
+
+            products = get_product_store().count()
+        except Exception:
+            products = 0
+        try:
+            from ..db.product_store import get_product_store
+
+            pending_products = get_product_store().count_needing_structure()
+        except Exception as exc:
+            pending_products = degrade_return(
+                logger, exc, "pending-structure count failed", 0
+            )
+        scan_limit = int(settings.kb_search_scan_limit or 5000)
+        pressure = (
+            min(1.0, float(chunks_active) / float(scan_limit)) if scan_limit > 0 else 0.0
+        )
+        retention_days = int(settings.kb_archive_retention_days or 0)
+        dual_write = settings.materials_suppliers_json_dual_write
+        return {
+            "enabled": kb_enabled(),
+            "sources": int(sources),
+            "sources_active": int(sources_active),
+            "sources_archived": int(sources_archived),
+            "sources_by_kind": {k: int(v) for k, v in by_kind.items()},
+            "chunks": total,
+            "chunks_active": int(chunks_active),
+            "chunks_archived": int(chunks_archived),
+            "embedded_chunks": embedded,
+            "embedding_available": _embedding_probe(),
+            "products": products,
+            # Visible on purpose: the trade-name synonym expansion these feed is
+            # unavailable until they resolve, so a number that never reaches 0
+            # is something to notice rather than something to discover later.
+            "products_pending_structure": pending_products,
+            "stale_chunks": stale,
+            "scan_limit": scan_limit,
+            "scan_pressure": round(pressure, 4),
+            "scan_near_cap": pressure >= 0.9,
+            "archive_retention_days": retention_days,
+            "suppliers_json_dual_write": dual_write,
+            **_vector_health(total, embedded, stale),
+            "quality_gate_drops": _quality_gate_drops(),
+            **_embedding_status_fields(),
+        }
+    except Exception as exc:
+        return degrade_return(
+            logger, exc, "kb stats failed",
+            {"enabled": kb_enabled(), "sources": 0, "sources_by_kind": {},
+             "sources_active": 0, "sources_archived": 0,
+             "chunks": 0, "chunks_active": 0, "chunks_archived": 0,
+             "embedded_chunks": 0, "embedding_available": False,
+             "products": 0, "scan_limit": 5000, "scan_pressure": 0.0,
+             "scan_near_cap": False, "archive_retention_days": 0,
+             "suppliers_json_dual_write": True,
+             "quality_gate_drops": _quality_gate_drops(),
+             **_embedding_status_fields()},
+        )
+
+
+def _embedding_status_fields() -> dict:
+    """Current embedding model + upgrade catalog (Option A; no Qdrant)."""
+    try:
+        from .rag import embedding_status
+
+        return embedding_status()
+    except Exception as exc:
+        return degrade_return(
+            logger,
+            exc,
+            "embedding status failed",
+            {
+                "embedding_model": _embed_model_name(),
+                "embedding_model_configured": None,
+                "embedding_catalog": [],
+                "reindex_hint": "换模型后必须点「重建索引」。",
+            },
+        )
+
+
+def _quality_gate_drops() -> dict:
+    try:
+        from .kb_retrieval_gate import gate_drop_stats
+
+        return gate_drop_stats()
+    except Exception:
+        return {
+            "retrieval": {"blocked_domain": 0, "garbage_snippet": 0, "wiki_track": 0},
+            "ingest": {"blocked_domain": 0, "garbage_snippet": 0, "wiki_track": 0},
+        }

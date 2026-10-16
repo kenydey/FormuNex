@@ -1,0 +1,862 @@
+"""Retrieval-Augmented knowledge store (OpenNotebook-style interface).
+
+Exposes ``ingest`` / ``query`` mirroring OpenNotebook's document pipeline. When
+OpenNotebook is installed it can be delegated to; the built-in fallback is a
+self-contained in-memory TF-IDF index (pure Python) that ranks ingested
+snippets against a query — enough to ground recommendations with citations
+offline.
+
+**Persistence model:** ``TfidfStore`` / ``EmbeddingStore`` from ``build_store()``
+are ephemeral per-call re-rankers (ingest sources for one question, then query).
+Cross-request knowledge persistence lives in ``colbert_store`` when ColBERT or
+the on-disk manifest is enabled — not in the TF-IDF instance.
+"""
+from __future__ import annotations
+
+import logging
+from .errors import log_handled_exception
+import math
+import re
+import threading
+from collections import Counter
+from dataclasses import dataclass, field
+
+from ..domain.schemas import Evidence, Requirement
+
+logger = logging.getLogger(__name__)
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+# P1-1: unified tokenizer (was ASCII-only _WORD.findall; Chinese queries
+# never matched properly on the chat session RAG path).
+from .embedding_download import is_model_cached
+from .text_tokenize import tokenize as _tokenize
+
+
+@dataclass
+class TfidfStore:
+    backend: str = "tfidf"
+    docs: list[Evidence] = field(default_factory=list)
+    _tokens: list[list[str]] = field(default_factory=list)
+    _df: Counter = field(default_factory=Counter)
+
+    def ingest(self, evidence: list[Evidence]) -> int:
+        for ev in evidence:
+            toks = _tokenize(f"{ev.title} {ev.snippet}")
+            self.docs.append(ev)
+            self._tokens.append(toks)
+            for t in set(toks):
+                self._df[t] += 1
+        return len(self.docs)
+
+    def _idf(self, term: str) -> float:
+        n = len(self.docs)
+        return math.log((1 + n) / (1 + self._df.get(term, 0))) + 1.0
+
+    def query(self, text: str, k: int = 5) -> list[Evidence]:
+        if not self.docs:
+            return []
+        q_tokens = _tokenize(text)
+        q_vec = {t: self._idf(t) for t in set(q_tokens)}
+        scored: list[tuple[float, Evidence]] = []
+        for toks, ev in zip(self._tokens, self.docs):
+            tf = Counter(toks)
+            length = len(toks) or 1
+            score = sum((tf[t] / length) * self._idf(t) * q_vec[t] for t in q_vec if t in tf)
+            scored.append((score, ev))
+        scored.sort(key=lambda s: s[0], reverse=True)
+        # v29 B-7: 全零分时返回空而非任意文档 —— 返回 docs[:k] 会让下游
+        # 误以为"相关"，污染引用。调用方已有 or filtered[:k] 兜底。
+        return [ev for score, ev in scored[:k] if score > 0]
+
+
+# ── Optional semantic embedding store (sentence-transformers) ────────────────
+# A drop-in re-ranker that understands meaning ("epoxy" ≈ "bisphenol-A"), unlike
+# the lexical TF-IDF index. Gated behind an availability probe; build_store()
+# selects it when installed and configured, else falls back to TF-IDF. The model
+# (all-MiniLM-L6-v2, ~22 MB) runs CPU-only; embeddings are cosine-compared with
+# numpy, so no vector database is needed for the ephemeral per-request store.
+
+# Default only. `embed_model_name()` is the accessor everything should use —
+# reading this constant directly ignores the operator's setting.
+_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Operator-facing catalog for FORMUNEX_EMBEDDING_MODEL. Changing the model
+# invalidates existing vectors — reindex is required (kb_stats vector_mode=stale).
+# No auto-download here; names are documentation + /api/kb/stats hints only.
+EMBEDDING_MODEL_CATALOG: tuple[dict[str, str], ...] = (
+    {
+        "id": "sentence-transformers/all-MiniLM-L6-v2",
+        "label": "MiniLM-L6 (default, EN-first, 384d)",
+        "langs": "en",
+        "note": "Small CPU default; weak on Chinese patent text.",
+    },
+    {
+        "id": "BAAI/bge-small-zh-v1.5",
+        "label": "bge-small-zh (ZH, 512d)",
+        "langs": "zh",
+        "note": "Preferred Chinese default when bilingual routing is off.",
+    },
+    {
+        "id": "BAAI/bge-m3",
+        "label": "bge-m3 (multilingual, larger)",
+        "langs": "multi",
+        "note": "Strong multilingual; heavier download/RAM.",
+    },
+    {
+        "id": "Qwen/Qwen3-Embedding-0.6B",
+        "label": "Qwen3-Embedding-0.6B (multilingual)",
+        "langs": "multi",
+        "note": "Higher-dim multilingual upgrade; reindex required after switch.",
+    },
+    {
+        "id": "moka-ai/m3e-base",
+        "label": "m3e-base (ZH, mid-size)",
+        "langs": "zh",
+        "note": "Chinese mid-size alternative to bge-small-zh.",
+    },
+)
+
+# 中文子库嵌入模型(双语分流 2026-09-04)与 bge 查询指令。
+# document_chunks 按 lang 分组: zh → bge-small-zh-v1.5(同语中文检索
+# 实测 0.70-0.77 精准 vs MiniLM 崩坏); en → MiniLM(免重嵌, 英文相当)。
+_EMBED_MODEL_ZH = "BAAI/bge-small-zh-v1.5"
+# bge 官方查询指令(仅查询侧; 文档侧不加)。A/B 实测 zh×zh 检索用它。
+_BGE_QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
+
+
+# v29: 运行时模型覆盖（UI 切换用，优先级高于 env var）
+_RUNTIME_MODEL_OVERRIDE: str | None = None
+_RUNTIME_MODEL_LOCK = threading.Lock()
+
+
+def set_runtime_embedding_model(model_id: str | None) -> None:
+    """UI 切换 embedding 模型时调用，运行时生效（进程级）。"""
+    global _RUNTIME_MODEL_OVERRIDE
+    with _RUNTIME_MODEL_LOCK:
+        _RUNTIME_MODEL_OVERRIDE = (model_id or "").strip() or None
+
+
+def embed_model_name(lang: str | None = None) -> str:
+    """按子库语言返回嵌入模型; lang=None 保持现状(全局配置优先)。
+
+    优先级：运行时覆盖（UI 切换）> FORMUNEX_EMBEDDING_MODEL > 按语言默认。
+    未配置时: zh 子库 → bge-small-zh-v1.5, en/其他 → MiniLM。
+    """
+    from ..config import get_settings
+
+    with _RUNTIME_MODEL_LOCK:
+        runtime = _RUNTIME_MODEL_OVERRIDE
+    if runtime:
+        return runtime
+    configured = (get_settings().embedding_model or "").strip()
+    if configured:
+        return configured
+    if lang == "zh":
+        return _EMBED_MODEL_ZH
+    return _EMBED_MODEL
+
+
+def embedding_model_catalog() -> list[dict[str, str]]:
+    """Return a copy of the recommended embedding model catalog."""
+    return [dict(row) for row in EMBEDDING_MODEL_CATALOG]
+
+
+def embedding_space_unified() -> bool:
+    """True when a single multilingual (or operator-pinned) model owns all langs.
+
+    Default dual-model bilingual routing (zh→bge 512d / en→MiniLM 384d) cannot
+    cosine-compare across languages. Setting ``FORMUNEX_EMBEDDING_MODEL`` to a
+    catalog ``langs=multi`` entry (bge-m3 / Qwen3-Embedding) — or any explicit
+    model id — pins one vector space so zh queries can retrieve en chunks
+    without translation. Requires reindex after the switch.
+    """
+    from ..config import get_settings
+
+    configured = (get_settings().embedding_model or "").strip()
+    if not configured:
+        return False
+    for row in EMBEDDING_MODEL_CATALOG:
+        if row["id"] == configured:
+            return row.get("langs") == "multi"
+    # Unknown pinned model: still one encoder for every lang.
+    return True
+
+
+def embedding_status() -> dict:
+    """Current model + catalog + reindex reminder for stats/meta surfaces."""
+    from ..config import get_settings
+
+    configured = (get_settings().embedding_model or "").strip()
+    return {
+        "embedding_model": embed_model_name(),
+        "embedding_model_configured": configured or None,
+        "embedding_catalog": embedding_model_catalog(),
+        "embedding_space_unified": embedding_space_unified(),
+        "reindex_hint": (
+            "换模型后必须点「重建索引」；在此之前 vector_mode=stale，"
+            "异模型向量不参与余弦比较（comparable_embedding）。"
+            "多语种统一向量空间请设 FORMUNEX_EMBEDDING_MODEL=bge-m3 或 "
+            "Qwen/Qwen3-Embedding-0.6B 后重建。"
+        ),
+    }
+
+
+def bge_query_prefix(model_name: str | None = None) -> str:
+    """bge 查询指令前缀; 非 bge 模型返回空串(文档侧绝不加)。"""
+    name = model_name or embed_model_name()
+    if "bge" in name.lower():
+        return _BGE_QUERY_INSTRUCTION
+    return ""
+
+
+def _embedding_available() -> bool:
+    try:
+        import sentence_transformers  # noqa: F401
+
+        return True
+    except Exception as exc:
+        log_handled_exception(logger, exc, "optional feature check")
+        return False
+
+
+# Cache the loaded model so repeated chat requests don't reload it.
+_MODEL_CACHE: dict[str, object] = {}
+
+
+def _load_model(name: str):
+    if name not in _MODEL_CACHE:
+        from sentence_transformers import SentenceTransformer
+
+        _MODEL_CACHE[name] = SentenceTransformer(name)
+    return _MODEL_CACHE[name]
+
+
+@dataclass
+class EmbeddingStore:
+    """Semantic retrieval over sentence-transformer embeddings (cosine sim)."""
+
+    backend: str = "embedding"
+    # Resolved per instance rather than pinned at class-definition time, so a
+    # store built after the setting changes uses the configured model.
+    model_name: str = field(default_factory=embed_model_name)
+    docs: list[Evidence] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self._model = _load_model(self.model_name)
+        self._mat = None  # np.ndarray of normalized doc embeddings
+
+    def ingest(self, evidence: list[Evidence]) -> int:
+        import numpy as np
+
+        texts = [f"{ev.title} {ev.snippet}" for ev in evidence]
+        self.docs.extend(evidence)
+        if texts:
+            embs = np.asarray(
+                self._model.encode(texts, normalize_embeddings=True), dtype=float
+            )
+            self._mat = embs if self._mat is None else np.vstack([self._mat, embs])
+        return len(self.docs)
+
+    def query(self, text: str, k: int = 5) -> list[Evidence]:
+        if not self.docs or self._mat is None:
+            return []
+        import numpy as np
+
+        q = np.asarray(
+            self._model.encode([text], normalize_embeddings=True), dtype=float
+        )[0]
+        sims = self._mat @ q
+        order = np.argsort(sims)[::-1][:k]
+        return [self.docs[i] for i in order]
+
+
+# ── BM25 + FAISS hybrid retriever (Phase 2 CPU backend) ───────────────────
+
+def _bm25_tokenize(text: str) -> list[str]:
+    """Tokenize for BM25 — unified with the persistent-KB path (P1-1)."""
+    return _tokenize(text)
+
+
+def _doc_text(ev: Evidence) -> str:
+    return f"{ev.title} {ev.snippet}"
+
+
+@dataclass
+class BM25FAISSStore:
+    """BM25 + FAISS hybrid retriever — zero AVX2, any x86_64 CPU.
+
+    Uses ``rank_bm25`` for sparse lexical matching + FAISS flat IP index
+    for dense semantic matching. Falls back to pure BM25 when FAISS or
+    an embedding model is unavailable.
+
+    Hybrid score: ``BM25(α) + FAISS_cosine(1-α)`` where α defaults to
+    ``settings.kb_hybrid_alpha`` (same knob as persistent ``hybrid_search_scored``).
+    """
+
+    backend: str = "bm25_faiss"
+    docs: list[Evidence] = field(default_factory=list)
+    # None → read settings.kb_hybrid_alpha at query time (shared with Hub probe).
+    bm25_weight: float | None = None
+
+    def __post_init__(self) -> None:
+        self._corpus: list[list[str]] = []
+        self._bm25: object | None = None
+        self._faiss_index: object | None = None
+        self._faiss_dim: int = 0
+        self._embedder: object | None = None
+
+    def _resolved_bm25_weight(self) -> float:
+        if self.bm25_weight is not None:
+            w = float(self.bm25_weight)
+        else:
+            try:
+                from ..config import get_settings
+
+                w = get_settings().kb_hybrid_alpha
+            except Exception:
+                w = 0.3
+        return min(1.0, max(0.0, w))
+
+    # ── ingest ──────────────────────────────────────────────────────────
+
+    def ingest(self, evidence: list[Evidence]) -> int:
+        from rank_bm25 import BM25Okapi
+
+        self.docs.extend(evidence)
+        new_corpus = [_bm25_tokenize(_doc_text(ev)) for ev in evidence]
+        self._corpus.extend(new_corpus)
+        # BM25Okapi divides by the corpus size, so an empty corpus raises
+        # ZeroDivisionError rather than building an empty index. Asking a
+        # question with no sources attached is an ordinary request, not an
+        # error, and it was returning HTTP 500. `query` already treats an
+        # empty store as "no hits"; this keeps ingest consistent with it.
+        self._bm25 = BM25Okapi(self._corpus) if self._corpus else None
+
+        # FAISS dense index — only for small batches (<200 docs)
+        # to avoid OOM on CPU VPS with sentence-transformers
+        # v21-fix: 跳过批次时置 None，避免向量位置与 docs 错位归因。
+        # v29 M-1: 大批量不再摧毁已有索引 —— 此前 _faiss_index=None 把
+        # 之前小批量建好的索引也清掉，向量通道静默死亡。现仅跳过本次构建，
+        # 保留已有索引。
+        if len(evidence) <= 200:
+            try:
+                self._build_faiss_index(evidence)
+            except Exception:
+                pass  # FAISS is optional; BM25 alone still works
+        else:
+            logger.warning(
+                "rag ingest: %d docs 超 200，大批量跳过 FAISS 增量构建（保留已有索引）",
+                len(evidence),
+            )
+            # 不碰 self._faiss_index，保留已有索引
+
+        return len(self.docs)
+
+    # ── query ───────────────────────────────────────────────────────────
+
+    def query(self, text: str, k: int = 5) -> list[Evidence]:
+        return [ev for _, ev in self.query_scored(text, k)]
+
+    def query_scored(self, text: str, k: int = 5) -> list[tuple[float, Evidence]]:
+        """v29 B-2: 返回 (hybrid分数, Evidence)，供 colbert_store 透出真实分数。
+
+        此前 colbert_store.search() 用合成排名分 (1.0 - i*0.08) 冒充分数，
+        导致 research_graph 的 colbert_min_score=0.35 绝对阈值实际变成固定砍 top-9。
+        """
+        if not self.docs:
+            return []
+
+        tokens = _bm25_tokenize(text)
+        n = min(k, len(self.docs))
+
+        if self._bm25 is not None:
+            bm25_raw = self._bm25.get_scores(tokens)
+            bm25_scores = _minmax_norm(bm25_raw)
+        else:
+            bm25_scores = [0.5] * len(self.docs)
+
+        faiss_scores = _faiss_scores(self._faiss_index, self._faiss_dim,
+                                     self._embedder, text, len(self.docs))
+
+        w = self._resolved_bm25_weight()
+        hybrid = [w * b + (1 - w) * f for b, f in zip(bm25_scores, faiss_scores)]
+
+        order = sorted(range(len(hybrid)), key=lambda i: hybrid[i], reverse=True)[:n]
+        return [(hybrid[i], self.docs[i]) for i in order]
+
+    # ── FAISS index builder (internal) ───────────────────────────────────
+
+    def _build_faiss_index(self, evidence: list[Evidence]) -> None:
+        import faiss
+        import numpy as np
+
+        # v22-fix: 之前有过未索引的 docs（跳过批次），保持 None 降级纯 BM25，
+        # 不重建错位索引。_build_faiss_index 在 self.docs.extend(evidence) 后调用，
+        # 故 len(self.docs) 含当前批次；len(self.docs) > len(evidence) 说明有历史未索引。
+        if self._faiss_index is None and len(self.docs) > len(evidence):
+            return
+
+        emb = self._get_embedder()
+        if emb is None:
+            return
+        texts = [_doc_text(ev) for ev in evidence]
+        vecs = np.asarray(emb.encode(texts, normalize_embeddings=True), dtype=np.float32)
+        dim = int(vecs.shape[1])
+        if self._faiss_index is None:
+            self._faiss_index = faiss.IndexFlatIP(dim)
+            self._faiss_dim = dim
+        self._faiss_index.add(vecs)
+
+    def _get_embedder(self) -> object | None:
+        """Return a SentenceTransformer, or None when unavailable.
+
+        Never invents random vectors: a missing embedding package must degrade
+        to pure BM25 (FAISS index stays None), not BM25 + noise.
+
+        v29 P0-1: 用模块级 _load_model 缓存 —— 此前每次新建 BM25FAISSStore
+        都从头加载模型（1-3 秒/次），colbert_store.search() 每次都新建 store。
+
+        v29 Phase2 B-9: 按配置路由模型而非硬编码 MiniLM ——
+        FORMUNEX_EMBEDDING_MODEL=bge-m3 时自动用统一多语言向量空间。
+        """
+        if self._embedder is False:
+            return None
+        if self._embedder is None:
+            try:
+                # 按配置/语言路由；未配置时默认 MiniLM（向后兼容）
+                model_name = embed_model_name()
+                self._embedder = _load_model(model_name)
+            except Exception as exc:
+                logger.warning(
+                    "sentence-transformers unavailable — FAISS disabled, BM25 only (%s)",
+                    exc,
+                )
+                self._embedder = False
+                return None
+        return self._embedder
+
+
+# ── helpers ─────────────────────────────────────────────────────────────
+
+def _minmax_norm(scores) -> list[float]:
+    mn, mx = min(scores), max(scores)
+    if mx == mn:
+        return [0.5] * len(scores)
+    return [(s - mn) / (mx - mn) for s in scores]
+
+
+def _faiss_scores(index, dim, embedder, text: str, n_docs: int) -> list[float]:
+    if index is None or dim == 0 or embedder is None:
+        return [0.0] * n_docs
+    try:
+        import numpy as np
+        q = np.asarray(embedder.encode([text], normalize_embeddings=True), dtype=np.float32)
+        D, I = index.search(q, min(n_docs, index.ntotal))
+        scores = [0.0] * n_docs
+        for d, i in zip(D[0], I[0]):
+            if 0 <= i < n_docs:
+                scores[i] = float(max(0.0, d))
+        return scores
+    except Exception:
+        return [0.0] * n_docs
+
+
+# ── Backend selection ───────────────────────────────────────────────────
+
+def active_rag_backend() -> str:
+    """Name of the retrieval backend that ``build_store`` will select."""
+    from ..config import get_settings
+    from . import colbert_store
+
+    settings = get_settings()
+    # Manual override always wins
+    if settings.rag_backend not in ("auto", ""):
+        return settings.rag_backend
+    # GPU mode: try PyLate or legacy ColBERT (only when gpu_enabled)
+    if settings.gpu_enabled:
+        if colbert_store.colbert_available_gpu(settings):
+            return "pylate"
+        if colbert_store.colbert_available():
+            return "colbert"
+    # CPU mode: BM25+FAISS (reliable, no AVX2 requirement)
+    return "bm25_faiss"
+
+
+def build_store():
+    """Return the retrieval store used to re-rank evidence for grounded Q&A.
+
+    Priority: BM25+FAISS (CPU default) > EmbeddingStore > TfidfStore.
+    ColBERT / PyLate is handled in ``colbert_store.search()`` directly.
+    """
+    backend = active_rag_backend()
+    if backend == "bm25_faiss":
+        try:
+            return BM25FAISSStore()
+        except Exception as exc:
+            log_handled_exception(logger, exc, "BM25FAISS init failed, falling back to TF-IDF")
+            return TfidfStore()
+    if backend == "embedding":
+        try:
+            return EmbeddingStore()
+        except Exception as exc:
+            log_handled_exception(logger, exc, "handled exception")
+    return TfidfStore()
+
+
+# ── Advanced RAG: HyDE query expansion + LLM semantic re-ranking ──────────────
+# Both are pure enhancements layered on top of build_store(); each degrades to a
+# behaviour-preserving no-op when no LLM is configured, so offline retrieval is
+# unchanged. They exist to cut "chemical hallucination": HyDE anchors retrieval
+# to the *content* an answer would contain (surfacing real citable evidence
+# instead of letting the model free-associate), and the re-ranker drops
+# off-topic context before synthesis so the LLM is grounded only on the most
+# relevant prior art.
+
+
+def hyde_expand(query: str, domain: str | None = None) -> str:
+    """HyDE (Hypothetical Document Embeddings) query expansion.
+
+    Ask the LLM for a short hypothetical technical abstract that an ideal answer
+    would resemble, then append it to the query. Embedding/TF-IDF retrieval then
+    matches on *meaning* rather than surface keywords, surfacing real evidence to
+    ground the answer against. When no LLM is available the original query is
+    returned unchanged — retrieval behaviour is identical to before.
+    """
+    from . import llm as _llm
+
+    ctx = f"（领域：{domain}）" if domain else ""
+    prompt = (
+        f"针对以下研究主题{ctx}，写一段约 80 词的假设性技术摘要，"
+        f"描述理想文献/专利中会出现的关键配方参数、机理与材料。仅输出摘要正文，不要前缀。\n\n"
+        f"研究主题：\n<user_query>{query}</user_query>"
+    )
+    try:
+        hint = _llm._call_llm(prompt)
+    except Exception:
+        hint = None
+    return f"{query}\n\n{hint}" if hint else query
+
+
+def _rerank_query(query: str, req: Requirement | None = None) -> str:
+    if req is None:
+        return query
+    parts = [query.strip()]
+    if req.product_type:
+        parts.append(f"产品: {req.product_type}")
+    if req.substrate:
+        parts.append(f"基材: {req.substrate}")
+    objs = ", ".join(
+        f"{o.metric}({o.direction})" for o in (req.objectives or [])[:4]
+    )
+    if objs:
+        parts.append(f"目标: {objs}")
+    mats = ", ".join(m.name for m in (req.materials or [])[:6] if m.name)
+    if mats:
+        parts.append(f"材料: {mats}")
+    return " | ".join(p for p in parts if p)
+
+
+def _rerank_prompt(query: str, candidates: list[Evidence], req: Requirement | None = None) -> str:
+    topic = _rerank_query(query, req)
+    lines = "\n".join(
+        f"[{i}] ({e.source}) {e.title}: {e.snippet[:200]}"
+        for i, e in enumerate(candidates)
+    )
+    return (
+        "你是检索相关性评审。给定研究主题与若干候选证据，为每条证据按其与主题的"
+        "语义相关性打分（0.0 完全无关 … 1.0 高度相关）。\n"
+        f"研究主题：\n<user_query>{topic}</user_query>\n\n候选证据：\n<candidate_items>{lines}</candidate_items>\n\n"
+        '仅返回 JSON：{"scores": [{"i": 0, "score": 0.9}, ...]}（i 为方括号内编号）。'
+    )
+
+
+def llm_rerank(
+    query: str,
+    candidates: list[Evidence],
+    k: int = 6,
+    req: Requirement | None = None,
+) -> list[Evidence]:
+    """Re-rank retrieved candidates by LLM-judged semantic relevance, return top-k.
+
+    Filters off-topic evidence *before* synthesis so the answer engine is
+    grounded only on the most relevant prior art. On any failure (no LLM,
+    malformed JSON) it returns ``candidates[:k]`` — i.e. the upstream store's
+    ordering is preserved, so this is a zero-risk enhancement.
+
+    Prefer :func:`rerank_scored` when callers need an explicit ``applied`` flag
+    (P1 #15). Failures with ``len(candidates) > 1`` log a warning so keep-order
+    is no longer silent.
+
+    W3-2 (P1-21): when ``settings.rerank_plugin_enabled`` is on and ``k`` is
+    within the plugin cap, routing goes through the optional cross-encoder
+    plugin chain (:mod:`rerank_plugin`); default off, behaviour unchanged.
+    """
+    try:
+        from ..config import get_settings
+
+        _plugin_on = get_settings().rerank_plugin_enabled
+    except Exception:
+        _plugin_on = False
+    if _plugin_on and k <= 50:
+        try:
+            from .rerank_plugin import rerank_candidates
+
+            reranked, _applied = rerank_candidates(query, candidates, k=k, req=req)
+            return reranked
+        except Exception as exc:
+            logger.warning(
+                "rerank plugin failed (%s); using legacy llm path", exc
+            )
+    items, applied = llm_rerank_scored(query, candidates, k=k, req=req)
+    if not applied and len(candidates) > 1:
+        logger.warning("llm_rerank not applied; keeping upstream order")
+    return [it.evidence for it in items]
+
+
+@dataclass(frozen=True)
+class RerankScoredItem:
+    """One reranked evidence row with the LLM score (query-test probe)."""
+
+    evidence: Evidence
+    score: float
+    original_index: int
+
+
+def llm_rerank_scored(
+    query: str,
+    candidates: list[Evidence],
+    k: int = 6,
+    req: Requirement | None = None,
+) -> tuple[list[RerankScoredItem], bool]:
+    """Like ``llm_rerank`` but also returns per-candidate scores.
+
+    Returns ``(items, applied)``. When the LLM call fails or yields no usable
+    scores, ``applied`` is False and items preserve the input order (top-k).
+    """
+    if not candidates:
+        return [], False
+    if len(candidates) <= 1:
+        return [
+            RerankScoredItem(evidence=candidates[0], score=float(candidates[0].relevance), original_index=0)
+        ][:k], False
+
+    from . import llm as _llm
+
+    try:
+        data = _llm.complete_json(_rerank_prompt(query, candidates, req))
+    except Exception:
+        data = None
+
+    scores = (data or {}).get("scores") if isinstance(data, dict) else None
+    if not isinstance(scores, list):
+        return [
+            RerankScoredItem(evidence=c, score=float(c.relevance), original_index=i)
+            for i, c in enumerate(candidates[:k])
+        ], False
+
+    ranking: dict[int, float] = {}
+    for item in scores:
+        try:
+            idx = int(item["i"])
+            if 0 <= idx < len(candidates):
+                ranking[idx] = float(item["score"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not ranking:
+        return [
+            RerankScoredItem(evidence=c, score=float(c.relevance), original_index=i)
+            for i, c in enumerate(candidates[:k])
+        ], False
+
+    order = sorted(
+        range(len(candidates)),
+        key=lambda i: (ranking.get(i, -1.0), -i),
+        reverse=True,
+    )
+    items = [
+        RerankScoredItem(
+            evidence=candidates[i],
+            score=float(ranking.get(i, candidates[i].relevance)),
+            original_index=i,
+        )
+        for i in order[:k]
+    ]
+    return items, True
+
+
+# ── P1 #15: Cross-encoder rerank (optional; default off) ─────────────────────
+
+_CE_CACHE: dict[str, object] = {}
+
+
+def cross_encoder_available() -> bool:
+    """True when sentence-transformers CrossEncoder can be imported."""
+    try:
+        from sentence_transformers import CrossEncoder  # noqa: F401
+
+        return True
+    except Exception as exc:
+        log_handled_exception(logger, exc, "cross-encoder availability probe")
+        return False
+
+
+def cross_encoder_model_cached(model_name: str | None = None) -> bool:
+    """v29 Phase5: 检查 reranker 模型是否已在本地缓存，避免生产意外下载。
+
+    默认启用 cross-encoder 时，只在模型已缓存时使用；未缓存则回退 LLM，
+    避免首次查询触发 ~1GB 下载阻塞。
+    """
+    from ..config import get_settings
+
+    name = (model_name or get_settings().cross_encoder_model or "").strip()
+    if not name:
+        return False
+    return is_model_cached(name)
+
+
+def _load_cross_encoder(name: str):
+    if name not in _CE_CACHE:
+        from sentence_transformers import CrossEncoder
+
+        _CE_CACHE[name] = CrossEncoder(name)
+    return _CE_CACHE[name]
+
+
+def _passthrough_scored(
+    candidates: list[Evidence], k: int
+) -> list[RerankScoredItem]:
+    return [
+        RerankScoredItem(
+            evidence=c,
+            score=float(c.relevance),
+            original_index=i,
+        )
+        for i, c in enumerate(candidates[:k])
+    ]
+
+
+def rerank_cross_encoder_scored(
+    query: str,
+    candidates: list[Evidence],
+    k: int = 6,
+    *,
+    model_name: str | None = None,
+) -> tuple[list[RerankScoredItem], bool]:
+    """Score (query, doc) pairs with a CrossEncoder; return top-k + applied flag.
+
+    On any failure returns upstream order with ``applied=False`` (never silent
+    success). Does not download models unless explicitly invoked.
+    """
+    if not candidates:
+        return [], False
+    if len(candidates) <= 1:
+        return _passthrough_scored(candidates, k), False
+
+    from ..config import get_settings
+
+    settings = get_settings()
+    name = (model_name or settings.cross_encoder_model or "").strip() or (
+        "BAAI/bge-reranker-base"
+    )
+    try:
+        model = _load_cross_encoder(name)
+        pairs = [
+            [query, f"{(c.title or '').strip()} {(c.snippet or '').strip()}".strip()]
+            for c in candidates
+        ]
+        raw = model.predict(pairs)
+        scores = [float(s) for s in list(raw)]
+    except Exception as exc:
+        logger.warning("cross-encoder rerank failed (%s); marking not applied", exc)
+        return _passthrough_scored(candidates, k), False
+
+    if len(scores) != len(candidates):
+        logger.warning(
+            "cross-encoder score length mismatch (%s vs %s); not applied",
+            len(scores),
+            len(candidates),
+        )
+        return _passthrough_scored(candidates, k), False
+
+    order = sorted(
+        range(len(candidates)),
+        key=lambda i: (scores[i], -i),
+        reverse=True,
+    )
+    items = [
+        RerankScoredItem(
+            evidence=candidates[i],
+            score=float(scores[i]),
+            original_index=i,
+        )
+        for i in order[:k]
+    ]
+    return items, True
+
+
+def rerank_scored(
+    query: str,
+    candidates: list[Evidence],
+    k: int = 6,
+    req: Requirement | None = None,
+    *,
+    prefer: str | None = None,
+) -> tuple[list[RerankScoredItem], dict]:
+    """Unified rerank with explicit backend + applied marking (P1 #15).
+
+    ``prefer``: ``auto`` | ``cross_encoder`` | ``llm`` (default from settings
+    ``search_rerank_backend``). Returns ``(items, meta)`` where meta includes
+    ``applied``, ``backend``, ``reason``.
+    """
+    from ..config import get_settings
+
+    settings = get_settings()
+    backend = (prefer or settings.search_rerank_backend or "auto").strip().lower()
+    if backend not in ("auto", "cross_encoder", "llm"):
+        backend = "auto"
+
+    if not candidates:
+        return [], {"applied": False, "backend": "none", "reason": "empty"}
+
+    want_ce = backend == "cross_encoder" or (
+        backend == "auto" and settings.cross_encoder_rerank_enabled
+    )
+    # v29 Phase5: 默认启用时，只在模型已缓存时用 cross-encoder，
+    # 避免生产首次查询触发大模型下载。显式指定 backend=cross_encoder 时仍尝试加载。
+    _ce_ok = cross_encoder_available() and (
+        backend == "cross_encoder" or cross_encoder_model_cached()
+    )
+    if want_ce and _ce_ok:
+        items, applied = rerank_cross_encoder_scored(query, candidates, k=k)
+        if applied:
+            return items, {
+                "applied": True,
+                "backend": "cross_encoder",
+                "reason": "ok",
+                "model": settings.cross_encoder_model,
+            }
+        if backend == "cross_encoder":
+            return items, {
+                "applied": False,
+                "backend": "cross_encoder",
+                "reason": "cross_encoder_failed",
+            }
+        # auto: fall through to LLM
+
+    if backend in ("auto", "llm"):
+        items, applied = llm_rerank_scored(query, candidates, k=k, req=req)
+        if applied:
+            return items, {"applied": True, "backend": "llm", "reason": "ok"}
+        return items, {
+            "applied": False,
+            "backend": "llm",
+            "reason": "llm_rerank_failed",
+        }
+
+    return _passthrough_scored(candidates, k), {
+        "applied": False,
+        "backend": "none",
+        "reason": "cross_encoder_unavailable",
+    }

@@ -1,0 +1,1026 @@
+"""SQLAlchemy ORM models for persisted platform state.
+
+Currently the single source of truth is the experiment dataset: measured
+DOE/lab results that train the data-driven predictors. Composite payloads
+(``factors``, ``measured``) are stored as JSON columns, which keeps the schema
+stable as new metrics appear without migrations.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from ..clock import utcnow
+
+_source_guide_type = JSON().with_variant(JSONB(), "postgresql")
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+# Strictly increasing within a process (see app/clock.py): the default for every ``created_at`` / ``updated_at``
+# below, so "newest first" is well-defined even where the OS clock ticks every ~15 ms (Windows).
+_utcnow = utcnow
+
+
+class ExperimentRow(Base):
+    """One measured DOE/lab result fed back into the platform.
+
+    When ``item_id`` is set the payload lives in Datalab (``formumind_training`` block);
+    otherwise factors/measured JSON columns hold the full record (sqlite fallback).
+    """
+
+    __tablename__ = "experiments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    domain: Mapped[str] = mapped_column(String(64), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True, default=None)
+    factors: Mapped[dict] = mapped_column(JSON, default=dict)
+    cure_temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    measured: Mapped[dict] = mapped_column(JSON)
+    source: Mapped[str] = mapped_column(String(64), default="lab")
+    label: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class MeasurementRow(Base):
+    """One typed lab result belonging to an experiment.
+
+    The experiment's ``measured`` JSON column stays as the flat mirror every
+    consumer already reads; this table is where the context that makes a number
+    comparable lives — unit, test method, instrument, operator, and the
+    acceptance window it was judged against.
+
+    Carries real foreign keys, unlike the rest of this schema: both parents are
+    local tables (never Datalab-authoritative), so the constraint can be
+    enforced rather than merely documented.
+    """
+
+    __tablename__ = "measurements"
+    __table_args__ = (
+        Index("ix_measurements_experiment_metric", "experiment_id", "metric"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    experiment_id: Mapped[int] = mapped_column(
+        ForeignKey("experiments.id", ondelete="CASCADE"), index=True
+    )
+    metric: Mapped[str] = mapped_column(String(80), index=True)
+    value: Mapped[float] = mapped_column(Float)
+    unit: Mapped[str] = mapped_column(String(32), default="")
+    # ASTM B117 / ISO 9227 / GB/T 1771 — salt-spray hours are not comparable
+    # across standards, so a value without one is not a result.
+    test_method: Mapped[str] = mapped_column(String(80), default="")
+    instrument: Mapped[str] = mapped_column(String(120), default="")
+    operator: Mapped[str] = mapped_column(String(80), default="")
+    measured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    spec_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spec_max: Mapped[float | None] = mapped_column(Float, nullable=True)
+    passed: Mapped[bool | None] = mapped_column(nullable=True)
+    # The QC report this value was read out of. SET NULL rather than CASCADE:
+    # losing the report should not silently delete the measurement.
+    source_document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("source_documents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class ExperimentAttachment(Base):
+    """Binds an ingested document to the experiment it reports on.
+
+    This link did not exist. QC reports were ingested into the knowledge base
+    as generic corpus documents with no way back to the run they measured, so
+    "show me the salt-spray certificate for this batch" had no answer.
+    """
+
+    __tablename__ = "experiment_attachments"
+    __table_args__ = (
+        UniqueConstraint(
+            "experiment_id", "source_document_id", name="uq_experiment_attachment"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    experiment_id: Mapped[int] = mapped_column(
+        ForeignKey("experiments.id", ondelete="CASCADE"), index=True
+    )
+    source_document_id: Mapped[str] = mapped_column(
+        ForeignKey("source_documents.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), default="qc_report")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class FormulationVersion(Base):
+    """An immutable snapshot of a formulation, linked to what it came from.
+
+    Formulation development is version-controlled work — a recipe is revised
+    dozens of times and the interesting question is almost never "what is it
+    now" but "what changed between v3 and v4, and why". Nothing recorded that:
+    formulations lived in a project's JSON payload and were overwritten in
+    place, so the reasoning behind every revision was lost as soon as the next
+    one was saved.
+
+    ``lineage_id`` groups the versions of one formulation; ``parent_version_id``
+    records which revision this one was derived from, so branching (two people
+    exploring different directions from the same v3) stays representable rather
+    than being flattened into a single line.
+    """
+
+    __tablename__ = "formulation_versions"
+    __table_args__ = (
+        UniqueConstraint("lineage_id", "version", name="uq_formulation_version"),
+        Index("ix_formulation_versions_lineage_version", "lineage_id", "version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    lineage_id: Mapped[str] = mapped_column(String(36), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    # Self-referential: NULL marks the root of a lineage. SET NULL rather than
+    # CASCADE — deleting one revision must not silently erase its descendants.
+    parent_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("formulation_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    domain: Mapped[str] = mapped_column(String(64), index=True)
+    # Frozen Formulation dump. Immutable by contract: a revision is a new row,
+    # never an edit, or the history stops being a history.
+    snapshot: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), default=dict
+    )
+    change_summary: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class Campaign(Base):
+    """One AI optimization campaign (BayBE / active-learning round)."""
+
+    __tablename__ = "campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(64), default="BayBE-LHS")
+    status: Mapped[str] = mapped_column(String(32), default="IN_PROGRESS")
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True, default=None)
+    primary_metric: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # v29 H-5: domain stored at creation (was hardcoded to anticorrosion_coating)
+    domain: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    objectives_snapshot: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    lever_snapshot: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    # Ordered Datalab sample refs: [{"id": 1, "item_id": "fm_c1_r1"}, ...]
+    sample_refs: Mapped[list] = mapped_column(JSON, default=list)
+    # P1: DataLab collection_id holding this campaign's DOE-row items
+    # (collection_id in Datalab: "formumind_campaign_{id}")
+    datalab_collection_id: Mapped[str | None] = mapped_column(
+        String(96), nullable=True, default=None
+    )
+    # Closed-loop round snapshots: [{round, at, rmse_by_metric, converged, ...}]
+    loop_history: Mapped[list] = mapped_column(JSON, default=list)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('IN_PROGRESS', 'COMPLETED', 'FAILED', 'ABORTED')",
+            name="ck_campaign_status",
+        ),
+    )
+
+
+class SourceDocument(Base):
+    """Ingested source with full text and LLM-extracted source guide."""
+
+    __tablename__ = "source_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(512), default="")
+    title: Mapped[str] = mapped_column(String(512), default="")
+    source_kind: Mapped[str] = mapped_column(String(32), default="local")
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    # Provenance: the URL / patent number / DOI the document was fetched from.
+    # Doubles as the async-ingest dedup key (don't re-download what we have).
+    origin_url: Mapped[str | None] = mapped_column(String(1024), nullable=True, index=True)
+    # Optional project scope — NULL = global corpus shared across projects.
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    full_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_text_chars: Mapped[int] = mapped_column(Integer, default=0)
+    source_guide: Mapped[dict | None] = mapped_column(
+        _source_guide_type, nullable=True, comment="LLM 提取的全局参数空间与摘要"
+    )
+    extraction_status: Mapped[str] = mapped_column(String(32), default="pending")
+    extraction_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # P1-1 (0040): ingest observability — 'indexed' | 'failed', NULL = legacy /
+    # unknown / non-ingest path. Failed rows keep the last failure reason in
+    # ingest_error and are retried (tier-1 origin dedup ignores them).
+    ingest_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    ingest_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # P3-5: which parser tier produced the text
+    # (hybrid | docling | marker | mineru | rapidocr | markitdown | pypdf |
+    #  docx | text | none). NULL = unknown / non-parse path (API text, QC).
+    parser: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # How the full text was obtained: "tei" (structured XML, no parse/OCR),
+    # "html" (landing/web text), "pdf" (download + parse, possibly OCR), or
+    # "text" (unknown/absent). Only "pdf" counts against the per-project PDF
+    # quota, because that path is the memory-bound one (~350 MB per document,
+    # ~557 MB when OCR runs).
+    acquisition: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Soft archive (W3): hide from default lists + retrieval; keep rows/chunks.
+    archived: Mapped[bool] = mapped_column(default=False, index=True)
+    # W4: when archived flipped on; used by retention purge (nullable for legacy).
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class DocumentChunk(Base):
+    """Persistent KB chunk — one structure-aware chunk of a SourceDocument.
+
+    ``embedding`` (normalized vector, JSON list) is filled when
+    sentence-transformers is installed; text-only rows still serve keyword
+    retrieval, and ``reindex`` can backfill vectors later.
+    """
+
+    __tablename__ = "document_chunks"
+    # Mirrors migration 0010. Declared here too so create_all() databases
+    # (dev/test) carry the same invariant as migrated ones — ingest_tx relies
+    # on the IntegrityError to detect a concurrent re-ingest of one source.
+    __table_args__ = (
+        UniqueConstraint("source_id", "ord", name="uq_document_chunks_source_ord"),
+        # Same index alembic 0009 creates: a database built by create_all (no alembic run) must not lack it.
+        Index("ix_document_chunks_source_offset", "source_id", "offset_start"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(36), index=True)
+    ord: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text, default="")
+    heading_path: Mapped[str] = mapped_column(String(120), default="")
+    # Source-page provenance (from <!-- page:N --> parser markers); citations
+    # can point at the exact page of the original PDF.
+    page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # PageIndex 借鉴 A5: 跨页 chunk 的末页（NULL = 单页，与 page_no 相同）。
+    page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Layout provenance (Phase 0, ragflow/kotaemon eval): normalized bounding
+    # box [xmin, ymin, xmax, ymax] as page width/height fractions (0-1 floats),
+    # so frontend rendering is DPI/zoom independent. NULL until a layout-aware
+    # parser (MinerU, Phase 1) fills it — the pymupdf4llm text chain only
+    # carries page_no.
+    bbox: Mapped[list | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
+        nullable=True,
+        comment="页面百分比 bbox [xmin,ymin,xmax,ymax]",
+    )
+    # Block kind from the parser/chunker: text | table | formula | figure | code.
+    # Heuristic on markdown for the text chain; layout parsers overwrite it.
+    block_type: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    # Anchor columns: promoted from meta JSON for efficient SQL range/grouping queries.
+    # offset_start/end give the raw byte range of this chunk's text in source order;
+    # paragraph_idx orders multi-paragraph sections.
+    offset_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    offset_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    paragraph_idx: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding: Mapped[list | None] = mapped_column(
+        # none_as_null: Python None must become SQL NULL (not JSON 'null'),
+        # so the embedded-rows count can filter with IS NOT NULL.
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
+        nullable=True,
+        comment="归一化句向量（JSON 数组）",
+    )
+    embedding_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # C-1b: float32 little-endian BLOB twin of ``embedding`` (JSON). New
+    # writes populate both; reads prefer BLOB and fall back to JSON.
+    embedding_blob: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, comment="句向量 float32 BLOB（C-1b）"
+    )
+    # Bilingual routing (2026-09-04): "zh" | "en" | None — filled by the lang
+    # backfill; retrieval filters by language and embeds per language model.
+    # zh chunks use BAAI/bge-small-zh-v1.5, en chunks keep all-MiniLM-L6-v2 —
+    # embedding_model column already distinguishes them (comparable_embedding).
+    lang: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+    # P2 (0042): L1 精确去重的索引键 —— sha256(text+heading_path+page_no)。
+    # 写入时由 ChunkStore.replace_for_source_in 统一计算；可空以兼容
+    # 回填失败的极端行（_l1_exact 对其回退为不去重）。
+    dedup_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Extracted entities: {"chem": [{type, value, ...}], "products": [...]}.
+    meta: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
+        nullable=True,
+        comment="化学/产品实体元数据",
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class ExtractionTable(Base):
+    """Structured table extracted from a source document (Phase 0 foundation).
+
+    Filled by layout-aware parsers (MinerU, Phase 1); the text chain does not
+    populate it. One row per detected table with its caption, markdown body
+    and page/bbox provenance for "which page, which region" lookups.
+    """
+
+    __tablename__ = "extraction_tables"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(36), index=True)
+    page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox: Mapped[list | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
+        nullable=True,
+        comment="页面百分比 bbox [xmin,ymin,xmax,ymax]",
+    )
+    caption: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    markdown_text: Mapped[str] = mapped_column(Text, default="")
+    n_rows: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_cols: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class ExtractionFormula(Base):
+    """LaTeX formula extracted from a source document (Phase 0 foundation).
+
+    Filled by layout-aware parsers (MinerU MFR, Phase 1). ``formula_no`` keeps
+    the in-document equation number (e.g. "(3)") for cross-referencing.
+    """
+
+    __tablename__ = "extraction_formulas"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(36), index=True)
+    page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox: Mapped[list | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
+        nullable=True,
+        comment="页面百分比 bbox [xmin,ymin,xmax,ymax]",
+    )
+    latex: Mapped[str] = mapped_column(Text, default="")
+    formula_no: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class MaterialRow(Base):
+    """A raw material available to formulation search.
+
+    Persists the curated ``knowledge.RAW_MATERIALS`` catalog and everything
+    added on top of it at runtime — manual entries and trade products promoted
+    out of ``kb_products``. Making the catalog data rather than a module literal
+    is what lets ingredient *choice* become a search variable: inverse design
+    and substitution both need a candidate pool that can grow.
+
+    ``origin`` records provenance (``seed`` / ``user`` / ``kb_promoted``) so the
+    curated 32 can always be told apart from harvested ones.
+
+    NULL columns are omitted when converting back to a spec dict — absence is
+    semantically distinct from None for several consumers (e.g. ``carrier``
+    defaults to "both" via ``.get(k, default)``, which a stored None would break).
+    """
+
+    __tablename__ = "materials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # Normalized name, for idempotent upserts and case-insensitive lookup.
+    norm_key: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    # Display name — the catalog key callers index RAW_MATERIALS by.
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    role: Mapped[str] = mapped_column(String(60), default="")
+    origin: Mapped[str] = mapped_column(String(16), default="seed", index=True)
+
+    # ── curated chemistry (mirrors the seed literal) ──
+    formula: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    smiles: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cas_no: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    zh_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    molar_mass: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_cny_per_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    voc_contrib: Mapped[float | None] = mapped_column(Float, nullable=True)
+    density_gcm3: Mapped[float | None] = mapped_column(Float, nullable=True)
+    oil_absorption: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tg_k: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lab: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    svhc: Mapped[bool | None] = mapped_column(nullable=True)
+    carrier: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    water_compatible: Mapped[bool | None] = mapped_column(nullable=True)
+
+    # ── substitution / sourcing metadata (new in the material space) ──
+    # Chemical family within a role ("epoxy", "isocyanate", "amine", "phosphate",
+    # "silane"…) — the first filter when looking for a drop-in replacement.
+    functional_class: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    # Epoxy equivalent weight / amine value: needed to re-balance a swap.
+    equivalent_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Hansen solubility parameters (MPa^0.5) — compatibility distance.
+    hansen_d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hansen_p: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hansen_h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hlb: Mapped[float | None] = mapped_column(Float, nullable=True)
+    supplier: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # in_stock | restricted | discontinued — drives supply-disruption alerts.
+    availability: Mapped[str] = mapped_column(String(16), default="in_stock", index=True)
+    regulatory: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Structured sourcing detail historically stored as JSON (alembic 0027).
+    # Canonical store is now ``suppliers`` + ``material_suppliers`` (0028);
+    # this column remains a dual-written projection / fallback for older readers.
+    suppliers_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Hand-tagged interchangeable group; members are drop-in for one another.
+    substitute_group: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    # Soft archive — hidden from RAW_MATERIALS pools but retained for audit/export.
+    archived: Mapped[bool] = mapped_column(default=False, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class SupplierRow(Base):
+    """Deduplicated vendor master (P3 — normalized out of ``suppliers_json``)."""
+
+    __tablename__ = "suppliers"
+    __table_args__ = (UniqueConstraint("norm_name", name="uq_suppliers_norm_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    norm_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # A′：手工维护的供应商国家/地区（ISO 或自由文本，如 CN / US）。
+    country: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class MaterialSupplierRow(Base):
+    """Material ↔ supplier link with optional product page URL + quote fields."""
+
+    __tablename__ = "material_suppliers"
+    __table_args__ = (
+        UniqueConstraint(
+            "material_id",
+            "supplier_id",
+            "product_url",
+            name="uq_material_supplier_product",
+        ),
+        Index("ix_material_suppliers_material_id", "material_id"),
+        Index("ix_material_suppliers_supplier_id", "supplier_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    material_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("materials.id", ondelete="CASCADE"), nullable=False
+    )
+    supplier_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False
+    )
+    product_url: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="app", nullable=False)
+    # A′ manual commercial terms (no scrape). price_source defaults to "manual".
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    price_cny_per_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_source: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
+    price_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    moq: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pack_size: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class MaterialCandidateRow(Base):
+    """Low-confidence material proposals awaiting human promote / dismiss.
+
+    High-confidence harvests (CAS/SMILES) upsert directly into ``materials``;
+    bare trade names land here so the main catalog stays clean.
+    """
+
+    __tablename__ = "material_candidates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    norm_key: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    role: Mapped[str] = mapped_column(String(60), default="")
+    cas_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    smiles: Mapped[str | None] = mapped_column(Text, nullable=True)
+    formula: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    zh_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    supplier: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    source: Mapped[str] = mapped_column(String(64), default="kb_promoted", index=True)
+    source_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    confidence: Mapped[str] = mapped_column(String(16), default="low")
+    # pending | promoted | dismissed
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class KBProduct(Base):
+    """Corpus-level registry of commercial chemical products (trade names).
+
+    Aggregated across every ingested document: rule-tier chunk extraction and
+    the LLM source-guide products both upsert here.  Feeds retrieval expansion
+    (牌号 ↔ 通用名 ↔ CAS) and recommendation grounding.
+    """
+
+    __tablename__ = "kb_products"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # Normalized "trade|grade" key for idempotent upserts.
+    norm_key: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    trade_name: Mapped[str] = mapped_column(String(120), default="")
+    grade: Mapped[str] = mapped_column(String(60), default="")
+    supplier: Mapped[str] = mapped_column(String(120), default="")
+    generic_name: Mapped[str] = mapped_column(String(200), default="")
+    cas: Mapped[str] = mapped_column(String(32), default="")
+    smiles: Mapped[str | None] = mapped_column(Text, nullable=True)
+    role: Mapped[str] = mapped_column(String(60), default="")
+    mention_count: Mapped[int] = mapped_column(Integer, default=1)
+    source_ids: Mapped[list] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), default=list
+    )
+    first_seen: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class KGEntity(Base):
+    """Normalized knowledge-graph entity (chemical, trade product, element)."""
+
+    __tablename__ = "kb_entities"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    canonical_name: Mapped[str] = mapped_column(String(512), default="")
+    zh_name: Mapped[str] = mapped_column(String(256), default="")
+    cas_no: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    smiles: Mapped[str | None] = mapped_column(Text, nullable=True)
+    formula: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    role: Mapped[str] = mapped_column(String(64), default="")
+    supplier: Mapped[str] = mapped_column(String(120), default="")
+    grade: Mapped[str] = mapped_column(String(60), default="")
+    composition_status: Mapped[str] = mapped_column(String(32), default="unknown")
+    proprietary: Mapped[bool] = mapped_column(default=False)
+    generic_name_hint: Mapped[str] = mapped_column(String(256), default="")
+    linked_catalog_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    linked_product_key: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    element_symbols: Mapped[list] = mapped_column(JSON, default=list)
+    aliases: Mapped[list] = mapped_column(JSON, default=list)
+    mention_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class KGMention(Base):
+    """Entity occurrence in a document chunk."""
+
+    __tablename__ = "kb_mentions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    entity_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_id: Mapped[str] = mapped_column(String(36), index=True)
+    chunk_id: Mapped[str] = mapped_column(String(36), index=True)
+    surface_form: Mapped[str] = mapped_column(String(256), default="")
+    char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    extractor: Mapped[str] = mapped_column(String(32), default="chem_extract")
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("entity_id", "chunk_id", "surface_form", name="uq_kb_mention_triple"),
+    )
+
+
+class KGEntityLink(Base):
+    """Optional link between entities (e.g. trade name → catalog chemical, semantic relations)."""
+
+    __tablename__ = "kb_entity_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    src_entity_id: Mapped[str] = mapped_column(String(64), index=True)
+    dst_entity_id: Mapped[str] = mapped_column(String(64), index=True)
+    link_type: Mapped[str] = mapped_column(String(32), index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    evidence_refs: Mapped[list] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_valid: Mapped[bool] = mapped_column(default=True)
+    extraction_method: Mapped[str] = mapped_column(String(16), default="rule")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("src_entity_id", "dst_entity_id", "link_type", name="uq_kb_link_triplet"),
+        # v7: KG 图谱查询热点是 (src,dst)×link_type 复合过滤，单列索引下需回表过滤。
+        Index("ix_kb_link_src_type", "src_entity_id", "link_type"),
+        Index("ix_kb_link_dst_type", "dst_entity_id", "link_type"),
+    )
+
+
+class ProjectRow(Base):
+    """NotebookLM-style project workspace (JSON payload)."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    headline: Mapped[str] = mapped_column(String(512), default="")
+    domain: Mapped[str] = mapped_column(String(64), index=True, default="")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_archived: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class ChatSessionRow(Base):
+    """Project-scoped chat session (SQLite authority since 2026-09-05).
+
+    会话入库项目数据库: project_id 关联项目, 消息全量在 chat_messages。
+    Redis 仅作热缓存(SQLite 为权威, Redis 重启不丢会话)。
+    """
+
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(String(36), index=True, default=None)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    context: Mapped[dict] = mapped_column(JSON, default=dict)
+    has_context: Mapped[bool] = mapped_column(default=False)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class ChatMessageRow(Base):
+    """One chat turn, stored per-message so sessions survive payload overwrites."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    project_id: Mapped[str | None] = mapped_column(String(36), index=True, default=None)
+    role: Mapped[str] = mapped_column(String(16), default="user")
+    content: Mapped[str] = mapped_column(Text, default="")
+    meta_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class ProjectPayloadHistoryRow(Base):
+    """Versioned payload snapshots: every update archives the previous payload.
+
+    任何覆盖事故可回滚 (GET /history + POST /rollback/{version}),
+    每项目保留最近 MAX_PAYLOAD_VERSIONS 版。
+    """
+
+    __tablename__ = "project_payload_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(String(36), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    cause: Mapped[str] = mapped_column(String(64), default="update")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class TaskOutbox(Base):
+    """Durable outbox row for async task dispatch (idempotency foundation).
+
+    One row per logical task submission. ``(operation, idempotency_key)`` is
+    unique so retried submissions collapse onto the same row instead of
+    enqueueing duplicate work; the dispatcher claims PENDING rows FIFO by
+    ``created_at`` and flips ``status``/``claimed_by``/``attempt_count`` as it
+    processes them.
+    """
+
+    __tablename__ = "task_outbox"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True, default=None)
+    status: Mapped[str] = mapped_column(String(16), default="PENDING", nullable=False)
+    claimed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Celery task id the client was handed for this submission. Recovery re-dispatches
+    # under the same id, so a client polling it sees the replayed run finish instead of
+    # waiting on a task that died.
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    # Doubles as the liveness heartbeat: every status flip and every worker heartbeat
+    # touches it (``onupdate``), and recovery treats "not touched for N minutes" — not
+    # "created N minutes ago" — as stalled.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("operation", "idempotency_key", name="uq_task_outbox_op_key"),
+        Index("ix_task_outbox_status_created", "status", "created_at"),
+        Index("ix_task_outbox_claim", "claimed_by", "claimed_at"),
+    )
+
+
+class DOEPlanRow(Base):
+    """Persisted DOE experimental design — one row per plan so recommendations
+    from /baybe/recommend, /doe, and /doe/active are recorded idempotently
+    for audit / reconciliation.
+    """
+
+    __tablename__ = "doe_plans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # Integer, matching the autoincrement primary keys these point at. They
+    # were declared String(36), so neither column could ever join its parent —
+    # a plan's experiment and campaign were unreachable by query. Nothing ever
+    # populated them, which is why it went unnoticed.
+    #
+    # SET NULL rather than CASCADE: these rows exist for audit and
+    # reconciliation, so a plan should outlive the campaign it was generated
+    # for rather than disappear with it.
+    experiment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("experiments.id", ondelete="SET NULL"), nullable=True
+    )
+    campaign_id: Mapped[int | None] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True
+    )
+    design_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Closed-loop round this plan was generated for (1-based); NULL = manual/unassociated.
+    round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    # P0-1 (Phase 0): project scope for isolation. NULL = legacy / unscoped.
+    # Index is declared explicitly in __table_args__ (single index).
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    # C-4b (Phase C): plan lifecycle status — draft → active → completed,
+    # draft/active → aborted. Distinct from ``doe_cycle_runs.status``, which
+    # records a cycle execution result (success|error), not a plan lifecycle.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+
+    __table_args__ = (
+        Index("ix_doe_plans_experiment", "experiment_id"),
+        Index("ix_doe_plans_campaign", "campaign_id"),
+        Index("ix_doe_plans_project", "project_id"),
+        Index("ix_doe_plans_status", "status"),
+    )
+
+
+class DOECycleRunRow(Base):
+    """Wave 3-2: one row per closed-loop DOE cycle execution.
+
+    Observability for the DOE -> measure -> next-cycle loop: which engine
+    produced the batch (``baybe`` | ``lhs``), how many prior measurements
+    seeded it, and how many experiments it suggested. P2-4 adds objective
+    tracking (best vs target, convergence reason); schema changes go through
+    Alembic (see ``app/db/alembic/versions``).
+    """
+
+    __tablename__ = "doe_cycle_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    domain: Mapped[str] = mapped_column(String(64), default="")
+    engine: Mapped[str] = mapped_column(String(16), default="")  # baybe | lhs
+    prior_measurement_count: Mapped[int] = mapped_column(Integer, default=0)
+    experiment_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="")  # success | error
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    # P2-4: objective tracking — best measured value vs target per cycle.
+    best_objective_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    objective_metric: Mapped[str] = mapped_column(String(64), default="")
+    objective_direction: Mapped[str] = mapped_column(String(16), default="")
+    # P2-4: why the cycle stopped generating: "" | rmse_plateau |
+    # target_achieved | budget_exhausted
+    convergence_reason: Mapped[str] = mapped_column(String(32), default="")
+
+    __table_args__ = (Index("ix_doe_cycle_runs_project", "project_id"),)
+
+
+class DOECyclePauseRow(Base):
+    """The pause flag of one campaign's closed loop.
+
+    The loop / doe_cycle tasks refuse to start while a campaign has an *active* pause. It lives in the
+    database - the one store the API process and every worker already share for ``loop_history`` - and not
+    in Redis, which a development or eager-mode install does not have (pausing answered 503 there) and which
+    answered "not paused" whenever it was unreachable, i.e. lost the user's pause exactly when something was
+    wrong.
+
+    * no row                     - running;
+    * ``lapsed_at`` is NULL      - paused, until ``paused_until`` (NULL = until somebody resumes);
+    * ``lapsed_at`` is set       - the pause ran out on its own at that moment and the loop is running again;
+      kept so the UI can say so instead of the loop starting unannounced. An explicit resume deletes the row.
+
+    Rows go with their campaign (``ON DELETE CASCADE``).
+    """
+
+    __tablename__ = "doe_cycle_pauses"
+
+    campaign_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("campaigns.id", ondelete="CASCADE"), primary_key=True
+    )
+    paused_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lapsed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class InferredSystemRow(Base):
+    """LLM-inferred formulation-system constraints, persisted for reuse (P2).
+
+    Unknown product_types are matched here before falling back to a fresh LLM
+    inference; each hit increments ``hit_count`` so hot entries can be promoted
+    into the static knowledge base after human review.
+    """
+
+    __tablename__ = "inferred_systems"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Stable cache key = normalize_key(product_type).
+    normalized_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    product_type: Mapped[str] = mapped_column(Text, default="")
+    system_name: Mapped[str] = mapped_column(String(200), default="")
+    must_include_roles: Mapped[list] = mapped_column(JSON, default=list)
+    must_exclude: Mapped[str] = mapped_column(Text, default="")
+    constraints: Mapped[list] = mapped_column(JSON, default=list)
+    metric_ranges: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence: Mapped[str] = mapped_column(String(10), default="medium")
+    hit_count: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    # Provenance: which requirement first triggered this inference.
+    source_requirement_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    source_requirement_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class WikiPage(Base):
+    """LLM Wiki compiled page metadata (Markdown body lives on disk).
+
+    Dual-write with ``data/wiki/{path}``. Raw chunks remain the provenance
+    authority; this row indexes human-readable compiled memory.
+    """
+
+    __tablename__ = "wiki_pages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    path: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(32), default="material", index=True)
+    entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(512), default="")
+    norm_key: Mapped[str] = mapped_column(String(200), default="", index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    source_ids: Mapped[list] = mapped_column(JSON, default=list)
+    flags: Mapped[list] = mapped_column(JSON, default=list)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # P0-2 (Phase 0): project scope for isolation. NULL = legacy / global page.
+    # Index is declared explicitly in __table_args__ (single index).
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+
+    __table_args__ = (
+        Index("ix_wiki_pages_project", "project_id"),
+    )
+
+
+class KbIngestAudit(Base):
+    """P0 ingest gate audit — not cascade-deleted with Hub sources."""
+
+    __tablename__ = "kb_ingest_audit"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    domain: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    query_fingerprint: Mapped[str] = mapped_column(String(32), default="")
+    evidence_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    action: Mapped[str] = mapped_column(String(16), default="skip")  # accept | skip
+    reason: Mapped[str] = mapped_column(String(64), default="")
+    domain_match: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class KbCoverageCounter(Base):
+    """B-3: KB embedding coverage counters persisted in SQLite.
+
+    Replaces the old process-local ``_KB_COVERAGE`` dict (in
+    ``app.services.kb_index``) as the source of truth, so counts survive
+    process restarts and stay consistent across processes. Keys:
+    ``kb_chunks_embedded`` / ``kb_chunks_total``.
+    """
+
+    __tablename__ = "kb_coverage_counters"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow
+    )
+
+
+
+class RecommendOutcomeRow(Base):
+    """C-8 (Phase C): adopt-signal telemetry for formulation recommendations.
+
+    Weak-success layer (user adoption). Strong-success layer (experiment
+    validation): U-4 marks ``experiment_validated`` when a synced lab
+    measurement heuristically matches the adopted formula's ingredients
+    (see ``recommend_outcome_store.try_mark_experiment_validated``).
+    """
+
+    __tablename__ = "recommend_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Stable id minted by run_recommend_orchestration per recommendation round.
+    recommend_id: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    # P0 isolation: NULL = legacy / unscoped, excluded from project-scoped reads.
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    # C-8: rounds are registered at generation time as NOT adopted (the
+    # denominator); adopt flips this to True. Never default to True — an
+    # always-adopted table makes adopt_rate meaningless.
+    adopted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # button | copied | campaign (only "button" is wired in C-a)
+    adopt_signal: Mapped[str] = mapped_column(String(16), nullable=False, default="button")
+    # Snapshot of the adopted formula's components so the signal stays
+    # interpretable even if the recommendation is later regenerated.
+    formula_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Reserved: component fingerprint for later measurement correlation (C-5).
+    formula_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    # U-4: 强成功层（实验验证）。adopt 记录用户采纳后，若该配方的实验数据
+    # 经 sync-datalab 同步入库（启发式成分名匹配），则标记为已实验验证。
+    experiment_validated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
+    # 命中实验的摘要：{experiment_id, measured_keys, matched_ingredients...}
+    validation_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
+
+    __table_args__ = (
+        Index("ix_recommend_outcomes_recommend_id", "recommend_id"),
+        Index("ix_recommend_outcomes_project", "project_id"),
+    )
+
+
+class StructureFingerprint(Base):
+    """P1-3: 化学结构指纹索引 —— SMILES → Morgan 指纹，支持 Tanimoto 相似搜索。
+
+    不是第二套检索引擎：这是 document_chunks 的扩展列（按 chunk_id 关联），
+    与现有文本/向量检索并列，供"找含苯环/结构相似"类查询使用。
+    指纹存为 hex 字符串（2048 bit = 512 hex 字符），Python 端算 Tanimoto。
+    """
+
+    __tablename__ = "structure_fingerprints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    chunk_id: Mapped[str] = mapped_column(String(36), index=True)
+    source_id: Mapped[str] = mapped_column(String(36), index=True)
+    # 规范 SMILES
+    smiles: Mapped[str] = mapped_column(String(2000), default="")
+    # Morgan 指纹 hex（2048 bit）
+    fingerprint_hex: Mapped[str] = mapped_column(Text, default="")
+    # 来源：ocsr / chem_extract / reaction_parser / bigsmiles
+    origin: Mapped[str] = mapped_column(String(32), default="")
+
+    __table_args__ = (
+        Index("ix_struct_fp_chunk", "chunk_id"),
+        Index("ix_struct_fp_source", "source_id"),
+        # Same index alembic 0049 creates (prefix LIKE lookups on the fingerprint).
+        Index("ix_structure_fingerprints_fp_hex", "fingerprint_hex"),
+    )
+
+
+class AcquisitionSnapshot(Base):
+    """D-3: 下载成功率趋势快照持久化。"""
+
+    __tablename__ = "acquisition_snapshots"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    ts: Mapped[float] = mapped_column(Float, index=True)
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    stats_json: Mapped[str] = mapped_column(Text, default="{}")
+    success_rate: Mapped[float] = mapped_column(Float, default=1.0)

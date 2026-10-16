@@ -1,0 +1,354 @@
+"""C-8: recommend adopt telemetry — upsert idempotency, stats, project isolation.
+
+- ``record_adopt`` upserts per recommend_id (no duplicate rows)
+- invalid adopt_signal rejected
+- ``outcome_stats`` aggregates counts / rate / by_signal; ``validated`` counts
+  experiment-validated adopted rows (U-4 strong-success layer, 0 when none)
+- project_id scoping excludes other projects' rows
+- stats fail open when the table is missing (migration not applied)
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db import recommend_outcome_store
+from app.db.database import make_engine, make_session_factory
+from app.db.models import Base, RecommendOutcomeRow
+from tests.alembic_helpers import run_upgrade
+
+
+@pytest.fixture()
+def session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    db_url = f"sqlite:///{tmp_path}/recommend_outcomes.db"
+    run_upgrade(db_url, monkeypatch)
+    engine = make_engine(db_url)
+    factory = make_session_factory(engine)
+    with factory() as s:
+        yield s
+    engine.dispose()
+
+
+def _row_count(session: Session) -> int:
+    return len(session.execute(select(RecommendOutcomeRow)).scalars().all())
+
+
+# ── record_adopt ─────────────────────────────────────────────────────────────
+
+
+def test_adopt_upsert_is_idempotent(session: Session) -> None:
+    r1 = recommend_outcome_store.record_adopt(
+        session,
+        recommend_id="rec-1",
+        project_id="proj-a",
+        adopt_signal="button",
+        formula_snapshot={"name": "f1"},
+    )
+    assert r1.adopted is True
+    assert r1.formula_hash  # fingerprint reserved for C-5 correlation
+    r2 = recommend_outcome_store.record_adopt(
+        session,
+        recommend_id="rec-1",
+        project_id="proj-a",
+        adopt_signal="copied",
+        formula_snapshot={"name": "f1-updated"},
+    )
+    assert _row_count(session) == 1
+    assert r2.id == r1.id
+    # P2: 弱信号（copied）不覆盖强信号（button），快照/hash 同样不受弱信号污染。
+    assert r2.adopt_signal == "button"
+    assert r2.formula_snapshot == {"name": "f1"}
+
+
+def test_adopt_signal_rank_stronger_wins(session: Session) -> None:
+    """P2: 强信号可覆盖弱信号（copied → button 升级）。"""
+    recommend_outcome_store.record_adopt(
+        session,
+        recommend_id="rec-2",
+        adopt_signal="copied",
+        formula_snapshot={"name": "f1"},
+    )
+    r2 = recommend_outcome_store.record_adopt(
+        session,
+        recommend_id="rec-2",
+        adopt_signal="button",
+        formula_snapshot={"name": "f1"},
+    )
+    assert r2.adopt_signal == "button"
+
+
+def test_adopt_same_rank_snapshot_updates(session: Session) -> None:
+    """P2 风险2: 同级信号（button→button）允许快照更新，最新为准。"""
+    recommend_outcome_store.record_adopt(
+        session,
+        recommend_id="rec-3",
+        adopt_signal="button",
+        formula_snapshot={"name": "f-old"},
+    )
+    r2 = recommend_outcome_store.record_adopt(
+        session,
+        recommend_id="rec-3",
+        adopt_signal="button",
+        formula_snapshot={"name": "f-new"},
+    )
+    assert r2.adopt_signal == "button"
+    assert r2.formula_snapshot == {"name": "f-new"}
+
+
+def test_invalid_signal_rejected(session: Session) -> None:
+    with pytest.raises(ValueError, match="adopt_signal"):
+        recommend_outcome_store.record_adopt(
+            session, recommend_id="rec-x", adopt_signal="telepathy"
+        )
+    with pytest.raises(ValueError, match="adopt_signal"):
+        recommend_outcome_store.validate_adopt_signal("")
+
+
+# ── outcome_stats ────────────────────────────────────────────────────────────
+
+
+def test_stats_aggregation(session: Session) -> None:
+    recommend_outcome_store.record_adopt(session, recommend_id="r1", adopt_signal="button")
+    recommend_outcome_store.record_adopt(session, recommend_id="r2", adopt_signal="button")
+    recommend_outcome_store.record_adopt(session, recommend_id="r3", adopt_signal="copied")
+    stats = recommend_outcome_store.outcome_stats(session)
+    assert stats["available"] is True
+    assert stats["total"] == 3
+    assert stats["adopted"] == 3
+    assert stats["adopt_rate"] == 1.0
+    assert stats["by_signal"] == {"button": 2, "copied": 1}
+    assert stats["adopted_7d"] == 3
+    # U-4: strong-success layer now implemented — 0 validated so far.
+    assert stats["validated"] == 0
+    assert "U-4" in stats["validated_note"]
+
+
+def test_stats_empty_table(session: Session) -> None:
+    stats = recommend_outcome_store.outcome_stats(session)
+    assert stats["total"] == 0
+    assert stats["adopt_rate"] == 0.0
+    assert stats["by_signal"] == {}
+    assert stats["validated"] == 0
+
+
+def test_stats_project_isolation(session: Session) -> None:
+    recommend_outcome_store.record_adopt(
+        session, recommend_id="ra", project_id="proj-a", adopt_signal="button"
+    )
+    recommend_outcome_store.record_adopt(
+        session, recommend_id="rb", project_id="proj-b", adopt_signal="button"
+    )
+    stats_a = recommend_outcome_store.outcome_stats(session, project_id="proj-a")
+    assert stats_a["total"] == 1
+    stats_b = recommend_outcome_store.outcome_stats(session, project_id="proj-b")
+    assert stats_b["total"] == 1
+
+
+def test_stats_fail_open_when_table_missing(tmp_path: Path) -> None:
+    """Simulates migration 0038 not applied: stats must not 500."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    db_url = f"sqlite:///{tmp_path}/no_recommend_table.db"
+    engine = create_engine(db_url)
+    # Create every table EXCEPT recommend_outcomes.
+    for table in Base.metadata.sorted_tables:
+        if table.name != "recommend_outcomes":
+            table.create(engine)
+    s = sessionmaker(bind=engine)()
+    try:
+        stats = recommend_outcome_store.outcome_stats(s)
+        assert stats["available"] is False
+        assert stats["total"] == 0
+        assert stats["validated"] == 0
+    finally:
+        s.close()
+        engine.dispose()
+
+
+def test_recent_adopted_ordering(session: Session) -> None:
+    for i in range(3):
+        recommend_outcome_store.record_adopt(session, recommend_id=f"rr-{i}")
+    recent = recommend_outcome_store.recent_adopted(session, limit=2)
+    assert len(recent) == 2
+    assert recent[0]["recommend_id"] == "rr-2"
+
+
+# ── register_round (the denominator) ───────────────────────────────────────
+
+
+def test_register_round_creates_unadopted_row(session: Session) -> None:
+    row = recommend_outcome_store.register_round(
+        session, recommend_id="round-1", project_id="proj-a"
+    )
+    assert row.adopted is False
+    assert row.recommend_id == "round-1"
+    assert row.project_id == "proj-a"
+    stats = recommend_outcome_store.outcome_stats(session)
+    assert stats["total"] == 1
+    assert stats["adopted"] == 0
+    assert stats["adopt_rate"] == 0.0
+
+
+def test_register_round_is_idempotent(session: Session) -> None:
+    r1 = recommend_outcome_store.register_round(session, recommend_id="round-dup")
+    r2 = recommend_outcome_store.register_round(session, recommend_id="round-dup")
+    assert r1.id == r2.id
+    assert _row_count(session) == 1
+
+
+def test_register_then_adopt_flips_to_adopted(session: Session) -> None:
+    recommend_outcome_store.register_round(session, recommend_id="round-2")
+    row = recommend_outcome_store.record_adopt(
+        session,
+        recommend_id="round-2",
+        adopt_signal="button",
+        formula_snapshot={"name": "f"},
+    )
+    assert row.adopted is True
+    assert row.formula_hash  # fingerprint derived from the snapshot in-store
+    assert _row_count(session) == 1
+    stats = recommend_outcome_store.outcome_stats(session)
+    assert stats["total"] == 1
+    assert stats["adopted"] == 1
+    assert stats["adopt_rate"] == 1.0
+
+
+def test_adopt_without_registration_still_works(session: Session) -> None:
+    """Adopt arriving before/without round registration must not be lost."""
+    row = recommend_outcome_store.record_adopt(
+        session, recommend_id="round-orphan", adopt_signal="copied"
+    )
+    assert row.adopted is True
+    # Late registration must not clobber the adopt.
+    late = recommend_outcome_store.register_round(session, recommend_id="round-orphan")
+    assert late.adopted is True
+    assert _row_count(session) == 1
+
+
+def test_mixed_rounds_give_honest_rate(session: Session) -> None:
+    recommend_outcome_store.register_round(session, recommend_id="m1")
+    recommend_outcome_store.register_round(session, recommend_id="m2")
+    recommend_outcome_store.record_adopt(session, recommend_id="m1")
+    stats = recommend_outcome_store.outcome_stats(session)
+    assert stats["total"] == 2
+    assert stats["adopted"] == 1
+    assert stats["adopt_rate"] == 0.5
+
+
+# ── API layer ────────────────────────────────────────────────────────────────
+
+
+def test_api_adopt_and_stats() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    rid = "rec-api-test-1"
+    r = client.post(
+        f"/api/formulations/recommend/{rid}/adopt",
+        json={
+            "adopt_signal": "button",
+            "formula_index": 0,
+            "formula_snapshot": {"name": "api-f"},
+            "project_id": "proj-adopt-api",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["adopted"] is True
+
+    # invalid signal → 422
+    r = client.post(
+        f"/api/formulations/recommend/{rid}/adopt",
+        json={"adopt_signal": "telepathy"},
+    )
+    assert r.status_code == 422
+
+    r = client.get("/api/ops/recommend-stats", params={"project_id": "proj-adopt-api"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] >= 1
+    assert body["validated"] == 0
+
+
+def test_api_outcome_hydration() -> None:
+    """P1-10: GET outcome 返回双层信号 + 配方名，供刷新后徽标水合。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    rid = "rec-outcome-hydration-1"
+    r = client.post(
+        f"/api/formulations/recommend/{rid}/adopt",
+        json={
+            "adopt_signal": "button",
+            "formula_index": 1,
+            "formula_snapshot": {"name": "hydration-f"},
+            "project_id": "proj-outcome-api",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.get(f"/api/formulations/recommend/{rid}/outcome")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["recommend_id"] == rid
+    assert body["adopted"] is True
+    assert body["adopt_signal"] == "button"
+    assert body["experiment_validated"] is False
+    assert body["formula_name"] == "hydration-f"  # 配方粒度：卡片对号
+
+    # 未采纳的 round：全 False，前端不点亮
+    r = client.get("/api/formulations/recommend/no-such-round-xyz/outcome")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["adopted"] is False
+    assert body["formula_name"] is None
+
+
+def test_recommend_generate_node_registers_round_and_surfaces_id(monkeypatch):
+    # F-4 回归：research graph 的推荐节点必须注册 C-8 round（分母）
+    # 并把 recommend_id 放进 state，前端采纳按钮才能启用。
+    from types import SimpleNamespace
+
+    from app.domain.schemas import ProductDomain, Requirement
+    from app.pipeline import research_graph
+
+    bundle = SimpleNamespace(
+        engine="offline",
+        scored=[],
+        tradeoff=None,
+        requested_n=3,
+        diversity_applied=False,
+        warnings=[],
+        recommend_id="rec-graph-1",
+    )
+    monkeypatch.setattr(
+        "app.services.recommend_pipeline.run_recommend_orchestration",
+        lambda *a, **kw: bundle,
+    )
+    seen = {}
+    monkeypatch.setattr(
+        research_graph,
+        "_register_recommend_round",
+        lambda rid, pid: seen.update(rid=rid, pid=pid),
+    )
+    req = Requirement(domain=ProductDomain.anticorrosion_coating, project_id="proj-x")
+    state = research_graph.recommend_generate_node({"req": req, "grounded_evidence": []})
+    assert state["recommend_id"] == "rec-graph-1"
+    assert seen == {"rid": "rec-graph-1", "pid": "proj-x"}
+
+
+def test_graph_state_to_research_result_carries_recommend_id():
+    # F-4 回归：ResearchResult 透出 recommend_id 给前端。
+    from app.domain.schemas import ProductDomain, Requirement
+    from app.pipeline.research_graph import graph_state_to_research_result
+
+    req = Requirement(domain=ProductDomain.anticorrosion_coating)
+    result = graph_state_to_research_result({"recommend_id": "rec-graph-2"}, req)
+    assert result.recommend_id == "rec-graph-2"

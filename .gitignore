@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.venv-decimer/
+.venv-molscribe/
+.pytest_cache/
+.env
+
+# Node / frontend
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js
+
+# Data / runtime
+shared_data/
+data/
+*.log
+data.bak/
+backend/=0.1.0
+dump.rdb
+.env
+
+# Vision benchmark runtime output (regenerated on each run)
+backend/scripts/vision_benchmark/results.json
+backend/scripts/vision_benchmark/_preview.png
+
+# venv rebuild notes (local only)
+backend/.venv-backup-notes/
+
+# OCSR POC / vendored source (re-cloned by setup scripts)
+MolScribe/
+poc_ocsr/
+vendor/llm_wiki/
+
+# Third-party wiki clones for architecture eval only (GPL — never commit)
+vendor/
+
+# Dev backup residue (never commit)
+*.bak
+*.bak2
+*.bak3
+*.orig
+*.work
+*.backup*
+*.before_fix
+*.backup_before_mod
+docker-compose.yml.bak*
+# 带时间戳的备份（如 .env.bak.20260913_143322）——`*.bak` 只匹配以 .bak 结尾，
+# 这类中间带 .bak. 的名字会漏网，可能把含密钥的 env 备份暴露给 git。
+*.bak.*
+.env.bak*
+
+# MolScribe weights (bind-mounted at runtime, 1.1 GB)
+deploy/molscribe/hf-cache/
+
+# Runtime index/cache artifacts
+.ragatouille/
+*.report.json
+
+# Local git worktrees (superpowers)
+.worktrees/
+
+backend/evals-history.jsonl
+.env.lock

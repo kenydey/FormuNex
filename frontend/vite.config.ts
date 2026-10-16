@@ -1,0 +1,83 @@
+// defineConfig comes from vitest/config, not vite: vitest 4 dropped the type
+// augmentation that `/// <reference types="vitest" />` relied on to teach vite's
+// UserConfig about the `test` key, so a clean install failed `tsc -b`.
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+
+// Pure client-side SPA (no SSR) to keep future 3D canvas integration simple.
+export default defineConfig({
+  plugins: [react()],
+  optimizeDeps: {
+    include: ["ag-grid-react", "ag-grid-community"],
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        // Split the heavy vendors out of the entry chunk. Everything landed in
+        // one ~2.3 MB file, which the deployment target feels: this ships to
+        // corporate intranets where first load is not on a fast link, and a
+        // single chunk also means any app change re-downloads AG Grid, KaTeX
+        // and Recharts along with it. These three are stable across releases,
+        // so cache them separately.
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return undefined;
+          // React must be claimed first and explicitly. Otherwise whichever
+          // vendor group happens to reach it first absorbs it — react-dom
+          // landed inside vendor-ag-grid, which made the entry chunk import
+          // 1.1 MB of grid code statically and undid the lazy loading.
+          if (
+            /node_modules\/(react|react-dom|scheduler)\//.test(id) ||
+            id.includes("react/jsx-runtime")
+          ) {
+            return "vendor-react";
+          }
+          if (id.includes("ag-grid")) return "vendor-ag-grid";
+          if (id.includes("recharts") || id.includes("d3-")) return "vendor-charts";
+          if (
+            id.includes("katex") ||
+            id.includes("react-markdown") ||
+            id.includes("remark") ||
+            id.includes("rehype") ||
+            id.includes("micromark") ||
+            id.includes("mdast")
+          ) {
+            return "vendor-markdown";
+          }
+          if (id.includes("node_modules/mermaid") || id.includes("node_modules/@mermaid")) {
+            return "vendor-mermaid";
+          }
+          return undefined;
+        },
+      },
+    },
+  },
+  server: {
+    port: 5173,
+    proxy: {
+      // SSE streams use a long timeout (30 min) to survive long-running
+      // multi-source searches that do PDF downloads + OCR + translation.
+      "/api/tasks": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+        proxyTimeout: 10_800_000, // 3 h — KB ingest of hundreds of docs far exceeds 30 min
+        timeout: 10_800_000,
+      },
+      "/api": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+        proxyTimeout: 600_000, // 10 min for regular API calls
+        timeout: 600_000,
+      },
+      "/health": { target: "http://127.0.0.1:8000", changeOrigin: true },
+    },
+  },
+  test: {
+    globals: true,
+    environment: "jsdom",
+    setupFiles: ["./src/test-setup.ts"],
+    // The suite runs ~140 jsdom files in parallel; on a 2-core CI runner the first test of a file that pulls in
+    // the whole api module (and renders a modal) can exceed vitest's 5 s default without anything being wrong.
+    testTimeout: 20000,
+    hookTimeout: 20000,
+  },
+});

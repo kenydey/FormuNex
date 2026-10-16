@@ -1,0 +1,893 @@
+"""CRAG research graph — ColBERT retrieve → grade → fallback → generate."""
+from __future__ import annotations
+
+from ..services.errors import degrade_return
+from collections.abc import Callable
+from enum import Enum
+from typing import Any, Literal, TypedDict
+
+from loguru import logger
+from pydantic import BaseModel, Field
+
+from ..config import Settings, get_settings
+from ..domain.research_query import build_research_query
+from ..domain.schemas import Evidence, Formulation, Requirement, ResearchResult
+from ..domain.tradeoff_schemas import TradeOffAnalysis
+from ..services import colbert_store, llm
+from ..services.federated_search import FederatedSearchEngine
+from ..services.rag import llm_rerank
+
+
+class GradeVerdict(str, Enum):
+    correct = "correct"
+    incorrect = "incorrect"
+
+
+class DocGrade(BaseModel):
+    index: int
+    relevant: bool
+    score: float = 0.5
+
+
+class GradeResult(BaseModel):
+    verdict: GradeVerdict
+    reason: str = ""
+    doc_grades: list[DocGrade] = Field(default_factory=list)
+
+
+class GroundedEvidenceResult(BaseModel):
+    query: str
+    evidence: list[Evidence]
+    grounded_evidence: list[Evidence]
+    grade: GradeVerdict
+    grade_reason: str = ""
+    fallback_used: bool = False
+
+
+class ResearchGraphState(TypedDict, total=False):
+    topic: str
+    query: str
+    req: Requirement | None
+    # v15: per-project NotebookLM notebook（None = 用全局配置；fallback 透传）
+    notebooklm_notebook_id: str | None
+    pre_index: list[Evidence]
+    evidence: list[Evidence]
+    grounded_evidence: list[Evidence]
+    grade: GradeVerdict | None
+    grade_reason: str
+    fallback_used: bool
+    fallback_evidence: list[Evidence]  # v28 R-1: fallback 纠错 evidence 独立键，不与 retrieve 共用 evidence
+    answer: str
+    citations: list[Evidence]
+    recommended: list[Formulation]
+    mechanism: str
+    chat_markdown: str
+    recommend_engine: str
+    stage: str
+    modify_prompt: str
+    base_formulas: list[Formulation]
+    report_markdown: str
+    verified_claims: list[dict]
+    claim_check_passed: bool
+    claim_check_attempts: int
+    claim_check_pass_rate: float
+    claim_check_engine: str
+    retrieval_queries: list[str]
+    tradeoff: dict[str, Any] | None
+    recommend_meta: dict[str, Any] | None
+    recommend_id: str | None  # F-4: C-8 round id for adopt signals
+
+
+ProgressCallback = Callable[[str, str, dict[str, Any] | None], None]
+
+
+def _emit(cb: ProgressCallback | None, stage: str, message: str, partial: dict | None = None) -> None:
+    if cb:
+        cb(stage, message, partial)
+
+
+def _grade_prompt(topic: str, evidence: list[Evidence]) -> str:
+    # Bounded by the same setting as the report, because this is the real
+    # ceiling: `apply_grade` can only mark documents the grader was shown, so a
+    # hardcoded 12 here silently capped everything downstream — raising the
+    # report budget alone would have changed nothing.
+    limit = max(1, get_settings().deep_report_evidence_count)
+    lines = "\n".join(
+        f"[{i}] ({e.source}) {e.title}: {e.snippet[:200]}"
+        for i, e in enumerate(evidence[:limit])
+    )
+    return (
+        "你是 CRAG 知识评估器。判断检索结果是否足以回答研究主题。\n"
+        f"研究主题：{topic}\n\n"
+        f"检索片段：\n{lines or '(无)'}\n\n"
+        "返回 JSON：\n"
+        '{"verdict":"correct"|"incorrect","reason":"...","doc_grades":[{"index":0,"relevant":true,"score":0.9},...]}'
+    )
+
+
+def grade_evidence(topic: str, evidence: list[Evidence], settings: Settings | None = None) -> GradeResult:
+    settings = settings or get_settings()
+    if not evidence:
+        return GradeResult(verdict=GradeVerdict.incorrect, reason="无检索结果")
+
+    min_score = settings.colbert_min_score
+    try:
+        data = llm.complete_json(_grade_prompt(topic, evidence))
+    except Exception as exc:
+        logger.warning("Grade LLM failed: {}", exc)
+        data = None
+
+    if isinstance(data, dict) and data.get("verdict") in ("correct", "incorrect"):
+        doc_grades = []
+        for item in data.get("doc_grades") or []:
+            try:
+                doc_grades.append(
+                    DocGrade(
+                        index=int(item["index"]),
+                        relevant=bool(item.get("relevant", False)),
+                        score=float(item.get("score", 0.5)),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        verdict = GradeVerdict(data["verdict"])
+        return GradeResult(verdict=verdict, reason=str(data.get("reason", "")), doc_grades=doc_grades)
+
+    relevant_count = sum(1 for e in evidence if e.relevance >= min_score)
+    if relevant_count >= max(1, len(evidence) // 3):
+        return GradeResult(
+            verdict=GradeVerdict.correct,
+            reason="offline heuristic: sufficient high-score hits",
+        )
+    return GradeResult(verdict=GradeVerdict.incorrect, reason="offline heuristic: low relevance")
+
+
+def apply_grade(
+    evidence: list[Evidence],
+    grade: GradeResult,
+    settings: Settings | None = None,
+) -> list[Evidence]:
+    settings = settings or get_settings()
+    min_score = settings.colbert_min_score
+    if grade.doc_grades:
+        grounded: list[Evidence] = []
+        for dg in grade.doc_grades:
+            if dg.relevant and dg.score >= min_score and 0 <= dg.index < len(evidence):
+                ev = evidence[dg.index]
+                grounded.append(ev.model_copy(update={"relevance": dg.score}))
+        if grounded:
+            return grounded
+    return [e for e in evidence if e.relevance >= min_score][: settings.colbert_top_k]
+
+
+def _retrieval_queries(
+    state: ResearchGraphState, settings: Settings, mode: str
+) -> list[str]:
+    """The queries this retrieval round will actually run.
+
+    Only deep research decomposes. ``recommend`` is a latency-sensitive path with
+    its own test asserting it stays under five seconds offline, and extra LLM
+    round trips there would buy breadth nobody asked for.
+    """
+    query = state.get("query") or state.get("topic") or ""
+    if mode != "deep" or settings.deep_subquestions <= 1:
+        return [query]
+    from . import subquestions
+
+    req = state.get("req")
+    domain = req.domain.value if req else ""
+    topic = state.get("topic") or query
+    questions = subquestions.decompose(topic, settings.deep_subquestions, domain)
+    # The built query carries requirement context the raw topic lacks, so keep it
+    # as the first entry rather than replacing it with the topic string.
+    return [query] + [q for q in questions if q != topic]
+
+
+def _search_one(query: str, settings: Settings, *, hyde: bool = False, domain: str | None = None) -> list[Evidence]:
+    """One retrieval, optionally through a hypothetical-answer expansion.
+
+    HyDE is applied to the primary query only, not to every sub-question. Its
+    value is turning a short bare question into document-shaped text so that
+    embedding and lexical matching have something comparable to match against —
+    real but not worth one extra LLM round trip per angle, which with four
+    sub-questions and a fallback round would be ten calls instead of two.
+    """
+    if hyde and settings.deep_hyde_enabled:
+        # The legitimate use of an ungrounded LLM call: the generated text steers
+        # retrieval and never reaches the report.
+        from ..services.rag import hyde_expand
+
+        query = hyde_expand(query, domain=domain)
+    return [h.evidence for h in colbert_store.search(query, settings=settings)]
+
+
+def retrieve_node(
+    state: ResearchGraphState,
+    settings: Settings | None = None,
+    *,
+    mode: str = "deep",
+) -> ResearchGraphState:
+    settings = settings or get_settings()
+    query = state.get("query") or state.get("topic") or ""
+    pre = state.get("pre_index") or []
+    if pre:
+        colbert_store.index_evidence(pre, settings=settings)
+
+    backend = colbert_store.active_backend(settings)
+    if backend == "colbert":
+        try:
+            colbert_store.bootstrap_seed_corpus(settings)
+        except Exception as exc:
+            logger.warning("ColBERT bootstrap failed (backend={}): {}", backend, exc)
+    queries = _retrieval_queries(state, settings, mode)
+    state["retrieval_queries"] = queries
+    # A: HyDE 应用到主查询 + 前 N 个子问题（原只主查询）。
+    # 每角度 1 次 LLM 调用换取检索深度；受 deep_hyde_subquestions 上限控
+    # 制避免 10 次调用拖垮延迟。domain 透传给 HyDE（检索质量关键）。
+    hyde_limit = settings.deep_hyde_subquestions
+    domain_val = None
+    _req = state.get("req")
+    if _req is not None and hasattr(_req, "domain"):
+        try:
+            domain_val = _req.domain.value
+        except Exception:
+            domain_val = None
+    if len(queries) > 1:
+        from . import subquestions
+
+        evidence = subquestions.merge_evidence(
+            [_search_one(q, settings, hyde=(i < hyde_limit), domain=domain_val)
+             for i, q in enumerate(queries)]
+        )
+    else:
+        evidence = _search_one(queries[0], settings, hyde=True, domain=domain_val)
+    # User-supplied sources are high-trust: keep them as candidates ahead of
+    # the retrieved hits (deduped) so an explicit pre-load always surfaces.
+    if pre:
+        pre_keys = {e.identifier or e.title for e in pre}
+        evidence = list(pre) + [
+            e for e in evidence if (e.identifier or e.title) not in pre_keys
+        ]
+    # Reranking to colbert_top_k would throw the extra angles away again: four
+    # sub-questions can merge to ~64 candidates and cutting back to one query's
+    # worth would make decomposition pointless. Keep as many as the pipeline is
+    # willing to grade.
+    rerank_k = settings.colbert_top_k
+    if len(queries) > 1:
+        rerank_k = max(rerank_k, settings.deep_report_evidence_count)
+    evidence = llm_rerank(query, evidence, k=rerank_k)
+
+    if settings.kg_enabled:
+        from ..services.kg import retrieve as kg_retrieve
+
+        kg_result = kg_retrieve(
+            query,
+            pre_evidence=evidence,
+            llm_cap=settings.kg_enumerative_llm_cap,
+            k_semantic=settings.kb_recommend_top_k,
+        )
+        evidence = kg_result.evidence
+    elif settings.kb_v2_enabled and settings.kb_recommend_top_k > 0:
+        from ..services import kb_index
+
+        req = state.get("req")
+        if settings.kb_recommend_use_hybrid:
+            project_id = (getattr(req, "project_id", None) or "").strip() or None
+            kb_hits = kb_index.search_chunks_hybrid(
+                query,
+                k=settings.kb_recommend_top_k,
+                alpha=settings.kb_hybrid_alpha,
+                project_id=project_id,
+                include_global=settings.kb_recommend_include_global,
+            )
+        else:
+            kb_hits = kb_index.search_chunks(query, k=settings.kb_recommend_top_k)
+        if kb_hits:
+            seen = {e.identifier or e.title for e in evidence}
+            evidence = evidence + [
+                h for h in kb_hits if (h.identifier or h.title) not in seen
+            ]
+    state["evidence"] = evidence
+    state["stage"] = "retrieve"
+    return state
+
+
+def grade_node(state: ResearchGraphState, settings: Settings | None = None) -> ResearchGraphState:
+    settings = settings or get_settings()
+    topic = state.get("topic") or state.get("query") or ""
+    evidence = state.get("evidence") or []
+    grade = grade_evidence(topic, evidence, settings)
+    grounded = apply_grade(evidence, grade, settings)
+    state["grade"] = grade.verdict
+    state["grade_reason"] = grade.reason
+    state["grounded_evidence"] = grounded
+    state["stage"] = "grade"
+    return state
+
+
+def fallback_node(
+    state: ResearchGraphState,
+    settings: Settings | None = None,
+    *,
+    mode: Literal["recommend", "deep"] = "deep",
+) -> ResearchGraphState:
+    settings = settings or get_settings()
+    query = state.get("query") or state.get("topic") or ""
+    req = state.get("req")
+    # v15: per-project notebook 透传（Requirement schema 无该字段，走 state 独立键）
+    nb_id = state.get("notebooklm_notebook_id")
+
+    # The fallback is itself a network call, and CRAG only gets here because
+    # local retrieval was already judged insufficient. Letting an upstream
+    # outage raise would turn "the web search is down" into a failed research
+    # run, discarding the evidence already retrieved. Degrade to no extra
+    # evidence and let the graph continue with what it has.
+    evidence: list[Evidence] = []
+    try:
+        if mode == "recommend":
+            from ..services import literature
+
+            fed = FederatedSearchEngine(settings)
+            types = fed.effective_sources()
+            evidence = literature.iter_search(
+                query,
+                types,
+                req=req,
+                total_limit=30,
+                per_source_cap=10,
+                max_rounds=1,
+                notebooklm_notebook_id=nb_id,
+            )[0]
+        else:
+            fed = FederatedSearchEngine(settings)
+            result = fed.search(query, req=req, notebooklm_notebook_id=nb_id)
+            evidence = result.evidence
+    except Exception as exc:
+        evidence = degrade_return(logger, exc, "CRAG fallback search failed", [])
+
+    if evidence:
+        colbert_store.index_evidence(evidence, settings=settings)
+        # v28 R-1: 写独立键 —— 此前直接覆盖 state["evidence"]，紧接着的
+        # retrieve_node 全新检索又把它覆盖掉，纠错 evidence 从未进入第二轮 grade。
+        state["fallback_evidence"] = evidence
+    state["fallback_used"] = True
+    state["stage"] = "fallback"
+    return state
+
+
+def _register_recommend_round(recommend_id: str, project_id: str | None) -> None:
+    """F-4: C-8 round registration for graph (non-API) recommend paths.
+
+    Mirrors ``api/formulations.py`` — the research graph nodes bypass that
+    endpoint, so without this the user's main recommend entry never enters the
+    adopt_rate denominator. Best-effort: telemetry must never break recommend.
+    """
+    if not recommend_id:
+        return
+    try:
+        from ..db import recommend_outcome_store
+        from ..db.database import default_session_factory
+        from ..db.session_utils import commit_session
+
+        _factory = default_session_factory()
+        with commit_session(_factory) as _s:
+            recommend_outcome_store.register_round(
+                _s, recommend_id=recommend_id, project_id=project_id or None
+            )
+    except Exception as exc:  # noqa: BLE001 — telemetry fail-open by contract
+        logger.warning("recommend round registration failed (fail-open): {}", exc)
+
+
+def recommend_generate_node(state: ResearchGraphState, settings: Settings | None = None) -> ResearchGraphState:
+    """Lightweight recommend path — skip answer/report/synthesize LLM calls."""
+    from ..domain.objective_contract import normalize_objectives
+    from ..services.recommend_pipeline import run_recommend_orchestration
+
+    settings = settings or get_settings()
+    req = state.get("req")
+    grounded = state.get("grounded_evidence") or state.get("evidence") or []
+
+    mechanism = ""
+    chat = ""
+    recommended: list[Formulation] = []
+    recommend_engine = "offline"
+    tradeoff = None
+    recommend_meta = None
+
+    if req:
+        objectives = normalize_objectives(req)
+        bundle = run_recommend_orchestration(
+            req,
+            grounded,
+            objectives=objectives,
+            modify_prompt=state.get("modify_prompt") or "",
+            base_formulas=state.get("base_formulas") or None,
+            settings=settings,
+        )
+        recommend_engine = bundle.engine
+        recommended = bundle.scored
+        tradeoff = bundle.tradeoff
+        recommend_meta = {
+            "requested_n": bundle.requested_n,
+            "returned_n": len(recommended),
+            "diversity_applied": bundle.diversity_applied,
+        }
+        # F-4: register the round + surface recommend_id (adopt_rate denominator
+        # and adopt-button enablement for the /api/research entry path).
+        state["recommend_id"] = bundle.recommend_id or None
+        _register_recommend_round(
+            bundle.recommend_id, getattr(req, "project_id", None)
+        )
+        if recommended:
+            mechanism = recommended[0].rationale or ""
+            chat = f"已推荐 {len(recommended)} 条配方。"
+        else:
+            chat = "未能生成有效配方。"
+        if bundle.warnings:
+            chat += "\n\n**Formulation validation:**\n" + "\n".join(f"- {w}" for w in bundle.warnings)
+    else:
+        chat = "缺少需求参数，无法推荐配方。"
+
+    state["mechanism"] = mechanism
+    state["chat_markdown"] = chat
+    state["recommended"] = recommended
+    state["recommend_engine"] = "llm" if recommend_engine == "llm" else "offline"
+    state["tradeoff"] = tradeoff.model_dump() if tradeoff else None
+    state["recommend_meta"] = recommend_meta
+    state["stage"] = "recommend"
+    return state
+
+
+def generate_node(state: ResearchGraphState, settings: Settings | None = None) -> ResearchGraphState:
+    from ..domain.objective_contract import normalize_objectives
+    from ..services.deep_research.engine import DeepResearchEngine
+    from ..services.recommend_pipeline import run_recommend_orchestration
+
+    settings = settings or get_settings()
+    topic = state.get("topic") or state.get("query") or ""
+    req = state.get("req")
+    grounded = state.get("grounded_evidence") or state.get("evidence") or []
+    domain = req.domain.value if req else None
+
+    answer, citations = llm.answer_question(topic, grounded, domain)
+    state["answer"] = answer
+    state["citations"] = citations or grounded
+
+    engine = DeepResearchEngine(settings)
+    try:
+        report_md, report_citations, report_engine = engine.report_agent(topic, answer, grounded)
+    finally:
+        engine.close()
+    state["report_markdown"] = report_md
+    state["citations"] = report_citations or grounded
+
+    mechanism = ""
+    chat = answer
+    recommended: list[Formulation] = []
+    recommend_engine = "offline"
+
+    if req:
+        objectives = normalize_objectives(req)
+        bundle = run_recommend_orchestration(
+            req,
+            grounded,
+            objectives=objectives,
+            settings=settings,
+        )
+        recommend_engine = bundle.engine
+        recommended = bundle.scored
+        # F-4: register the round + surface recommend_id (same as recommend_generate_node).
+        state["recommend_id"] = bundle.recommend_id or None
+        _register_recommend_round(
+            bundle.recommend_id, getattr(req, "project_id", None)
+        )
+        state["tradeoff"] = bundle.tradeoff.model_dump() if bundle.tradeoff else None
+        state["recommend_meta"] = {
+            "requested_n": bundle.requested_n,
+            "returned_n": len(recommended),
+            "diversity_applied": bundle.diversity_applied,
+        }
+        mechanism, chat = llm.synthesize_research(req, grounded, recommended)
+        if bundle.warnings:
+            chat += "\n\n**Formulation validation:**\n" + "\n".join(
+                f"- {w}" for w in bundle.warnings
+            )
+
+    state["mechanism"] = mechanism
+    state["chat_markdown"] = chat
+    state["recommended"] = recommended
+    state["recommend_engine"] = "llm" if recommend_engine == "llm" else "offline"
+    state["stage"] = "generate"
+    return state
+
+
+def claim_check_node(state: ResearchGraphState, settings: Settings | None = None) -> ResearchGraphState:
+    from .claim_checker import append_verification_footer, check_claims
+
+    settings = settings or get_settings()
+    topic = state.get("topic") or state.get("query") or ""
+    report = state.get("report_markdown") or state.get("answer") or ""
+    evidence = state.get("grounded_evidence") or state.get("citations") or []
+
+    result = check_claims(topic, report, evidence, settings)
+    state["verified_claims"] = [v.model_dump() for v in result.claims]
+    state["claim_check_pass_rate"] = result.pass_rate
+    state["claim_check_passed"] = result.claim_check_passed
+    # Was dropped here, so both report builders hardcoded "offline" and an
+    # LLM-verified report claimed to have been checked by token overlap.
+    state["claim_check_engine"] = result.engine
+    state["claim_check_attempts"] = int(state.get("claim_check_attempts") or 0) + 1
+
+    if not result.claim_check_passed:
+        state["report_markdown"] = append_verification_footer(report, result)
+    state["stage"] = "claim_check"
+    return state
+
+
+def regenerate_report_node(state: ResearchGraphState, settings: Settings | None = None) -> ResearchGraphState:
+    from .claim_checker import ClaimVerdict, VerifiedClaim, regenerate_prompt
+    from ..services.deep_research.engine import DeepResearchEngine
+
+    settings = settings or get_settings()
+    raw_claims = state.get("verified_claims") or []
+    failed = [
+        VerifiedClaim.model_validate(v)
+        for v in raw_claims
+        if v.get("verdict") in (ClaimVerdict.unsupported.value, ClaimVerdict.conflicting.value)
+    ]
+    if not failed:
+        return state
+
+    topic = state.get("topic") or state.get("query") or ""
+    answer = state.get("answer") or ""
+    evidence = state.get("grounded_evidence") or state.get("citations") or []
+    narrowed = regenerate_prompt(topic, answer, failed)
+
+    engine = DeepResearchEngine(settings)
+    try:
+        report_md, citations, _ = engine.report_agent(topic, narrowed, evidence)
+    finally:
+        engine.close()
+    state["report_markdown"] = report_md
+    state["citations"] = citations or evidence
+    state["stage"] = "regenerate"
+    return state
+
+
+def route_after_claim_check(state: ResearchGraphState) -> str:
+    if state.get("claim_check_passed"):
+        return "end"
+    if int(state.get("claim_check_attempts") or 0) < 2:
+        return "regenerate"
+    return "end"
+
+
+def _run_claim_check_loop(
+    state: ResearchGraphState,
+    settings: Settings,
+    progress_cb: ProgressCallback | None,
+) -> ResearchGraphState:
+    _emit(progress_cb, "claim_check", "核验论断")
+    state = claim_check_node(state, settings)
+    _emit(
+        progress_cb,
+        "claim_check",
+        f"核验通过率 {state.get('claim_check_pass_rate', 1.0):.0%}",
+        {"claim_check_pass_rate": state.get("claim_check_pass_rate")},
+    )
+    while not state.get("claim_check_passed") and int(state.get("claim_check_attempts") or 0) < 2:
+        _emit(progress_cb, "regenerate", "修正未支撑论断")
+        before = state.get("report_markdown")
+        state = regenerate_report_node(state, settings)
+        if state.get("report_markdown") == before:
+            # Nothing was rewritten (only `insufficient` claims, which have no
+            # narrowed-rewrite prompt). Re-checking would re-verify the report
+            # *including its own footer* and append a second footer.
+            break
+        _emit(progress_cb, "claim_check", "复核论断")
+        state = claim_check_node(state, settings)
+    return state
+
+
+def route_after_grade(state: ResearchGraphState) -> str:
+    if state.get("grade") == GradeVerdict.incorrect and not state.get("fallback_used"):
+        return "fallback"
+    return "generate"
+
+
+def _needs_fallback(state: ResearchGraphState, mode: Literal["recommend", "deep"]) -> bool:
+    if state.get("grade") != GradeVerdict.incorrect or state.get("fallback_used"):
+        return False
+    if mode == "recommend" and (state.get("pre_index") or []):
+        return False
+    return True
+
+
+def _run_crag_retrieval(
+    state: ResearchGraphState,
+    settings: Settings,
+    mode: Literal["recommend", "deep"],
+    progress_cb: ProgressCallback | None,
+) -> ResearchGraphState:
+    _emit(progress_cb, "retrieve", "正在检索")
+    state = retrieve_node(state, settings, mode=mode)
+    queries = state.get("retrieval_queries") or []
+    detail = f"（{len(queries)} 个检索角度）" if len(queries) > 1 else ""
+    _emit(
+        progress_cb,
+        "retrieve",
+        f"已召回 {len(state.get('evidence') or [])} 条{detail}",
+        {
+            "evidence_count": len(state.get("evidence") or []),
+            "query_count": len(queries),
+        },
+    )
+
+    _emit(progress_cb, "grade", "评估质量")
+    state = grade_node(state, settings)
+
+    if _needs_fallback(state, mode):
+        _emit(progress_cb, "fallback", "重试搜索")
+        state = fallback_node(state, settings, mode=mode)
+        state = retrieve_node(state, settings, mode=mode)
+        # v28 R-1: 把 fallback 的纠错 evidence 合并进第二轮检索结果（去重），
+        # 再 grade —— 此前 fallback 写 state["evidence"] 被 retrieve 直接覆盖。
+        fb = state.get("fallback_evidence") or []
+        if fb:
+            seen = {e.identifier or e.title for e in (state.get("evidence") or [])}
+            state["evidence"] = list(state.get("evidence") or []) + [
+                e for e in fb if (e.identifier or e.title) not in seen
+            ]
+        state = grade_node(state, settings)
+
+    return state
+
+
+def run_research_graph(
+    topic: str,
+    req: Requirement | None = None,
+    *,
+    query: str = "",
+    pre_index: list[Evidence] | None = None,
+    progress_cb: ProgressCallback | None = None,
+    settings: Settings | None = None,
+    mode: Literal["recommend", "deep"] = "deep",
+    modify_prompt: str = "",
+    base_formulas: list[Formulation] | None = None,
+    # v16: per-project NotebookLM notebook（None = 用全局配置）
+    notebooklm_notebook_id: str | None = None,
+) -> ResearchGraphState:
+    """Execute CRAG pipeline (LangGraph-compatible linear runner).
+
+    ``deep`` (default) terminates at the ``generate`` node — full answer +
+    cited report, matching the canonical LangGraph definition. ``recommend``
+    is the lightweight opt-in path that skips answer/report synthesis and goes
+    straight to formulation recommendation.
+    """
+    settings = settings or get_settings()
+    q = build_research_query(query or topic, req)
+
+    # v16: 未显式传入时，从项目工作区解析 per-project notebook（fail-open）。
+    if notebooklm_notebook_id is None and req is not None:
+        try:
+            from ..db.project_store import get_project_store
+
+            pid = getattr(req, "project_id", "") or ""
+            if pid:
+                detail = get_project_store().get(pid)
+                if detail is not None:
+                    notebooklm_notebook_id = detail.workspace.notebooklm_notebook_id
+        except Exception:  # noqa: BLE001 - fail-open
+            notebooklm_notebook_id = None
+
+    state: ResearchGraphState = {
+        "topic": topic,
+        "query": q,
+        "req": req,
+        "pre_index": pre_index or [],
+        "fallback_used": False,
+        "modify_prompt": modify_prompt,
+        "base_formulas": base_formulas or [],
+        # v16: per-project NotebookLM notebook 传给 fallback_node
+        "notebooklm_notebook_id": notebooklm_notebook_id,
+    }
+
+    state = _run_crag_retrieval(state, settings, mode, progress_cb)
+
+    if mode == "recommend":
+        _emit(progress_cb, "recommend", "推荐配方")
+        state = recommend_generate_node(state, settings)
+    else:
+        _emit(progress_cb, "generate", "生成答案")
+        state = generate_node(state, settings)
+        state = _run_claim_check_loop(state, settings, progress_cb)
+    return state
+
+
+def _filter_unindexed_external(evidence: list[Evidence]) -> list[Evidence]:
+    """过滤「外部 URL 但 full-text 从未成功入库」的 evidence。
+
+    用户原则：无法下载全文的资料源（无 OA 文献 / 下载超时 / 解析为空）对
+    FormuNex 无价值，强制过滤。外部源的 full-text 仅在 kb_ingest 成功获取时
+    写入 source 表（origin_url=identifier）；find_by_origin_url 查不到即视为
+    失败/未获取。seed 语料（seed:*）与本地文件（identifier 非 URL）不受影响。
+    """
+    try:
+        from ..db.source_store import get_source_store
+
+        store = get_source_store()
+    except Exception:
+        return evidence  # DB 不可达时保守返回全部，避免 recommend 退化为空
+
+    kept: list[Evidence] = []
+    filtered: list[str] = []
+    for ev in evidence:
+        ident = (ev.identifier or "").strip()
+        # include_failed=False: a failed-ingest row (P1-1 observability) is
+        # recorded under the same origin_url but holds no full text — it must
+        # not make an un-downloadable source look "ingested".
+        if ident.startswith(("http://", "https://")) and store.find_by_origin_url(
+            ident, include_failed=False
+        ) is None:
+            filtered.append(ident)
+            continue
+        kept.append(ev)
+    if filtered:
+        logger.info(
+            "过滤 {} 条未入库外部源（full-text 获取失败），示例: {}",
+            len(filtered), filtered[0],
+        )
+    return kept
+
+
+def resolve_grounded_evidence(
+    req: Requirement,
+    query: str,
+    *,
+    pre_index: list[Evidence] | None = None,
+    settings: Settings | None = None,
+) -> GroundedEvidenceResult:
+    """ColBERT/BM25 retrieve → optional probe-aligned KB hybrid fuse → SSOT."""
+    settings = settings or get_settings()
+    q = build_research_query(query, req)
+
+    # Fast path for recommend: skip CRAG graph (HyDE, sub-questions, grading)
+    # and use the active retrieval backend directly.
+    from ..services import colbert_store
+    pre = pre_index or []
+    if pre:
+        colbert_store.index_evidence(pre, settings=settings)
+    hits = colbert_store.search(q, k=settings.colbert_top_k, settings=settings)
+    evidence = [h.evidence for h in hits]
+    # User-supplied sources are high-trust: keep them as candidates ahead of
+    # the retrieved hits (deduped), mirroring retrieve_node's pre_index merge —
+    # otherwise a caller's explicit sources (POST /formulations/recommend's
+    # ``body.sources``) are silently dropped the moment the KB query returns
+    # anything at all.
+    if pre:
+        pre_keys = {e.identifier or e.title for e in pre}
+        evidence = list(pre) + [
+            e for e in evidence if (e.identifier or e.title) not in pre_keys
+        ]
+
+    evidence = _fuse_recommend_kb_hybrid(evidence, q, req, settings)
+    evidence = _filter_unindexed_external(evidence)
+
+    return GroundedEvidenceResult(
+        query=query,
+        evidence=evidence,
+        grounded_evidence=evidence[:settings.deep_report_evidence_count],
+        grade=GradeVerdict.correct if evidence else GradeVerdict.incorrect,
+        grade_reason=f"BM25/ColBERT retrieval: {len(evidence)} hits" if evidence else "No KB results",
+        fallback_used=not bool(evidence),
+    )
+
+
+def _fuse_recommend_kb_hybrid(
+    evidence: list[Evidence],
+    query: str,
+    req: Requirement | None,
+    settings: Settings,
+) -> list[Evidence]:
+    """Merge probe-stack hybrid chunk hits into recommend/research evidence.
+
+    Controlled by ``kb_recommend_use_hybrid`` + ``kb_recommend_top_k``. Uses the
+    same ``kb_hybrid_alpha`` / project scope knobs as Hub retrieval probe.
+    """
+    if not settings.kb_v2_enabled:
+        return evidence
+    if int(settings.kb_recommend_top_k or 0) <= 0:
+        return evidence
+    if not settings.kb_recommend_use_hybrid:
+        return evidence
+
+    from ..services import kb_index
+
+    project_id = (getattr(req, "project_id", None) or "").strip() or None
+    include_global = settings.kb_recommend_include_global
+    kb_hits = kb_index.search_chunks_hybrid(
+        query,
+        k=settings.kb_recommend_top_k,
+        alpha=settings.kb_hybrid_alpha,
+        project_id=project_id,
+        include_global=include_global,
+    )
+    if not kb_hits:
+        return evidence
+
+    seen = {e.identifier or e.title for e in evidence}
+    merged = list(evidence) + [h for h in kb_hits if (h.identifier or h.title) not in seen]
+
+    if settings.kb_recommend_rerank_enabled and merged:
+        try:
+            from ..services.rag import llm_rerank
+
+            merged = llm_rerank(query, merged, k=len(merged))
+        except Exception as exc:
+            logger.debug("kb recommend rerank skipped: {}", exc)
+    return merged
+
+
+def graph_state_to_research_result(state: ResearchGraphState, req: Requirement) -> ResearchResult:
+    grounded = state.get("grounded_evidence") or []
+    tradeoff_raw = state.get("tradeoff")
+    tradeoff = TradeOffAnalysis.model_validate(tradeoff_raw) if tradeoff_raw else None
+    return ResearchResult(
+        requirement_headline=req.headline(),
+        evidence=grounded,
+        mechanism=state.get("mechanism") or "",
+        recommended=state.get("recommended") or [],
+        chat_markdown=state.get("chat_markdown") or state.get("answer") or "",
+        recommend_engine=state.get("recommend_engine") or "offline",
+        tradeoff=tradeoff,
+        recommend_meta=state.get("recommend_meta"),
+        recommend_id=state.get("recommend_id"),
+    )
+
+
+def build_langgraph(settings: Settings | None = None):
+    """Build LangGraph StateGraph when langgraph is installed."""
+    settings = settings or get_settings()
+    try:
+        from langgraph.graph import END, StateGraph
+    except ImportError:
+        return None
+
+    graph = StateGraph(ResearchGraphState)
+
+    def _retrieve(s: ResearchGraphState) -> ResearchGraphState:
+        return retrieve_node(s, settings)
+
+    def _grade(s: ResearchGraphState) -> ResearchGraphState:
+        return grade_node(s, settings)
+
+    def _fallback(s: ResearchGraphState) -> ResearchGraphState:
+        return fallback_node(s, settings)
+
+    def _generate(s: ResearchGraphState) -> ResearchGraphState:
+        return generate_node(s, settings)
+
+    def _claim_check(s: ResearchGraphState) -> ResearchGraphState:
+        return claim_check_node(s, settings)
+
+    def _regenerate(s: ResearchGraphState) -> ResearchGraphState:
+        return regenerate_report_node(s, settings)
+
+    graph.add_node("retrieve", _retrieve)
+    graph.add_node("grade", _grade)
+    graph.add_node("fallback", _fallback)
+    graph.add_node("generate", _generate)
+    graph.add_node("claim_check", _claim_check)
+    graph.add_node("regenerate", _regenerate)
+    graph.set_entry_point("retrieve")
+    graph.add_edge("retrieve", "grade")
+    graph.add_conditional_edges("grade", route_after_grade, {"fallback": "fallback", "generate": "generate"})
+    graph.add_edge("fallback", "retrieve")
+    graph.add_edge("generate", "claim_check")
+    graph.add_conditional_edges(
+        "claim_check",
+        route_after_claim_check,
+        {"regenerate": "regenerate", "end": END},
+    )
+    graph.add_edge("regenerate", "claim_check")
+    return graph.compile()

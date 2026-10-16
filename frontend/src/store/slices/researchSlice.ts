@@ -1,0 +1,395 @@
+import { api, awaitTaskStream, extractThinkingSteps, formatApiError, progressToTaskStatus } from "../../api";
+import type { ChatMessage, ComprehensiveReport, Formulation, ResearchResult } from "../../api";
+import { applyEnrichedLeaderboard } from "../formulationEnrich";
+import { undismiss } from "../notifications";
+import type { SliceGet, SliceSet } from "../sliceTypes";
+import type { AppState } from "../types";
+import { withActiveProjectId } from "../../utils/withActiveProjectId";
+
+/** Long LLM jobs (recommend / AI-modify) emit progress sporadically.
+ *  No wall-clock limit — a fixed 120s abort killed healthy 174–281s recommends
+ *  after celery went async. Stall clock still catches a dead worker. */
+const LLM_TASK_STALL_MS = 5 * 60 * 1000;
+
+export function createResearchSlice(set: SliceSet, get: SliceGet) {
+  return {
+    setLeaderboard: (forms) => {
+      void applyEnrichedLeaderboard(set, get, forms);
+    },
+
+    addManualFormula: async () => {
+      const { requirement } = get();
+      const blank: Formulation = {
+        name: "手动配方",
+        domain: requirement.domain,
+        ingredients: [
+          {
+            name: "",
+            zh_name: "",
+            role: "additive",
+            weight_pct: 0,
+            cas_no: "",
+          },
+        ],
+        rationale: "手动输入",
+        predicted: {},
+        predicted_std: {},
+        score: null,
+        warnings: [],
+        source: "manual",
+      };
+      try {
+        const { formulation } = await api.addManualFormulation(blank, requirement);
+        set((draft) => {
+          draft.leaderboard = [...draft.leaderboard, formulation];
+        });
+        get().scheduleAutosave();
+      } catch (e) {
+        set((draft) => {
+          draft.error = formatApiError(e);
+        });
+      }
+    },
+
+    updateFormulaIngredient: (formulaIdx, ingIdx, patch) => {
+      set((draft) => {
+        const form = draft.leaderboard[formulaIdx];
+        if (!form?.ingredients[ingIdx]) return;
+        Object.assign(form.ingredients[ingIdx], patch);
+      });
+      get().scheduleAutosave();
+    },
+
+    removeFormula: (formulaIdx) => {
+      set((draft) => {
+        if (formulaIdx < 0 || formulaIdx >= draft.leaderboard.length) return;
+        draft.leaderboard = draft.leaderboard.filter((_, idx) => idx !== formulaIdx);
+      });
+      get().scheduleAutosave();
+    },
+
+    saveFormulaToDoe: async (formulaIdx) => {
+      const form = get().leaderboard[formulaIdx];
+      if (!form) return null;
+      // Lineage lookup errors must surface — swallowing them as "no lineage"
+      // silently opens a new version chain instead of appending.
+      const hits = await api.findFormulationLineages(form.name, form.domain, 1);
+      const lineage = hits[0];
+      const parentId = lineage?.versions.length
+        ? lineage.versions[lineage.versions.length - 1].id
+        : undefined;
+      const saved = await api.saveFormulationVersion({
+        formulation: form,
+        lineage_id: lineage?.lineage_id ?? undefined,
+        parent_version_id: parentId,
+        change_summary: "从推荐列表保存为 DOE 基准配方",
+        created_by: "ui",
+      });
+      // Stamp a stable client_uid on both the DOE baseline snapshot and the
+      // leaderboard card so the 「基准」 badge matches by identity, not name
+      // (duplicate names would otherwise all light up).
+      const clientUid =
+        form.client_uid ??
+        (typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `doe-${Date.now()}-${formulaIdx}`);
+      const snapshot = {
+        ...(JSON.parse(JSON.stringify(form)) as Formulation),
+        client_uid: clientUid,
+      };
+      set((draft) => {
+        draft.requirement.active_formulation = snapshot;
+        if (draft.leaderboard[formulaIdx]) {
+          draft.leaderboard[formulaIdx].client_uid = clientUid;
+        }
+      });
+      get().scheduleAutosave();
+      return { version_id: saved.id };
+    },
+
+    runAiModifyFormula: async (prompt, baseIndex = 0) => {
+      const { requirement, sources, selectedSources, searchQuery, leaderboard, activeProjectId } = get();
+      const req = withActiveProjectId(requirement, activeProjectId);
+      const selected = sources.filter((e) =>
+        selectedSources.includes(e.identifier || e.title)
+      );
+      const payload = selected.length > 0 ? selected : sources;
+      const base = leaderboard[baseIndex];
+      set((draft) => {
+        draft.formulationBusy = true;
+        draft.recommendStage = "retrieve";
+        draft.recommendMessage = "AI 修改配方中…";
+        draft.taskThinking = [];
+        draft.error = null;
+      });
+      try {
+        const { task_id } = await api.modifyFormulations(req, prompt, {
+          sources: payload,
+          baseFormulas: leaderboard,
+          baseFormulation: base,
+          query: searchQuery.trim(),
+          n: 3,
+        });
+        const final = await awaitTaskStream(
+          task_id,
+          (ev) => {
+            set((draft) => {
+              draft.recommendStage = ev.stage ?? "";
+              draft.recommendMessage = ev.message ?? "";
+              draft.task = progressToTaskStatus(task_id, "recommend", ev);
+              const steps = extractThinkingSteps(ev);
+              if (steps.length) draft.taskThinking = steps;
+            });
+          },
+          0,
+          undefined,
+          LLM_TASK_STALL_MS
+        );
+        const wrapped = final.data as { research?: ResearchResult } | undefined;
+        const research = wrapped?.research;
+        if (!research?.recommended?.length) throw new Error("AI 修改未返回配方");
+        const scored = research.recommended.map((f) => ({
+          ...f,
+          source: "ai_modify",
+        }));
+        await applyEnrichedLeaderboard(set, get, [...leaderboard, ...scored], (draft) => {
+          draft.research = {
+            ...research,
+            recommended: draft.leaderboard,
+            chat_markdown: `AI 修改：${prompt}`,
+          };
+          // v7 H2: AI 修改产生新轮次，必须更新 lastRecommendId，否则采纳记到旧轮
+          // v10: 无 ID 时写 null 而非保留旧值，避免采纳归因到上一轮。
+          draft.lastRecommendId = research.recommend_id ?? null;
+        });
+      } catch (e) {
+        set((draft) => {
+          draft.error = formatApiError(e);
+        });
+      } finally {
+        set((draft) => {
+          draft.formulationBusy = false;
+          draft.recommendStage = "";
+          draft.recommendMessage = "";
+          draft.taskThinking = [];
+        });
+      }
+    },
+
+    runResearch: async () => {
+      set((draft) => {
+        draft.formulationBusy = true;
+        draft.recommendStage = "retrieve";
+        draft.recommendMessage = "正在检索";
+        draft.taskThinking = [];
+        draft.error = null;
+      });
+      const ctrl = new AbortController();
+      set((draft) => {
+        (draft as unknown as Record<string, unknown>)._researchAbort = ctrl;
+      });
+      try {
+        const { requirement, sources, selectedSources, searchQuery, preferMaterialsCatalog, activeProjectId } = get();
+        const req = withActiveProjectId(requirement, activeProjectId);
+        const selected = sources.filter((e) =>
+          selectedSources.includes(e.identifier || e.title)
+        );
+        const payload = selected.length > 0 ? selected : sources;
+        const { task_id } = await api.submitRecommendResearch(
+          req,
+          payload,
+          searchQuery.trim(),
+          { preferMaterialsCatalog }
+        );
+        (ctrl as unknown as Record<string, unknown>).taskId = task_id;
+        const final = await awaitTaskStream(
+          task_id,
+          (ev) => {
+            set((draft) => {
+              draft.recommendStage = ev.stage ?? "";
+              // 冷启动区分：首包 retrieve 阶段文案
+              draft.recommendMessage = ev.stage === "retrieve" && !ev.message ? "模型冷启动中… 正在检索" : (ev.message ?? "");
+              draft.task = progressToTaskStatus(task_id, "recommend", ev);
+              const steps = extractThinkingSteps(ev);
+              if (steps.length) draft.taskThinking = steps;
+            });
+          },
+          0,
+          ctrl.signal,
+          LLM_TASK_STALL_MS
+        );
+        const wrapped = final.data as { research?: ResearchResult } | undefined;
+        const research = wrapped?.research;
+        if (!research) throw new Error("推荐未返回结果");
+        await applyEnrichedLeaderboard(set, get, research.recommended, (draft) => {
+          draft.research = { ...research, recommended: draft.leaderboard };
+          // P1-1: 异步路径同样写入 round id，否则采纳按钮静默禁用。
+          // v10: 无 ID 时写 null 而非保留旧值，避免采纳归因到上一轮。
+          draft.lastRecommendId = research.recommend_id ?? null;
+        });
+      } catch (e) {
+        const msg = formatApiError(e);
+        const isCancelled = msg.includes("取消") || msg.includes("cancel");
+        set((draft) => {
+          draft.error = isCancelled ? "推荐已取消" : msg;
+        });
+      } finally {
+        set((draft) => {
+          draft.formulationBusy = false;
+          draft.recommendStage = "";
+          draft.recommendMessage = "";
+          draft.taskThinking = [];
+          delete (draft as unknown as Record<string, unknown>)._researchAbort;
+        });
+      }
+    },
+
+    cancelResearch: async () => {
+      const abort = (get() as unknown as Record<string, unknown>)._researchAbort as AbortController & { taskId?: string } | undefined;
+      if (!abort) return;
+      abort.abort();
+      const tid = abort.taskId;
+      if (tid) {
+        try { await api.cancelTask(tid); } catch {}
+      }
+    },
+
+    runSyncRecommend: async () => {
+      set((draft) => {
+        draft.formulationBusy = true;
+        draft.recommendStage = "recommend";
+        draft.recommendMessage = "同步推荐中…";
+        draft.error = null;
+      });
+      try {
+        const { requirement, sources, selectedSources, searchQuery, preferMaterialsCatalog, activeProjectId } = get();
+        const req = withActiveProjectId(requirement, activeProjectId);
+        const selected = sources.filter((e) =>
+          selectedSources.includes(e.identifier || e.title)
+        );
+        const payload = selected.length > 0 ? selected : sources;
+
+        // Prefer the full sync research endpoint (mechanism + recommended).
+        try {
+          const research = await api.research(req, payload, searchQuery.trim());
+          await applyEnrichedLeaderboard(set, get, research.recommended ?? [], (draft) => {
+            draft.research = { ...research, recommended: draft.leaderboard };
+            draft.recommendMessage = "同步研究完成";
+            // F-4: /api/research now carries recommend_id — adopt button works.
+            draft.lastRecommendId = research.recommend_id ?? null;
+          });
+          return;
+        } catch {
+          // Fall through to recommendFormulations.
+        }
+
+        const rec = await api.recommendFormulations(req, undefined, payload, 3, {
+          preferMaterialsCatalog,
+          relationInsight: true,
+        });
+        const forms = (rec.scored?.length ? rec.scored : []) as Formulation[];
+        if (!forms.length) {
+          throw new Error(rec.warnings?.[0] || "同步推荐未返回配方");
+        }
+        const insightN = rec.relation_insights?.length ?? 0;
+        await applyEnrichedLeaderboard(set, get, forms, (draft) => {
+          draft.recommendMessage =
+            insightN > 0
+              ? `同步推荐完成 · ${rec.engine || "offline"} · KG 关系洞察 ${insightN} 条`
+              : `同步推荐完成 · ${rec.engine || "offline"}`;
+          draft.relationInsights = rec.relation_insights ?? [];
+          // C-8: stash the round id so cards can report adopt signals.
+          draft.lastRecommendId = rec.recommend_id ?? null;
+        });
+      } catch (e) {
+        set((draft) => {
+          draft.error = formatApiError(e);
+        });
+      } finally {
+        set((draft) => {
+          draft.formulationBusy = false;
+          draft.recommendStage = "";
+        });
+      }
+    },
+
+    runDeepResearch: async () => {
+      const { searchQuery, requirement, sources } = get();
+      set((draft) => {
+        draft.deepResearchBusy = true;
+        draft.deepResearchStage = "retrieve";
+        draft.deepResearchMessage = "正在检索";
+        draft.taskThinking = [];
+        draft.error = null;
+        undismiss(draft.notificationsDismissed, ["deep-research", "deep-report"]);
+      });
+      const ctrl = new AbortController();
+      set((draft) => {
+        (draft as unknown as Record<string, unknown>)._deepResearchAbort = ctrl;
+      });
+      try {
+        const { task_id } = await api.submitDeepResearch(
+          searchQuery,
+          requirement,
+          sources,
+          searchQuery.trim()
+        );
+        (ctrl as unknown as Record<string, unknown>).taskId = task_id;
+        const final = await awaitTaskStream(task_id, (ev) => {
+          set((draft) => {
+            draft.deepResearchStage = ev.stage ?? "";
+            draft.deepResearchMessage = ev.stage === "retrieve" && !ev.message ? "模型冷启动中… 正在检索" : (ev.message ?? "");
+            draft.task = progressToTaskStatus(task_id, "deep_research", ev);
+            const steps = extractThinkingSteps(ev);
+            if (steps.length) draft.taskThinking = steps;
+          });
+        }, 600_000, ctrl.signal);
+        const wrapped = final.data as { report?: ComprehensiveReport; recommend_id?: string | null } | undefined;
+        const report = wrapped?.report;
+        if (!report) throw new Error("深度研究未返回结果");
+        set((draft) => {
+          draft.deepReport = report;
+          // P1-1: deep 异步路径同样写入 round id，否则采纳按钮静默禁用。
+          // v10: 无 ID 时写 null 而非保留旧值，避免采纳归因到上一轮。
+          draft.lastRecommendId = wrapped?.recommend_id ?? null;
+        });
+        if (report.citations?.length) get().addSources(report.citations);
+        if (report.candidates?.length) {
+          await applyEnrichedLeaderboard(set, get, report.candidates);
+        }
+        const msg: ChatMessage = {
+          role: "assistant",
+          content: report.report_markdown,
+          citations: report.citations,
+        };
+        set((draft) => {
+          draft.chatHistory.push(msg);
+        });
+        get().scheduleAutosave();
+      } catch (e) {
+        const msg = formatApiError(e);
+        const isCancelled = msg.includes("取消") || msg.includes("cancel");
+        set((draft) => {
+          draft.error = isCancelled ? "深度研究已取消" : msg;
+        });
+      } finally {
+        set((draft) => {
+          draft.deepResearchBusy = false;
+          draft.deepResearchStage = "";
+          draft.deepResearchMessage = "";
+          draft.taskThinking = [];
+          delete (draft as unknown as Record<string, unknown>)._deepResearchAbort;
+        });
+      }
+    },
+
+    cancelDeepResearch: async () => {
+      const abort = (get() as unknown as Record<string, unknown>)._deepResearchAbort as AbortController & { taskId?: string } | undefined;
+      if (!abort) return;
+      abort.abort();
+      const tid = abort.taskId;
+      if (tid) try { await api.cancelTask(tid); } catch {}
+    },
+
+  } as Pick<AppState, 'setLeaderboard' | 'addManualFormula' | 'updateFormulaIngredient' | 'removeFormula' | 'saveFormulaToDoe' | 'runAiModifyFormula' | 'runResearch' | 'cancelResearch' | 'runSyncRecommend' | 'runDeepResearch' | 'cancelDeepResearch'>;
+}

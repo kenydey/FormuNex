@@ -1,0 +1,819 @@
+"""Structure-aware chunking — Markdown headings and tables survive splitting.
+
+``chunk_markdown`` is the shared chunker for every ingest path.  Behaviour:
+
+* the document is first sectioned on ATX headings (``#`` … ``######``); each
+  chunk remembers its heading path (``实施例 > 实施例 3``) so retrieval and
+  citations can show *where* in the document a passage lives;
+* Markdown tables (and fenced code blocks) are atomic — they are never split
+  mid-row, even when that makes a chunk oversized, because a half table is
+  worthless for formulation extraction;
+* display-math blocks (``$$…$$``, ``\\[…\\]``, ``\\begin{…}…\\end{…}``) are
+  atomic too — chemistry PDFs parsed by Docling/MinerU carry reaction
+  equations as LaTeX, and half an equation is as useless as half a table;
+* a table keeps its caption: the short ``表 N …`` / ``Table N …`` paragraph right above it is part of
+  the table's chunk. A table is its own chunk, so the caption used to become a separate chunk of a few
+  words (dropped outright when under the length floor) and the table — numbers with no subject — was left
+  to be retrieved without the words that say what it is;
+* ``<!-- page:N -->`` markers (inserted by the PDF parsers between pages) are
+  consumed into ``Chunk.page_no`` provenance and stripped from chunk text;
+* plain text without headings degrades to the legacy recursive splitter
+  (``\\n\\n`` → ``\\n`` → sentence), so non-Markdown parsers keep behaving
+  exactly as before (page-marked plain text is split page-wise first).
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+_HEADING_OPEN_RE = re.compile(r"^(#{1,6})(\s+)")
+_MAX_HEADING_PATH = 80
+
+
+def _parse_heading(line: str) -> tuple[int, str] | None:
+    r"""``## Title ##`` → ``(2, "Title")``; ``None`` when the line is not an ATX heading.
+
+    The same answer as the regex ``^(#{1,6})\s+(.+?)\s*#*\s*$`` this replaces, in linear time: that pattern has two
+    adjacent ``\s*`` around an optional ``#*`` and a lazy title in front, so a heading followed by a long run of
+    spaces (padding from a layout-preserving PDF conversion) was retried from every position — cubic. 2000 trailing
+    spaces took longer than 20 s; a differential test against the old pattern is in ``test_chunking_linear.py``.
+    """
+    opened = _HEADING_OPEN_RE.match(line)
+    if not opened:
+        return None
+    level, gap = len(opened.group(1)), opened.group(2)
+    rest = line[opened.end():]
+    if not rest:
+        # the old pattern's title needed a character, so it took the last whitespace character of the gap; one
+        # whitespace character after the hashes therefore was not a heading, two or more were (with an empty title)
+        return (level, "") if len(gap) >= 2 else None
+    trimmed = rest.rstrip()
+    title = trimmed.rstrip("#").rstrip()
+    if title:
+        return level, title
+    if trimmed:  # nothing but closing hashes: the first one stays as the title
+        return level, trimmed[0]
+    return level, ""
+
+PAGE_MARKER_RE = re.compile(r"^\s*<!--\s*page:(\d+)\s*-->\s*$")
+# v2 P0-9: 视觉解析占位符 —— vision 失败/跳过时的降级文本，入库即检索噪声。
+# 保知识库质量：chunking 时直接丢弃，不进入索引。
+VISION_PLACEHOLDER_RE = re.compile(r"（视觉解析(已跳过|异常|未返回结果)")
+
+
+def _is_vision_placeholder(block: str) -> bool:
+    """True if the block is only vision-failure placeholder quote lines."""
+    if not VISION_PLACEHOLDER_RE.search(block):
+        return False
+    # 占位符块只含引用行（> 开头）与空行，不含实质内容
+    for line in block.split("\n"):
+        s = line.strip()
+        if not s:
+            continue
+        if not s.startswith(">"):
+            return False
+    return True
+BLOCK_MARKER_RE = re.compile(
+    r"^\s*<!--\s*block:(text|table|formula|figure|code|image)\s*-->\s*$"
+)
+
+
+def page_marker(page_no: int) -> str:
+    """The canonical inter-page marker PDF parsers emit (chunker strips it)."""
+    return f"<!-- page:{page_no} -->"
+
+
+def block_marker(kind: str) -> str:
+    """Block-kind marker layout-aware parsers emit (MinerU tier, Phase 1).
+
+    Lets the chunker use the detected block type instead of the markdown
+    heuristic. Stripped from chunk text like page markers.
+    """
+    return f"<!-- block:{kind} -->"
+
+
+@dataclass
+class Chunk:
+    text: str
+    heading_path: str = ""
+    page_no: int | None = None
+    # PageIndex 借鉴 A5: 跨页 chunk 的末页（None = 单页，与 page_no 相同）。
+    page_end: int | None = None
+    paragraph_idx: int | None = None
+    offset_start: int | None = None
+    offset_end: int | None = None
+    # Layout provenance (Phase 0): normalized page-fraction bbox, filled by
+    # layout-aware parsers (MinerU, Phase 1); None for the text chain.
+    bbox: list | None = None
+    # Block kind: text | table | formula | figure | code. Heuristic on
+    # markdown for the text chain; layout parsers overwrite it.
+    block_type: str = "text"
+
+
+# ── legacy plain-text splitter (moved verbatim from ingestion) ───────────────
+
+
+def chunk_plain_text_with_offsets(
+    text: str,
+    *,
+    max_chars: int = 1600,
+    overlap: int = 200,
+    max_depth: int = 10,
+) -> list[tuple[str, int]]:
+    """P1-3: chunk_plain_text + each chunk's start offset in ``text``.
+
+    The old call sites did ``char_pos += len(c)``, assuming chunks are
+    back-to-back — wrong when ``overlap > 0`` (offsets drift). Here offsets
+    are located with ``str.find`` from a moving cursor, so overlapping chunks
+    get their true positions. ``find`` works despite the internal stripping:
+    the stripped chunk is still a substring of the original at its location.
+    """
+    chunks = chunk_plain_text(text, max_chars=max_chars, overlap=overlap, max_depth=max_depth)
+    out: list[tuple[str, int]] = []
+    cursor = 0
+    for c in chunks:
+        idx = text.find(c, cursor)
+        if idx == -1:
+            # Shouldn't happen; fall back to cursor to avoid crashing.
+            idx = cursor
+        out.append((c, idx))
+        cursor = idx + 1  # +1 (not +len) so overlapping next chunks are found
+    return out
+
+
+def chunk_plain_text(
+    text: str,
+    *,
+    max_chars: int = 1600,
+    overlap: int = 200,
+    max_depth: int = 10,
+    _depth: int = 0,
+) -> list[str]:
+    """Recursive split on \\n\\n > \\n > 句号，控制 chunk 大小。"""
+    text = text.strip()
+    if not text:
+        return []
+
+    if len(text) <= max_chars:
+        return [text]
+
+    if _depth >= max_depth:
+        chunks: list[str] = []
+        start = 0
+        while start < len(text):
+            end = min(start + max_chars, len(text))
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= len(text):
+                break
+            start = max(end - overlap, start + 1)
+        return chunks
+
+    for sep in ("\n\n", "\n", "。", ". "):
+        if sep not in text:
+            continue
+        parts = text.split(sep)
+        chunks = []
+        current = ""
+        for i, part in enumerate(parts):
+            piece = part if i == len(parts) - 1 else part + sep
+            if len(current) + len(piece) <= max_chars:
+                current += piece
+            else:
+                if current.strip():
+                    chunks.append(current.strip())
+                if len(piece) > max_chars:
+                    chunks.extend(
+                        chunk_plain_text(
+                            piece,
+                            max_chars=max_chars,
+                            overlap=overlap,
+                            max_depth=max_depth,
+                            _depth=_depth + 1,
+                        )
+                    )
+                    current = ""
+                else:
+                    current = piece
+        if current.strip():
+            chunks.append(current.strip())
+        if chunks:
+            return chunks
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_chars, len(text))
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= len(text):
+            break
+        start = max(end - overlap, start + 1)
+    return chunks
+
+
+# ── markdown structure parsing ───────────────────────────────────────────────
+
+
+def _split_sections(md: str) -> list[tuple[str, str]]:
+    """Split on ATX headings → [(heading_path, body)]. Empty path = preamble."""
+    lines = md.split("\n")
+    sections: list[tuple[str, list[str]]] = [("", [])]
+    stack: list[tuple[int, str]] = []  # (level, title)
+    in_fence = False
+    in_math = False  # v22: 跟踪 math 块，避免 math 内行首 # 被误判为标题
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        stripped = line.strip()
+        # v22: math 块状态跟踪（复用 _math_open/_math_selfclosed）
+        if not in_fence and not in_math:
+            if not _math_selfclosed(stripped):
+                closer = _math_open(stripped)
+                if closer:
+                    in_math = closer
+        elif in_math and stripped.startswith(in_math):
+            in_math = False
+        heading = None if (in_fence or in_math) else _parse_heading(line)
+        if heading:
+            level, title = heading
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, title))
+            path = " > ".join(t for _, t in stack)[:_MAX_HEADING_PATH]
+            sections.append((path, []))
+        else:
+            sections[-1][1].append(line)
+    return [(path, "\n".join(body).strip()) for path, body in sections if "\n".join(body).strip()]
+
+def _math_open(stripped: str) -> str | None:
+    """If *stripped* opens a display-math block, return the closer token."""
+    if stripped.startswith("$$"):
+        # single-line $$…$$ is already closed
+        return None if stripped.count("$$") >= 2 and len(stripped) > 2 else "$$"
+    if stripped.startswith("\\["):
+        return None if stripped.endswith("\\]") and len(stripped) > 3 else "\\]"
+    if stripped.startswith("\\begin{"):
+        return "\\end{"
+    return None
+
+
+def _math_selfclosed(stripped: str) -> bool:
+    return (
+        (stripped.startswith("$$") and stripped.count("$$") >= 2 and len(stripped) > 2)
+        or (stripped.startswith("\\[") and stripped.endswith("\\]") and len(stripped) > 3)
+    )
+
+
+def _split_blocks(body: str) -> list[str]:
+    """Split a section body into blocks; tables, fences and math stay atomic."""
+    lines = body.split("\n")
+    blocks: list[str] = []
+    current: list[str] = []
+    mode = "text"  # text | table | html_table | fence | math
+    math_closer = ""
+
+    def flush() -> None:
+        block = "\n".join(current).strip()
+        # v2 P0-9: 视觉解析占位符直接丢弃，不进入索引（检索噪声）。
+        # 占位符形如 ">\n> _（视觉解析…）_"，strip 后只剩引用行。
+        if block and not _is_vision_placeholder(block):
+            blocks.append(block)
+        current.clear()
+
+    # v19-2: 块级行数上限，未闭合时强制闭合，避免吞整篇。
+    # v21-fix: 推广到 fence/html_table（与 math 同类问题）。
+    _BLOCK_MAX_LINES = 50
+    _block_lines = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if mode == "fence":
+            current.append(line)
+            _block_lines += 1
+            if stripped.startswith("```") or _block_lines >= _BLOCK_MAX_LINES:
+                flush()
+                mode = "text"
+                _block_lines = 0
+            continue
+        if mode == "math":
+            current.append(line)
+            _block_lines += 1
+            # v19-2: closer 改行首匹配（与 opener 对称），避免行内 $$5$$ 提前闭合。
+            # 未闭合超过上限时强制闭合，避免吞整篇。
+            if stripped.startswith(math_closer) or _block_lines >= _BLOCK_MAX_LINES:
+                flush()
+                mode = "text"
+                _block_lines = 0
+            continue
+        if stripped.startswith("```"):
+            flush()
+            mode = "fence"
+            current.append(line)
+            continue
+        if PAGE_MARKER_RE.match(line):
+            # page markers become standalone blocks (consumed by chunk_markdown)
+            flush()
+            blocks.append(stripped)
+            continue
+        if BLOCK_MARKER_RE.match(line):
+            # block-kind markers likewise become standalone blocks; the
+            # chunker consumes them into Chunk.block_type and strips them.
+            flush()
+            blocks.append(stripped)
+            continue
+        if _math_selfclosed(stripped):
+            flush()
+            blocks.append(stripped)
+            continue
+        closer = _math_open(stripped)
+        if closer:
+            flush()
+            mode = "math"
+            math_closer = closer
+            _block_lines = 0
+            current.append(line)
+            continue
+        is_table_row = stripped.startswith("|") and stripped.count("|") >= 2
+        # v18-17: HTML 表格原子化 —— <table>...</table> 遇空行不截断，
+        # 与模块头"表格原子"承诺对齐。
+        _is_html_table_start = stripped.lower().startswith("<table")
+        _is_html_table_end = "</table>" in stripped.lower()
+        if mode == "table":
+            if is_table_row:
+                current.append(line)
+                continue
+            flush()
+            mode = "text"
+        if mode == "html_table":
+            current.append(line)
+            _block_lines += 1
+            if _is_html_table_end or _block_lines >= _BLOCK_MAX_LINES:
+                flush()
+                mode = "text"
+                _block_lines = 0
+            continue
+        if _is_html_table_start:
+            flush()
+            mode = "html_table"
+            _block_lines = 0
+            current.append(line)
+            # 单行完整表格直接结束
+            if _is_html_table_end:
+                flush()
+                mode = "text"
+            continue
+        if is_table_row:
+            flush()
+            mode = "table"
+            current.append(line)
+            continue
+        if not stripped and current:
+            flush()
+            continue
+        if stripped or current:
+            current.append(line)
+    flush()
+    return blocks
+
+
+def _classify_block_type(block: str) -> str:
+    """Heuristic block kind for the text chain: table | formula | figure | code | text.
+
+    Mirrors ``_is_atomic``'s classification; layout-aware parsers (MinerU,
+    Phase 1) overwrite this with detected values. Kept deliberately coarse —
+    the text chain has no real geometry, so this only separates "probably a
+    table/formula" from running text for retrieval-time filtering.
+    """
+    first = block.lstrip()
+    lower = first[:64].lower()
+    if first.startswith("|") or lower.startswith("<table"):
+        return "table"
+    if (
+        first.startswith("$$")
+        or first.startswith("\\[")
+        or first.startswith("\\begin{")
+    ):
+        return "formula"
+    if first.startswith("```"):
+        return "code"
+    if first.startswith("!["):
+        return "figure"
+    return "text"
+
+
+def _is_atomic(block: str) -> bool:
+    """Blocks that must not be split on blank lines (tables / code / math).
+
+    P1 #17: MinerU / HTML pipelines often emit ``<table>…</table>``; treating
+    them as atomic prevents blank-line splits from shredding rows.
+    """
+    first = block.lstrip()
+    lower = first[:64].lower()
+    return (
+        first.startswith("|")
+        or first.startswith("```")
+        or first.startswith("$$")
+        or first.startswith("\\[")
+        or first.startswith("\\begin{")
+        or lower.startswith("<table")
+        or "<table" in block[:200].lower()
+    )
+
+
+_CAPTION_START_RE = re.compile(r"^\s*(?:表|Table|TABLE|Tab\.)\s*[\dIVXivx]+", re.UNICODE)
+_CAPTION_MAX_CHARS = 300
+
+
+def _is_table_block(block: str) -> bool:
+    first = block.lstrip()
+    return first.startswith("|") or "<table" in first[:200].lower()
+
+
+def _is_table_caption(paragraph: str) -> bool:
+    """A short paragraph that *starts* with ``表 N`` / ``Table N`` — what a table's caption looks like.
+
+    Anchored on purpose: "如表1所示，粘度符合要求" is a sentence about a table, not its caption.
+    """
+    text = paragraph.strip()
+    if not text or len(text) > _CAPTION_MAX_CHARS or "\n\n" in text:
+        return False
+    text = re.sub(r"^#{1,6}\s+", "", text).replace("**", "").replace("__", "")
+    return bool(_CAPTION_START_RE.match(text))
+
+
+def _strip_block_markers(md: str) -> str:
+    """Remove ``<!-- block:K -->`` lines (plain-text fallback paths)."""
+    return "\n".join(
+        line for line in md.split("\n") if not BLOCK_MARKER_RE.match(line)
+    )
+
+
+def _split_pages(md: str) -> list[tuple[int | None, str]]:
+    """Split page-marked text into [(page_no, segment)]; markers removed."""
+    segments: list[tuple[int | None, list[str]]] = [(None, [])]
+    for line in md.split("\n"):
+        m = PAGE_MARKER_RE.match(line)
+        if m:
+            segments.append((int(m.group(1)), []))
+        else:
+            segments[-1][1].append(line)
+    return [(p, "\n".join(body).strip()) for p, body in segments if "\n".join(body).strip()]
+
+
+_EXAMPLE_HEAD_LINE = re.compile(
+    r"^\s*(example|embodiment|实施例|实例)\s*([0-9０-９]+|[IVXLC]+)?\s*[:：.]?\s*$",
+    re.I,
+)
+
+
+def mark_example_boundaries(md: str) -> str:
+    """v2 P1-10: 专利 Example N 感知切分 —— 独立成行的 Example 头转为 ``##`` 标题。
+
+    使 ``_split_sections`` 按示例边界切分，单个示例不被拦腰切断；
+    heading_path 自然带上 "Example N"，示例 chunk 可整体召回。
+    非独立成行的行内提及（如 "as shown in example 1"）不受影响。
+    """
+    return "\n".join(
+        f"## {line.strip()}" if _EXAMPLE_HEAD_LINE.match(line) else line
+        for line in (md or "").split("\n")
+    )
+
+
+def chunk_markdown(
+    md: str, *, max_chars: int = 1600, overlap: int = 200,
+    bookmarks: list[tuple[str, int, int]] | None = None,
+    example_aware: bool = False,
+) -> list[Chunk]:
+    """Structure-aware chunking; degrades to the plain splitter for non-Markdown.
+
+    PageIndex 借鉴 A2: ``bookmarks`` 为 [(title, level, page_1based)] 时，
+    page-wise 分支中 heading_path 为空的 chunk 按页查表补充。
+    """
+    md = (md or "").strip()
+    if not md:
+        return []
+    # v2 P1-10: 专利 Example N 感知切分（默认关，仅专利路径开启）。
+    if example_aware:
+        md = mark_example_boundaries(md)
+
+    # PageIndex 借鉴 A2: 书签按页区间展开（只需算一次）
+    _bm_map: dict[int, str] = {}
+    if bookmarks:
+        try:
+            from .parsing import _bookmarks_to_page_map
+
+            _pages = [p for _, _, p in bookmarks]
+            _bm_map = _bookmarks_to_page_map(
+                bookmarks, max(_pages) if _pages else 0
+            )
+        except Exception:
+            _bm_map = {}
+
+    sections = _split_sections(md)
+    has_structure = (
+        any(path for path, _ in sections) or "|" in md or "```" in md or "$$" in md
+    )
+    if not has_structure:
+        pages = _split_pages(md)
+        if len(pages) > 1 or (pages and pages[0][0] is not None):
+            # Page-marked plain text (pypdf): split page-wise so provenance
+            # survives even without headings.
+            chunks: list[Chunk] = []
+            para_idx = 0
+            # P1-3: seg 在 md 中的基址用 find 定位；chunk 偏移用真实值。
+            md_cursor = 0
+            for page_no, seg in pages:
+                seg = _strip_block_markers(seg)
+                seg_base = md.find(seg, md_cursor)
+                if seg_base == -1:
+                    seg_base = md_cursor
+                md_cursor = seg_base + len(seg)
+                for c, off in chunk_plain_text_with_offsets(
+                    seg, max_chars=max_chars, overlap=overlap
+                ):
+                    # PageIndex 借鉴 A2: 空 heading_path 按书签页映射补充
+                    _hp = _bm_map.get(page_no, "") if page_no else ""
+                    chunks.append(Chunk(
+                        c, _hp[:_MAX_HEADING_PATH], page_no,
+                        paragraph_idx=para_idx,
+                        offset_start=seg_base + off,
+                        offset_end=seg_base + off + len(c),
+                        block_type=_classify_block_type(c),
+                    ))
+                    para_idx += 1
+            return chunks
+        chunks: list[Chunk] = []
+        md = _strip_block_markers(md)
+        # P1-3: 用真实偏移，不再 char_pos += len(c)（overlap 下会漂移）。
+        for i, (c, off) in enumerate(
+            chunk_plain_text_with_offsets(md, max_chars=max_chars, overlap=overlap)
+        ):
+            chunks.append(Chunk(
+                c,
+                paragraph_idx=i,
+                offset_start=off,
+                offset_end=off + len(c),
+                block_type=_classify_block_type(c),
+            ))
+        return chunks
+
+    chunks: list[Chunk] = []
+    page: int | None = None
+    para_counter = 0
+    # v13-4: 结构化路径改用真实偏移（find+游标），不再 char_pos 合成累计。
+    md_cursor = 0
+    # Block kind announced by a layout-aware parser via <!-- block:K -->.
+    # Overrides the markdown heuristic for the next emitted chunk only.
+    pending_block: str | None = None
+
+    def _locate_block(bd: str, needle: str, cursor: int) -> tuple[int, int]:
+        """在 body 中定位 needle，返回 (body 相对位置, 新 cursor)。找不到则
+        返回 (-1, cursor)（防御性，正常不应发生）。"""
+        pos = bd.find(needle, cursor)
+        if pos == -1:
+            return -1, cursor
+        return pos, pos + len(needle)
+
+    def _page_span(pages: list[int | None], fallback_first, fallback_end) -> tuple[int | None, int | None]:
+        """(first page, last page or None when it is the same) of the blocks accumulated so far."""
+        known = [p for p in pages if p is not None]
+        if known:
+            return known[0], (known[-1] if known[-1] != known[0] else None)
+        return fallback_first, (fallback_end if fallback_end != fallback_first else None)
+
+    def _emit_verbatim_or_split(
+        t: str, os_: int, blocks: list[str], body_start: int,
+        seg_base: int, md: str, body: str, path: str, page_no,
+        para_idx: int, blk_type: str, page_end: int | None = None,
+        block_pages: list[int | None] | None = None,
+    ) -> list["Chunk"]:
+        """v14-5: 优先整体发射（verbatim）；md[os:oe]!=t 时退化逐 block 发射。
+
+        单个 strip block 经 body.find 必命中，verbatim 天然成立。
+        PageIndex 借鉴 A5: page_end 为跨页 chunk 的末页（None = 单页）。
+        """
+        oe_ = os_ + len(t)
+        if md[os_:oe_] == t:
+            return [Chunk(
+                t, path, page_no, page_end=page_end, paragraph_idx=para_idx,
+                offset_start=os_, offset_end=oe_, block_type=blk_type,
+            )]
+        # 降级：逐 block 发射
+        # v16 P3-18: 每个 block 递增 paragraph_idx（不再共享）；
+        # block_type 优先用传入的 blk_type（调用方已知），分类失败才重算。
+        out: list["Chunk"] = []
+        cursor = body_start
+        for _bi, blk in enumerate(blocks):
+            bpos, cursor = _locate_block(body, blk, cursor)
+            if bpos == -1:
+                # 极端防御：找不到则跳过该 block（不应发生）
+                continue
+            bos_ = seg_base + bpos
+            # A block that was emitted on its own sits on ITS page. Giving every block the range of the whole
+            # accumulated chunk labelled "beta" (page 2) as pages 1-3 and sent the citation to the wrong page.
+            if block_pages is not None and len(block_pages) == len(blocks):
+                blk_page, blk_page_end = block_pages[_bi], None
+            else:
+                blk_page, blk_page_end = page_no, page_end
+            out.append(Chunk(
+                blk, path, blk_page, page_end=blk_page_end,
+                paragraph_idx=para_idx + _bi,
+                offset_start=bos_, offset_end=bos_ + len(blk),
+                block_type=blk_type or _classify_block_type(blk),
+            ))
+        return out
+
+    for path, body in sections:
+        # section body 在 md 中的基址
+        seg_base = md.find(body, md_cursor)
+        if seg_base == -1:
+            seg_base = md_cursor  # 防御性
+        md_cursor = seg_base + len(body)
+        body_cursor = 0
+        current_start_body = 0  # `current` 首 block 在 body 中的位置
+        current = ""
+        # v14-5: 保留块边界，用于 verbatim 降级（逐 block 发射）
+        current_blocks: list[str] = []
+        # The page each entry of current_blocks sits on (the latest page marker when it was added).
+        current_pages: list[int | None] = []
+        current_page = page
+        # PageIndex 借鉴 A5: 跨页跟踪 —— current 累积期间遇到的最末页码
+        current_page_end = page
+        current_para = para_counter
+        for block in _split_blocks(body):
+            # 推进 body_cursor（markers 也占原文位置）
+            bpos, body_cursor = _locate_block(body, block, body_cursor)
+            m = PAGE_MARKER_RE.match(block)
+            if m:
+                page = int(m.group(1))
+                if not current.strip():
+                    current_page = page
+                # PageIndex 借鉴 A5: 累积中遇到新页 marker，记录末页
+                current_page_end = page
+                continue
+            bm = BLOCK_MARKER_RE.match(block)
+            if bm:
+                pending_block = bm.group(1)
+                continue
+            if _is_atomic(block):
+                caption = ""
+                caption_body_pos = -1
+                if current.strip() and _is_table_block(block):
+                    head, _, tail = current.rpartition("\n\n")
+                    if _is_table_caption(tail):
+                        caption, current = tail.strip(), head
+                        # v14-5: caption 是最后一个 block，current_blocks 去尾
+                        # v15: 删死变量 caption_block（赋值后未使用）
+                        current_blocks = current_blocks[:-1]
+                        current_pages = current_pages[:-1]
+                        # caption 在 body 中的位置（current 起始处搜索）
+                        caption_body_pos, _ = _locate_block(
+                            body, caption, current_start_body
+                        )
+                if current.strip():
+                    t = current.strip()
+                    # v13-4: current 起始于 current_start_body（首 block 位置，
+                    # block 已 strip 故无前导空白）
+                    # v14-5: verbatim 不成立时退化逐 block 发射
+                    os_ = seg_base + current_start_body
+                    # PageIndex 借鉴 A5: 跨页 chunk 记录末页
+                    _first, _pe = _page_span(current_pages, current_page, current_page_end)
+                    chunks.extend(_emit_verbatim_or_split(
+                        t, os_, current_blocks, current_start_body,
+                        seg_base, md, body, path, _first,
+                        current_para, pending_block or "text",
+                        page_end=_pe, block_pages=current_pages,
+                    ))
+                    current = ""
+                    current_blocks = []
+                    current_pages = []
+                    pending_block = None
+                    current_page_end = current_page
+                atom = f"{caption}\n\n{block}" if caption else block
+                # v13-4: atom 定位——优先找完整 atom，否则用 caption 位置，
+                # 再否则用 block 位置（bpos）
+                # v14-5: verbatim 不成立时（多空行/marker 隔断）拆开发射
+                atom_body_pos, _ = _locate_block(body, atom, current_start_body)
+                if atom_body_pos == -1 and caption_body_pos != -1:
+                    atom_body_pos = caption_body_pos
+                if atom_body_pos == -1:
+                    atom_body_pos = bpos if bpos != -1 else body_cursor
+                aos_ = seg_base + atom_body_pos
+                aoe_ = aos_ + len(atom)
+                if md[aos_:aoe_] == atom:
+                    chunks.append(Chunk(
+                        atom, path, page,
+                        paragraph_idx=para_counter,
+                        offset_start=aos_,
+                        offset_end=aoe_,
+                        block_type=pending_block or _classify_block_type(block),
+                    ))
+                elif caption and caption_body_pos != -1:
+                    # v14-5: caption 与表格被多空行/marker 隔断，拆开发射
+                    cos_ = seg_base + caption_body_pos
+                    chunks.append(Chunk(
+                        caption, path, page,
+                        paragraph_idx=para_counter,
+                        offset_start=cos_,
+                        offset_end=cos_ + len(caption),
+                        block_type="text",
+                    ))
+                    # block 单独成 atom（用 bpos 真实位置）
+                    bbs_ = seg_base + (bpos if bpos != -1 else body_cursor)
+                    chunks.append(Chunk(
+                        block, path, page,
+                        paragraph_idx=para_counter,
+                        offset_start=bbs_,
+                        offset_end=bbs_ + len(block),
+                        block_type=pending_block or _classify_block_type(block),
+                    ))
+                else:
+                    # v14-5: block 单独发射（verbatim 必成立）
+                    bbs_ = seg_base + (bpos if bpos != -1 else body_cursor)
+                    chunks.append(Chunk(
+                        block, path, page,
+                        paragraph_idx=para_counter,
+                        offset_start=bbs_,
+                        offset_end=bbs_ + len(block),
+                        block_type=pending_block or _classify_block_type(block),
+                    ))
+                pending_block = None
+                para_counter += 1
+                current_page = page
+                # v13-4: cursor 已在循环顶部推进到 block 末尾；current 已清空
+                continue
+            if not current.strip():
+                current_page = page
+                current_para = para_counter
+            if len(current) + len(block) + 2 <= max_chars:
+                if not current:
+                    # v13-4: 新累积段的起始位置（首 block 处）
+                    current_start_body = bpos if bpos != -1 else body_cursor
+                current = f"{current}\n\n{block}" if current else block
+                # v14-5: 同步块边界
+                current_blocks.append(block)
+                current_pages.append(page)
+                para_counter += 1
+                continue
+            if current.strip():
+                t = current.strip()
+                os_ = seg_base + current_start_body
+                # v14-5: verbatim 不成立时退化逐 block 发射
+                _first, _pe = _page_span(current_pages, current_page, current_page_end)
+                chunks.extend(_emit_verbatim_or_split(
+                    t, os_, current_blocks, current_start_body,
+                    seg_base, md, body, path, _first,
+                    current_para, pending_block or "text",
+                    page_end=_pe, block_pages=current_pages,
+                ))
+                current = ""
+                current_blocks = []
+                current_pages = []
+                pending_block = None
+                current_page_end = current_page
+            current_page = page
+            current_para = para_counter
+            if len(block) > max_chars:
+                # v13-4: block 基址用真实位置（bpos），不再 char_pos 合成。
+                block_base = seg_base + (bpos if bpos != -1 else body_cursor)
+                for c, off in chunk_plain_text_with_offsets(
+                    block, max_chars=max_chars, overlap=overlap
+                ):
+                    chunks.append(Chunk(
+                        c, path, page,
+                        paragraph_idx=para_counter,
+                        offset_start=block_base + off,
+                        offset_end=block_base + off + len(c),
+                        block_type=pending_block or _classify_block_type(c),
+                    ))
+                pending_block = None
+                para_counter += 1
+                current = ""
+                current_blocks = []
+                current_pages = []
+                continue
+            else:
+                # v13-4: block 太长放不下、current 已刷出，block 独立成段
+                current_start_body = bpos if bpos != -1 else body_cursor
+                current = block
+                current_page_end = page
+                # v14-5: 同步块边界
+                current_blocks = [block]
+                current_pages = [page]
+            para_counter += 1
+        if current.strip():
+            t = current.strip()
+            os_ = seg_base + current_start_body
+            # v14-5: verbatim 不成立时退化逐 block 发射
+            _first, _pe = _page_span(current_pages, current_page, current_page_end)
+            chunks.extend(_emit_verbatim_or_split(
+                t, os_, current_blocks, current_start_body,
+                seg_base, md, body, path, _first,
+                current_para, pending_block or "text",
+                page_end=_pe, block_pages=current_pages,
+            ))
+            pending_block = None
+    return chunks

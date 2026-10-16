@@ -1,0 +1,1976 @@
+"""POST /api/chat — Q&A grounded in loaded sources (Chat P0)."""
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from pydantic import PrivateAttr, field_validator
+
+from ..domain.chat_schemas import (
+    ChatRequest,
+    ChatResponse,
+    ChatTurn,
+    StructuredAnswer,
+    structure_retrieval_context,
+)
+from ..domain.kg_schemas import EntityResolutionSummary, KGRetrieveStats
+from ..domain.schemas import Evidence
+from ..services.chat_claims import (
+    build_sources_audit,
+    build_sourced_claims,
+    verify_answer_claims,
+)
+from ..services.chat_clarify import apply_assumption_to_structured, detect_clarification
+from ..services.chat_context import rewrite_query, trim_history
+from ..services.chat_structured import generate_structured_answer
+from ..services.llm import answer_question
+from ..services.query_aware_compression import (
+    compress_evidence,
+    query_compress_enabled,
+    query_compress_token_budget,
+)
+from ..services.rag import active_rag_backend
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+# ── B-7 reviewer 显错契约 ──────────────────────────────────────────────
+# evidence_reviewer.review_answer 在配置了 evidence_reviewer_model 后失败会
+# 抛 ReviewerModelError（"不静默回退，避免'以为审了'"）。调用方必须单独
+# 捕获并返回显式的 reviewer error 状态，绝不 debug-only 吞掉。
+
+
+def _run_evidence_review(question, answer, evidence, settings):
+    """调用 evidence_reviewer.review_answer，B-7 显错封装。
+
+    - ReviewerModelError → ``{"status": "error", "reviewer_error": ...}``
+      （配置专用 reviewer 模型后失败必须显错，客户端绝不能误以为"已审"）；
+    - 其他异常 → None（fail-open，沿用旧行为）。
+    """
+    from ..services.evidence_reviewer import ReviewerModelError, review_answer
+
+    try:
+        return review_answer(question, answer, evidence, settings=settings)
+    except ReviewerModelError as exc:
+        logger.error("reviewer 模型失败: %s", exc)
+        return {
+            "status": "error",
+            "reviewer_error": str(exc)[:500],
+            "notes": [],
+            "findings": [],
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("reviewer skipped: %s", exc)
+        return None
+
+
+def _reviewer_failed(review) -> bool:
+    """reviewer 是否处于显错状态（B-7）；是则跳过 fix-loop 与 auto-review。"""
+    return isinstance(review, dict) and bool(review.get("reviewer_error"))
+
+
+def _reviewer_notices(reviewer) -> list[str]:
+    """v16 P3-11: reviewer fail-open 时给用户可见提示（不再静默）。"""
+    if _reviewer_failed(reviewer):
+        return ["证据评审未完成（reviewer 异常），回答未经第二轮校验"]
+    # P2: reviewer 为 None（跳过）时也明确告知，不再静默
+    if reviewer is None:
+        return ["证据评审未运行（已跳过），回答未经第二轮校验"]
+    return []
+
+
+def _clamp_relevance(value: float) -> float:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    if n != n:
+        return 0.5
+    return max(0.0, min(1.0, n))
+
+
+def _sanitize_evidence(ev: Evidence) -> Evidence:
+    identifier = (ev.identifier or ev.title or "source").strip() or "source"
+    title = (ev.title or identifier).strip() or identifier
+    snippet = (ev.snippet or "").strip()
+    return ev.model_copy(
+        update={
+            "source": (ev.source or "local").strip() or "local",
+            "identifier": identifier,
+            "title": title,
+            "snippet": snippet or title,
+            "relevance": _clamp_relevance(ev.relevance),
+        }
+    )
+
+
+class ChatRequestValidated(ChatRequest):
+    # Who sent it: set by the route from the bearer token, never read from the body (a client must not name its own
+    # owner). ``None`` = an internal call with no identity, which the Text2SQL scope treats as "restrict nothing".
+    _owner_id: str | None = PrivateAttr(default=None)
+
+    @field_validator("sources", mode="before")
+    @classmethod
+    def _coerce_sources(cls, raw: object) -> object:
+        if not isinstance(raw, list):
+            return raw
+        # Cap the number of supplied sources to bound prompt size / cost.
+        # NOTE: ChatRequest.sources lives in domain/chat_schemas.py (outside
+        # this agent's file list); the hard Field(max_length=50) constraint
+        # should be added there when that file is touched.
+        if len(raw) > 50:
+            logger.warning("chat sources truncated: %d -> 50", len(raw))
+            raw = raw[:50]
+        out: list[dict] = []
+        dropped = 0
+        for item in raw:
+            if isinstance(item, Evidence):
+                out.append(_sanitize_evidence(item).model_dump())
+            elif isinstance(item, dict):
+                data = dict(item)
+                if "relevance" in data:
+                    data["relevance"] = _clamp_relevance(data.get("relevance", 0.5))
+                try:
+                    out.append(_sanitize_evidence(Evidence.model_validate(data)).model_dump())
+                except Exception:
+                    dropped += 1
+                    continue
+        if dropped:
+            logger.warning("chat sources: %d invalid item(s) discarded", dropped)
+        return out
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _coerce_history(cls, raw: object) -> object:
+        if not isinstance(raw, list):
+            return raw
+
+        # P2-2: validator 只做超大保护（200 条），精细截断（token budget+摘要）留给 trim_history
+        hard_cap = 200
+        items = raw[-hard_cap:] if len(raw) > hard_cap else raw
+        out: list[dict] = []
+        for item in items:
+            if isinstance(item, ChatTurn):
+                out.append(item.model_dump())
+            elif isinstance(item, dict):
+                try:
+                    out.append(ChatTurn.model_validate(item).model_dump())
+                except Exception:
+                    continue
+        return out
+
+
+def _augment_with_kb(
+    question: str,
+    sources: list[Evidence],
+    *,
+    project_id: str | None = None,
+    include_entity_resolution: bool = False,
+) -> tuple[list[Evidence], int, EntityResolutionSummary | None, KGRetrieveStats | None]:
+    from ..config import get_settings
+
+    settings = get_settings()
+    resolution: EntityResolutionSummary | None = None
+    kg_stats: KGRetrieveStats | None = None
+    wiki_added = 0
+
+    # W3: blend Wiki condensed pages (flag-gated; prepended).
+    try:
+        from ..services.wiki.retrieve import blend_wiki_evidence
+
+        sources, wiki_added = blend_wiki_evidence(
+            question, sources, project_id=project_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("wiki chat blend skipped: %s", exc)
+
+    if settings.kg_enabled:
+        from ..services.kg import retrieve as kg_retrieve
+        from ..services.kg.retrieval import build_resolution_summary
+
+        result = kg_retrieve(
+            question,
+            project_id=project_id,
+            pre_evidence=sources,
+            k_semantic=settings.kb_chat_top_k,
+        )
+        if include_entity_resolution:
+            resolution = build_resolution_summary(question)
+        kg_stats = result.stats
+        added = max(0, len(result.evidence) - len(sources)) + wiki_added
+        return result.evidence, added, resolution, kg_stats
+
+    if not settings.kb_v2_enabled:
+        return sources, wiki_added, resolution, kg_stats
+    from ..services.kb_bilingual import search as bilingual_search
+
+    hits = bilingual_search(
+        question, k=settings.kb_chat_top_k, project_id=project_id
+    )
+    # 增量 #7: 子问题分解 —— 长问题拆成子问题，多路检索后合并。
+    # opt-in（chat_subquestions_enabled），fail-open。
+    if not hits and settings.chat_subquestions_enabled and len(question) > 40:
+        try:
+            from ..pipeline.subquestions import decompose, merge_evidence
+            from ..services.kb_bilingual import search as _bi_search
+
+            _subs = decompose(question, 3, domain="")
+            _batches = []
+            for _sq in _subs[1:]:  # [0] 是原问题，已检索过
+                _batches.append(_bi_search(_sq, k=settings.kb_chat_top_k, project_id=project_id))
+            if _batches:
+                hits = merge_evidence([hits] + _batches)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("subquestions retrieval skipped: %s", exc)
+    if not hits:
+        return sources, wiki_added, resolution, kg_stats
+    seen = {ev.identifier for ev in sources}
+    added = [h for h in hits if h.identifier not in seen]
+    return sources + added, len(added) + wiki_added, resolution, kg_stats
+
+
+from ..services.citation_coords import claims_evidence as _claims_evidence
+from ..services.citation_coords import reviewer_view as _reviewer_view
+
+
+def _claims_and_audit(
+    question: str,
+    answer: str,
+    citations: list[Evidence],
+    *,
+    structured: StructuredAnswer | None = None,
+    settings=None,
+):
+    """Run claim verification once → (sourced_claims, sources_audit, verified).
+
+    ``verified`` (raw :class:`VerifiedClaim` list) is returned for the P2
+    runtime gates (numeric check / conflict section / abstention); None when
+    claim-check is disabled.
+    """
+    from ..config import get_settings
+
+    settings = settings or get_settings()
+    evidence = _claims_evidence(citations)
+    verified = verify_answer_claims(
+        question,
+        answer,
+        evidence,
+        structured=structured,
+        settings=settings,
+    )
+    sourced_claims = build_sourced_claims(
+        question,
+        answer,
+        evidence,
+        structured=structured,
+        settings=settings,
+        verified=verified,
+    )
+    sources_audit = None
+    if verified is not None and settings.sources_audit_enabled:
+        try:
+            # P1-l: 计算未验证 claim 数（答案总句数 - 实际验证数）
+            from ..services.chat_claims import _SENTENCE_SPLIT
+
+            _total = len([p for p in _SENTENCE_SPLIT.split(answer or "") if p.strip()])
+            _n_unverified = max(0, _total - len(verified))
+            sources_audit = build_sources_audit(
+                evidence, verified=verified, enabled=True, n_unverified=_n_unverified
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("sources_audit skipped: %s", exc)
+            sources_audit = None
+    return sourced_claims, sources_audit, verified
+
+
+# ── P2 运行时门（数值一致性 / 证据冲突透出 / 证据不足拒答）─────────────────
+# 挂在 _claims_and_audit 之后、ChatResponse 组装之前。顺序：
+#   1. P2-1 数值检查：标注 + claim 降级（不替换答案）；
+#   2. P2-3 冲突段：答案尾追加（不替换答案）；
+#   3. P2-2 拒答门：触发时整体替换为拒答模板（硬门）。
+# v16: 同步与流式路径均调用此函数（旧注释"流式不经过"已过时）。
+
+def _answer_data_sources(hybrid_out: dict, sources: list) -> list[str]:
+    """Where an answer's material came from. ``hybrid_answer`` reports it truthfully - an empty list when it had neither SQL
+    rows nor a retrieved passage (P1-b) - so an empty list must stay empty: the old ``or ["kb_evidence"]`` turned it back
+    into a claim of grounding. Only when the hook did not run at all (no ``data_sources`` key) is it inferred from the sources."""
+    if "data_sources" in hybrid_out:
+        return list(hybrid_out["data_sources"] or [])
+    return ["kb_evidence"] if sources else []
+
+
+_ABSTAIN_TEMPLATE = (
+    "证据不足，无法基于现有证据回答该问题。\n\n"
+    "{reason}"
+    "为避免误导，本次不生成确定性结论。建议补充相关文献、专利或实验数据后重试，或缩小问题范围。"
+)
+
+_ABSTAIN_REASON_NO_EVIDENCE = "未检索到任何可用证据"
+_ABSTAIN_REASON_UNSUPPORTED = (
+    "已检索到的证据不足以支撑可靠回答（{n_claims} 条论断中 {n_unsupported} 条缺乏证据支撑），"
+)
+
+_RETRIEVAL_DEGRADED_MODES = ("degraded", "keyword", "stale")
+
+
+def _retrieval_degradation_notices(kb_used: int) -> list[dict]:
+    """B-1: BM25-only 退化显式提示。
+
+    KB 实际参与检索（kb_used>0）但向量层退化/缺失时返回提示位，否则 []。
+    探测失败时返回 []（不阻断问答）。
+    """
+    if not kb_used or kb_used <= 0:
+        return []
+    try:
+        from ..services.kb_index import kb_vector_notice
+
+        vec = kb_vector_notice() or {}
+        if vec.get("vector_mode") in _RETRIEVAL_DEGRADED_MODES:
+            return [
+                {
+                    "code": "retrieval_degraded",
+                    "message": vec.get("vector_hint")
+                    or "知识库检索已退化为关键词匹配，语义排序不可用。",
+                }
+            ]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("retrieval degradation probe failed: %s", exc)
+    return []
+
+
+_NUMERIC_DOWNGRADE = {"supported": "weak", "weak": "unsupported"}
+
+
+def _apply_answer_gates(
+    question: str,
+    answer: str,
+    citations,
+    sourced_claims,
+    verified,
+    settings,
+    # D P2-4: paperqa 路径的引用格式非 [^n]，数值检查会误报，跳过。
+    is_paperqa: bool = False,
+):
+    """Apply P2-1/P2-3/P2-2 gates.
+
+    Returns (answer, sourced_claims, abstained, notices). ``notices`` is a
+    list of {"code", "message"} dicts for B-1 fail-open visibility: e.g. the
+    numeric check being skipped (never silently ignored again).
+    """
+    from ..services.numeric_check import (
+        check_answer_numbers,
+        extract_numbers,
+        format_numeric_note,
+    )
+    from ..pipeline.claim_checker import ClaimVerdict
+
+    gated_answer = answer
+    abstained = False
+    notices: list[dict] = []
+
+    # —— P2-1：数值一致性运行时检查 ——
+    # D P2-4: paperqa 路径跳过（引用格式非 [^n]，会误报）。
+    if settings.chat_numeric_check_enabled and citations and not is_paperqa:
+        try:
+            evidence_texts = [
+                f"{c.title or ''} {c.snippet or ''}" for c in citations
+            ]
+            failures = check_answer_numbers(gated_answer, evidence_texts)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("numeric check skipped: %s", exc)
+            # B-1: fail-open 降级必须显式提示用户，不再静默跳过。
+            notices.append(
+                {
+                    "code": "numeric_check_skipped",
+                    "message": "数值一致性检查未能执行，答案中的数字未经核验，请自行确认关键数值。",
+                }
+            )
+            failures = []
+        if failures:
+            gated_answer = gated_answer + format_numeric_note(failures)
+            if sourced_claims:
+                import math as _math
+                import re as _re
+
+                def _hit(claim_text: str) -> bool:
+                    cnums = extract_numbers(claim_text or "")
+                    if not cnums:
+                        return False
+                    for f in failures:
+                        m = _re.search(r"([0-9]+(?:\.[0-9]+)?)", f["claim"])
+                        if not m:
+                            continue
+                        fv = float(m.group(1))
+                        if any(
+                            _math.isclose(fv, cv, rel_tol=1e-6, abs_tol=1e-9)
+                            for cv, _ in cnums
+                        ):
+                            return True
+                    return False
+
+                for sc in sourced_claims:
+                    if _hit(sc.text) and sc.status in _NUMERIC_DOWNGRADE:
+                        sc.status = _NUMERIC_DOWNGRADE[sc.status]
+
+    # —— P2-3：conflicting 判词显式透出 ——
+    if (
+        settings.chat_conflict_section_enabled
+        and verified
+    ):
+        # P0-3: verified.evidence_indices 是相对 Wiki 过滤后列表的下标，
+        # 渲染时必须映射回完整 citations 序号，否则引用错位。
+        _filtered = _claims_evidence(citations)
+        _full_idx = {id(e): i for i, e in enumerate(citations)}
+        _f2f = [_full_idx[id(e)] for e in _filtered if id(e) in _full_idx]
+        conflicts = [
+            v for v in verified if v.verdict == ClaimVerdict.conflicting
+        ]
+        if conflicts:
+            lines = ["\n\n【证据冲突】以下论断的证据相互矛盾，请谨慎采信："]
+            for v in conflicts:
+                refs = ", ".join(
+                    f"[^{_f2f[i] + 1}]"
+                    for i in (v.evidence_indices or [])
+                    if 0 <= i < len(_f2f)
+                )
+                src = f"（相关证据 {refs} 结论不一致）" if refs else ""
+                lines.append(f"- 「{v.text}」{src}")
+            gated_answer = gated_answer + "\n".join(lines)
+
+    # —— P2-2：证据不足拒答硬门 ——
+    # B-5：门限按问答难度自适应 — 难题门限收紧（最多 20%），更容易拒答；
+    # 简单问答恒等于 base，保持 pin 住的 0.5 边界行为。
+    from ..services.gate_difficulty import (
+        adaptive_abstention_threshold,
+        estimate_difficulty,
+    )
+
+    base_threshold = float(settings.chat_abstention_threshold or 0.5)
+    should_abstain = False
+    n_claims, n_unsupported = 0, 0
+    if not citations:
+        should_abstain = True
+    elif verified:
+        n_claims = len(verified)
+        n_unsupported = sum(
+            1 for v in verified if v.verdict == ClaimVerdict.unsupported
+        )
+    elif verified is None:
+        # P0-1: 拒答门去耦合 claim-check —— claim-check 关闭时不能静默放行。
+        # 回退到引用启发式：引用整体过弱（max relevance<0.3）或单条中等引用（<2条且<0.5）则拒答。
+        # 单条强引用（≥0.5）仍放行，避免误杀。
+        n_cit = len(citations)
+        try:
+            relevances = [
+                float(c.get("relevance", 0.5) if isinstance(c, dict) else getattr(c, "relevance", 0.5))
+                for c in citations
+            ]
+        except Exception:
+            relevances = []
+        max_rel = max(relevances) if relevances else 0.0
+        if max_rel < 0.3 or (n_cit < 2 and max_rel < 0.5):
+            should_abstain = True
+            logger.info(
+                "chat abstention gate fired (claim-check off, citation heuristic): "
+                "citations=%d max_relevance=%.3f",
+                n_cit, max_rel,
+            )
+    threshold = adaptive_abstention_threshold(
+        base_threshold,
+        estimate_difficulty(question=question, answer=gated_answer, n_claims=n_claims),
+    )
+    if not should_abstain and verified:
+        if n_claims and n_unsupported / n_claims > threshold:
+            should_abstain = True
+    if should_abstain:
+        if n_claims:
+            reason = _ABSTAIN_REASON_UNSUPPORTED.format(
+                n_claims=n_claims, n_unsupported=n_unsupported
+            )
+        else:
+            reason = _ABSTAIN_REASON_NO_EVIDENCE + "，"
+        gated_answer = _ABSTAIN_TEMPLATE.format(reason=reason)
+        abstained = True
+        # P1-c: 拒答时清空 claims —— 避免前端收到"证据不足"+被丢弃答案的 claims
+        sourced_claims = []
+        logger.info(
+            "chat abstention gate fired: citations=%d claims=%d unsupported=%d threshold=%.2f",
+            len(citations or []),
+            n_claims,
+            n_unsupported,
+            threshold,
+        )
+
+    return gated_answer, sourced_claims, abstained, notices
+
+
+
+def _ensure_answer(text: str | None, *, fallback: str = "暂无可用回答。") -> str:
+    cleaned = (text or "").strip()
+    return cleaned or fallback
+
+
+def _bind_owner(req: ChatRequestValidated, request: Request | None) -> None:
+    """Record the caller's owner on the request so the structured (Text2SQL) half reads only what they may see."""
+    if request is not None:
+        from ..middleware.api_auth import get_current_owner
+
+        req._owner_id = get_current_owner(request)
+
+
+@router.post("/chat", response_model=ChatResponse)
+def chat(req: ChatRequestValidated, request: Request = None):  # type: ignore[assignment]
+    _bind_owner(req, request)
+    import time as _time
+    _t0 = _time.time()
+    _marks: list[str] = []
+
+    def _mark(name: str) -> None:
+        _marks.append(f"{name}={_time.time() - _t0:.1f}s")
+
+    try:
+        from ..config import get_settings
+
+        settings = get_settings()
+        question = req.question.strip()
+        history = trim_history(req.history)
+        _mark("parse")
+
+        retrieval_query, rewritten_query = rewrite_query(
+            question,
+            history,
+            req.clarified_entities,
+            settings=settings,
+        )
+
+        # 结构图上下文：相似材料名并入检索 query（增强命中），不污染展示文案。
+        struct_ctx = structure_retrieval_context(req.structure)
+        if struct_ctx:
+            retrieval_query = f"{struct_ctx} {retrieval_query}".strip()
+            rewritten_query = rewritten_query or retrieval_query
+
+        sources = [_sanitize_evidence(ev) for ev in req.sources]
+        sources, kb_used, entity_resolution, kg_stats = _augment_with_kb(
+            retrieval_query,
+            sources,
+            project_id=req.project_id,
+            include_entity_resolution=req.include_entity_resolution,
+        )
+        # B-1: BM25-only 退化显式提示。KB 实际参与检索（kb_used>0）但向量层
+        # 退化/缺失时，语义排序已失效，用户必须看得见。
+        retrieval_notices = _retrieval_degradation_notices(kb_used)
+        try:
+            from ..services.connectors_builtin import gather_connector_evidence
+
+            extra = gather_connector_evidence(
+                retrieval_query,
+                list(req.selected_connectors or []),
+                settings=settings,
+            )
+            if extra:
+                sources = sources + [_sanitize_evidence(e) for e in extra]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("connector enrich skipped: %s", exc)
+        _mark("kb_augment")
+
+        clarification = detect_clarification(
+            question,
+            history,
+            req.clarified_entities,
+            settings=settings,
+        )
+        _mark("clarify")
+
+        structured: StructuredAnswer | None = None
+        citations: list[Evidence]
+        from ..services.evidence_synthesis import (
+            evidence_mode_active,
+            try_paperqa_answer,
+            postprocess_evidence_answer,
+        )
+
+        use_evidence = evidence_mode_active(req.mode, settings)
+
+        prompt_prefix = ""
+        try:
+            if settings.chat_skills_runtime_enabled and (
+                use_evidence or req.selected_skills or req.selected_mcp_servers
+            ):
+                from ..services.evidence_synthesis import build_evidence_prompt_prefix
+
+                prompt_prefix = build_evidence_prompt_prefix(
+                    skill_ids=list(req.selected_skills or []),
+                    mcp_server_ids=list(req.selected_mcp_servers or []),
+                    settings=settings,
+                    project_id=req.project_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("sync skill/mcp prefix skipped: %s", exc)
+
+        # C-3 — unified hybrid routing: one decision drives the SQL half and
+        # the literature half (replaces the SQL-only structured_data_block).
+        # chat already retrieved literature into `sources`, so pass it in —
+        # hybrid_answer never re-retrieves. Fail-open: the hook never raises;
+        # SQL failure falls back to the pure-literature path.
+        hybrid_out: dict = {}
+        try:
+            from ..services.text2sql import hybrid_answer
+
+            hybrid_out = hybrid_answer(
+                retrieval_query,
+                settings=settings,
+                project_id=req.project_id,
+                owner_id=getattr(req, "_owner_id", None),
+                evidence=sources,
+                include_evidence_text=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("hybrid_answer hook skipped: %s", exc)
+        fused_block = hybrid_out.get("fused_context") or ""
+        if fused_block:
+            prompt_prefix = (
+                f"{fused_block}\n\n{prompt_prefix}" if prompt_prefix else fused_block
+            )
+        data_sources = _answer_data_sources(hybrid_out, sources)
+
+        if req.response_format == "structured" and settings.chat_structured_enabled:
+            structured, struct_err, eff_sources = generate_structured_answer(
+                question,
+                sources,
+                history=history,
+                domain=req.domain,
+                settings=settings,
+            )
+            if structured is not None:
+                structured = apply_assumption_to_structured(structured, clarification)
+                answer = _ensure_answer(structured.summary)
+                # P1-11: citations 取压缩后列表，与 LLM 所见 [n] 同序。
+                citations = eff_sources[: min(8, len(eff_sources))]
+            else:
+                logger.warning("structured chat fallback: %s", struct_err)
+                answer, citations = answer_question(
+                    question,
+                    sources,
+                    domain=req.domain,
+                    history=history,
+                    structure=req.structure,
+                    prompt_prefix=prompt_prefix or None,
+                    retrieval_query=retrieval_query,
+                )
+                answer = _ensure_answer(answer)
+            _mark("answer")
+        else:
+            pq = try_paperqa_answer(question, sources) if use_evidence else None
+            if pq:
+                answer, citations = pq
+                answer = _ensure_answer(answer)
+            else:
+                answer, citations = answer_question(
+                    question,
+                    sources,
+                    domain=req.domain,
+                    history=history,
+                    structure=req.structure,
+                    prompt_prefix=prompt_prefix or None,
+                    retrieval_query=retrieval_query,
+                )
+                answer = _ensure_answer(answer)
+            _mark("answer")
+
+        # D P2-3: 检查具体标记而非单字"按" —— "按"太常用（按照/按标准），
+        # 单字检查导致澄清提示几乎恒被抑制。
+        if clarification and clarification.possible_meanings and "（默认按" not in answer:
+            hint = clarification.possible_meanings[0]
+            answer = f"{answer}\n\n（默认按「{hint}」理解；如需其他含义请说明。）"
+
+        doi_results = None
+        citation_expand = None
+        evidence_provenance = None
+        evidence_reviewer = None
+        reviewer_fix = None
+        mcp_permission_required = None
+        mcp_tool_results = None
+        if use_evidence or req.selected_skills or req.selected_mcp_servers:
+            answer, emeta = postprocess_evidence_answer(answer, settings=settings)
+            doi_results = emeta.get("doi_results")
+            citation_expand = emeta.get("citation_expand") or None
+            # v24-fix: reviewer 坐标对齐 —— 重写答案 [^n] 到过滤后空间。
+            _rev_answer, _rev_evidence = _reviewer_view(answer, citations)
+            evidence_reviewer = _run_evidence_review(
+                question, _rev_answer, _rev_evidence, settings
+            )
+            if (
+                evidence_reviewer
+                and not _reviewer_failed(evidence_reviewer)
+                and (evidence_reviewer.get("status") or "pass") != "pass"
+            ):
+                try:
+                    from ..services.reviewer_fix_loop import run_fix_loop
+
+                    def _repair(_q: str, auditor: str):
+                        # P0-4: 返回 (answer, citations)，供 fix-loop 重绑引用。
+                        repaired, cited = answer_question(
+                            f"{question}\n\n{auditor}\n\n请输出修订后的完整回答：",
+                            sources,
+                            domain=req.domain,
+                            history=history,
+                            structure=req.structure,
+                        )
+                        return _ensure_answer(repaired), cited
+
+                    answer, reviewer_fix = run_fix_loop(
+                        question=question,
+                        answer=answer,
+                        # P0-4: 传完整 citations（答案 [^n] 与之对齐）；loop 内
+                        # 部 review 时自行过滤 Wiki，重绑在完整空间做。
+                        citations=citations,
+                        review=evidence_reviewer,
+                        settings=settings,
+                        repair_fn=_repair,
+                        max_rounds=3,
+                        project_id=req.project_id,
+                    )
+                    if reviewer_fix and reviewer_fix.get("findings"):
+                        evidence_reviewer = reviewer_fix["findings"]
+                    # v13-1: 空列表也是合法重绑结果，用 is not None。
+                    if reviewer_fix and reviewer_fix.get("citations") is not None:
+                        citations = reviewer_fix["citations"]
+                    # v17-3: 同步 structured.summary —— fix-loop 重生成了 answer，
+                    # structured 对象仍是旧文本，两张皮。
+                    # v18-2: 同步补全 —— key_findings 等文本字段清空（迫使
+                    # _extract_claims 回退到按 answer 分句提取，避免验证过期文本）；
+                    # formulation_hints 的 [n] 型 evidence_ref 清空（无 old_to_new
+                    # 映射，错误编号比缺失更糟）。
+                    if structured is not None and reviewer_fix:
+                        try:
+                            import re as _re
+
+                            _hints = []
+                            for _h in structured.formulation_hints or []:
+                                _ref = _h.evidence_ref or ""
+                                if _re.fullmatch(r"\[\d+\]", _ref.strip()):
+                                    _h = _h.model_copy(update={"evidence_ref": ""})
+                                _hints.append(_h)
+                            structured = structured.model_copy(
+                                update={
+                                    "summary": answer,
+                                    "key_findings": [],
+                                    "data_conflicts": [],
+                                    "uncertainty_notes": [],
+                                    "assumptions": [],
+                                    "formulation_hints": _hints,
+                                }
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("reviewer fix-loop skipped: %s", exc)
+
+        # MCP skill-doc inject is handled in evidence_synthesis; optional tool call path
+        if req.selected_mcp_servers:
+            try:
+                from ..services.mcp_skill_docs import ensure_mcp_skill_docs
+                from ..services.mcp_chat_tools import maybe_run_selected_mcp
+
+                ensure_mcp_skill_docs(
+                    server_ids=list(req.selected_mcp_servers or []),
+                    settings=settings,
+                    probe=True,
+                )
+                mcp_out = maybe_run_selected_mcp(
+                    question,
+                    list(req.selected_mcp_servers or []),
+                    session_id=req.chat_session_id,
+                    settings=settings,
+                )
+                mcp_tool_results = mcp_out.get("results")
+                mcp_permission_required = mcp_out.get("mcp_permission_required")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("mcp chat selection skipped: %s", exc)
+
+        sourced_claims, sources_audit, _verified = _claims_and_audit(
+            question,
+            answer,
+            citations,
+            structured=structured,
+            settings=settings,
+        )
+        # P2 运行时门：数值检查 → 冲突透出 → 拒答硬门（决策 A：同步路径）。
+        answer, sourced_claims, _abstained, gate_notices = _apply_answer_gates(
+            question,
+            answer,
+            citations,
+            sourced_claims,
+            _verified,
+            settings,
+        )
+        notices = list(retrieval_notices) + list(gate_notices or [])
+        try:
+            from ..services.scholar_helpers import build_evidence_provenance
+
+            evidence_provenance = build_evidence_provenance(
+                doi_results=doi_results,
+                sourced_claims=sourced_claims,
+                enabled=settings.evidence_provenance_enabled,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("evidence_provenance skipped: %s", exc)
+        _mark("claims")
+        logger.info("chat 耗时分解: %s", " | ".join(_marks))
+
+        # W2-8 (P1-12): turn-stop 自动审计；evidence 路径已内联 review 的 turn 跳过。
+        if evidence_reviewer is None:
+            _fire_auto_review(
+                question=question,
+                answer=answer,
+                citations=citations,
+                settings=settings,
+                session_id=req.chat_session_id,
+                project_id=req.project_id,
+            )
+
+        return ChatResponse(
+            answer=answer,
+            citations=[_sanitize_evidence(c) for c in citations],
+            rag_backend=active_rag_backend(),
+            kb_chunks_used=kb_used,
+            entity_resolution=entity_resolution,
+            kg_retrieval_stats=kg_stats,
+            structured=structured,
+            clarification=clarification,
+            rewritten_query=rewritten_query,
+            sourced_claims=sourced_claims,
+            sources_audit=sources_audit,
+            mode=req.mode,
+            doi_results=doi_results,
+            citation_expand=citation_expand,
+            evidence_provenance=evidence_provenance,
+            evidence_reviewer=evidence_reviewer,
+            reviewer_fix=reviewer_fix,
+            mcp_permission_required=mcp_permission_required,
+            mcp_tool_results=mcp_tool_results,
+            data_sources=data_sources,
+            notices=notices or None,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _mark("FAILED")
+        logger.info("chat 耗时分解(失败): %s | %s", " | ".join(_marks), str(exc)[:200])
+        logger.exception("chat failed")
+        raise HTTPException(status_code=500, detail="问答处理失败") from exc
+
+
+# ── SSE 流式问答(2026-09-04)─────────────────────────────────────────────
+# 事件协议(data: JSON 一行一个):
+#   {"type":"phase","phase":"retrieval|answering|claims"}
+#   {"type":"meta","kb_used":N,"rewritten_query":...}
+#   {"type":"token","delta":"..."}                    # 主回答增量
+#   {"type":"done", 完整 ChatResponse 字段}            # 收尾(含 citations/claims)
+#   {"type":"error","message":"..."}
+# 旧 /api/chat 保留(兼容/测试/结构化完整回退)。
+
+
+def _stream_answer_plan(req: "ChatRequestValidated", settings):
+    """同步准备: 改写/检索/澄清/召回 → (question, prompt, ctx)。
+
+    与 /api/chat 的准备逻辑一致(kb_augment + BM25 召回 top-k 直取,
+    不做 LLM 二次精排——2026-09-04 实测 rerank 30-76s/问, 收益边际)。
+    """
+    from ..services import kb_index  # noqa: F401 (warm imports)
+    from ..services.chat_context import rewrite_query, trim_history
+    from ..services.chat_clarify import detect_clarification
+    from ..services.llm import _chat_prompt
+    from ..services.rag import build_store
+
+    question = (req.question or "").strip()
+    history = trim_history(req.history)
+
+    retrieval_query, rewritten_query = rewrite_query(
+        question, history, req.clarified_entities, settings=settings
+    )
+    struct_ctx = structure_retrieval_context(req.structure)
+    if struct_ctx:
+        retrieval_query = f"{struct_ctx} {retrieval_query}".strip()
+        rewritten_query = rewritten_query or retrieval_query
+
+    sources = [_sanitize_evidence(ev) for ev in req.sources]
+    sources, kb_used, entity_resolution, kg_stats = _augment_with_kb(
+        retrieval_query,
+        sources,
+        project_id=req.project_id,
+        include_entity_resolution=req.include_entity_resolution,
+    )
+    try:
+        from ..services.connectors_builtin import gather_connector_evidence
+
+        extra = gather_connector_evidence(
+            retrieval_query,
+            list(req.selected_connectors or []),
+            settings=settings,
+        )
+        if extra:
+            sources = sources + [_sanitize_evidence(e) for e in extra]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("stream connector enrich skipped: %s", exc)
+
+    clarification = detect_clarification(
+        question, history, req.clarified_entities, settings=settings
+    )
+
+    # BM25 召回(与 answer_question 同款)。
+    store = build_store()
+    store.ingest(sources)
+    candidates_n = min(settings.chat_rerank_candidates, max(1, len(sources)))
+    recalled = store.query(retrieval_query, k=candidates_n) or sources[:candidates_n]
+    # P1-d: cross-encoder 精排接入 —— BM25 粗排后精排，fail-open（模型未缓存则跳过）
+    try:
+        from ..services.rag import rerank_scored
+
+        reranked, _meta = rerank_scored(retrieval_query, recalled, k=candidates_n)
+        if reranked:
+            recalled = [r.evidence for r in reranked]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("chat rerank skipped: %s", exc)
+    relevant = recalled[: settings.chat_rerank_top_k]
+
+    # Up-3: 主路径接入 query 压缩（fail-open；压缩后 prompt 与 plan["relevant"]
+    # 同序，Fix-1 的 [^n] 对齐不受影响）。
+    if query_compress_enabled(settings) and relevant:
+        try:
+            budget = query_compress_token_budget(settings)
+            relevant = compress_evidence(question, relevant, token_budget=budget)
+        except Exception as exc:  # noqa: BLE001 - fail-open
+            logger.debug("stream query compression skipped: %s", exc)
+
+    # v21-fix: 过滤空 snippet（与 answer_question 的 v19-1 同构），
+    # 否则 prompt 的 [^n] 与返回的 relevant 错位。
+    relevant = [e for e in relevant if (e.snippet or "").strip()]
+    prompt = _chat_prompt(
+        question, relevant, req.domain, history=history, structure=req.structure
+    )
+    # C-3 — unified hybrid routing (same hook as /api/chat): one decision
+    # drives the SQL half and the literature half. Fail-open, never blocks
+    # the stream.
+    hybrid_out: dict = {}
+    try:
+        from ..services.text2sql import hybrid_answer
+
+        hybrid_out = hybrid_answer(
+            retrieval_query,
+            settings=settings,
+            project_id=req.project_id,
+            owner_id=getattr(req, "_owner_id", None),
+            evidence=sources,
+            include_evidence_text=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("stream hybrid_answer hook skipped: %s", exc)
+    fused_block = hybrid_out.get("fused_context") or ""
+    if fused_block:
+        prompt = f"{fused_block}\n\n{prompt}"
+    data_sources = _answer_data_sources(hybrid_out, sources)
+    try:
+        from ..services.evidence_synthesis import enrich_chat_prompt
+
+        if settings.chat_skills_runtime_enabled:
+            prompt = enrich_chat_prompt(
+                prompt,
+                mode=req.mode,
+                skill_ids=list(req.selected_skills or []),
+                mcp_server_ids=list(req.selected_mcp_servers or []),
+                settings=settings,
+                project_id=req.project_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("evidence prompt enrich skipped: %s", exc)
+    return {
+        "question": question,
+        "prompt": prompt,
+        "sources": sources,
+        # Fix B-Q1: prompt 用 BM25 重排后的 relevant 建 [^n] 序号，
+        # stream done 的 citations 必须取同序的 relevant[:8]，
+        # 否则 [^n] 与前端引用卡片错位。
+        "relevant": relevant,
+        "kb_used": kb_used,
+        "entity_resolution": entity_resolution,
+        "kg_stats": kg_stats,
+        "clarification": clarification,
+        "rewritten_query": rewritten_query,
+        "mode": req.mode,
+        "selected_skills": list(req.selected_skills or []),
+        "selected_mcp_servers": list(req.selected_mcp_servers or []),
+        "data_sources": data_sources,
+    }
+
+
+def _sse_default(o):
+    """json fallback: pydantic models become JSON objects, not their repr().
+
+    ``default=str`` turned every ``Evidence`` / ``SourcedClaim`` / structured
+    answer in a ``done`` event into a ``"source='x' identifier=..."`` string,
+    so the client received unusable citation cards.
+    """
+    dump = getattr(o, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json")
+    return str(o)
+
+
+def _sse(obj: dict) -> str:
+    import json
+
+    return f"data: {json.dumps(obj, ensure_ascii=False, default=_sse_default)}\n\n"
+
+
+def _fire_auto_review(
+    *,
+    question: str,
+    answer: str,
+    citations: list,
+    settings,
+    session_id: str | None,
+    project_id: str | None,
+) -> None:
+    """W2-8 (P1-12): turn-stop 自动审计，后台线程触发，不阻塞响应。
+
+    maybe_auto_review 内部做开关/幂等/防抖/修正轮抑制，这里只负责不阻塞。
+    """
+    try:
+        if not settings.auto_audit_enabled:
+            return
+        import threading as _th
+        import uuid as _uuid
+
+        from ..services.citation_coords import reviewer_view
+        from ..services.reviewer_fix_loop import maybe_auto_review
+
+        # v25-fix: 坐标对齐 —— 传完整 citations，在内部做 mapping+remap
+        #（与 4 处主调用点同构；之前这里传的是过滤后列表，reviewer 看到的编号错位）。
+        _rev_answer, _rev_evidence = reviewer_view(answer, citations)
+        kwargs = dict(
+            turn_id=_uuid.uuid4().hex,
+            question=question,
+            answer=_rev_answer,
+            citations=_rev_evidence,
+            settings=settings,
+            session_id=session_id,
+            project_id=project_id,
+        )
+        _th.Thread(target=maybe_auto_review, kwargs=kwargs, daemon=True).start()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("auto review skipped: %s", exc)
+
+
+def _finalize_evidence_fields(
+    question: str,
+    answer: str,
+    citations: list,
+    *,
+    settings,
+    mode: str | None,
+    selected_skills: list[str] | None,
+    project_id: str | None = None,
+    sources: list | None = None,
+    domain: str | None = None,
+    history: list | None = None,
+    structure: dict | None = None,
+) -> tuple[str, dict | None, dict | None, dict | None, list | None, list]:
+    """DOI annotate + optional reviewer + 1-round fix-loop.
+
+    Returns (answer, doi_results, reviewer, reviewer_fix, citation_expand,
+    citations). citations is the possibly re-bound table after fix-loop.
+    """
+    from ..services.evidence_synthesis import evidence_mode_active, postprocess_evidence_answer
+
+    doi_results = None
+    citation_expand = None
+    reviewer = None
+    reviewer_fix = None
+    if evidence_mode_active(mode, settings) or selected_skills:
+        answer, emeta = postprocess_evidence_answer(answer, settings=settings)
+        doi_results = emeta.get("doi_results")
+        citation_expand = emeta.get("citation_expand") or None
+        # v24-fix: reviewer 坐标对齐 —— 重写答案 [^n] 到过滤后空间。
+        _rev_answer, _rev_evidence = _reviewer_view(answer, citations)
+        reviewer = _run_evidence_review(
+            question, _rev_answer, _rev_evidence, settings
+        )
+        if (
+            reviewer
+            and not _reviewer_failed(reviewer)
+            and (reviewer.get("status") or "pass") != "pass"
+        ):
+            try:
+                from ..services.reviewer_fix_loop import run_fix_loop
+
+                def _repair(_q: str, auditor: str):
+                    # P0-4: 返回 (answer, citations)，供 fix-loop 重绑引用。
+                    repaired, cited = answer_question(
+                        f"{question}\n\n{auditor}\n\n请输出修订后的完整回答：",
+                        list(sources or citations),
+                        domain=domain,
+                        history=history,
+                        structure=structure,
+                    )
+                    return _ensure_answer(repaired), cited
+
+                answer, reviewer_fix = run_fix_loop(
+                    question=question,
+                    answer=answer,
+                    # P0-4: 传完整 citations（答案 [^n] 与之对齐）；loop 内
+                    # 部 review 时自行过滤 Wiki，重绑在完整空间做。
+                    citations=citations,
+                    review=reviewer,
+                    settings=settings,
+                    repair_fn=_repair,
+                    max_rounds=1,  # stream: at most 1 round
+                    project_id=project_id,
+                )
+                if reviewer_fix and reviewer_fix.get("findings"):
+                    reviewer = reviewer_fix["findings"]
+                # v13-1: 空列表也是合法重绑结果，用 is not None。
+                if reviewer_fix and reviewer_fix.get("citations") is not None:
+                    citations = reviewer_fix["citations"]
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("stream fix-loop skipped: %s", exc)
+    return answer, doi_results, reviewer, reviewer_fix, citation_expand, citations
+
+
+@router.post("/chat/stream")
+async def chat_stream(req: "ChatRequestValidated", request: Request = None):  # type: ignore[assignment]
+    """SSE 流式问答: 检索阶段提示 → 主回答逐 token → done(含引用/claims)。
+
+    结构化(StructuredAnswer)请求暂不走 token 流(需整包 JSON 校验),
+    完整生成后单发 done; markdown 请求全流式。
+    """
+    _bind_owner(req, request)
+    import asyncio
+    import threading
+    from ..config import get_settings
+    from ..services.llm import (
+        _openai_compatible_stream,
+        effective_setting as _es,
+        _resolve_openai_base_url,
+    )
+
+    settings = get_settings()
+    provider = _es(settings, "llm_provider")
+    api_key = settings.get_active_api_key() or ""
+
+    async def gen():
+        import time
+
+        # P2-3: 后端总 deadline（10 分钟）—— 缓慢但持续的流不会无限占线程
+        _deadline = time.monotonic() + 600
+        if not api_key:
+            # Running without a key is a supported mode (QUICKSTART: "with no key, everything still runs via the
+            # offline rule engine") and POST /api/chat answers it with an excerpt of the loaded sources. The UI only
+            # ever streams, so refusing here made that path unreachable from it. Same pipeline, one `done` event.
+            yield _sse({"type": "phase", "phase": "retrieval"})
+            try:
+                resp = await asyncio.to_thread(chat, req)
+            except HTTPException as exc:
+                yield _sse({"type": "error", "message": str(exc.detail)})
+                return
+            payload = resp.model_dump(mode="json")
+            payload["notices"] = [
+                {
+                    "code": "llm_offline",
+                    "message": "未配置 LLM API Key：以下是已加载资料的摘录，不是模型生成的回答。",
+                },
+                *(payload.get("notices") or []),
+            ]
+            yield _sse({"type": "phase", "phase": "answering"})
+            yield _sse({"type": "token", "delta": payload["answer"]})
+            yield _sse({"type": "done", **payload})
+            return
+
+        try:
+            yield _sse({"type": "phase", "phase": "retrieval"})
+            plan = await asyncio.to_thread(_stream_answer_plan, req, settings)
+            question = plan["question"]
+            prompt = plan["prompt"]
+            sources = plan["sources"]
+            kb_used = plan["kb_used"]
+
+            yield _sse(
+                {
+                    "type": "meta",
+                    "kb_used": kb_used,
+                    "rewritten_query": plan["rewritten_query"],
+                    "source_count": len(sources),
+                    "mode": plan.get("mode") or req.mode,
+                }
+            )
+
+            # P3-2: opt-in VLM chart fallback. Chart questions are answered from
+            # stored page thumbnails instead of the pure-text path. Default off
+            # (vlm_fallback_enabled=False) = zero overhead: the check below
+            # short-circuits before any vision call. Fail-open — no thumbnails,
+            # no vision backend, or any error falls through to the normal
+            # token stream below.
+            chart_hit = False
+            try:
+                from ..services.page_thumbnails import (
+                    answer_chart_question,
+                    is_chart_question,
+                )
+
+                if settings.vlm_fallback_enabled and is_chart_question(question):
+                    _chart_source_id = (
+                        sources[0].identifier if sources else None
+                    )
+                    if _chart_source_id:
+                        _chart = await asyncio.to_thread(
+                            answer_chart_question, question, _chart_source_id, None
+                        )
+                        if _chart is not None and _chart.answer:
+                            chart_hit = True
+                            yield _sse({"type": "phase", "phase": "chart_vlm"})
+                            yield _sse({"type": "token", "delta": _chart.answer})
+                            yield _sse(
+                                {
+                                    "type": "done",
+                                    "answer": _chart.answer,
+                                    # P2-3: chart 路径显式 notices 字段（前端防御性处理）
+                                    "citations": [],
+                                    "chart_vlm": {
+                                        "pages_used": _chart.pages_used,
+                                        "image_tokens": _chart.image_tokens,
+                                        "model": _chart.model,
+                                    },
+                                    "kb_chunks_used": kb_used,
+                                    "data_sources": plan.get("data_sources"),
+                                    "clarification": plan["clarification"],
+                                }
+                            )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("chat/stream chart vlm hook skipped: %s", exc)
+            if chart_hit:
+                return
+        except Exception as exc:
+            logger.warning("chat/stream 准备失败: %s", exc)
+            # P1-h: 错误消息泛化 —— 内部细节只记日志，不发前端
+            yield _sse({"type": "error", "code": "retrieval_failed", "message": "检索失败，请重试"})
+            return
+
+        # Evidence mode: try PaperQA async before token stream.
+        try:
+            from ..services.evidence_synthesis import (
+                evidence_mode_active,
+                try_paperqa_answer_async,
+            )
+
+            if evidence_mode_active(req.mode, settings):
+                pq = await try_paperqa_answer_async(question, sources)
+                if pq:
+                    answer, citations = pq
+                    answer = _ensure_answer(answer)
+                    yield _sse({"type": "phase", "phase": "answering"})
+                    yield _sse({"type": "token", "delta": answer})
+                    yield _sse({"type": "phase", "phase": "claims"})
+                    # Crossref + LLM reviewer + repair loop: seconds of blocking
+                    # I/O — never on the event loop.
+                    # v13-1: 取回重绑后的 citations，后续 claims/gates/done 用新表。
+                    answer, doi_results, reviewer, reviewer_fix, citation_expand, citations = (
+                        await asyncio.to_thread(
+                            _finalize_evidence_fields,
+                            question,
+                            answer,
+                            citations,
+                            settings=settings,
+                            mode=req.mode,
+                            selected_skills=list(req.selected_skills or []),
+                            project_id=req.project_id,
+                            sources=list(sources),
+                            domain=req.domain,
+                            history=list(req.history or []),
+                            structure=req.structure,
+                        )
+                    )
+                    claims, sources_audit = None, None
+                    gate_notices = []
+                    try:
+                        claims, sources_audit, _verified = await asyncio.to_thread(
+                            _claims_and_audit,
+                            question,
+                            answer,
+                            citations,
+                            settings=settings,
+                        )
+                        # P2 运行时门（paperqa 整包路径，决策 A）。
+                        answer, claims, _abstained, gate_notices = _apply_answer_gates(
+                            question,
+                            answer,
+                            citations,
+                            claims,
+                            _verified,
+                            settings,
+                            is_paperqa=True,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("chat/stream paperqa claims: %s", exc)
+                    evidence_provenance = None
+                    try:
+                        from ..services.scholar_helpers import build_evidence_provenance
+
+                        evidence_provenance = build_evidence_provenance(
+                            doi_results=doi_results,
+                            sourced_claims=claims,
+                            enabled=settings.evidence_provenance_enabled,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    yield _sse(
+                        {
+                            "type": "done",
+                            "answer": answer,
+                            "citations": [_sanitize_evidence(c) for c in citations],
+                            "rag_backend": "paperqa",
+                            "kb_chunks_used": kb_used,
+                            "data_sources": plan.get("data_sources"),
+                            "entity_resolution": plan["entity_resolution"],
+                            "kg_retrieval_stats": plan["kg_stats"],
+                            "clarification": plan["clarification"],
+                            "rewritten_query": plan["rewritten_query"],
+                            "sourced_claims": claims,
+                            "sources_audit": sources_audit,
+                            "mode": req.mode,
+                            "doi_results": doi_results,
+                            "citation_expand": citation_expand,
+                            "evidence_provenance": evidence_provenance,
+                            "evidence_reviewer": reviewer,
+                            "reviewer_fix": reviewer_fix,
+                            # P1-j: 补 degradation notices（与其他路径对齐）
+                            "notices": list(_retrieval_degradation_notices(kb_used) or [])
+                            + list(gate_notices or [])
+                            + _reviewer_notices(reviewer) or None,
+                        }
+                    )
+                    return
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("paperqa stream path skipped: %s", exc)
+
+        # 结构化请求 → 整包答案(非 token 流)。
+        try:
+            if req.response_format == "structured" and settings.chat_structured_enabled:
+                from ..services.chat_structured import generate_structured_answer
+
+                structured, struct_err, eff_sources = await asyncio.to_thread(
+                    generate_structured_answer,
+                    question,
+                    plan["sources"],
+                    history=req.history,
+                    domain=req.domain,
+                    settings=settings,
+                )
+                if structured is None:
+                    # Falls through to the markdown stream below (the sync endpoint does the same).
+                    logger.warning("structured stream fallback: %s", struct_err)
+                answer = ""
+                citations: list = []
+                gate_notices: list = []
+                if structured is not None:
+                    structured = apply_assumption_to_structured(
+                        structured, plan["clarification"]
+                    )
+                    assert structured is not None
+                    answer = _ensure_answer(structured.summary)
+                    # P1-11: citations 取压缩后列表，与 LLM 所见 [n] 同序。
+                    citations = eff_sources[: min(8, len(eff_sources))]
+                    # P1-4: 整包 structured 同样走 claims/gates —— 与同步路径同口径，
+                    # 否则数值门/冲突节弃权等全部静默缺席。
+                    _claims: list = []
+                    _audit: dict = {}
+                    try:
+                        _claims, _audit, _verified = await asyncio.to_thread(
+                            _claims_and_audit,
+                            question,
+                            answer,
+                            citations,
+                            structured=structured,
+                            settings=settings,
+                        )
+                        answer, _claims, _abstained, gate_notices = _apply_answer_gates(
+                            question,
+                            answer,
+                            citations,
+                            _claims,
+                            _verified,
+                            settings,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("chat/stream structured claims: %s", exc)
+                    # 风险5 复核补齐：同步 structured 路径会跑 evidence_reviewer
+                    #（use_evidence/skills/MCP 门控），stream 整包路径此前完全缺席。
+                    # 只跑 review 不跑 fix-loop —— fix-loop 的 repair 重生成 markdown
+                    # 会破坏 structured 对象契约；fail-open。
+                    evidence_reviewer = None
+                    try:
+                        from ..services.evidence_synthesis import evidence_mode_active
+
+                        if (
+                            evidence_mode_active(req.mode, settings)
+                            or req.selected_skills
+                            or req.selected_mcp_servers
+                        ):
+                            # v24-fix: reviewer 坐标对齐 —— 重写答案 [^n] 到过滤后空间。
+                            _rev_answer, _rev_evidence = _reviewer_view(answer, citations)
+                            evidence_reviewer = await asyncio.to_thread(
+                                _run_evidence_review,
+                                question,
+                                _rev_answer,
+                                _rev_evidence,
+                                settings,
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("chat/stream structured reviewer: %s", exc)
+                        evidence_reviewer = None
+                    # v16 P2-1: structured 路径补 fix-loop（仅修 summary 文本，
+                    # 不重生成 structured 对象 —— 保持对象契约）。
+                    reviewer_fix = None
+                    _answer_before = answer  # v23-fix: 初始化，避免 try 提前异常导致 NameError
+                    if (
+                        evidence_reviewer
+                        and not _reviewer_failed(evidence_reviewer)
+                        and (evidence_reviewer.get("status") or "pass") != "pass"
+                    ):
+                        try:
+                            from ..services.reviewer_fix_loop import run_fix_loop
+
+                            def _repair_summary(q: str, hint: str):
+                                # 用 answer_question 重生成 summary 文本；
+                                # v18-8: 返回 (repaired, cited) 元组，与同步路径
+                                # _repair 一致，否则 fix-loop 拿不到重排后的
+                                # citations，导致 [^n] 错位。
+                                from ..services.llm import answer_question
+
+                                repaired, cited = answer_question(
+                                    f"{question}\n\n{hint}\n\n请输出修订后的摘要：",
+                                    citations,
+                                    domain=req.domain,
+                                    history=req.history,
+                                )
+                                return _ensure_answer(repaired), cited
+
+                            answer, reviewer_fix = await asyncio.to_thread(
+                                run_fix_loop,
+                                question=question,
+                                answer=answer,
+                                citations=citations,
+                                review=evidence_reviewer,
+                                settings=settings,
+                                repair_fn=_repair_summary,
+                                max_rounds=1,
+                                project_id=req.project_id,
+                            )
+                            # 同步 structured，保持对象契约一致。
+                            # v17-3: 同时重绑 citations —— reviewer_fix 可能重排了引用，
+                            # 只同步 summary 会导致答案与引用表脱钩（v11 P0-4 变体）。
+                            # v18-2: 同步补全（同同步路径）——清空过期文本字段。
+                            if structured is not None and reviewer_fix:
+                                try:
+                                    import re as _re2
+
+                                    _hints2 = []
+                                    for _h2 in structured.formulation_hints or []:
+                                        _ref2 = _h2.evidence_ref or ""
+                                        if _re2.fullmatch(r"\[\d+\]", _ref2.strip()):
+                                            _h2 = _h2.model_copy(update={"evidence_ref": ""})
+                                        _hints2.append(_h2)
+                                    structured = structured.model_copy(
+                                        update={
+                                            "summary": answer,
+                                            "key_findings": [],
+                                            "data_conflicts": [],
+                                            "uncertainty_notes": [],
+                                            "assumptions": [],
+                                            "formulation_hints": _hints2,
+                                        }
+                                    )
+                                    if reviewer_fix.get("citations") is not None:
+                                        citations = reviewer_fix["citations"]
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        except Exception as exc:  # noqa: BLE001 - fail-open
+                            logger.warning("chat/stream structured fix-loop: %s", exc)
+                    _degr_notices = _retrieval_degradation_notices(kb_used) or []
+                    # v21-fix: fix-loop 可能修改答案，重算 claims/audit（与同步路径对齐）。
+                    # v22-fix: 用答案文本比较触发（"repaired" 键不存在，v21-5 死代码）。
+                    if reviewer_fix and answer != _answer_before:
+                        try:
+                            _claims, _audit, _verified = await asyncio.to_thread(
+                                _claims_and_audit,
+                                question,
+                                answer,
+                                citations,
+                                structured=structured,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    yield _sse(
+                        {
+                            "type": "done",
+                            "answer": answer,
+                            "citations": [_sanitize_evidence(c) for c in citations],
+                            "rag_backend": active_rag_backend(),
+                            "kb_chunks_used": kb_used,
+                            "data_sources": plan.get("data_sources"),
+                            "structured": structured,
+                            "clarification": plan["clarification"],
+                            "rewritten_query": plan["rewritten_query"],
+                            # 风险5：reviewer 结果透出（与 paperqa 整包路径同字段）。
+                            "evidence_reviewer": evidence_reviewer,
+                            # v16 P2-1: fix-loop 结果透出。
+                            "reviewer_fix": reviewer_fix,
+                            # v7 问答-4: claims/audit 进 SSE（与 paperqa 整包路径同字段），
+                            # 否则前端无法展示。
+                            "sourced_claims": _claims,
+                            "sources_audit": _audit,
+                            # B-1: BM25-only 退化提示位 + P1-4 门 notices 合并。
+                            # v16 P3-11: reviewer fail-open 提示位。
+                            "notices": list(_degr_notices) + list(gate_notices or []) + _reviewer_notices(evidence_reviewer) or None,
+                        }
+                    )
+                    return
+
+            # markdown 主回答 — 可选 chem tool loop，否则 token 流。
+            from ..services.chat_chem_tools import (
+                build_chat_messages,
+                build_tool_context,
+                openai_tool_schemas,
+                run_tool_loop_events,
+                should_enable_tools,
+            )
+
+            use_tools = should_enable_tools(provider, settings)
+            ctx = build_tool_context(
+                structure=req.structure,
+                attachment_source_ids=list(req.attachment_source_ids or []),
+                settings=settings,
+            )
+            tools_used: list[str] = []
+
+            if use_tools and openai_tool_schemas(ctx):
+                yield _sse({"type": "phase", "phase": "tools"})
+                loop = asyncio.get_running_loop()
+                queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+                result_holder: dict = {}
+
+                def tools_worker() -> None:
+                    try:
+                        base_url = _resolve_openai_base_url(
+                            provider, _es(settings, "llm_base_url")
+                        )
+                        messages = build_chat_messages(prompt=prompt, ctx=ctx)
+                        answer_acc = ""
+                        used: list[str] = []
+                        for ev in run_tool_loop_events(
+                            messages=messages,
+                            ctx=ctx,
+                            api_key=api_key,
+                            model=_es(settings, "llm_model"),
+                            base_url=base_url,
+                            max_tokens=2048,
+                            settings=settings,
+                        ):
+                            if ev["type"] == "token":
+                                answer_acc += ev.get("delta") or ""
+                            if ev["type"] == "loop_done":
+                                answer_acc = ev.get("answer") or answer_acc
+                                used = list(ev.get("tools_used") or [])
+                            try:
+                                loop.call_soon_threadsafe(queue.put_nowait, ("ev", ev))
+                            except RuntimeError:
+                                return
+                        result_holder["text"] = answer_acc
+                        result_holder["tools_used"] = used
+                    except Exception as exc:  # noqa: BLE001
+                        result_holder["error"] = str(exc)[:300]
+                    finally:
+                        try:
+                            loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
+                        except RuntimeError:
+                            pass
+
+                t = threading.Thread(target=tools_worker, daemon=True)
+                t.start()
+                parts: list[str] = []
+                try:
+                    while True:
+                        # P0-2: 客户端断开检测 —— 用户关页面后不再空转烧 token
+                        # P2-3: 总 deadline 检查
+                        if request is not None and await request.is_disconnected():
+                            logger.info("chat_stream: client disconnected, aborting chem-tools loop")
+                            break
+                        if time.monotonic() > _deadline:
+                            yield _sse({"type": "error", "code": "deadline_exceeded", "message": "回答超时，请重试"})
+                            break
+                        kind, payload = await asyncio.wait_for(queue.get(), timeout=240)
+                        if kind == "ev":
+                            ev = payload
+                            if ev["type"] in ("phase", "tool_start", "tool_result"):
+                                yield _sse(ev)
+                            elif ev["type"] == "token":
+                                parts.append(ev.get("delta") or "")
+                                yield _sse({"type": "token", "delta": ev.get("delta") or ""})
+                            elif ev["type"] == "loop_done":
+                                tools_used = list(ev.get("tools_used") or [])
+                        else:
+                            break
+                except asyncio.TimeoutError:
+                    yield _sse(
+                        {
+                            "type": "error",
+                            "message": "回答超时(含化学工具), 请重试",
+                        }
+                    )
+                    return
+                finally:
+                    t.join(timeout=0.2)
+
+                if "error" in result_holder:
+                    logger.warning(
+                        "chat/stream chem tools failed, fallback direct: %s",
+                        result_holder["error"],
+                    )
+                    # fall through to legacy stream below by not returning —
+                    # only if we got no answer yet
+                    if not (result_holder.get("text") or "".join(parts).strip()):
+                        use_tools = False
+                    else:
+                        answer = (result_holder.get("text") or "".join(parts)).strip()
+                        yield _sse({"type": "phase", "phase": "claims"})
+                        cites = [
+                            _sanitize_evidence(c)
+                            for c in plan["relevant"]
+                        ]
+                        # v16: chem-tools 路径接入 reviewer+fix-loop+DOI（与主 token 流对齐）。
+                        answer, doi_results, reviewer, reviewer_fix, citation_expand, cites = (
+                            await asyncio.to_thread(
+                                _finalize_evidence_fields,
+                                question,
+                                answer,
+                                cites,
+                                settings=settings,
+                                mode=req.mode,
+                                selected_skills=list(req.selected_skills or []),
+                                project_id=req.project_id,
+                                sources=list(plan["sources"]),
+                                domain=req.domain,
+                                history=list(req.history or []),
+                                structure=req.structure,
+                            )
+                        )
+                        claims, sources_audit = None, None
+                        try:
+                            claims, sources_audit, _verified = await asyncio.to_thread(
+                                _claims_and_audit,
+                                question,
+                                answer,
+                                cites,
+                                settings=settings,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("chat/stream claims 失败: %s", exc)
+                            _verified = None
+                        # P2 运行时门（与同步 /chat 对齐）：数值检查 → 冲突透出 → 拒答硬门。
+                        # 前端 done 用 ev.answer 替换流式内容，门触发时最终展示门控后答案。
+                        answer, claims, _abstained, _gate_notices = _apply_answer_gates(
+                            question,
+                            answer,
+                            cites,
+                            claims,
+                            _verified,
+                            settings,
+                        )
+                        done_payload = {
+                            "type": "done",
+                            "answer": answer,
+                            "citations": cites,
+                            "rag_backend": active_rag_backend(),
+                            "kb_chunks_used": kb_used,
+                            "data_sources": plan.get("data_sources"),
+                            "entity_resolution": plan["entity_resolution"],
+                            "kg_retrieval_stats": plan["kg_stats"],
+                            "clarification": plan["clarification"],
+                            "rewritten_query": plan["rewritten_query"],
+                            "sourced_claims": claims,
+                            "sources_audit": sources_audit,
+                            "tools_used": tools_used or result_holder.get("tools_used") or [],
+                            # v16: chem-tools 路径也带 reviewer/doi 字段（与主 token 流对齐）。
+                            "mode": req.mode,
+                            "doi_results": doi_results,
+                            "citation_expand": citation_expand,
+                            "evidence_reviewer": reviewer,
+                            "reviewer_fix": reviewer_fix,
+                            # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
+                            "notices": (
+                                list(_retrieval_degradation_notices(kb_used) or [])
+                                + list(_gate_notices or [])
+                                + _reviewer_notices(reviewer)
+                            ) or None,
+                        }
+                        yield _sse(done_payload)
+                        return
+                else:
+                    answer = (result_holder.get("text") or "".join(parts)).strip()
+                    tools_used = result_holder.get("tools_used") or tools_used
+                    yield _sse({"type": "phase", "phase": "claims"})
+                    cites = [
+                        _sanitize_evidence(c)
+                        for c in plan["relevant"]
+                    ]
+                    claims, sources_audit = None, None
+                    try:
+                        claims, sources_audit, _verified = await asyncio.to_thread(
+                            _claims_and_audit,
+                            question,
+                            answer,
+                            cites,
+                            settings=settings,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("chat/stream claims 失败: %s", exc)
+                        _verified = None
+                    # P2 运行时门（与同步 /chat 对齐）：数值检查 → 冲突透出 → 拒答硬门。
+                    answer, claims, _abstained, _gate_notices = _apply_answer_gates(
+                        question,
+                        answer,
+                        cites,
+                        claims,
+                        _verified,
+                        settings,
+                    )
+                    yield _sse(
+                        {
+                            "type": "done",
+                            "answer": answer,
+                            "citations": cites,
+                            "rag_backend": active_rag_backend(),
+                            "kb_chunks_used": kb_used,
+                            "data_sources": plan.get("data_sources"),
+                            "entity_resolution": plan["entity_resolution"],
+                            "kg_retrieval_stats": plan["kg_stats"],
+                            "clarification": plan["clarification"],
+                            "rewritten_query": plan["rewritten_query"],
+                            "sourced_claims": claims,
+                            "sources_audit": sources_audit,
+                            "tools_used": tools_used,
+                            "notices": list(_gate_notices or []) or None,
+                        }
+                    )
+                    return
+
+            # markdown 主回答 — token 流（无 tools 或 tools 失败回退）。
+            yield _sse({"type": "phase", "phase": "answering"})
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+            result_holder: dict = {}
+
+            def worker() -> None:
+                def on_delta(piece: str) -> None:
+                    try:
+                        loop.call_soon_threadsafe(queue.put_nowait, ("tok", piece))
+                    except RuntimeError:
+                        pass  # loop 已关(客户端断开)
+
+                try:
+                    from ..services.llm import _OPENAI_COMPAT_PROVIDERS, _call_llm
+
+                    if (provider or "").strip().lower() not in _OPENAI_COMPAT_PROVIDERS:
+                        # anthropic / gemini have no OpenAI-compatible endpoint
+                        # (and the default provider is anthropic): streaming
+                        # through the OpenAI SDK sent the Anthropic key to
+                        # api.openai.com. Use the provider-aware blocking call
+                        # and emit the answer as a single delta.
+                        text = _call_llm(prompt, 2048, disable_thinking=True)
+                        if not text:
+                            raise RuntimeError("LLM 未返回内容")
+                        on_delta(text)
+                    else:
+                        base_url = _resolve_openai_base_url(
+                            provider, _es(settings, "llm_base_url")
+                        )
+                        text = _openai_compatible_stream(
+                            prompt,
+                            api_key,
+                            _es(settings, "llm_model"),
+                            2048,
+                            base_url,
+                            on_delta=on_delta,
+                            disable_thinking=True,
+                        )
+                    result_holder["text"] = text
+                except Exception as exc:  # noqa: BLE001
+                    result_holder["error"] = str(exc)[:300]
+                finally:
+                    try:
+                        loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
+                    except RuntimeError:
+                        pass
+
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
+
+            parts: list[str] = []
+            try:
+                while True:
+                    # P0-2: 客户端断开检测
+                    # P2-3: 总 deadline 检查
+                    if request is not None and await request.is_disconnected():
+                        logger.info("chat_stream: client disconnected, aborting token loop")
+                        break
+                    if time.monotonic() > _deadline:
+                        yield _sse({"type": "error", "code": "deadline_exceeded", "message": "回答超时，请重试"})
+                        break
+                    kind, payload = await asyncio.wait_for(queue.get(), timeout=120)
+                    if kind == "tok":
+                        parts.append(payload)
+                        # v29 M-17: 拒答门前置 —— 先缓冲不直接 yield，
+                        # 门触发时直接发拒答，避免"先出字后闪烁替换"。
+                        # （门在 answer 完整后判定，此处仅缓冲）
+                    else:
+                        break
+            except asyncio.TimeoutError:
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": "回答超时(120s 无输出), 请重试",
+                    }
+                )
+                return
+            finally:
+                t.join(timeout=0.2)
+
+            if "error" in result_holder:
+                err = result_holder["error"]
+                logger.warning("chat/stream LLM 失败: %s", err)
+                # P1-h: 错误消息泛化
+                yield _sse({"type": "error", "code": "generation_failed", "message": "生成失败，请重试"})
+                return
+
+            answer = "".join(parts).strip()
+            if not answer:
+                answer = result_holder.get("text") or ""
+
+            citations = [
+                _sanitize_evidence(c) for c in plan["relevant"]
+            ]
+            # v13-1: 取回重绑后的 citations，后续 claims/gates/done 用新表。
+            answer, doi_results, reviewer, reviewer_fix, citation_expand, citations = (
+                await asyncio.to_thread(
+                    _finalize_evidence_fields,
+                    question,
+                    answer,
+                    citations,
+                    settings=settings,
+                    mode=req.mode,
+                    selected_skills=list(req.selected_skills or []),
+                    project_id=req.project_id,
+                    sources=list(plan["sources"]),
+                    domain=req.domain,
+                    history=list(req.history or []),
+                    structure=req.structure,
+                )
+            )
+
+            # claims 收尾(12s 硬超时 → offline 降级)。
+            yield _sse({"type": "phase", "phase": "claims"})
+            claims, sources_audit = None, None
+            try:
+                claims, sources_audit, _verified = await asyncio.to_thread(
+                    _claims_and_audit,
+                    question,
+                    answer,
+                    citations,
+                    settings=settings,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("chat/stream claims 失败: %s", exc)
+                _verified = None
+            # P2 运行时门（与同步 /chat 对齐）：数值检查 → 冲突透出 → 拒答硬门。
+            # v29 M-17: 门在流式前判定 —— 门通过才 yield tokens，门触发直接发拒答，
+            # 不再"先出字后闪烁替换"。
+            answer, claims, _abstained, _gate_notices = _apply_answer_gates(
+                question,
+                answer,
+                citations,
+                claims,
+                _verified,
+                settings,
+            )
+
+            # 门通过：补发缓冲的 tokens（保持流式体验）；门触发：不发 tokens
+            if not _abstained:
+                for tok in parts:
+                    yield _sse({"type": "token", "delta": tok})
+
+            evidence_provenance = None
+            try:
+                from ..services.scholar_helpers import build_evidence_provenance
+
+                evidence_provenance = build_evidence_provenance(
+                    doi_results=doi_results,
+                    sourced_claims=claims,
+                    enabled=settings.evidence_provenance_enabled,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+            yield _sse(
+                {
+                    "type": "done",
+                    "answer": answer,
+                    "citations": citations,
+                    "rag_backend": active_rag_backend(),
+                    "kb_chunks_used": kb_used,
+                    "data_sources": plan.get("data_sources"),
+                    "entity_resolution": plan["entity_resolution"],
+                    "kg_retrieval_stats": plan["kg_stats"],
+                    "clarification": plan["clarification"],
+                    "rewritten_query": plan["rewritten_query"],
+                    "sourced_claims": claims,
+                    "sources_audit": sources_audit,
+                    "mode": req.mode,
+                    "doi_results": doi_results,
+                    "citation_expand": citation_expand,
+                    "evidence_provenance": evidence_provenance,
+                    "evidence_reviewer": reviewer,
+                    "reviewer_fix": reviewer_fix,
+                    # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
+                    "notices": (
+                        list(_retrieval_degradation_notices(kb_used) or [])
+                        + list(_gate_notices or [])
+                        + _reviewer_notices(reviewer)
+                    ) or None,
+                }
+            )
+            # W2-8 (P1-12): turn-stop 自动审计；evidence 路径已内联 review 的 turn 跳过。
+            if reviewer is None:
+                _fire_auto_review(
+                    question=question,
+                    answer=answer,
+                    citations=citations,
+                    settings=settings,
+                    session_id=req.chat_session_id,
+                    project_id=req.project_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("chat/stream failed")
+            yield _sse({"type": "error", "message": "问答处理失败"})
+            return
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

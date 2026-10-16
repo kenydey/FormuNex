@@ -1,0 +1,274 @@
+"""查询扩展引擎 — 将自然语言主题扩展为中英文关键词与 IPC/CPC 建议。"""
+from __future__ import annotations
+
+from ..errors import degrade_return, log_handled_exception
+import logging
+import re
+from dataclasses import dataclass
+
+from ...config import Settings, get_settings
+from .. import llm
+from .models import ExpandedQuery
+
+logger = logging.getLogger(__name__)
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+|[一-鿿]+")
+_DEFAULT_IPC = ["C09D", "C09D175/04", "C08G18/00", "C23F"]
+
+
+@dataclass(frozen=True)
+class SearchQueries:
+    """Per-source query strings derived from QueryExpander output."""
+
+    expanded: ExpandedQuery
+    rank_q: str
+    patent_q: str
+    western_q: str
+    chinese_q: str
+    ipc_codes: tuple[str, ...]
+
+
+def build_rank_query(expanded: ExpandedQuery, topic: str = "") -> str:
+    """Merged query for relevance ranking (IPC weighted ×2)."""
+    parts: list[str] = []
+    if topic.strip():
+        parts.append(topic.strip())
+    parts.extend(expanded.ipc_cpc_suggestions)
+    parts.extend(expanded.ipc_cpc_suggestions)
+    parts.extend(expanded.chinese_keywords)
+    parts.extend(expanded.english_synonyms)
+    return " ".join(dict.fromkeys(p for p in parts if p))
+
+
+def build_patent_query(expanded: ExpandedQuery, topic: str = "") -> str:
+    """USPTO/EPO full-text patent search (English-heavy)."""
+    parts: list[str] = []
+    if topic.strip():
+        parts.append(topic.strip())
+    parts.extend(expanded.english_synonyms[:8])
+    return " ".join(dict.fromkeys(p for p in parts if p)) or topic
+
+
+def build_western_query(expanded: ExpandedQuery, topic: str = "") -> str:
+    """arXiv / Semantic Scholar / SerpAPI scholar."""
+    western = list(expanded.english_synonyms[:6])
+    if not western:
+        western = [p for p in expanded.chinese_keywords if re.search(r"[a-zA-Z]", p)]
+    return " ".join(western) if western else topic
+
+
+def build_chinese_query(expanded: ExpandedQuery, topic: str = "") -> str:
+    """Chinese patent / Chinese web retrieval."""
+    chinese = list(expanded.chinese_keywords[:8])
+    if not chinese and topic and re.search(r"[一-鿿]", topic):
+        chinese = [topic.strip()]
+    return " ".join(dict.fromkeys(chinese)) if chinese else ""
+
+
+_CHEM_ENTITY_MAX_TERMS = 4
+
+
+def _augment_with_chemical_entities(expanded: ExpandedQuery) -> ExpandedQuery:
+    """Append CAS numbers for chemical entities among the English synonyms.
+
+    Patent full-text and scholarly indexes match CAS registry numbers far more
+    precisely than trivial names (e.g. "isophorone diamine" → "2855-13-2").
+    Resolution goes through the ChemCrow gateway (cached, hard timeout) and is
+    a strict no-op when chemcrow is not installed or the gateway is disabled,
+    so offline behaviour is unchanged.
+    """
+    from .. import chemtools
+
+    if not chemtools.gateway_enabled():
+        return expanded
+    existing = set(expanded.english_synonyms)
+    extra: list[str] = []
+    for term in expanded.english_synonyms[:_CHEM_ENTITY_MAX_TERMS]:
+        t = term.strip()
+        # Skip obvious non-entities: too short, or long multi-word phrases.
+        if len(t) < 4 or len(t.split()) > 4:
+            continue
+        try:
+            cas = chemtools.name_to_cas(t)
+        except Exception as exc:
+            log_handled_exception(logger, exc, "chemical entity CAS resolution failed")
+            continue
+        if cas and cas not in existing and cas not in extra:
+            extra.append(cas)
+    if not extra:
+        return expanded
+    return expanded.model_copy(
+        update={"english_synonyms": [*expanded.english_synonyms, *extra]}
+    )
+
+
+def prepare_search_queries(
+    topic: str,
+    settings: Settings | None = None,
+    *,
+    domain=None,
+) -> SearchQueries:
+    """Expand topic and build per-source query bundle."""
+    settings = settings or get_settings()
+    q = (topic or "").strip()
+    if not q:
+        empty = ExpandedQuery(intent="", chinese_keywords=[], english_synonyms=[], ipc_cpc_suggestions=[])
+        return SearchQueries(empty, "", "", "", "", ())
+
+    expanded = _augment_with_chemical_entities(QueryExpander(settings).expand(q, domain=domain))
+    ipc = tuple(expanded.ipc_cpc_suggestions[:5])
+    # P0: when DomainSearchProfile is active, prefer profile.ipc_codes over
+    # the global coating-centric default / LLM suggestions for that domain.
+    try:
+        from ...domain.search_profiles import resolve_profile
+        _prof = resolve_profile(domain)
+        if _prof is not None and _prof.ipc_codes:
+            ipc = tuple(_prof.ipc_codes[:5])
+            # Keep expanded suggestions in sync for rank_q consumers.
+            expanded = expanded.model_copy(update={
+                "ipc_cpc_suggestions": list(ipc),
+            }) if hasattr(expanded, "model_copy") else expanded
+        # Drop expanded synonyms that collide with profile keyword_deny / search_deny.
+        if _prof is not None:
+            from ...domain.search_profiles import effective_search_deny
+
+            deny = tuple(
+                d.casefold()
+                for d in effective_search_deny(
+                    _prof, extra=list(getattr(expanded, "negative_terms", None) or [])
+                )
+                if d
+            )
+            if deny:
+                def _ok(term: str) -> bool:
+                    t = (term or "").casefold()
+                    return bool(t) and not any(d in t for d in deny)
+
+                eng = [t for t in expanded.english_synonyms if _ok(t)]
+                zh = [t for t in expanded.chinese_keywords if _ok(t)]
+                neg = [t for t in (expanded.negative_terms or []) if t]
+                # Seed negative_terms with profile search_deny heads (cap).
+                for d in (_prof.search_deny or ())[:8]:
+                    if d and d not in neg:
+                        neg.append(d)
+                updates = {}
+                if eng != list(expanded.english_synonyms):
+                    updates["english_synonyms"] = eng
+                if zh != list(expanded.chinese_keywords):
+                    updates["chinese_keywords"] = zh
+                if neg != list(expanded.negative_terms or []):
+                    updates["negative_terms"] = neg[:12]
+                if updates:
+                    expanded = expanded.model_copy(update=updates)
+    except Exception:
+        pass
+    return SearchQueries(
+        expanded=expanded,
+        rank_q=build_rank_query(expanded, q),
+        patent_q=build_patent_query(expanded, q),
+        western_q=build_western_query(expanded, q),
+        chinese_q=build_chinese_query(expanded, q),
+        ipc_codes=ipc,
+    )
+
+
+_EXPAND_PROMPT = """你是一位涂料与多相聚合物研发领域的专利与文献检索专家。
+根据用户的自然语言输入，推断检索意图，并扩展为结构化检索词。
+
+用户输入：{user_query}
+
+请严格输出以下 JSON（不要 markdown 代码块，不要额外说明）：
+{{
+  "intent": "一句话描述用户检索意图（中文）",
+  "chinese_keywords": ["中文关键词1", "中文关键词2"],
+  "english_synonyms": ["english term 1", "academic synonym 2"],
+  "ipc_cpc_suggestions": ["C09D", "C08G18/00"],
+  "negative_terms": ["应排除的漂移词1", "off-topic term 2"]
+}}
+
+要求：
+1. chinese_keywords 提取 3-8 个核心中文检索词；
+2. english_synonyms 给出 3-8 个英文学术同义词或 IUPAC/行业术语；
+3. ipc_cpc_suggestions 给出 2-5 个与主题相关的 IPC/CPC 分类号；
+4. negative_terms 给出 2-6 个易被上位词卷进来的离题词（如核材料/电池电极/生物医学植入），用于检索期负向收缩；
+5. 若输入为英文，chinese_keywords 可给出对应中文译名。"""
+
+
+class QueryExpander:
+    """通过统一 llm 服务将用户自然语言扩展为结构化检索查询。"""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings or get_settings()
+
+
+    def _ipc_for_domain(self, domain=None) -> list[str]:
+        try:
+            from ...domain.search_profiles import resolve_profile
+            prof = resolve_profile(domain)
+            if prof is not None and prof.ipc_codes:
+                return list(prof.ipc_codes[:5])
+        except Exception:
+            pass
+        return list(_DEFAULT_IPC)
+
+    def expand(self, user_query: str, *, domain=None) -> ExpandedQuery:
+        query = (user_query or "").strip()
+        if not query:
+            return ExpandedQuery(
+                intent="空查询",
+                chinese_keywords=[],
+                english_synonyms=[],
+                ipc_cpc_suggestions=self._ipc_for_domain(domain),
+            )
+
+        expanded = self._expand_with_llm(query)
+        if expanded is not None:
+            return expanded
+
+        return self._offline_expand(query, domain=domain)
+
+    def _expand_with_llm(self, user_query: str) -> ExpandedQuery | None:
+        if not self._settings.get_active_api_key():
+            return None
+
+        prompt = _EXPAND_PROMPT.format(user_query=user_query)
+        try:
+            data = llm.complete_json(prompt)
+        except Exception as exc:
+            return degrade_return(logger, exc, "Query expansion LLM call failed", None)
+
+        if not isinstance(data, dict):
+            return None
+
+        try:
+            return ExpandedQuery(
+                intent=str(data.get("intent") or user_query),
+                chinese_keywords=[str(k) for k in (data.get("chinese_keywords") or []) if k],
+                english_synonyms=[str(k) for k in (data.get("english_synonyms") or []) if k],
+                ipc_cpc_suggestions=[
+                    str(k) for k in (data.get("ipc_cpc_suggestions") or []) if k
+                ],
+                negative_terms=[
+                    str(k) for k in (data.get("negative_terms") or []) if k
+                ][:12],
+            )
+        except Exception as exc:
+            return degrade_return(logger, exc, "operation failed", None)
+
+    def _offline_expand(self, user_query: str, *, domain=None) -> ExpandedQuery:
+        tokens = _TOKEN_RE.findall(user_query.lower())
+        chinese = [t for t in tokens if re.search(r"[一-鿿]", t)]
+        english = [t for t in tokens if re.match(r"[a-z0-9]+", t)]
+
+        def _uniq(items: list[str]) -> list[str]:
+            return list(dict.fromkeys(items))
+
+        chinese_kw = _uniq(chinese) or [user_query[:20]]
+        english_kw = _uniq(english)
+
+        return ExpandedQuery(
+            intent=f"检索与「{user_query[:40]}」相关的专利与文献",
+            chinese_keywords=chinese_kw[:8],
+            english_synonyms=english_kw[:8],
+            ipc_cpc_suggestions=self._ipc_for_domain(domain),
+        )

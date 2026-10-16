@@ -1,0 +1,323 @@
+"""Shared Datalab Headless ELN HTTP contract helpers (campaign + experiment stores)."""
+from __future__ import annotations
+
+import logging
+from typing import Any, Callable
+
+from ..domain.schemas import DatalabDeleteResponse, DatalabItemEnvelope, DatalabSampleResponse
+from ..services.http_safe import make_client, make_async_client
+
+logger = logging.getLogger(__name__)
+
+
+class DatalabStoreError(ValueError):
+    """Raised when Datalab API responses fail Pydantic contract validation."""
+
+
+# Shown in 503 detail and /health when ELN is required but down.
+DATALAB_START_HINT = (
+    "启动指引：docker compose -f docker-compose.yml -f docker-compose.eln.yml up -d，"
+    "或按 deploy/eln/README.md 拉起 Datalab；确认 FORMUNEX_DATALAB_API_URL 可达。"
+)
+
+
+class DatalabUnavailableError(RuntimeError):
+    """Raised when Datalab ELN is required but unreachable."""
+
+    def __init__(self, api_url: str, reason: str | None = None) -> None:
+        msg = (
+            f"Datalab ELN 不可达（{api_url}）。"
+            "请确认 Datalab API 已启动且 FORMUNEX_DATALAB_API_URL 正确。"
+            f" {DATALAB_START_HINT}"
+        )
+        if reason:
+            msg = f"{msg} 原因：{reason}"
+        super().__init__(msg)
+        self.api_url = api_url
+        self.reason = reason or ""
+
+
+# Datalab Headless API uses ``blocktype`` (no underscore) and string ``type`` on samples.
+# Comment blocks store arbitrary JSON in ``data`` (see datalab CommentBlock).
+DATALAB_SAMPLE_TYPE = "samples"
+DATALAB_BLOCK_KIND = "comment"
+
+
+def datalab_block(block_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Build a blocks_obj entry accepted by Datalab ``/new-sample/``."""
+    return {
+        "block_id": block_id,
+        "blocktype": DATALAB_BLOCK_KIND,
+        "data": data,
+    }
+
+
+def datalab_sample_type() -> str:
+    return DATALAB_SAMPLE_TYPE
+
+
+def datalab_headers() -> dict[str, str]:
+    """Auth headers for Datalab API calls.
+
+    The platform runs non-TESTING (2026-09-02 hardened): every request must
+    carry the ``DATALAB-API-KEY`` header or the endpoint 401s. Returns {} when
+    no token is configured so older deployments keep working unauthenticated.
+    """
+    from ..config import get_settings
+    from ..services.runtime_secrets import effective_setting
+
+    token = str(effective_setting(get_settings(), "datalab_api_token") or "")
+    return {"DATALAB-API-KEY": token} if token else {}
+
+
+# A listener on this machine accepts a connection within milliseconds, so waiting longer than this for the *connect*
+# can only mean nothing is listening. It matters on Windows, where a refused loopback connection takes ~2 s to be
+# reported (and ``localhost`` is tried as ::1 and 127.0.0.1): /health, which probes Datalab on every call, took
+# 5-6 s on a machine without it.
+LOOPBACK_CONNECT_TIMEOUT_S = 0.5
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def check_datalab_reachable(api_url: str, timeout: float = 2.0) -> tuple[bool, str | None]:
+    """Return (reachable, error_reason)."""
+    from urllib.parse import urlparse
+
+    import httpx
+
+    url = (api_url or "").rstrip("/")
+    if not url:
+        return False, "FORMUNEX_DATALAB_API_URL 未配置"
+    host = (urlparse(url).hostname or "").lower()
+    connect = min(timeout, LOOPBACK_CONNECT_TIMEOUT_S) if host in _LOOPBACK_HOSTS else timeout
+    try:
+        with make_client(
+            base_url=url, timeout=httpx.Timeout(timeout, connect=connect), headers=datalab_headers()
+        ) as client:
+            resp = client.get("/")
+            resp.raise_for_status()
+        return True, None
+    except httpx.HTTPStatusError as exc:
+        return False, f"HTTP {exc.response.status_code}"
+    except httpx.ConnectTimeout:
+        return False, f"连接超时（{host or url} 上没有进程在监听，或网络不通）"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def validate_blocks(item_data: dict[str, Any], required_blocks: tuple[str, ...]) -> None:
+    blocks = item_data.get("blocks_obj")
+    if not isinstance(blocks, dict):
+        raise DatalabStoreError("Datalab item_data.blocks_obj missing or invalid")
+    for key in required_blocks:
+        block = blocks.get(key)
+        if not isinstance(block, dict) or "data" not in block:
+            raise DatalabStoreError(f"Datalab block {key!r} missing or invalid")
+
+
+def parse_create_sample_response(body: dict[str, Any], expected_item_id: str) -> DatalabSampleResponse:
+    entry_raw = body.get("sample_list_entry") if isinstance(body.get("sample_list_entry"), dict) else body
+    sample = DatalabSampleResponse.model_validate(entry_raw)
+    if sample.item_id != expected_item_id:
+        raise DatalabStoreError(
+            f"Datalab item_id mismatch: expected {expected_item_id!r}, got {sample.item_id!r}"
+        )
+    return sample
+
+
+def parse_item_envelope(
+    body: dict[str, Any],
+    *,
+    required_blocks: tuple[str, ...] | None = None,
+    validate: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    if isinstance(body.get("item_data"), dict):
+        envelope = DatalabItemEnvelope.model_validate(body)
+        item_data = envelope.item_data
+    elif isinstance(body.get("blocks_obj"), dict):
+        item_data = body
+    else:
+        raise DatalabStoreError("Datalab get-item-data response missing item_data")
+    if validate is not None:
+        validate(item_data)
+    elif required_blocks:
+        validate_blocks(item_data, required_blocks)
+    return item_data
+
+
+def parse_delete_response(body: dict[str, Any], item_id: str) -> None:
+    parsed = DatalabDeleteResponse.model_validate(body)
+    if parsed.status != "success":
+        raise DatalabStoreError(f"Datalab delete-sample failed for {item_id}: status={parsed.status}")
+
+
+def delete_sample_sync(api_url: str, item_id: str, *, timeout: float = 10.0) -> None:
+    """Delete one Datalab sample; return normally when it is gone.
+
+    "Gone" includes *already absent* (HTTP 404): the point is that the sample must not
+    exist afterwards, and a retry after a half-finished cleanup would otherwise fail
+    forever. Transport errors and non-success answers raise, so the caller keeps the work
+    pending and retries later.
+    """
+    url = (api_url or "").rstrip("/")
+    if not url:
+        raise DatalabUnavailableError(api_url or "", "FORMUNEX_DATALAB_API_URL 未配置")
+    with make_client(base_url=url, timeout=timeout, headers=datalab_headers()) as client:
+        resp = client.post("/delete-sample/", json={"item_id": item_id})
+        if resp.status_code == 404:
+            return
+        resp.raise_for_status()
+        parse_delete_response(resp.json(), item_id)
+
+
+async def upload_file(
+    api_url: str,
+    content: bytes,
+    filename: str,
+    *,
+    item_id: str | None = None,
+    timeout: float = 30.0,
+) -> str | None:
+    """Upload a file to Datalab ELN ``POST /upload-file/``; return its ``file_id``.
+
+    Best-effort: returns ``None`` on any failure (unreachable, non-2xx, bad body)
+    so callers can degrade gracefully to a local-only reference. This is the
+    single upload path shared by experiment attachments and QC-report archival.
+
+    The platform requires the target ``item_id`` in the multipart form (the file
+    is stored under that item), so callers should resolve the Datalab sample id
+    of the experiment / workbench row they are archiving for. Without it the
+    upload cannot be attached to anything and we return ``None``.
+    """
+    url = (api_url or "").rstrip("/")
+    if not url or not item_id:
+        return None
+    try:
+        async with make_async_client(base_url=url, timeout=timeout, headers=datalab_headers()) as client:
+            resp = await client.post(
+                "/upload-file/",
+                files={"file": (filename, content)},
+                data={"item_id": item_id, "replace_file": "null"},
+            )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "datalab upload failed: HTTP %s %s", resp.status_code, resp.text[:200]
+                )
+                return None
+            body = resp.json()
+            return body.get("file_id") or None
+    except Exception as exc:
+        logger.warning("datalab upload failed: %s", exc)
+        return None
+
+
+def list_item_versions(
+    api_url: str, refcode: str, *, timeout: float = 15.0, _transport=None
+) -> list[dict]:
+    """P3: list saved DataLab versions for an item (by refcode), newest first.
+
+    Returns [] on any failure (unreachable / 401 / 404) so the UI can degrade
+    to "no version history" instead of erroring.
+    """
+    url = (api_url or "").rstrip("/")
+    if not url or not refcode:
+        return []
+    try:
+        with make_client(base_url=url, timeout=timeout, headers=datalab_headers(), transport=_transport) as client:
+            resp = client.get(f"/items/{refcode}/versions/")
+            if resp.status_code != 200:
+                return []
+            body = resp.json()
+            versions = body.get("versions") or []
+            out = []
+            for v in versions:
+                out.append(
+                    {
+                        "id": str(v.get("_id") or ""),
+                        "version": v.get("version") or v.get("datalab_version"),
+                        "action": v.get("action"),
+                        "timestamp": (v.get("timestamp") or "")[:19],
+                        "creator": (v.get("creator") or {}).get("display_name"),
+                    }
+                )
+            return out
+    except Exception as exc:
+        logger.warning("datalab list_item_versions(%s) failed: %s", refcode, exc)
+        return []
+
+
+def diff_item_versions(
+    api_url: str, refcode: str, v1_id: str, v2_id: str, *, timeout: float = 15.0, _transport=None
+) -> dict:
+    """P3: DeepDiff between two saved versions; {} on failure."""
+    url = (api_url or "").rstrip("/")
+    if not url or not refcode:
+        return {}
+    try:
+        with make_client(base_url=url, timeout=timeout, headers=datalab_headers(), transport=_transport) as client:
+            resp = client.get(
+                f"/items/{refcode}/compare-versions/",
+                params={"v1": v1_id, "v2": v2_id},
+            )
+            if resp.status_code != 200:
+                return {}
+            return resp.json().get("diff") or {}
+    except Exception as exc:
+        logger.warning("datalab diff_item_versions(%s) failed: %s", refcode, exc)
+        return {}
+
+
+def get_file_bytes(
+    api_url: str, file_id: str, filename: str, *, timeout: float = 30.0, _transport=None
+) -> bytes | None:
+    """P4: fetch a file's bytes from the platform (GET /files/<id>/<filename>).
+
+    Returns None on any failure (unreachable / 401 / 404) so callers can fall
+    back to a local copy / friendly 404.
+    """
+    url = (api_url or "").rstrip("/")
+    if not url or not file_id:
+        return None
+    try:
+        with make_client(base_url=url, timeout=timeout, headers=datalab_headers(), transport=_transport) as client:
+            resp = client.get(f"/files/{file_id}/{filename}")
+            if resp.status_code != 200:
+                logger.warning(
+                    "datalab get_file_bytes(%s) failed: HTTP %s", file_id, resp.status_code
+                )
+                return None
+            return resp.content
+    except Exception as exc:
+        logger.warning("datalab get_file_bytes(%s) failed: %s", file_id, exc)
+        return None
+
+
+def restore_item_version(
+    api_url: str, refcode: str, version_id: str, *, timeout: float = 15.0, _transport=None
+) -> bool:
+    """P3: restore an item to a saved version (platform mints a new version).
+
+    Returns True on success; False on any failure (the caller shows a message).
+    """
+    url = (api_url or "").rstrip("/")
+    if not url or not refcode or not version_id:
+        return False
+    try:
+        with make_client(
+            base_url=url, timeout=timeout, headers=datalab_headers(), transport=_transport
+        ) as client:
+            resp = client.post(
+                f"/items/{refcode}/restore-version/",
+                json={"version_id": version_id},
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "datalab restore_item_version(%s) failed: HTTP %s %s",
+                    refcode,
+                    resp.status_code,
+                    resp.text[:200],
+                )
+                return False
+            return True
+    except Exception as exc:
+        logger.warning("datalab restore_item_version(%s) failed: %s", refcode, exc)
+        return False

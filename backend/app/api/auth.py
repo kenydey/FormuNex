@@ -1,0 +1,34 @@
+"""Public auth status — no bearer token required."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Request
+
+from ..config import get_settings, multi_user_enabled
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+@router.get("/status")
+def auth_status(request: Request = None) -> dict:  # type: ignore[no-untyped-def]
+    """Tell the SPA whether API bearer auth is enforced (safe without a token)."""
+
+    settings = get_settings()
+    owner = "default"
+    if request is not None:
+        try:
+            from ..middleware.api_auth import get_current_owner
+
+            owner = get_current_owner(request)
+        except Exception:
+            owner = "default"
+    return {
+        "auth_required": settings.api_auth_enabled,
+        "multi_user": multi_user_enabled(),
+        "owner": owner,
+        "hint": (
+            "Configure FORMUNEX_API_TOKEN on the server and enter the same token "
+            "in Settings → API 访问令牌 (runtime only; do not bake into the frontend build)."
+            if settings.api_auth_enabled
+            else ""
+        ),
+    }

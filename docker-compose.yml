@@ -1,0 +1,289 @@
+# FormuNex — service orchestration.
+#
+# Core profile (default): redis + backend + frontend. Self-contained, no
+# credentials required (LLM and heavy science engines fall back to offline
+# implementations).
+#
+# Async jobs (search, deep research, optimization) run in Celery worker;
+# the frontend subscribes to GET /api/tasks/{id}/stream (SSE).
+#
+# Heavy profile (opt-in): mounts the C++/MD physics engines as official images
+# so they auto-upgrade without forking. Start them only when needed:
+#   docker compose --profile heavy up
+services:
+  # Primary database. FormuNex runs on PostgreSQL in every deployment (desktop
+  # and server); SQLite remains only for CI / unit tests.
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${FORMUNEX_PG_USER:-formunex}
+      POSTGRES_PASSWORD: ${FORMUNEX_PG_PASSWORD:-formunex}
+      POSTGRES_DB: ${FORMUNEX_PG_DB:-formunex}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FORMUNEX_PG_USER:-formunex} -d ${FORMUNEX_PG_DB:-formunex}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --stop-writes-on-bgsave-error no --save ""
+    # Loopback only: host-side tools (scripts/start_all.sh) still reach it, the network does not.
+    # The broker has no password.
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # Knowledge Graph Service (Neo4j)
+  kg:
+    image: neo4j:5.15
+    restart: unless-stopped
+    # Loopback only (browser on :7474, bolt on :7687). To reach it from another machine, publish it
+    # deliberately — behind a firewall or a tunnel — rather than on every interface.
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    environment:
+      # Set FORMUNEX_NEO4J_PASSWORD in .env BEFORE the first start: Neo4j stores the password in
+      # data/neo4j on first initialisation and ignores NEO4J_AUTH afterwards. The fallback only
+      # keeps an existing install (initialised with it) working — change it there with
+      # `cypher-shell … ALTER CURRENT USER SET PASSWORD`, then set the variable.
+      - NEO4J_AUTH=neo4j/${FORMUNEX_NEO4J_PASSWORD:-formunex123}
+      - FORMUNEX_NEO4J_PASSWORD=${FORMUNEX_NEO4J_PASSWORD:-formunex123}
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_dbms_memory_pagecache_size=512M
+      - NEO4J_dbms_memory_heap_max__size=512M
+    volumes:
+      - ./data/neo4j:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$$FORMUNEX_NEO4J_PASSWORD\" 'RETURN 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      FORMUNEX_REDIS_URL: redis://redis:6379/0
+      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_CELERY_EAGER: "false"
+      FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
+      # v29: Embedding 模型选择（5 选 1，见 install.sh / Settings UI）。
+      # 默认 MiniLM（轻量）；bge-m3（多语言推荐，需 ~2GB 下载）。
+      FORMUNEX_EMBEDDING_MODEL: ${FORMUNEX_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      # Platform bearer auth (distinct from LLM vendor keys in Settings).
+      # Intranet lab default OFF. Production ELN compose defaults ON
+      # (see docker-compose.eln.yml :-true).
+      FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
+      # The nginx in the frontend container is the one proxy in front of the API: rate-limit per real client, not per proxy.
+      FORMUNEX_TRUSTED_PROXY_HOPS: ${FORMUNEX_TRUSTED_PROXY_HOPS:-1}
+      FORMUNEX_CAMPAIGN_BACKEND: datalab
+      FORMUNEX_EXPERIMENT_BACKEND: datalab
+      FORMUNEX_DATALAB_REQUIRED: "true"
+      FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
+      # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
+      # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。
+      # 值放 .env（已 gitignore），不要写死在本文件里。
+      FORMUNEX_DATALAB_API_TOKEN: ${FORMUNEX_DATALAB_API_TOKEN:-}
+      # Optional Neo4j graph-store adapter (sibling to SQLite KG).
+      FORMUNEX_NEO4J_ENABLED: "true"
+      FORMUNEX_NEO4J_URI: bolt://kg:7687
+      FORMUNEX_NEO4J_USER: neo4j
+      FORMUNEX_NEO4J_PASSWORD: ${FORMUNEX_NEO4J_PASSWORD:-formunex123}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/colbert_index:/app/data/colbert_index
+      - ./data:/app/data
+    ports:
+      # Loopback by default, like redis and neo4j: the UI container reaches the API over the compose network, and
+      # FORMUNEX_API_AUTH_ENABLED defaults to off, so publishing 8000 to the LAN would hand every host on it the settings,
+      # ingest and dependency-install endpoints. Set FORMUNEX_BACKEND_BIND=0.0.0.0 only together with an API token.
+      - "${FORMUNEX_BACKEND_BIND:-127.0.0.1}:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kg:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+  # Async jobs run in Celery worker; API returns 202 + SSE progress stream.
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A app.worker.celery_app.celery_app worker --loglevel=info
+    env_file:
+      - .env
+    environment:
+      FORMUNEX_REDIS_URL: redis://redis:6379/0
+      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_CELERY_EAGER: "false"
+      FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
+      FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
+      FORMUNEX_CAMPAIGN_BACKEND: datalab
+      FORMUNEX_EXPERIMENT_BACKEND: datalab
+      FORMUNEX_DATALAB_REQUIRED: "true"
+      FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
+      # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
+      # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。
+      # 值放 .env（已 gitignore），不要写死在本文件里。
+      FORMUNEX_DATALAB_API_TOKEN: ${FORMUNEX_DATALAB_API_TOKEN:-}
+      # Optional Neo4j graph-store adapter (sibling to SQLite KG).
+      FORMUNEX_NEO4J_ENABLED: "true"
+      FORMUNEX_NEO4J_URI: bolt://kg:7687
+      FORMUNEX_NEO4J_USER: neo4j
+      FORMUNEX_NEO4J_PASSWORD: ${FORMUNEX_NEO4J_PASSWORD:-formunex123}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/colbert_index:/app/data/colbert_index
+      - ./data:/app/data
+    # The worker shares the backend image, and so inherits its HEALTHCHECK —
+    # which probes uvicorn on :8000, a server this container does not run. Left
+    # alone it reports "unhealthy" forever, and a status that is always wrong
+    # is worse than none: `docker compose ps` stops being worth reading at
+    # exactly the moment you need it. Ask Celery instead. A worker that answers
+    # ping has also proved its broker connection, which is the thing most
+    # likely to be broken here.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app.celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      kg:
+        condition: service_healthy
+
+  # Topic radar (optional, `docker compose --profile radar up -d`): Celery Beat fires
+  # formunex.topic_sweep on the schedule defined by FORMUNEX_TOPIC_RADAR_ENABLED /
+  # FORMUNEX_TOPIC_RADAR_TOPICS in .env (see .env.example). One beat process per deployment —
+  # two would fire every sweep twice. A single sweep can also be started on demand with
+  # POST /api/search/topic-sweep.
+  beat:
+    build: ./backend
+    profiles: ["radar"]
+    restart: unless-stopped
+    command: celery -A app.worker.celery_app.celery_app beat --loglevel=info -s /tmp/celerybeat-schedule
+    env_file:
+      - .env
+    environment:
+      FORMUNEX_REDIS_URL: redis://redis:6379/0
+      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_CELERY_EAGER: "false"
+    # Shares the backend image and so its uvicorn HEALTHCHECK, which this container cannot satisfy.
+    healthcheck:
+      disable: true
+    depends_on:
+      redis:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
+  # MolScribe OCSR worker — dedicated image (torch 2.3.0+cpu pin), consumes
+  # only the `molscribe` queue. mem_limit isolates its ~1.9 GB peak so an OOM
+  # restarts this container alone, never the main stack.
+  molscribe:
+    build: ./deploy/molscribe
+    restart: unless-stopped
+    # --pool=solo: MolScribe's OpenNMT stack spawns multiprocessing children,
+    # which celery's default prefork pool forbids (daemonic processes cannot
+    # have children). concurrency is already 1, so solo costs nothing.
+    command: celery -A app.worker.celery_app.celery_app worker -n molscribe@%h --queues=molscribe --concurrency=1 --pool=solo --loglevel=info
+    env_file:
+      - .env
+    environment:
+      FORMUNEX_REDIS_URL: redis://redis:6379/0
+      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_CELERY_EAGER: "false"
+      FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
+      FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
+      FORMUNEX_CAMPAIGN_BACKEND: datalab
+      FORMUNEX_EXPERIMENT_BACKEND: datalab
+      FORMUNEX_DATALAB_REQUIRED: "true"
+      FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
+      # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
+      # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。
+      # 值放 .env（已 gitignore），不要写死在本文件里。
+      FORMUNEX_DATALAB_API_TOKEN: ${FORMUNEX_DATALAB_API_TOKEN:-}
+      FORMUNEX_NEO4J_ENABLED: "true"
+      FORMUNEX_NEO4J_URI: bolt://kg:7687
+      FORMUNEX_NEO4J_USER: neo4j
+      FORMUNEX_NEO4J_PASSWORD: ${FORMUNEX_NEO4J_PASSWORD:-formunex123}
+      HF_HUB_OFFLINE: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/colbert_index:/app/data/colbert_index
+      - ./data:/app/data
+      # MolScribe weights (1.1 GB) — bind-mounted, not baked into the image.
+      - ./deploy/molscribe/hf-cache/models--yujieq--MolScribe:/root/.cache/huggingface/hub/models--yujieq--MolScribe:ro
+    mem_limit: 2500m
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app.celery_app inspect ping -d molscribe@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      # No VITE_API_TOKEN build arg — bake would embed the bearer in static JS.
+      # Enter FORMUNEX_API_TOKEN via Settings → API 访问令牌 at runtime.
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # --- Heavy MD / physics engines (opt-in, auto-upgrading official images) ---
+  lammps:
+    image: lammps/lammps:stable
+    profiles: ["heavy"]
+    volumes:
+      - ./shared_data:/data
+    command: ["sleep", "infinity"]
+
+  htpolynet:
+    image: ghcr.io/abramsgroup/htpolynet:latest
+    profiles: ["heavy"]
+    volumes:
+      - ./shared_data:/data
+    command: ["sleep", "infinity"]

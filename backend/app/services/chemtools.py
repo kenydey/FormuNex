@@ -1,0 +1,1016 @@
+"""Chemistry tool gateway — deterministic, native-only chemistry utilities.
+
+This module is the single integration point between FormuNex pipelines and
+deterministic chemistry tooling (PubChem REST / RDKit / molbloom).  It was
+previously a ChemCrow tool gateway; ChemCrow has been removed (2026-09, see
+docs/archive/formunex/plans/2026-09-04-dechemcrow.md) because every tool it exposed was a thin
+wrapper over the same native backends this module now calls directly.
+Tool-level calls are deterministic, mostly local (RDKit / molbloom) and
+LLM-free, so they are safe to embed in the recommend / DOE / optimize
+pipelines.
+
+Design contract (mirrors the platform's optional-engine conventions):
+
+* every public function degrades to a neutral value (``None`` / ``[]``)
+  when the gateway is disabled via ``FORMUNEX_CHEMTOOLS_ENABLED=false``,
+  or the underlying backend fails;
+* pure-structure utilities (functional groups, similarity, descriptors,
+  synthetic accessibility) are local RDKit implementations;
+* network-bound tools (PubChem) run under a hard timeout so pipeline
+  latency is bounded;
+* results are memoised in a process-local TTL cache keyed by (tool, arg).
+"""
+from __future__ import annotations
+
+import concurrent.futures
+import json
+import logging
+import re
+import sys
+import threading
+import time
+from typing import Any, Callable, TypeVar
+from urllib.parse import quote
+
+import httpx
+
+from ..config import get_settings
+from .errors import degrade_return, optional_import
+from .http_safe import make_client
+
+logger = logging.getLogger(__name__)
+
+_PUBCHEM_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest"
+
+T = TypeVar("T")
+
+_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
+_CACHE_TTL_SEC = 86400  # 24h — same policy as chemical_lookup / compounds
+# Negative results expire far sooner. They have to be cached at all because
+# supplier trade names ("Epikote 828", "Tinuvin 1130") are the common case in a
+# coatings corpus and PubChem will never resolve them: without this, every
+# document containing a product paid the round trips again. Measured on one
+# coating patent — 7 product mentions, 6537 ms, all of it name resolution.
+# The short TTL preserves the reason failures were not cached before: a
+# transient outage should cost minutes of stale misses, not a day of them.
+_NEGATIVE_CACHE_TTL_SEC = 900  # 15 min
+_CACHE_LOCK = threading.Lock()
+_CACHE_WRITE_COUNT = 0
+
+_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
+_EXECUTOR_LOCK = threading.Lock()
+
+# PubChem unreachable (offline lab, corporate firewall that drops packets): without this every cold name lookup waits
+# out its own timeout, one after the other, inside the request — the first recommendation of an air-gapped install took
+# 12-25 s here (one ingredient after another). After a transport-level failure the lookups are skipped for a while; they
+# all already degrade to "unknown" and are negatively cached.
+_PUBCHEM_BACKOFF_S = 60.0
+_PUBCHEM_CONNECT_TIMEOUT_S = 3.0
+_pubchem_down_until = 0.0
+
+_CAS_RE = re.compile(r"\b\d{2,7}-\d{2}-\d\b")
+
+
+# ── availability ─────────────────────────────────────────────────────────────
+
+
+def gateway_enabled() -> bool:
+    """True when the gateway switch is on (independent of installed libs)."""
+    return get_settings().chemtools_enabled
+
+
+def rdkit_available() -> bool:
+    return optional_import("rdkit")
+
+
+def _httpx_available() -> bool:
+    return optional_import("httpx")
+
+
+def pubchempy_available() -> bool:
+    return optional_import("pubchempy")
+
+
+def molbloom_available() -> bool:
+    return optional_import("molbloom")
+
+
+def pubchem_available() -> bool:
+    """A name/structure-resolution backend that needs no third-party agent.
+
+    name→SMILES / name→CAS / explosive screening hit the public PubChem REST
+    API directly through ``httpx`` (already a hard dependency) or
+    ``pubchempy``.
+    """
+    return _httpx_available() or pubchempy_available()
+
+
+def availability() -> dict[str, Any]:
+    """Per-capability availability report (for /api/chemical/tools and UI).
+
+    Each capability is available when the backend that serves it is present:
+
+    * name→SMILES / name→CAS  → PubChem (httpx/pubchempy);
+    * functional groups / similarity / descriptors / SA score → RDKit (local);
+    * molecular patent pre-screen → ``molbloom`` (standalone);
+    * explosive screen → PubChem GHS classification.
+    """
+    enabled = gateway_enabled()
+    rd = rdkit_available()
+    pubchem = pubchem_available()
+    molbloom = molbloom_available()
+
+    def cap(available: bool, hint: str | None) -> dict[str, Any]:
+        return {"available": bool(enabled and available), "hint": None if (enabled and available) else hint}
+
+    pubchem_hint = "需 httpx（已内置）或 pubchempy 以访问 PubChem；离线环境不可用"
+    rdkit_hint = "pip install rdkit 以启用本地结构工具"
+    molbloom_hint = "pip install molbloom 启用分子专利布隆过滤器"
+    return {
+        "enabled": enabled,
+        "rdkit_installed": rd,
+        "pubchem_available": pubchem,
+        "molbloom_installed": molbloom,
+        "capabilities": {
+            "name_to_smiles": cap(pubchem, pubchem_hint),
+            "name_to_cas": cap(pubchem, pubchem_hint),
+            "func_groups": cap(rd, rdkit_hint),
+            "mol_similarity": cap(rd, rdkit_hint),
+            "mol_descriptors": cap(rd, rdkit_hint),
+            "synthetic_accessibility": cap(rd, rdkit_hint),
+            "patent_check": cap(molbloom, molbloom_hint),
+            "explosive_check": cap(pubchem, pubchem_hint),
+        },
+        "chat_tool_calling": {
+            "flag_enabled": get_settings().chat_chem_tools_enabled,
+            "chemtools_enabled": bool(enabled),
+            "note": "实际启用还取决于当前 LLM 是否为 OpenAI 兼容供应商",
+        },
+    }
+
+
+# ── plumbing ─────────────────────────────────────────────────────────────────
+
+
+def _executor() -> concurrent.futures.ThreadPoolExecutor:
+    global _EXECUTOR
+    if _EXECUTOR is None:
+        with _EXECUTOR_LOCK:
+            if _EXECUTOR is None:
+                _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=4, thread_name_prefix="chemtools"
+                )
+    return _EXECUTOR
+
+
+def _run_with_timeout(fn: Callable[[], T], default: T) -> T:
+    """Run *fn* on the gateway executor with the configured hard timeout."""
+    timeout = get_settings().chemtools_timeout_s
+    future = _executor().submit(fn)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        logger.warning("chemtools call timed out after %.1fs", timeout)
+        return default
+    except Exception as exc:
+        return degrade_return(logger, exc, "chemtools call failed", default)
+
+
+# Tools whose argument is a SMILES string. SMILES are case-sensitive — `c1ccccc1`
+# is benzene, `C1CCCCC1` is cyclohexane — so these keys must not be lowercased,
+# or the two collide and the second lookup silently returns the first molecule's
+# result for the whole TTL.
+_CASE_SENSITIVE_TOOLS = frozenset(
+    {"mol_similarity", "mol_descriptors", "func_groups", "patent_check"}
+)
+
+
+def _ttl_for(value: object) -> int:
+    return _CACHE_TTL_SEC if value is not None else _NEGATIVE_CACHE_TTL_SEC
+
+
+def _cached(tool: str, arg: str, compute: Callable[[], T]) -> T:
+    global _CACHE_WRITE_COUNT
+    normalized = arg.strip() if tool in _CASE_SENSITIVE_TOOLS else arg.strip().lower()
+    key = (tool, normalized)
+    now = time.time()
+    with _CACHE_LOCK:
+        entry = _CACHE.get(key)
+        if entry and now - entry[0] <= _ttl_for(entry[1]):
+            return entry[1]
+    value = compute()
+    with _CACHE_LOCK:
+        _CACHE[key] = (time.time(), value)
+        _CACHE_WRITE_COUNT += 1
+        if _CACHE_WRITE_COUNT % 100 == 0:
+            now = time.time()
+            expired = [k for k, (ts, v) in _CACHE.items() if now - ts > _ttl_for(v)]
+            for k in expired:
+                del _CACHE[k]
+    return value
+
+
+def clear_cache() -> None:
+    """Test hook."""
+    global _pubchem_down_until
+    with _CACHE_LOCK:
+        _CACHE.clear()
+    _pubchem_down_until = 0.0
+
+
+# ── native PubChem backend ────────────────────────────────────────────────────
+
+
+def _pubchem_get(path: str) -> Any | None:
+    """GET a PubChem REST / PUG-View path and return parsed JSON, else None.
+
+    Single choke-point for every native PubChem call: tests stub this one
+    function to keep the network out of unit runs, and any transport / status
+    failure degrades uniformly to ``None`` so callers stay neutral offline.
+    """
+    global _pubchem_down_until
+    if time.monotonic() < _pubchem_down_until:
+        return None
+    url = path if path.startswith("http") else f"{_PUBCHEM_BASE}{path}"
+    timeout = get_settings().chemtools_timeout_s
+    try:
+        # A reachable PubChem accepts the connection in milliseconds; waiting longer than a few seconds for the *connect*
+        # only means nobody is there. The read timeout stays as configured.
+        with make_client(timeout=httpx.Timeout(timeout, connect=min(timeout, _PUBCHEM_CONNECT_TIMEOUT_S))) as client:
+            resp = client.get(url)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+    except httpx.TransportError as exc:  # connect / DNS / timeout: the service or the network is not there
+        _pubchem_down_until = time.monotonic() + _PUBCHEM_BACKOFF_S
+        return degrade_return(logger, exc, "pubchem request failed", None)
+    except Exception as exc:
+        return degrade_return(logger, exc, "pubchem request failed", None)
+
+
+# PubChem renamed its SMILES properties in 2025: requesting ``SMILES`` returns
+# the absolute/isomeric SMILES under key ``SMILES``; ``ConnectivitySMILES`` is
+# the former ``CanonicalSMILES``.  One request fetches both; we prefer the
+# isomeric form when present.
+_PUBCHEM_SMILES_KEYS = ("SMILES", "ConnectivitySMILES", "IsomericSMILES", "CanonicalSMILES")
+
+# OCR/全文抽取会把期刊卷期引用误当产品名（如 "Calphad 2001"、"Ferroelectrics 76"、
+# "We 14"），逐名 PubChem 往返既浪费又触发限流。命中以下形态直接跳过查询。
+_YEAR_TOKEN_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+_STOP_FIRST_TOKENS = {
+    "we", "of", "in", "on", "at", "the", "a", "an", "for", "to", "from", "with", "and",
+}
+
+
+def _is_queryable_name(name: str) -> bool:
+    """True when *name* plausibly names a chemical product (not a citation artifact)."""
+    n = (name or "").strip()
+    if not n or len(n) > 60:
+        return False
+    toks = n.split()
+    # 期刊卷期引用: 末尾 token 是纯数字（卷/页/年），或句中含 4 位年份
+    if toks and toks[-1].isdigit():
+        return False
+    if _YEAR_TOKEN_RE.search(n):
+        return False
+    # 引用句首停用词: "We 14" / "Of ..."
+    if toks and toks[0].lower() in _STOP_FIRST_TOKENS:
+        return False
+    # 纯标点 / 单字符（"T"、"L" 之类 OCR 碎片）
+    if len(n) < 2 or not any(ch.isalnum() for ch in n):
+        return False
+    return True
+
+
+def _pubchem_name_to_smiles(name: str) -> str | None:
+    if not _is_queryable_name(name):
+        return None
+    encoded = quote(name, safe="")
+    data = _pubchem_get(
+        f"/pug/compound/name/{encoded}/property/SMILES,ConnectivitySMILES/JSON"
+    )
+    props = ((data or {}).get("PropertyTable") or {}).get("Properties") or []
+    if not props:
+        return None
+    row = props[0]
+    for key in _PUBCHEM_SMILES_KEYS:
+        smi = (row.get(key) or "").strip()
+        if smi and _looks_like_smiles(smi):
+            return smi
+    return None
+
+
+def _pubchem_name_to_cas(name: str) -> str | None:
+    # PubChem deprecated the RegistryNumber xref endpoint; the canonical CAS now
+    # lives among the compound synonyms (first CAS-format entry is the primary).
+    if not _is_queryable_name(name):
+        return None
+    encoded = quote(name, safe="")
+    data = _pubchem_get(f"/pug/compound/name/{encoded}/synonyms/JSON")
+    info = ((data or {}).get("InformationList") or {}).get("Information") or []
+    for entry in info:
+        for syn in entry.get("Synonym", []) or []:
+            m = _CAS_RE.fullmatch(str(syn).strip())
+            if m:
+                return m.group(0)
+    return None
+
+
+def _pubchem_cid(query: str) -> int | None:
+    encoded = quote(query, safe="")
+    data = _pubchem_get(f"/pug/compound/name/{encoded}/cids/JSON")
+    cids = ((data or {}).get("IdentifierList") or {}).get("CID") or []
+    return int(cids[0]) if cids else None
+
+
+# GHS hazard statement codes for explosives (H200–H208, Section 2.1).
+_EXPLOSIVE_HCODES = ("H200", "H201", "H202", "H203", "H204", "H205", "H206", "H207", "H208")
+
+
+def _pubchem_explosive(cas: str) -> bool | None:
+    cid = _pubchem_cid(cas)
+    if not cid:
+        return None
+    data = _pubchem_get(
+        f"/pug_view/data/compound/{cid}/JSON?heading=GHS+Classification"
+    )
+    if not data:
+        return None
+    blob = json.dumps(data)
+    if any(code in blob for code in _EXPLOSIVE_HCODES) or "Explos" in blob:
+        return True
+    # GHS classification present but no explosive hazard → clear.
+    if "GHS" in blob or "Hazard" in blob or "Pictogram" in blob:
+        return False
+    return None
+
+
+# ── native molbloom backend ──────────────────────────────────────────────────
+
+
+def _molbloom_patented(smiles: str) -> bool | None:
+    """molbloom SureChEMBL patent membership. None when molbloom is absent."""
+    try:
+        import molbloom  # type: ignore
+    except Exception:
+        return None
+    try:
+        return bool(
+            molbloom.buy(smiles, canonicalize=rdkit_available(), catalog="surechembl")
+        )
+    except Exception as exc:
+        return degrade_return(logger, exc, "molbloom patent check failed", None)
+
+
+# ── name resolution (network; PubChem) ───────────────────────────────────────
+
+_SMILES_CHARS_RE = re.compile(r"^[A-Za-z0-9@+\-\[\]\(\)=#$/\\%.:*]+$")
+
+
+def _looks_like_smiles(text: str) -> bool:
+    t = text.strip()
+    return 1 < len(t) <= 500 and " " not in t and bool(_SMILES_CHARS_RE.match(t))
+
+
+def name_to_smiles(name: str) -> str | None:
+    """Resolve a chemical name to SMILES (PubChem REST)."""
+    name = (name or "").strip()
+    if not name or not gateway_enabled() or not pubchem_available():
+        return None
+
+    def compute() -> str | None:
+        return _run_with_timeout(lambda: _pubchem_name_to_smiles(name), None)
+
+    return _cached("name_to_smiles", name, compute)
+
+
+def name_to_cas(name: str) -> str | None:
+    """Resolve a chemical name to a CAS number (PubChem REST)."""
+    name = (name or "").strip()
+    if not name or not gateway_enabled() or not pubchem_available():
+        return None
+
+    def compute() -> str | None:
+        return _run_with_timeout(lambda: _pubchem_name_to_cas(name), None)
+
+    return _cached("name_to_cas", name, compute)
+
+
+# ── structure utilities (local RDKit) ────────────────────────────────────────
+
+# Compact SMARTS dictionary focused on coating / surface-treatment chemistry.
+_FUNC_GROUP_SMARTS: dict[str, str] = {
+    "epoxide": "[OX2r3]1[#6r3][#6r3]1",
+    "isocyanate": "[NX2]=[CX2]=[OX1]",
+    "primary amine": "[NX3;H2;!$(NC=O)]",
+    "secondary amine": "[NX3;H1;!$(NC=O)]",
+    "hydroxyl": "[OX2H]",
+    "carboxylic acid": "[CX3](=O)[OX2H1]",
+    "ester": "[CX3](=O)[OX2H0][#6]",
+    "amide": "[NX3][CX3](=[OX1])",
+    "urethane": "[NX3][CX3](=[OX1])[OX2H0]",
+    "ether": "[OD2]([#6])[#6]",
+    "silane (alkoxysilane)": "[Si]([OX2])[OX2]",
+    "phosphate": "[PX4](=O)([OX2])[OX2]",
+    "sulfonate": "[SX4](=O)(=O)[OX2]",
+    "nitrile": "[NX1]#[CX2]",
+    "vinyl": "[CX3]=[CX2]",
+    "aromatic ring": "a1aaaaa1",
+}
+
+
+def _rdkit_func_groups(smiles: str) -> list[str] | None:
+    try:
+        from rdkit import Chem  # type: ignore
+
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+        found = []
+        for label, smarts in _FUNC_GROUP_SMARTS.items():
+            patt = Chem.MolFromSmarts(smarts)
+            if patt is not None and mol.HasSubstructMatch(patt):
+                found.append(label)
+        return found
+    except Exception as exc:
+        return degrade_return(logger, exc, "rdkit func_groups failed", None)
+
+
+def func_groups(smiles: str) -> list[str]:
+    """Functional groups present in *smiles* (local RDKit SMARTS)."""
+    smiles = (smiles or "").strip()
+    if not smiles or not gateway_enabled():
+        return []
+
+    def compute() -> list[str] | None:
+        return _rdkit_func_groups(smiles)
+
+    return _cached("func_groups", smiles, compute) or []
+
+
+DESCRIPTOR_NAMES = ("mol_wt", "logp", "tpsa", "hbd", "hba", "arom_rings")
+
+
+def mol_descriptors(smiles: str) -> dict[str, float] | None:
+    """RDKit physicochemical descriptors for one molecule (cached).
+
+    Returns {mol_wt, logp, tpsa, hbd, hba, arom_rings} or None when RDKit is
+    unavailable or the SMILES does not parse.  Deterministic and local — used
+    by the opt-in v2 feature set in ``domain.features``.
+    """
+    smiles = (smiles or "").strip()
+    if not smiles or not gateway_enabled():
+        return None
+
+    def compute() -> dict[str, float] | None:
+        try:
+            from rdkit import Chem  # type: ignore
+            from rdkit.Chem import Descriptors, rdMolDescriptors  # type: ignore
+
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                return None
+            return {
+                "mol_wt": round(float(Descriptors.MolWt(mol)), 3),
+                "logp": round(float(Descriptors.MolLogP(mol)), 3),
+                "tpsa": round(float(Descriptors.TPSA(mol)), 3),
+                "hbd": float(rdMolDescriptors.CalcNumHBD(mol)),
+                "hba": float(rdMolDescriptors.CalcNumHBA(mol)),
+                "arom_rings": float(rdMolDescriptors.CalcNumAromaticRings(mol)),
+            }
+        except Exception as exc:
+            return degrade_return(logger, exc, "rdkit descriptors failed", None)
+
+    return _cached("mol_descriptors", smiles, compute)
+
+
+def mol_similarity(smiles_a: str, smiles_b: str) -> float | None:
+    """Tanimoto similarity of two molecules (local RDKit)."""
+    a, b = (smiles_a or "").strip(), (smiles_b or "").strip()
+    if not a or not b or not gateway_enabled():
+        return None
+    if a == b:
+        return 1.0
+
+    def compute() -> float | None:
+        try:
+            from rdkit import Chem, DataStructs  # type: ignore
+
+            from .fingerprints import morgan_bitvect
+
+            ma, mb = Chem.MolFromSmiles(a), Chem.MolFromSmiles(b)
+            if ma is None or mb is None:
+                return None
+            fa = morgan_bitvect(ma)
+            fb = morgan_bitvect(mb)
+            return round(float(DataStructs.TanimotoSimilarity(fa, fb)), 4)
+        except Exception as exc:
+            return degrade_return(logger, exc, "rdkit similarity failed", None)
+
+    # Sort the pair: similarity is symmetric, so (A,B) and (B,A) must share one
+    # cache entry rather than each computing and storing its own.
+    lo, hi = sorted((a, b))
+    return _cached("mol_similarity", f"{lo}|{hi}", compute)
+
+
+# ── synthetic accessibility (local RDKit SA score) ────────────────────────────
+
+_SA_TIER = ((3.0, "easy"), (6.0, "moderate"), (8.0, "hard"))
+
+
+def synthetic_accessibility(smiles: str) -> dict[str, Any]:
+    """Ertl & Schuffenhauer synthetic-accessibility score (1=easy → 10=very hard).
+
+    Local RDKit implementation (``Contrib/SA_Score/sascorer``), cached.
+    Returns ``{"sa_score": float, "tier": str, "note": str}``; degrades to
+    ``{"sa_score": None, "tier": "unknown", "note": ...}`` when the SMILES
+    does not parse or RDKit is unavailable.
+
+    Scope note: SA score is designed for drug-like organic small molecules.
+    Coating resins / inorganic salts (no SMILES or non-small-molecule) return
+    ``unknown`` — this field is additive advice in profiles, never a gate.
+    """
+    smiles = (smiles or "").strip()
+    if not smiles or not gateway_enabled():
+        return {"sa_score": None, "tier": "unknown", "note": "网关关闭或无输入"}
+
+    def compute() -> dict[str, Any] | None:
+        try:
+            from rdkit import Chem  # type: ignore
+            from rdkit.Chem import RDConfig  # type: ignore
+
+            sys.path.append(f"{RDConfig.RDContribDir}/SA_Score")  # noqa: PLC0415
+            import sascorer  # type: ignore
+
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                return {"sa_score": None, "tier": "unknown", "note": "SMILES 无法解析"}
+            score = float(sascorer.calculateScore(mol))
+            tier = next((t for th, t in _SA_TIER if score <= th), "very_hard")
+            return {
+                "sa_score": round(score, 2),
+                "tier": tier,
+                "note": "1–10，越低越易合成（RDKit SA score）",
+            }
+        except Exception as exc:
+            return degrade_return(logger, exc, "rdkit SA score failed", None)
+
+    return _cached("synthetic_accessibility", smiles, compute) or {
+        "sa_score": None,
+        "tier": "unknown",
+        "note": "不可用",
+    }
+
+
+# ── patent / safety screens (native backends) ────────────────────────────────
+
+
+def patent_check(smiles: str) -> bool | None:
+    """molbloom patent pre-screen. True=likely patented, False=novel, None=unknown.
+
+    Calls the standalone ``molbloom`` SureChEMBL filter directly (the same
+    data source ChemCrow's PatentCheck wrapped).
+    """
+    smiles = (smiles or "").strip()
+    if not smiles or not gateway_enabled() or not molbloom_available():
+        return None
+
+    def compute() -> bool | None:
+        return _run_with_timeout(lambda: _molbloom_patented(smiles), None)
+
+    return _cached("patent_check", smiles, compute)
+
+
+def controlled_check(smiles_or_cas: str) -> bool | None:
+    """Controlled-chemical screen. Always None since ChemCrow's removal.
+
+    ChemCrow 0.3.7 shipped no working controlled-chemical tool
+    (``ControlChemCheck`` never existed in its tool table), so this check has
+    always degraded to None on this platform.  The signature and neutral
+    value are kept so callers (``safety_flags`` / screening / DOE review)
+    need no behavioural change; a curated control list can be wired here
+    later without touching call sites.
+    """
+    return None
+
+
+def _peek_cached(tool: str, arg: str) -> Any:
+    """The cached value for ``(tool, arg)`` if it is there and fresh, else None - never computes, never touches the network."""
+    normalized = arg.strip() if tool in _CASE_SENSITIVE_TOOLS else arg.strip().lower()
+    with _CACHE_LOCK:
+        entry = _CACHE.get((tool, normalized))
+    if entry and time.time() - entry[0] <= _ttl_for(entry[1]):
+        return entry[1]
+    return None
+
+
+def explosive_check(cas: str, *, cache_only: bool = False) -> bool | None:
+    """GHS explosive screen by CAS. True=explosive hazard, False=clear, None=unknown.
+
+    Reads GHS Section 2.1 classification straight from PubChem PUG-View (the
+    same underlying source ChemCrow's ExplosiveCheck wrapped).
+
+    ``cache_only``: answer from the gateway cache or not at all (None) - for callers that run inside optimisation loops
+    and must not wait on a request.
+    """
+    cas = (cas or "").strip()
+    if (
+        not cas
+        or not _CAS_RE.fullmatch(cas)
+        or not gateway_enabled()
+        or not pubchem_available()
+    ):
+        return None
+    if cache_only:
+        return _peek_cached("explosive_check", cas)
+
+    def compute() -> bool | None:
+        return _run_with_timeout(lambda: _pubchem_explosive(cas), None)
+
+    return _cached("explosive_check", cas, compute)
+
+
+def safety_flags(smiles: str | None, cas: str | None = None) -> dict[str, bool | None]:
+    """Combined safety screen used by requirement / recommend pipelines."""
+    return {
+        "controlled": controlled_check(smiles or cas or ""),
+        "explosive": explosive_check(cas or ""),
+    }
+
+
+# ── formulation screening (recommend pipeline; advisory only) ────────────────
+
+_SCREEN_MIN_WT_PCT = 0.5
+
+
+def screen_formulation(form: Any) -> list[str]:
+    """Molecular patent + structure pre-screen for a Formulation.
+
+    Returns advisory warning strings (never blocks).  Only ingredients with a
+    SMILES and a non-negligible weight are screened; every check is cached in
+    the gateway, and everything degrades to [] when backends are absent.
+
+    Since ChemCrow's removal this is fully local: molbloom patent (offline
+    SureChEMBL Bloom filter) + RDKit valence / PAINS / Brenk checks.  It is
+    now behaviourally identical to ``screen_formulation_local`` and is kept
+    as a separate name only so existing call sites (``chem_screen`` /
+    ``chem_screen_local`` flags in the pipeline) keep their contracts.
+    """
+    return screen_formulation_local(form, allow_network=True)
+
+
+def screen_formulation_local(form: Any, *, allow_network: bool = False) -> list[str]:
+    """零网络化学预筛 — molbloom patent (本地) + RDKit 价键/PAINS/Brenk 校验。
+
+    可安全用于优化循环(NSGA-II 每代数百次调用)。返回告警字符串列表，
+    永不阻塞。缺 RDKit 或 molbloom 时静默降级(只返回能算的检查)。
+
+    P1-13 爆炸性（GHS 2.1）筛查读 PubChem：默认 ``allow_network=False`` 只读网关缓存（命中才告警，
+    不发请求）——优化循环里一个未缓存的 CAS 不该等一次网络往返；推荐链路
+    （``screen_formulation``）传 ``allow_network=True``，把结果写进缓存供循环使用。
+    """
+    warnings: list[str] = []
+    if not rdkit_available():
+        return warnings
+    try:
+        from rdkit import Chem
+        from rdkit.Chem import FilterCatalog
+
+        # PAINS (Pan-Assay INterference) + Brenk 目录
+        _pains_params = FilterCatalog.FilterCatalogParams()
+        _pains_params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS)
+        _pains_params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.BRENK)
+        _pains_catalog = FilterCatalog.FilterCatalog(_pains_params)
+    except Exception:
+        return warnings
+    patent = molbloom_available()
+    for ing in getattr(form, "ingredients", []) or []:
+        smiles = getattr(ing, "smiles", None)
+        if not smiles or (getattr(ing, "weight_pct", 0.0) or 0.0) < _SCREEN_MIN_WT_PCT:
+            continue
+        name = getattr(ing, "name", "") or smiles
+        # RDKit 价键校验（本地，零网络）
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            warnings.append(f"结构校验：{name} 的 SMILES 无法被 RDKit 解析，请核对结构")
+            continue
+        # PAINS/Brenk 泛干扰子结构（本地目录，药物筛选毒性警报）
+        try:
+            match = _pains_catalog.GetFirstMatch(mol)
+            if match is not None:
+                warnings.append(
+                    f"结构安全：{name} 命中泛干扰子结构 {match.GetDescription()}（PAINS/Brenk），建议人工复核"
+                )
+        except Exception:
+            pass
+        # molbloom patent 布隆过滤器（本地离线数据）
+        if patent:
+            try:
+                if patent_check(smiles) is True:
+                    warnings.append(
+                        f"IP 预筛：{name} 的分子结构已见于专利文献（molbloom），建议开展 FTO 检索"
+                    )
+            except Exception:
+                pass
+        # P1-13: 爆炸性筛查（GHS 2.1，PubChem 缓存；无 CAS/无网络时静默跳过）
+        try:
+            cas = getattr(ing, "cas_no", None) or getattr(ing, "cas", None)
+            if cas and explosive_check(cas, cache_only=not allow_network) is True:
+                warnings.append(
+                    f"⚠️ 安全警告：{name}（CAS {cas}）被 GHS 归类为爆炸性物质，"
+                    f"建议人工确认合规性后再采用"
+                )
+        except Exception:
+            pass
+        # E-2: 管制化学品筛查接入本地预筛 —— 此前只在 enrich_material_specs
+        # （chemistry API 路径）执行，推荐链路的 screen_formulation_local
+        # 从未触发，"管制"一半永为 False。
+        try:
+            if smiles and controlled_check(smiles) is True:
+                warnings.append(
+                    f"⚠️ 管制筛查：{name} 命中管制化学品清单，采购/使用需合规确认"
+                )
+        except Exception:
+            pass
+    return warnings
+
+
+def func_group_summary(items: list[tuple[str, str]], max_items: int = 8) -> str:
+    """One-line-per-material functional group summary for LLM prompts.
+
+    ``items`` is a list of (name, smiles).  Returns "" when no groups can be
+    resolved (offline), so callers can omit the prompt block entirely.
+    """
+    lines: list[str] = []
+    for name, smiles in items[:max_items]:
+        if not smiles:
+            continue
+        groups = func_groups(smiles)
+        if groups:
+            lines.append(f"- {name}: {', '.join(groups[:6])}")
+    return "\n".join(lines)
+
+
+# ── DOE factor chemistry review ──────────────────────────────────────────────
+
+_EPOXIDE_LABELS = ("epoxide", "epoxy")
+_AMINE_LABELS = ("amine",)
+_CURE_FACTOR_NAMES = ("cure_temperature_c", "cure_time_min", "bake_temperature_c")
+
+
+def _process_safety_notes(plan: Any) -> list[str]:
+    """危险工艺条件软阈值警告（advisory，不阻塞）。
+
+    F-3: 本地规则，不依赖 KG gateway —— gateway 关闭时也必须执行。
+    """
+    notes: list[str] = []
+    for f in getattr(plan, "factors", []) or []:
+        _fname = (getattr(f, "name", "") or "").lower()
+        _high = getattr(f, "high", None)
+        try:
+            _hv = float(_high) if _high is not None else None
+        except (TypeError, ValueError):
+            _hv = None
+        if _hv is None:
+            continue
+        if any(k in _fname for k in ("温度", "temp")) and _hv > 200:
+            notes.append(
+                f"工艺安全：因子 {getattr(f, 'name', '')} 上限 {_hv}°C 超过 200°C，"
+                f"请确认设备安全范围"
+            )
+        elif any(k in _fname for k in ("压力", "pressure")) and _hv > 5:
+            notes.append(
+                f"工艺安全：因子 {getattr(f, 'name', '')} 上限 {_hv} bar 超过 5 bar，"
+                f"请确认设备安全范围"
+            )
+    return notes
+
+
+def review_doe_factors(req: Any, plan: Any) -> list[str]:
+    """Chemistry sanity review of a DOE plan against the project materials.
+
+    Advisory notes only (appended to plan.notes, never blocking):
+    * controlled-chemical hits among project materials;
+    * a reactive epoxide + amine pair present while the design has no cure
+      factor — the classic missed-interaction in coating DOE.
+    * 工艺安全阈值（温度/压力）—— 本地规则，gateway 关闭时也执行。
+    Empty when the gateway is disabled or nothing resolves (offline),
+    except process-safety notes which are gateway-independent.
+    """
+    # F-3: 工艺安全是本地规则，先执行，不受 gateway 早退影响。
+    notes: list[str] = _process_safety_notes(plan)
+    if not gateway_enabled():
+        return notes
+    materials = list(getattr(req, "materials", None) or [])
+    group_map: dict[str, list[str]] = {}
+    for m in materials:
+        smiles = getattr(m, "smiles", None)
+        if not smiles:
+            continue
+        name = getattr(m, "name", "") or smiles
+        if controlled_check(smiles) is True:
+            notes.append(f"化学审查：材料 {name} 命中管制化学品清单，实施 DOE 前请确认合规")
+        groups = func_groups(smiles)
+        if groups:
+            group_map[name] = [g.lower() for g in groups]
+
+    has_epoxide = any(
+        any(lbl in g for lbl in _EPOXIDE_LABELS for g in groups)
+        for groups in group_map.values()
+    )
+    has_amine = any(
+        any(lbl in g for lbl in _AMINE_LABELS for g in groups)
+        for groups in group_map.values()
+    )
+    if has_epoxide and has_amine:
+        factor_names = {
+            (getattr(f, "name", "") or "").lower() for f in getattr(plan, "factors", []) or []
+        }
+        if not factor_names & set(_CURE_FACTOR_NAMES):
+            notes.append(
+                "化学审查：材料含环氧基与胺基（反应对），当前设计未包含固化温度/时间因子，"
+                "建议纳入以捕获固化动力学交互效应"
+            )
+    return notes
+
+
+# ── formulation similarity dedup (recommend paths) ───────────────────────────
+
+_DEDUP_THRESHOLD = 0.96
+
+
+def _ingredient_similarity(a: Any, b: Any) -> float:
+    """Structure/name similarity of two ingredients scaled by weight closeness."""
+    wa = float(getattr(a, "weight_pct", 0.0) or 0.0)
+    wb = float(getattr(b, "weight_pct", 0.0) or 0.0)
+    if max(wa, wb) > 0:
+        weight_closeness = 1.0 - min(1.0, abs(wa - wb) / max(wa, wb))
+    else:
+        weight_closeness = 1.0
+    if (getattr(a, "name", "") or "").strip().lower() == (getattr(b, "name", "") or "").strip().lower():
+        return weight_closeness
+    sa, sb = getattr(a, "smiles", None), getattr(b, "smiles", None)
+    if sa and sb:
+        sim = mol_similarity(sa, sb)
+        if sim is not None:
+            return sim * weight_closeness
+    return 0.0
+
+
+def formulation_similarity(a: Any, b: Any) -> float:
+    """Symmetric weighted similarity of two formulations in [0, 1]."""
+
+    def directed(x: Any, y: Any) -> float:
+        total = 0.0
+        score = 0.0
+        for ing in getattr(x, "ingredients", []) or []:
+            w = float(getattr(ing, "weight_pct", 0.0) or 0.0)
+            if w <= 0:
+                continue
+            best = max(
+                (_ingredient_similarity(ing, other) for other in getattr(y, "ingredients", []) or []),
+                default=0.0,
+            )
+            total += w
+            score += w * best
+        return score / total if total > 0 else 0.0
+
+    return min(directed(a, b), directed(b, a))
+
+
+def _strict_similarity(a: Any, b: Any) -> float:
+    """Duplicate detector: the *weakest* ingredient match across both forms.
+
+    A weighted average would mask a deliberate change in a minor component
+    (e.g. an inhibitor at 5 wt% varied ±20% is a distinct design), so dedup
+    uses the min — every single ingredient must have a near-perfect
+    counterpart before two formulations count as duplicates.
+    """
+
+    def directed(x: Any, y: Any) -> float:
+        worst = 1.0
+        seen_any = False
+        for ing in getattr(x, "ingredients", []) or []:
+            if (getattr(ing, "weight_pct", 0.0) or 0.0) <= 0:
+                continue
+            seen_any = True
+            best = max(
+                (_ingredient_similarity(ing, other) for other in getattr(y, "ingredients", []) or []),
+                default=0.0,
+            )
+            worst = min(worst, best)
+        return worst if seen_any else 0.0
+
+    return min(directed(a, b), directed(b, a))
+
+
+def dedupe_similar_formulations(
+    forms: list[Any], threshold: float = _DEDUP_THRESHOLD
+) -> tuple[list[Any], list[str]]:
+    """Drop near-duplicate formulations, keeping the earlier (higher-ranked) one.
+
+    Callers pass score-sorted lists.  Name-identical composition matching works
+    offline; structure-level matching engages when RDKit/ChemCrow is present.
+    Returns (kept, notes).  No-op when the gateway is disabled or < 2 forms.
+    """
+    if not gateway_enabled() or len(forms) < 2:
+        return forms, []
+    kept: list[Any] = []
+    notes: list[str] = []
+    for form in forms:
+        dupe_of = next(
+            (k for k in kept if _strict_similarity(form, k) >= threshold), None
+        )
+        if dupe_of is None:
+            kept.append(form)
+        else:
+            notes.append(
+                f"已去重：{getattr(form, 'name', '?')} 与 {getattr(dupe_of, 'name', '?')} "
+                f"分子组成高度相似（≥{threshold:.2f}）"
+            )
+    return kept, notes
+
+
+# ── requirement material enrichment ──────────────────────────────────────────
+
+
+def enrich_material_specs(materials: list[Any]) -> list[str]:
+    """Fill missing SMILES on ``MaterialSpec`` rows in place; return warnings.
+
+    Resolution order per material: curated catalog (offline, always on) →
+    ChemCrow ``Query2SMILES`` (when installed).  Materials that resolve to a
+    structure are screened against the controlled-chemical list; hits are
+    reported as human-readable warnings, never as hard blocks.
+    """
+    from ..domain.knowledge import RAW_MATERIALS
+
+    warnings: list[str] = []
+    for m in materials or []:
+        name = (getattr(m, "name", "") or "").strip()
+        if not name:
+            continue
+        if not getattr(m, "smiles", None):
+            spec = RAW_MATERIALS.get(name)
+            if spec is None:
+                lowered = name.lower()
+                spec = next(
+                    (row for key, row in RAW_MATERIALS.items() if key.lower() == lowered),
+                    None,
+                )
+            if spec and spec.get("smiles"):
+                m.smiles = spec["smiles"]
+            else:
+                resolved = name_to_smiles(name)
+                if resolved:
+                    m.smiles = resolved
+        smiles = getattr(m, "smiles", None)
+        if smiles and controlled_check(smiles) is True:
+            warnings.append(f"{name}: 命中管制化学品清单，采购/使用需合规确认")
+    return warnings
+
+
+# ── aggregate profile ────────────────────────────────────────────────────────
+
+
+def chemical_profile(q: str) -> dict[str, Any]:
+    """Full chemical dossier for a name/CAS query.
+
+    Extends the classic 3-tier ``lookup_chemical`` result with native
+    chemistry fields: SMILES/CAS gap-fill, functional groups, molecular
+    patent status, synthetic-accessibility score and safety flags.  Shape is
+    a strict superset of the lookup payload so the frontend can reuse
+    existing typing.
+    """
+    from .chemical_lookup import lookup_chemical
+
+    base = dict(lookup_chemical(q))
+    smiles = base.get("smiles")
+    cas = base.get("cas") or ""
+
+    if gateway_enabled() and pubchem_available():
+        if not smiles:
+            smiles = name_to_smiles(q)
+            if smiles:
+                base["smiles"] = smiles
+                base["found"] = True
+                if base.get("source") in ("none", "empty"):
+                    base["source"] = "pubchem"
+        if not cas:
+            resolved = name_to_cas(q)
+            if resolved:
+                cas = resolved
+                base["cas"] = resolved
+
+    base["func_groups"] = func_groups(smiles) if smiles else []
+    base["patented"] = patent_check(smiles) if smiles else None
+    base["safety"] = safety_flags(smiles, cas)
+    base["synthetic_accessibility"] = synthetic_accessibility(smiles) if smiles else {
+        "sa_score": None,
+        "tier": "unknown",
+        "note": "无 SMILES",
+    }
+    base["chemtools"] = {
+        "enabled": gateway_enabled(),
+    }
+    return base

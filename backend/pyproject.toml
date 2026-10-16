@@ -1,0 +1,178 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "formunex-backend"
+version = "0.1.0"
+description = "FormuNex — AI-assisted formulation R&D platform for metal surface treatment"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "python-multipart>=0.0.18",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "celery>=5.4",
+    "redis>=5.2",
+    # Cap below 2.5 so editable extras cannot silently drift past the
+    # requirements.txt pin (2.4.6) the way science did before P1 #23.
+    "numpy>=1.26,<2.5",
+    "httpx>=0.27",
+    "tenacity>=8.2.0",
+    "loguru>=0.7",
+    "rank-bm25>=0.2",
+    "jieba>=0.42",
+    "neo4j>=6.1.0",
+    "openpyxl>=3.1",
+]
+
+# Heavy / optional scientific engines. These are declared but NOT required to
+# run the platform: every service has a deterministic offline fallback. Install
+# with `pip install -e .[heavy]` on a machine that can support them, or run the
+# corresponding Docker images (see docker-compose.yml).
+[project.optional-dependencies]
+llm = ["anthropic>=0.25", "openai>=1.30", "google-generativeai>=0.7"]
+# P1 #26: optional LLM tracing (fail-open; default off via settings).
+observability = ["langfuse>=2.0"]
+science = [
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "rdkit>=2023.9",
+    "ChemFormula>=1.3",
+    "thermo>=0.2",          # physical-property estimation (density → VOC g/L)
+]
+# CPU-only, pip-installable multi-objective / Bayesian optimizer. Sits between
+# the built-in numpy UCB fallback and BoTorch (the `bo` extra).
+optimize = ["optuna>=3.4"]
+heavy = [
+    "torch>=2.2",
+    "ase>=3.22",
+]
+intel = [
+    "paper-qa>=4.0",        # semantic RAG synthesis (auto-detected in chat)
+    "molbloom>=2.0",        # standalone SureChEMBL patent pre-screen
+    "pubchempy>=1.0.4",     # enrich raw-material SMILES/molar-mass from PubChem
+    "ddgs>=6.0",            # renamed from duckduckgo-search
+]
+# MarkItDown keeps every format backend behind an extra — a bare install parses
+# nothing but plain text, so .pptx/.xlsx silently yield an empty document and
+# .docx falls back to python-docx, which drops tables. The extras are the whole
+# point of depending on it.
+file_ingest = [
+    "markitdown[pdf,docx,pptx,xlsx]>=0.1",
+    "pypdf>=6.19.0",
+    "python-docx>=1.1",
+    "trafilatura>=1.8",
+]
+# P5 report export (DOCX / PDF / PPTX). Soft-imported; Hub falls back to Markdown.
+report_export = [
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
+    "fpdf2>=2.7",
+]
+# Layout-aware PDF → Markdown parsers. FORMUNEX_PDF_PARSER picks the tier:
+# hybrid → docling(dormant) → marker(dormant) → mineru(cloud) → rapidocr →
+# markitdown → pypdf. docling/marker are dormant stubs (skipped when not
+# installed); the old local magic-pdf path is retired (see _parse_mineru).
+#
+# ⚠️ LICENSING: pymupdf4llm and its PyMuPDF backend are AGPL-3.0, or a paid
+# Artifex commercial licence. Every call to them is confined to
+# app/services/pdf_local.py so this can be swapped without an audit.
+#
+# docling / marker-pdf 需要 torch 权重或 GPU，在 CPU-only 主机上不实用
+# （marker 实测 ~54 s/page），在 _PDF_TIERS 中为 dormant stub（未安装时跳过）；
+# 高保真解析走 hybrid 的云端 MinerU（mineru-open-sdk）。本地 magic-pdf 路径
+# 已退役（见 app/services/parsing.py::_parse_mineru）。有 GPU 的主机可自行加回。
+parse_pro = [
+    # Local OCR for scanned pages. rapidocr>=3.9 ships the PP-OCRv6 small ONNX
+    # weights inside the wheel, so no model download at deploy time.
+    # opencv-python-headless is pinned explicitly: the default opencv-python drags
+    # in GUI libraries that a headless VPS does not have.
+    "rapidocr==3.9.2",
+    # rapidocr 3.x declares no inference runtime ("onnxruntime is not installed" when the engine is built). It used
+    # to arrive through pymupdf4llm -> pymupdf-layout; naming it here keeps OCR from depending on that.
+    "onnxruntime>=1.17",
+    "opencv-python-headless>=4.9",
+    # pymupdf4llm is pinned to 1.28.0 (NOT >=): 1.28.2 rewrites OCR backend
+    # selection and adds pymupdf.layout which links libmupdf.so.29.0 (absent from
+    # that wheel), breaking use_layout(True). 1.28.0 also has a RapidOCR
+    # attribute-name bug (text_detector vs text_det); scripts/apply_patches.py
+    # fixes it from patchspec/pymupdf4llm/. PyMuPDF is the exact pin pymupdf4llm
+    # 1.28.0 declares as its hard dependency.
+    "pymupdf4llm==1.28.0",
+    "PyMuPDF==1.28.0",
+    "mineru-open-sdk>=0.2.5",
+]
+export = ["openpyxl>=3.1"]
+# Semantic-embedding RAG upgrade: sentence-transformers + optional chromadb.
+# CPU-only; no GPU required. Activates EmbeddingStore in rag.py automatically.
+embedding = ["sentence-transformers>=2.6"]
+# True Gaussian-process optimizer (BoTorch + gpytorch + torch CPU).
+# Activates BotorchOptimizer (GP + Log-EI acquisition) in optimizer.py.
+bo = ["botorch>=0.10", "gpytorch>=1.11", "torch>=2.2"]
+# Classic DOE designs (LHS, CCD, mixture simplex, Sobol, …).
+pydoe = ["pydoe>=0.3"]
+# Enterprise Bayesian back-end for constrained active learning.
+baybe = ["baybe>=0.14", "pandas>=2.0"]
+# CIELAB / CIEDE2000 colorimetry. Pure Python, no GPU.
+# Activates delta_e + lab_L/a/b metrics in the predictor.
+color = ["colour-science>=0.4"]
+# NotebookLM as a retrieval source (unofficial SDK; browser-session auth).
+# [browser] pulls Playwright + Chromium for the one-time `notebooklm login`.
+notebooklm = ["notebooklm-py[browser]>=0.1"]
+# ColBERT late-interaction retrieval (RAGatouille + torch CPU).
+colbert = ["ragatouille>=0.0.8", "torch>=2.2"]
+# LangGraph CRAG workflow + structured logging.
+crag = ["langgraph>=0.2"]
+intel-colbert = [
+    "ragatouille>=0.0.8",
+    "torch>=2.2",
+    "langgraph>=0.2",
+    "sentence-transformers>=2.6",
+    "ddgs>=6.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.0",
+    "httpx>=0.27",
+    "pypdf>=6.19.0",          # real PDF parsing in test_pdf_downloader real-path tests
+    "PyYAML>=6.0",            # tests/test_compose_hardening.py parses the compose files
+    "cryptography>=42",       # tests/test_http_safe.py mints a self-signed cert for the TLS-name test
+    "ruff==0.15.8",           # lint gate (see [tool.ruff] below); pinned so new rules cannot break CI
+]
+postgres = ["psycopg2-binary>=2.9"]
+
+# Lint gate: bug classes only — syntax errors (E9), invalid comparisons/literals
+# (F63), statement-level mistakes (F7), undefined names (F82) and shadowed
+# definitions (F811) — plus unused imports (F401) in application code: an import
+# nobody uses is how a half-finished wiring hides (the KG "formulation linker"
+# kept its imports for a feature that no longer existed). Re-exports that other
+# modules rely on carry ``# noqa: F401``. Tests are exempt from F401 (fixtures and
+# optional-dependency probes import for effect). Layout, import order and unused
+# *variables* (F841) are deliberately NOT enabled: none is a defect on its own.
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["data", "locks"]
+
+[tool.ruff.lint]
+select = ["E9", "F401", "F63", "F7", "F82", "F811"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F401"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "golden_eval: golden QA dataset evaluation — slower, use -m 'not golden_eval' to skip in fast local runs",
+    "flaky: historically intermittent (timeouts / external deps); still run in CI but easy to filter",
+    "network: test may reach the public internet (everything else runs with outbound connects blocked)",
+]

@@ -1,0 +1,317 @@
+"""OCSR 离线结构识别 adapter — MolScribe（torch，独立 worker）。
+
+统一「化学结构图 → SMILES」的离线识别接口。MolScribe 只在独立 Celery worker
+的 venv 里 import（锁 numpy<2.0，与主 venv numpy 2.x 冲突）；主 backend 进程这里
+的 ``molscribe_available()`` 恒为 False，所有调用返回中性值，管线行为不变。
+"""
+from __future__ import annotations
+
+import logging
+import time
+
+from ..config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+def molscribe_available() -> bool:
+    """当前进程能否 import MolScribe（仅独立 molscribe worker 为 True）。"""
+    try:
+        __import__("molscribe")
+        return True
+    except Exception:
+        return False
+
+
+# ── MolScribe 后端 ─────────────────────────────────────────────────────────
+_molscribe_model = None
+
+
+def _get_molscribe_model():
+    global _molscribe_model
+    if _molscribe_model is None:
+        import torch
+        from molscribe import MolScribe
+        from huggingface_hub import hf_hub_download
+
+        ckpt = hf_hub_download("yujieq/MolScribe", "swin_base_char_aux_1m.pth")
+        _molscribe_model = MolScribe(ckpt, device=torch.device("cpu"))
+    return _molscribe_model
+
+
+def predict_smiles_molscribe(image_path: str) -> str | None:
+    if not molscribe_available():
+        return None
+    try:
+        model = _get_molscribe_model()
+        out = model.predict_image_file(image_path, return_confidence=True)
+        return (out or {}).get("smiles") or None
+    except Exception as exc:
+        logger.warning("MolScribe predict failed: %s", exc)
+        return None
+
+
+def predict_molscribe_with_confidence(image_path: str) -> dict:
+    """P-C: MolScribe 识别 + 置信度（overall_score）。
+
+    Returns {"smiles": str|None, "confidence": float|None}. Confidence is the
+    model's ``overall_score`` in [0,1] — low scores flag likely-misrecognized
+    structures for human review. Never raises.
+    """
+    return predict_molscribe_full(image_path)
+
+
+def predict_molscribe_full(image_path: str) -> dict:
+    """M-D: MolScribe 识别 + 整图/逐原子置信度 + 低置信原子审计。
+
+    Returns::
+
+        {
+          "smiles": str|None,
+          "confidence": float|None,        # overall_score [0,1]
+          "atoms": [{"symbol", "x", "y", "confidence"}...] | None,
+          "low_confidence_atoms": [int...] | None,  # idx with conf < 0.5
+          "atom_confidence_ok": bool|None,  # None when atoms unavailable
+        }
+
+    逐原子置信度来自 MolScribe ``return_atoms_bonds``（atom_scores）。
+    低置信原子提示「该结构区域识别可信度低」——比整图 confidence 细。
+    """
+    if not molscribe_available():
+        return {"smiles": None, "confidence": None, "atoms": None,
+                "low_confidence_atoms": None, "atom_confidence_ok": None}
+    try:
+        model = _get_molscribe_model()
+        out = model.predict_image_file(
+            image_path, return_confidence=True, return_atoms_bonds=True
+        )
+        if not out:
+            return {"smiles": None, "confidence": None, "atoms": None,
+                    "low_confidence_atoms": None, "atom_confidence_ok": None}
+        atoms = out.get("atoms") or []
+        low: list[int] = []
+        if atoms:
+            for i, a in enumerate(atoms):
+                try:
+                    if float(a.get("confidence", 1.0)) < 0.5:
+                        low.append(i)
+                except (TypeError, ValueError):
+                    pass
+        return {
+            "smiles": (out.get("smiles") or "").strip() or None,
+            "confidence": float(out["confidence"]) if out.get("confidence") is not None else None,
+            "atoms": atoms,
+            "low_confidence_atoms": low,
+            "atom_confidence_ok": (len(low) == 0) if atoms is not None else None,
+        }
+    except Exception as exc:
+        logger.warning("MolScribe predict failed: %s", exc)
+        return {"smiles": None, "confidence": None, "atoms": None,
+                "low_confidence_atoms": None, "atom_confidence_ok": None}
+
+
+def validate_recognized_smiles(image_path: str) -> dict:
+    """MolScribe 识别 + MolJSON/RDKit 结构校验（P1 校验闭环）。
+
+    Runs the recognition and validates the result structurally, so
+    recognition errors (missing atoms, wrong bonds, unparseable output)
+    are exposed *before* the SMILES reaches any downstream reasoning.
+
+    Returns::
+
+        {"ok": True,  "smiles": ..., "valid": True,  "atom_count": N,
+         "ring_count": N, "roundtrip_ok": True}
+        {"ok": True,  "smiles": ..., "valid": False, "reason": "...",
+         "atom_count": 0, "ring_count": 0, "roundtrip_ok": False}
+        {"ok": False, "smiles": None, "reason": "MolScribe unavailable or failed",
+         "valid": False, "atom_count": 0, "ring_count": 0, "roundtrip_ok": False}
+
+    ``valid: False`` with ``ok: True`` means the image was recognized but
+    the structure fails RDKit parsing (e.g. MolScribe emitted an invalid
+    SMILES) — treat the result as low-confidence.
+    """
+    pred = predict_molscribe_with_confidence(image_path)
+    smiles = pred.get("smiles")
+    confidence = pred.get("confidence")
+    atom_confidence_ok = pred.get("atom_confidence_ok")  # M-D
+    if not smiles:
+        return {"ok": False, "smiles": None,
+                "reason": "MolScribe unavailable or failed",
+                "valid": False, "atom_count": 0, "ring_count": 0,
+                "roundtrip_ok": False, "confidence": None,
+                "atom_confidence_ok": atom_confidence_ok}
+    from .moljson import validate_smiles
+
+    info = validate_smiles(smiles)
+    if not info["valid"]:
+        return {"ok": True, "smiles": smiles, "valid": False,
+                "reason": "RDKit 无法解析 MolScribe 输出（结构可疑）",
+                "atom_count": 0, "ring_count": 0, "roundtrip_ok": False,
+                "confidence": confidence, "atom_confidence_ok": atom_confidence_ok}
+    return {"ok": True, "smiles": info["smiles"], "valid": True,
+            "atom_count": info["atom_count"], "ring_count": info["ring_count"],
+            "roundtrip_ok": info["roundtrip_ok"], "confidence": confidence,
+            "atom_confidence_ok": atom_confidence_ok}
+
+
+def prewarm_molscribe() -> bool:
+    if not molscribe_available():
+        return False
+    try:
+        _get_molscribe_model()
+        return True
+    except Exception as exc:
+        logger.warning("MolScribe prewarm failed: %s", exc)
+        return False
+
+
+# ── 统一预测入口 ───────────────────────────────────────────────────────────
+def predict_smiles_local(image_path: str) -> str | None:
+    """离线识别统一入口（硬件自适应）。缺库/禁用时中性返回 None（调用方回退 vision-llm）。"""
+    backend = resolve_vision_backend()
+    if backend == "off":
+        return None
+    if backend == "molscribe":
+        return predict_smiles_molscribe(image_path)
+    if backend == "molparser-mobile":
+        try:
+            from .molparser_mobile import predict_smiles_molparser_mobile
+            return predict_smiles_molparser_mobile(image_path)
+        except Exception:
+            return None
+    # vision-llm 由调用方直接处理，这里返回 None 触发回退
+    return None
+
+
+_alive_cache: dict = {"t": 0.0, "v": False}
+
+
+def _molscribe_worker_alive() -> bool:
+    """Whether a dedicated MolScribe Celery worker is consuming the queue.
+
+    ``molscribe_available()`` only reports the *current* process, and the
+    main backend never carries MolScribe (it lives in the dedicated worker
+    image), so it would report False even when OCSR is fully operational.
+    Probe the broker instead: ping all workers and look for the
+    ``molscribe@`` name set by ``celery -n molscribe@%h``. Cached 30 s — the
+    settings panel polls this.
+    """
+    now = time.monotonic()
+    if now - _alive_cache["t"] < 30:
+        return _alive_cache["v"]
+    try:
+        # With the broker down, ``control.ping`` spends 6–8 s in kombu's connection retries before it
+        # gives up — on every poll of the settings panel. A plain TCP check settles that in milliseconds.
+        from ..api._dispatch import broker_reachable
+
+        if not broker_reachable():
+            alive = False
+        else:
+            from ..worker.celery_app import celery_app
+
+            pings = celery_app.control.ping(timeout=2) or {}
+            alive = any("molscribe" in str(name).lower() for name in pings)
+    except Exception:
+        alive = False
+    _alive_cache.update(t=now, v=alive)
+    return alive
+
+
+def availability() -> dict:
+    s = get_settings()
+    hw = detect_hardware_tier()
+    return {
+        "enabled": s.ocsr_enabled,
+        "molscribe_installed": _molscribe_worker_alive(),
+        "molscribe_queue": s.molscribe_queue,
+        "molscribe_timeout_s": s.molscribe_timeout_s,
+        "vision_backend_config": s.chem_vision_backend,
+        "vision_backend_resolved": resolve_vision_backend(),
+        "hardware": hw,
+    }
+
+
+# ── 硬件自适应后端选择（2026-10-11）────────────────────────────────────
+# 对标 pdf_parser="auto" 模式：启动时检测硬件，自动选 tier；可手动 pin。
+_CHEM_VISION_TIERS = ("molscribe", "molparser-mobile", "vision-llm", "off")
+
+_hw_cache: dict = {}
+
+
+def detect_hardware_tier() -> dict:
+    """检测主机硬件，返回 {"gpu": bool, "mem_gb": float, "tier": str}。
+
+    tier 语义：
+      - "gpu": CUDA 可用 → MolScribe GPU（快）
+      - "high-cpu": 内存 >4GB → MolScribe CPU（后台队列，3-8s/张）
+      - "low-cpu": 内存 ≤4GB → MolParser-Mobile（轻量，POC 后启用）
+      - "minimal": 无 torch/内存极低 → vision-llm 兜底
+    永不抛异常，fail-open。
+    """
+    if _hw_cache:
+        return _hw_cache
+    gpu = False
+    try:
+        import torch
+        gpu = torch.cuda.is_available()
+    except Exception:
+        pass
+    mem_gb = 0.0
+    try:
+        import psutil
+        mem_gb = psutil.virtual_memory().total / (1024 ** 3)
+    except Exception:
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        mem_gb = int(line.split()[1]) / (1024 ** 2)
+                        break
+        except Exception:
+            pass
+    if gpu:
+        tier = "gpu"
+    elif mem_gb > 4:
+        tier = "high-cpu"
+    elif mem_gb > 0:
+        tier = "low-cpu"
+    else:
+        tier = "minimal"
+    _hw_cache.update(gpu=gpu, mem_gb=round(mem_gb, 1), tier=tier)
+    logger.info("chem vision hardware: gpu=%s mem=%.1fGB tier=%s", gpu, mem_gb, tier)
+    return _hw_cache
+
+
+def resolve_vision_backend() -> str:
+    """解析 chem_vision_backend 配置为实际后端名。
+
+    - "auto" → 按硬件 tier 映射：gpu/high-cpu→molscribe，
+      low-cpu→molparser-mobile（未就绪时回退 vision-llm），minimal→vision-llm
+    - 手动 pin → 返回该值（未知值警告后回退 auto）
+    - "off" → 禁用
+    """
+    s = get_settings()
+    prefer = (s.chem_vision_backend or "auto").strip().lower()
+    if prefer == "off":
+        return "off"
+    if prefer in _CHEM_VISION_TIERS:
+        return prefer
+    if prefer != "auto":
+        logger.warning("unknown chem_vision_backend=%r — using auto", s.chem_vision_backend)
+    hw = detect_hardware_tier()
+    tier = hw["tier"]
+    if tier in ("gpu", "high-cpu"):
+        return "molscribe"
+    if tier == "low-cpu":
+        # MolParser-Mobile 尚未部署就绪前回退 vision-llm
+        return "molparser-mobile" if _molparser_mobile_available() else "vision-llm"
+    return "vision-llm"
+
+
+def _molparser_mobile_available() -> bool:
+    """MolParser-Mobile 是否可用（POC 阶段恒 False，模型未部署）。"""
+    try:
+        from .molparser_mobile import molparser_mobile_available
+        return molparser_mobile_available()
+    except Exception:
+        return False

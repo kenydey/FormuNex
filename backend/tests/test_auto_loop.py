@@ -1,0 +1,239 @@
+"""Tests for the self-driving loop orchestration (v0.6, P0)."""
+from app.domain.schemas import DOEPlan, LoopReport, OptimizationResult, ProductDomain, Requirement
+from app.services.auto_loop import loop_iterate, rmse_plateau_detected
+
+_REQ = Requirement(domain=ProductDomain.anticorrosion_coating, salt_spray_hours=500)
+
+
+def test_rmse_plateau_detected_when_flat():
+    history = [
+        {"salt_spray_hours": 0.50, "cost_cny_per_kg": 0.20},
+        {"salt_spray_hours": 0.505, "cost_cny_per_kg": 0.201},
+        {"salt_spray_hours": 0.504, "cost_cny_per_kg": 0.199},
+    ]
+    assert rmse_plateau_detected(history, eps=0.01, patience=2)
+
+
+def test_rmse_plateau_not_detected_when_improving():
+    history = [
+        {"salt_spray_hours": 0.50},
+        {"salt_spray_hours": 0.40},
+        {"salt_spray_hours": 0.30},
+    ]
+    assert not rmse_plateau_detected(history, eps=0.01, patience=2)
+
+
+def test_loop_iterate_skips_optimize_when_plateau(monkeypatch):
+    monkeypatch.setenv("FORMUNEX_LOOP_CONVERGENCE_ENABLED", "true")
+    monkeypatch.setenv("FORMUNEX_LOOP_CONVERGENCE_EPS", "0.01")
+    monkeypatch.setenv("FORMUNEX_LOOP_CONVERGENCE_PATIENCE", "2")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    prior = [
+        {"salt_spray_hours": 0.50, "cost_cny_per_kg": 0.20},
+        {"salt_spray_hours": 0.505, "cost_cny_per_kg": 0.201},
+    ]
+
+    def fake_rmse(domain):
+        from app.domain.schemas import ModelInfo
+
+        infos = [
+            ModelInfo(domain=domain, metric="salt_spray_hours", rmse=0.504, r2=0.9, n_samples=8, backend="test"),
+            ModelInfo(domain=domain, metric="cost_cny_per_kg", rmse=0.199, r2=0.8, n_samples=8, backend="test"),
+        ]
+        rmse = {m.metric: m.rmse for m in infos}
+        return infos, rmse
+
+    monkeypatch.setattr("app.services.auto_loop._rmse_by_metric", fake_rmse)
+
+    stub_opt = OptimizationResult(
+        iterations=1,
+        objective="salt_spray_hours",
+        history=[1.0],
+        top_formulations=[],
+        engine="test-prior",
+    )
+    stub_doe = DOEPlan(design="lhs", factors=[], runs=[], plan_id="prior")
+
+    rep = loop_iterate(
+        _REQ,
+        optimize_iterations=1,
+        n_suggest=3,
+        prior_rmse_history=prior,
+        prior_optimization=stub_opt,
+        prior_next_doe=stub_doe,
+    )
+    assert rep.converged is True
+    assert rep.loop_message
+    assert rep.optimization.engine == "test-prior"
+    assert rep.next_doe.plan_id == "prior"
+    get_settings.cache_clear()
+
+
+def test_loop_iterate_includes_adaptive_fields():
+    rep = loop_iterate(_REQ, optimize_iterations=1, n_suggest=3, optimize_engine="numpy", doe_engine="legacy")
+    assert rep.strategy_label in {"exploration", "balanced", "exploitation"}
+    assert rep.recommended_next_action
+    assert len(rep.run_explanations) >= 1
+
+
+def test_loop_iterate_returns_loop_report():
+    rep = loop_iterate(_REQ, optimize_iterations=1, n_suggest=3, optimize_engine="numpy", doe_engine="legacy")
+    assert isinstance(rep, LoopReport)
+    assert rep.domain == "anticorrosion_coating"
+    assert rep.engine in {"numpy-ucb", "optuna-tpe", "botorch-ei", "baybe"}
+
+
+def test_loop_iterate_produces_optimization_and_next_doe():
+    rep = loop_iterate(_REQ, optimize_iterations=1, n_suggest=4, optimize_engine="numpy", doe_engine="legacy")
+    # Optimization should yield ranked top formulations
+    assert len(rep.optimization.top_formulations) > 0
+    assert len(rep.optimization.history) == 1
+    # Active-learning DOE should flag exactly n_suggest runs
+    ai_runs = [r for r in rep.next_doe.runs if r.ai_suggested]
+    assert len(ai_runs) == 4
+
+
+def test_loop_iterate_graceful_without_records():
+    # In the CI baseline there may be no lab data — loop must still return a result.
+    rep = loop_iterate(_REQ, optimize_iterations=1, n_suggest=2, optimize_engine="numpy", doe_engine="legacy")
+    assert rep.total_records >= 0
+    assert isinstance(rep.rmse_by_metric, dict)
+    assert rep.next_doe.design  # a design was chosen
+
+
+def test_loop_progress_callback_invoked():
+    calls: list[tuple[float, str]] = []
+    loop_iterate(_REQ, optimize_iterations=1, n_suggest=2, optimize_engine="numpy", doe_engine="legacy", progress_cb=lambda p, m: calls.append((p, m)))
+    assert calls, "progress callback should be invoked at least once"
+    assert calls[-1][0] == 1.0, "final progress should reach 1.0"
+
+
+def test_records_for_filters_by_domain():
+    from app.services.training import registry
+
+    recs = registry.records_for(ProductDomain.anticorrosion_coating)
+    assert isinstance(recs, list)
+    assert all(r.domain == ProductDomain.anticorrosion_coating for r in recs)
+
+
+def test_loop_all_domains():
+    for domain in ProductDomain:
+        rep = loop_iterate(
+            Requirement(domain=domain),
+            optimize_iterations=1,
+            n_suggest=2,
+            optimize_engine="numpy",
+            doe_engine="legacy",
+        )
+        assert rep.optimization.top_formulations
+        assert rep.next_doe.runs
+
+
+def test_loop_iterate_converges_when_target_achieved(monkeypatch):
+    """P2-4: measured best meets the objective target → converged hold."""
+    monkeypatch.setenv("FORMUNEX_LOOP_CONVERGENCE_ENABLED", "true")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    from app.domain.schemas import ExperimentRecord, ObjectiveSpec
+
+    def fake_records(domain):
+        return [
+            ExperimentRecord(
+                domain=domain, factors={},
+                measured={"salt_spray_hours": 600.0},
+            )
+        ]
+
+    def fake_rmse(domain):
+        from app.domain.schemas import ModelInfo
+
+        infos = [
+            ModelInfo(domain=domain, metric="salt_spray_hours", rmse=0.50,
+                      r2=0.9, n_samples=8, backend="test"),
+        ]
+        return infos, {m.metric: m.rmse for m in infos}
+
+    monkeypatch.setattr(
+        "app.services.training.registry.records_for", fake_records)
+    monkeypatch.setattr("app.services.auto_loop._rmse_by_metric", fake_rmse)
+
+    req = Requirement(
+        domain=ProductDomain.anticorrosion_coating,
+        objectives=[ObjectiveSpec(metric="salt_spray_hours",
+                                  direction="maximize", target_value=500.0)],
+    )
+    rep = loop_iterate(req)
+    assert rep.converged is True
+    assert "目标已达成" in rep.loop_message
+    assert rep.next_doe.design == "converged-hold"
+
+
+def test_loop_iterate_not_converged_when_target_missed(monkeypatch):
+    """P2-4: best below target → normal iteration continues."""
+    monkeypatch.setenv("FORMUNEX_LOOP_CONVERGENCE_ENABLED", "true")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    from app.domain.schemas import ExperimentRecord, ObjectiveSpec
+
+    def fake_records(domain):
+        return [
+            ExperimentRecord(
+                domain=domain, factors={},
+                measured={"salt_spray_hours": 400.0},
+            )
+        ]
+
+    def fake_rmse(domain):
+        from app.domain.schemas import ModelInfo
+
+        infos = [
+            ModelInfo(domain=domain, metric="salt_spray_hours", rmse=0.50,
+                      r2=0.9, n_samples=8, backend="test"),
+        ]
+        return infos, {m.metric: m.rmse for m in infos}
+
+    monkeypatch.setattr(
+        "app.services.training.registry.records_for", fake_records)
+    monkeypatch.setattr("app.services.auto_loop._rmse_by_metric", fake_rmse)
+
+    req = Requirement(
+        domain=ProductDomain.anticorrosion_coating,
+        objectives=[ObjectiveSpec(metric="salt_spray_hours",
+                                  direction="maximize", target_value=500.0)],
+    )
+    # target missed + no plateau → must NOT take the converged shortcut
+    # (workflow will run; stub it to avoid heavy compute)
+    import app.services.auto_loop as al
+
+    monkeypatch.setattr(
+        "app.pipeline.workflow.run_optimization",
+        lambda *a, **k: __import__("app.domain.schemas", fromlist=["OptimizationResult"]).OptimizationResult(
+            iterations=1, objective="salt_spray_hours", history=[],
+            top_formulations=[], engine="test"),
+    )
+
+    def fake_al_doe(*a, **k):
+        from types import SimpleNamespace
+
+        from app.domain.schemas import DOEPlan
+
+        plan = DOEPlan(design="lhs", factors=[], runs=[], plan_id="p")
+        return SimpleNamespace(
+            plan=plan, chemical_feasibility=None, physical_constraints=None,
+            campaign_state=None, strategy_label="balanced", strategy_rationale="",
+            run_explanations=[], anomalies=[], recommended_next_action="",
+            budget_remaining=None,
+        )
+
+    # active_learning is imported lazily inside loop_iterate: patch the source.
+    monkeypatch.setattr(
+        "app.services.active_learning.active_learning_doe", fake_al_doe)
+    rep = loop_iterate(req)
+    assert rep.converged is False

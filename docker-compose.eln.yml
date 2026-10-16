@@ -1,0 +1,84 @@
+# FormuNex — Enterprise ELN overlay (Plan D)
+#
+# Usage:
+#   docker network create formunex-eln
+#   # Start official Datalab stack on the same network (see deploy/eln/README.md)
+#   docker compose -f docker-compose.yml -f docker-compose.eln.yml up
+#
+# For an existing external Datalab cluster, set FORMUNEX_DATALAB_API_URL only.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${FORMUNEX_PG_USER:-formunex}
+      POSTGRES_PASSWORD: ${FORMUNEX_PG_PASSWORD:-formunex}
+      POSTGRES_DB: ${FORMUNEX_PG_DB:-formunex}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FORMUNEX_PG_USER:-formunex} -d ${FORMUNEX_PG_DB:-formunex}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - formunex-eln
+
+  backend:
+    environment:
+      FORMUNEX_ENVIRONMENT: production
+      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_CAMPAIGN_BACKEND: datalab
+      FORMUNEX_EXPERIMENT_BACKEND: datalab
+      FORMUNEX_DATALAB_REQUIRED: "true"
+      FORMUNEX_DATALAB_API_URL: ${FORMUNEX_DATALAB_API_URL:-http://datalab-api:5001}
+      # Datalab 平台非 TESTING 模式，每个端点都要求 DATALAB-API-KEY 头，缺失即 401。
+      # 值放 .env（已 gitignore），不要写死在本文件里。
+      FORMUNEX_DATALAB_API_TOKEN: ${FORMUNEX_DATALAB_API_TOKEN:-}
+      # production ELN: default auth ON (override with FORMUNEX_API_AUTH_ENABLED=false).
+      # Local docker-compose.yml keeps :-false for intranet lab use.
+      FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - formunex-eln
+
+  worker:
+    environment:
+      FORMUNEX_ENVIRONMENT: production
+      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_CAMPAIGN_BACKEND: datalab
+      FORMUNEX_EXPERIMENT_BACKEND: datalab
+      FORMUNEX_DATALAB_REQUIRED: "true"
+      FORMUNEX_DATALAB_API_URL: ${FORMUNEX_DATALAB_API_URL:-http://datalab-api:5001}
+      # Datalab 平台非 TESTING 模式，每个端点都要求 DATALAB-API-KEY 头，缺失即 401。
+      # 值放 .env（已 gitignore），不要写死在本文件里。
+      FORMUNEX_DATALAB_API_TOKEN: ${FORMUNEX_DATALAB_API_TOKEN:-}
+      FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - formunex-eln
+
+  frontend:
+    build:
+      context: ./frontend
+      # No VITE_API_TOKEN bake — enter token in Settings at runtime.
+    networks:
+      - formunex-eln
+
+  redis:
+    networks:
+      - formunex-eln
+
+networks:
+  formunex-eln:
+    name: formunex-eln
+    driver: bridge
+
+volumes:
+  postgres_data:

@@ -1,0 +1,205 @@
+import pytest
+
+from app.domain.schemas import Evidence, ObjectiveSpec, ProductDomain, Requirement, Substrate
+from app.pipeline import workflow
+
+
+@pytest.fixture()
+def fake_federated_search(monkeypatch):
+    """Mock 联邦检索（arXiv/专利）——live-search 测试不再打真实网络，arXiv 限流(429)会 flake 全量套件。"""
+    def _fake_iter_search(query, source_types, req=None, **kwargs):
+        return ([Evidence(source="literature", identifier="doi:mock", title="Mock study",
+                          snippet="Zinc phosphate and polyamide hardener formulation.", relevance=0.9)], {})
+
+    monkeypatch.setattr("app.services.literature.iter_search", _fake_iter_search)
+
+
+def test_research_returns_evidence_and_recommendations(fake_federated_search):
+    req = Requirement(domain=ProductDomain.anticorrosion_coating, salt_spray_hours=500, film_weight_gsm=70)
+    result = workflow.run_research(req)
+    assert result.evidence, "should retrieve prior art"
+    assert len(result.recommended) == 3
+    # Recommendations are scored and sorted descending.
+    scores = [f.score for f in result.recommended]
+    assert scores == sorted(scores, reverse=True)
+    assert "salt_spray_hours" in result.recommended[0].predicted
+    assert result.chat_markdown
+
+
+def test_research_populates_cost_and_sustainability():
+    req = Requirement(domain=ProductDomain.anticorrosion_coating)
+    result = workflow.run_research(req)
+    for form in result.recommended:
+        assert "cost_cny_per_kg" in form.predicted
+        assert "voc_gpl" in form.predicted
+        assert "sustainability_idx" in form.predicted
+        assert form.predicted["cost_cny_per_kg"] > 0
+
+
+def test_research_voc_warning_when_over_limit():
+    # Set an extremely low VOC limit so the solvent-based coating triggers a warning.
+    req = Requirement(domain=ProductDomain.anticorrosion_coating, voc_limit_gpl=1.0)
+    result = workflow.run_research(req)
+    # At least one recommended formulation should warn about VOC.
+    warning_found = any(
+        any("VOC" in w for w in f.warnings)
+        for f in result.recommended
+    )
+    assert warning_found
+
+
+def test_research_source_types_filters_preloaded():
+    req = Requirement(domain=ProductDomain.anticorrosion_coating)
+    from app.domain.schemas import Evidence
+
+    mixed = [
+        Evidence(source="USPTO", identifier="US1", title="Pat", snippet="p", relevance=0.9),
+        Evidence(source="literature", identifier="DOI:1", title="Paper", snippet="l", relevance=0.8),
+    ]
+    result = workflow.run_research(req, pre_sources=mixed, source_types=["literature"])
+    assert result.evidence
+    assert all("literature" in e.source.lower() or e.identifier.startswith("DOI") for e in result.evidence)
+
+
+def test_research_source_types_live_search(fake_federated_search):
+    req = Requirement(domain=ProductDomain.anticorrosion_coating, salt_spray_hours=500)
+    result = workflow.run_research(req, source_types=["patents", "literature"])
+    assert result.evidence
+    assert len(result.recommended) == 3
+
+
+def test_build_doe_includes_cure_factor_for_coatings():
+    req = Requirement(domain=ProductDomain.anticorrosion_coating, cure_temperature_c=100)
+    plan = workflow.build_doe(req, design="full_factorial")
+    names = [f.name for f in plan.factors]
+    assert "cure_temperature_c" in names
+    assert len(plan.runs) == 2 ** len(plan.factors)
+
+
+def test_optimization_single_objective_improves_over_baseline():
+    # Explicit single-objective: purely maximise salt spray.
+    req = Requirement(
+        domain=ProductDomain.anticorrosion_coating,
+        salt_spray_hours=600,
+        objectives=[ObjectiveSpec(metric="salt_spray_hours", weight=1.0, direction="maximize")],
+    )
+    # iterations=1 only samples one candidate and flakes ~50% of the time: the
+    # Botorch recommender's RNG is local and does not answer to a global
+    # torch.manual_seed, so "固定 seed" cannot make a single round deterministic.
+    # Six rounds give the optimiser room to actually improve, which is what this
+    # test is asserting, and empirically beat the baseline 6/6 runs with margin.
+    result = workflow.run_optimization(req, iterations=6)
+    assert result.objective == "salt_spray_hours"
+    assert len(result.top_formulations) >= 1
+    # Best-so-far convergence curve is monotonically non-decreasing.
+    assert all(b >= a for a, b in zip(result.history, result.history[1:]))
+    # Optimized top beats the neutral baseline on the salt-spray metric.
+    from app.domain import knowledge
+    from app.services import predictor
+
+    baseline = knowledge.baseline_formulation(req)
+    base_score = predictor.objective_value(baseline, result.objective)
+    assert result.top_formulations[0].score >= base_score
+
+
+def test_formulation_from_factors_uses_active_formulation_ingredients():
+    """When req.active_formulation uses different specific materials than the
+    generic domain template, lever overrides must apply to *those* ingredient
+    names. formulation_from_factors used to always rebuild from the generic
+    baseline template regardless, so every override matched nothing and the
+    reconstructed formulation was identical no matter what value the
+    optimizer suggested — an optimization loop over a static point."""
+    from app.domain.schemas import Formulation, Ingredient
+    from app.domain.project_spec import normalize_requirement, resolve_levers
+    from app.pipeline import reconstruct
+
+    active = Formulation(
+        name="custom",
+        domain=ProductDomain.anticorrosion_coating,
+        ingredients=[
+            Ingredient(name="Zinc molybdate", role="inhibitor", weight_pct=10.0),
+            Ingredient(name="Novolac epoxy", role="resin", weight_pct=40.0),
+            Ingredient(name="Amine hardener", role="hardener", weight_pct=15.0),
+        ],
+    )
+    req = Requirement(
+        domain=ProductDomain.anticorrosion_coating,
+        salt_spray_hours=500,
+        active_formulation=active,
+    )
+    levers = resolve_levers(normalize_requirement(req), active)
+    lever_names = {lev.name for lev in levers}
+    assert "Zinc molybdate" in lever_names
+
+    low = reconstruct.formulation_from_factors(req, {"Zinc molybdate": 5.0})
+    high = reconstruct.formulation_from_factors(req, {"Zinc molybdate": 20.0})
+    low_pct = next(i.weight_pct for i in low.ingredients if i.name == "Zinc molybdate")
+    high_pct = next(i.weight_pct for i in high.ingredients if i.name == "Zinc molybdate")
+    assert low_pct != high_pct
+
+
+def test_score_and_validate_uses_passed_objectives_not_empty_req_objectives():
+    """run_optimization ranks candidates with default_objectives() whenever
+    req.objectives is empty (the common case), then re-scores the winners via
+    _score_and_validate — which used to look at req.objectives alone, saw an
+    empty list, and silently fell back to a raw single-metric prediction
+    instead of the multi-objective composite that had actually driven
+    ranking/selection: two incompatible numbers on completely different
+    scales for the same formulation."""
+    from app.domain import knowledge
+    from app.services import predictor
+    from app.pipeline.workflow import _score_and_validate
+
+    req = Requirement(domain=ProductDomain.anticorrosion_coating, salt_spray_hours=500)
+    assert req.objectives == []  # the case that used to trigger the fallback
+
+    objectives = [
+        ObjectiveSpec(metric="salt_spray_hours", weight=0.5, direction="maximize"),
+        ObjectiveSpec(metric="cost_cny_per_kg", weight=0.5, direction="minimize"),
+    ]
+    form = knowledge.baseline_formulation(req)
+    scored = _score_and_validate(form, None, req, objectives=objectives)
+
+    bounds = predictor.default_bounds(objectives, scored)
+    expected = predictor.multi_objective_score(scored, objectives, None, bounds)
+    assert scored.score == pytest.approx(expected, abs=1e-6)
+    # Not the old broken behaviour: a raw salt_spray_hours prediction is in
+    # the hundreds, nowhere near a normalized multi-objective composite.
+    assert scored.score != pytest.approx(scored.predicted["salt_spray_hours"], rel=1e-3)
+
+
+def test_optimization_multi_objective_returns_objectives():
+    req = Requirement(domain=ProductDomain.anticorrosion_coating, salt_spray_hours=500)
+    result = workflow.run_optimization(req, iterations=1)
+    # Default multi-objective: objectives list should be populated.
+    assert result.objectives, "multi-objective result should carry objective specs"
+    assert any(o.metric == "salt_spray_hours" for o in result.objectives)
+    assert any(o.metric == "cost_cny_per_kg" for o in result.objectives)
+    # predicted_std should be populated (may be empty if no trained models).
+    for form in result.top_formulations:
+        assert isinstance(form.predicted_std, dict)
+
+
+def test_optimization_enriches_cas_and_zh_name():
+    req = Requirement(
+        domain=ProductDomain.surface_treatment,
+        substrate=Substrate.aluminum,
+        salt_spray_hours=500,
+    )
+    result = workflow.run_optimization(req, iterations=1)
+    assert result.top_formulations
+    top = result.top_formulations[0]
+    by_name = {i.name: i for i in top.ingredients}
+    assert by_name["Hexafluorozirconic acid"].cas_no == "12021-95-3"
+    assert by_name["Hexafluorozirconic acid"].zh_name == "六氟锆酸"
+    assert by_name["Cerium nitrate"].cas_no == "7789-18-6"
+    assert by_name["Cerium nitrate"].zh_name == "硝酸铈"
+
+
+def test_all_domains_run_end_to_end():
+    for domain in ProductDomain:
+        req = Requirement(domain=domain, substrate=Substrate.aluminum)
+        research = workflow.run_research(req)
+        assert research.recommended
+        opt = workflow.run_optimization(req, iterations=1)
+        assert opt.top_formulations

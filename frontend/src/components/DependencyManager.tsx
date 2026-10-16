@@ -1,0 +1,1614 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  api,
+  awaitTaskStream,
+  type ChemToolsStatus,
+  type DependencyInfo,
+  type DependencyInstallResult,
+  type KBStats,
+} from "../api";
+import { CANCEL_BUTTON_CLASS } from "../hooks/useTaskCancel";
+
+const CHEMTOOL_LABELS: Record<string, string> = {
+  name_to_smiles: "名称→SMILES",
+  name_to_cas: "名称→CAS",
+  func_groups: "官能团识别",
+  mol_similarity: "分子相似度",
+  patent_check: "分子专利预筛",
+  controlled_check: "管制品筛查",
+  explosive_check: "爆炸性筛查",
+  web_search: "化学网络检索",
+};
+
+function ChemToolsCard({ status }: { status: ChemToolsStatus | null }) {
+  if (!status) return null;
+  const caps = Object.entries(status.capabilities || {});
+  const okCount = caps.filter(([, c]) => c.available).length;
+  return (
+    <div className="border border-edge/60 rounded p-2">
+      <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">
+        化学工具网关 · {okCount}/{caps.length} 可用
+        {!status.enabled && <span className="text-amber-400 ml-1">（已禁用）</span>}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {caps.map(([key, cap]) => (
+          <span
+            key={key}
+            title={cap.hint ?? undefined}
+            className={`text-[10px] px-1.5 py-0.5 rounded border ${
+              cap.available
+                ? "border-teal-500/40 bg-teal-500/10 text-teal-300"
+                : "border-edge bg-ink/60 text-slate-500"
+            }`}
+          >
+            {cap.available ? "●" : "○"} {CHEMTOOL_LABELS[key] ?? key}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeBaseCard({
+  stats,
+  onReindex,
+  reindexing,
+}: {
+  stats: KBStats | null;
+  onReindex: () => void;
+  reindexing: boolean;
+}) {
+  if (!stats) return null;
+  return (
+    <div className="border border-edge/60 rounded p-2">
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[11px] uppercase tracking-wide text-slate-500">
+          持久知识库
+          {!stats.enabled && <span className="text-amber-400 ml-1">（已禁用）</span>}
+        </div>
+        {stats.enabled && (
+          <button
+            onClick={onReindex}
+            disabled={reindexing}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-edge text-slate-400 hover:text-slate-200 hover:border-accent/50 disabled:opacity-50"
+            title="对已存储的全部文档重建切块与向量索引"
+          >
+            {reindexing ? "重建中…" : "重建索引"}
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1 text-[10px]">
+        <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60 text-slate-400">
+          文档 {stats.sources}
+        </span>
+        {(stats.sources_archived ?? 0) > 0 && (
+          <span
+            className="px-1.5 py-0.5 rounded border border-slate-500/40 bg-slate-500/10 text-slate-400"
+            data-testid="kb-archive-split"
+            title={`活跃 ${stats.sources_active ?? "?"} · 已归档 ${stats.sources_archived}`}
+          >
+            活跃 {stats.sources_active ?? "?"} · 归档 {stats.sources_archived}
+          </span>
+        )}
+        <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60 text-slate-400">
+          切块 {stats.chunks}
+        </span>
+        {stats.embedding_model && (
+          <span
+            className="px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-500/10 text-sky-300"
+            data-testid="kb-embedding-model"
+            title={
+              [
+                stats.reindex_hint || "换模型后必须重建索引",
+                stats.embedding_catalog?.length
+                  ? `可选：${stats.embedding_catalog.map((c) => c.id).join(", ")}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n")
+            }
+          >
+            模型 {stats.embedding_model.split("/").pop()}
+          </span>
+        )}
+        {/* Keyed on vector_mode, not embedding_available. The library being
+            importable says nothing about whether any chunk actually carries a
+            vector — the model download can fail and every embedding silently
+            becomes NULL — so a badge driven by the import probe would show
+            green over a corpus doing keyword matching. */}
+        <span
+          className={`px-1.5 py-0.5 rounded border ${
+            stats.vector_mode === "semantic"
+              ? "border-teal-500/40 bg-teal-500/10 text-teal-300"
+              : stats.vector_mode === "degraded"
+                ? "border-amber-500/50 bg-amber-500/10 text-amber-300"
+                : "border-edge bg-ink/60 text-slate-500"
+          }`}
+          title={
+            stats.vector_hint ||
+            (stats.vector_mode === "semantic"
+              ? `检索为语义向量模式（${stats.rag_backend ?? "embedding"}）`
+              : "尚无切块，入库后再看")
+          }
+        >
+          {stats.vector_mode === "degraded" ? "⚠ " : ""}
+          向量 {stats.embedded_chunks}/{stats.chunks}
+        </span>
+        {typeof stats.scan_pressure === "number" && (stats.scan_limit ?? 0) > 0 && (
+          <span
+            className={`px-1.5 py-0.5 rounded border ${
+              stats.scan_near_cap
+                ? "border-amber-500/50 bg-amber-500/10 text-amber-300"
+                : "border-edge bg-ink/60 text-slate-500"
+            }`}
+            data-testid="kb-scan-pressure"
+            title={
+              stats.scan_near_cap
+                ? `活跃切块接近扫描上限（${stats.chunks_active ?? "?"}/${stats.scan_limit}）；可考虑归档清理`
+                : `活跃切块 / 扫描上限 = ${stats.chunks_active ?? "?"}/${stats.scan_limit}`
+            }
+          >
+            {stats.scan_near_cap ? "⚠ " : ""}
+            扫描 {(stats.scan_pressure * 100).toFixed(0)}%
+          </span>
+        )}
+        {stats.suppliers_json_dual_write === false && (
+          <span
+            className="px-1.5 py-0.5 rounded border border-violet-500/40 bg-violet-500/10 text-violet-300"
+            data-testid="kb-suppliers-json-off"
+            title="materials.suppliers_json 双写已关；写入只走归一化表"
+          >
+            供应商 JSON 单写
+          </span>
+        )}
+        {(stats.products ?? 0) > 0 && (
+          <span
+            className="px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300"
+            title="从文献/专利中自动识别的商业化学品牌号登记簿（牌号/供应商/通用名）"
+          >
+            商业产品 {stats.products}
+          </span>
+        )}
+        {Object.entries(stats.sources_by_kind || {}).map(([kind, n]) => (
+          <span
+            key={kind}
+            className="px-1.5 py-0.5 rounded border border-edge bg-ink/60 text-slate-500"
+          >
+            {kind} ×{n}
+          </span>
+        ))}
+      </div>
+      {(() => {
+        const g = stats.quality_gate_drops;
+        if (!g) return null;
+        const r = g.retrieval || {};
+        const i = g.ingest || {};
+        const parts = [
+          r.blocked_domain ? `检索拦域名 ${r.blocked_domain}` : null,
+          r.garbage_snippet ? `检索垃圾 ${r.garbage_snippet}` : null,
+          r.wiki_track ? `检索wiki ${r.wiki_track}` : null,
+          i.blocked_domain ? `入库拦域名 ${i.blocked_domain}` : null,
+          i.garbage_snippet ? `入库垃圾 ${i.garbage_snippet}` : null,
+        ].filter(Boolean);
+        if (parts.length === 0) return null;
+        return (
+          <div
+            className="mt-1 text-[10px] text-slate-500"
+            data-testid="kb-quality-gate-drops"
+            title="进程内质量门禁累计丢弃（重启清零）"
+          >
+            门禁丢弃 · {parts.join(" · ")}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+/** Top-5 #5: dry-run → confirm purge of soft-archived sources past retention days. */
+function RetentionPurgeCard({
+  stats,
+  onPurged,
+}: {
+  stats: KBStats | null;
+  onPurged: () => void;
+}) {
+  const [days, setDays] = useState(30);
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<
+    Array<{ source_id: string; title?: string | null; archived_at?: string | null }>
+  >([]);
+
+  const nearCap = Boolean(stats?.scan_near_cap);
+  const archived = stats?.sources_archived ?? 0;
+
+  async function runDry() {
+    setBusy(true);
+    setReport(null);
+    try {
+      const out = await api.kbRetentionPurge({ days, dry_run: true, confirm: false });
+      setCandidates(out.candidates || []);
+      setReport(
+        `预览：${out.candidate_count} 条归档源超过 ${out.days} 天` +
+          (out.candidate_count ? "（确认后才会物理删除）" : ""),
+      );
+    } catch (e) {
+      setReport(`预览失败: ${e instanceof Error ? e.message : String(e)}`);
+      setCandidates([]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runPurge() {
+    if (candidates.length === 0) {
+      setReport("请先预览；当前无候选");
+      return;
+    }
+    const ok = window.confirm(
+      `确认物理删除 ${candidates.length} 条已软归档且超过 ${days} 天的知识库文档？\n此操作不可撤销（切块/提及一并清理）。`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    setReport(null);
+    try {
+      const out = await api.kbRetentionPurge({
+        days,
+        dry_run: false,
+        confirm: true,
+      });
+      setReport(
+        out.ok
+          ? `已清理 ${out.purged_count} / ${out.candidate_count} 条`
+          : `清理部分失败：成功 ${out.purged_count}，错误 ${out.errors?.length ?? 0}`,
+      );
+      setCandidates([]);
+      onPurged();
+    } catch (e) {
+      setReport(`清理失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={`border rounded p-2 ${
+        nearCap ? "border-amber-500/50 bg-amber-500/5" : "border-edge/60"
+      }`}
+      data-testid="kb-retention-purge"
+    >
+      <div className="flex items-center justify-between mb-1 gap-2">
+        <div className="text-[11px] uppercase tracking-wide text-slate-500">
+          归档清理
+          {nearCap && <span className="text-amber-300 ml-1">· 扫描近上限</span>}
+          {archived > 0 && (
+            <span className="text-slate-500 ml-1 normal-case">（已归档 {archived}）</span>
+          )}
+        </div>
+      </div>
+      <p className="text-[10px] text-slate-500 mb-1.5">
+        仅删除<strong>已软归档</strong>且超龄源；默认先预览。不会自动 TTL。
+      </p>
+      <div className="flex flex-wrap items-center gap-2 text-[10px]">
+        <label className="flex items-center gap-1 text-slate-400">
+          超过
+          <input
+            type="number"
+            min={1}
+            max={3650}
+            value={days}
+            onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
+            className="w-14 bg-ink border border-edge rounded px-1 py-0.5 text-slate-300"
+            data-testid="kb-retention-days"
+          />
+          天
+        </label>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void runDry()}
+          className="px-1.5 py-0.5 rounded border border-edge text-slate-400 hover:text-slate-200 disabled:opacity-50"
+          data-testid="kb-retention-dry-run"
+        >
+          {busy ? "…" : "预览"}
+        </button>
+        <button
+          type="button"
+          disabled={busy || candidates.length === 0}
+          onClick={() => void runPurge()}
+          className="px-1.5 py-0.5 rounded border border-rose-500/40 text-rose-300 hover:bg-rose-500/10 disabled:opacity-40"
+          data-testid="kb-retention-confirm"
+        >
+          确认清理
+        </button>
+      </div>
+      {report && (
+        <div className="mt-1 text-[10px] text-slate-400" data-testid="kb-retention-report">
+          {report}
+        </div>
+      )}
+      {candidates.length > 0 && (
+        <ul className="mt-1 max-h-24 overflow-auto text-[10px] text-slate-500 space-y-0.5">
+          {candidates.slice(0, 20).map((c) => (
+            <li key={c.source_id}>
+              {(c.title || c.source_id).slice(0, 60)}
+              {c.archived_at ? ` · ${c.archived_at.slice(0, 10)}` : ""}
+            </li>
+          ))}
+          {candidates.length > 20 && <li>…另有 {candidates.length - 20} 条</li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Human labels for the extra groups, in display order.
+const EXTRA_LABELS: Record<string, string> = {
+  llm: "大模型供应商 · LLM",
+  intel: "在线检索 · Retrieval",
+  embedding: "语义向量 RAG · Embedding",
+  colbert: "ColBERT 检索 · ColBERT",
+  crag: "联邦检索 · CRAG",
+  science: "科学计算 · Science",
+  optimize: "寻优器 · Optimize",
+  bo: "高斯过程寻优 · BoTorch",
+  pydoe: "经典 DOE · pyDOE",
+  baybe: "贝叶斯主动学习 · BayBE",
+  color: "色差 · Color",
+  file_ingest: "文件解析 · Ingest",
+  // Without an entry here the group is filtered out of the UI entirely by
+  // EXTRA_ORDER, so every parse_pro package was installable only from a shell.
+  parse_pro: "版面感知解析 · Layout",
+  export: "导出 · Export",
+  notebooklm: "NotebookLM",
+};
+const EXTRA_ORDER = Object.keys(EXTRA_LABELS);
+
+/**
+ * KB/KG 维护诊断卡(B1/B2/B3, 2026-09-05): 完整性扫描(孤儿引用) /
+ * 重建知识图谱 / Neo4j 图谱适配层状态。
+ */
+function KbDiagnosticsCard() {
+  const [integrity, setIntegrity] = useState<import("../api").KbIntegrityResponse | null>(null);
+  const [integBusy, setIntegBusy] = useState(false);
+  const [rebuildBusy, setRebuildBusy] = useState(false);
+  const [neo4j, setNeo4j] = useState<import("../api").Neo4jStats | null>(null);
+  const [neoBusy, setNeoBusy] = useState(false);
+  const [report, setReport] = useState<string | null>(null);
+  const [kgStats, setKgStats] = useState<import("../api").KgStats | null>(null);
+  const [calibration, setCalibration] = useState<import("../api").KgCalibrationResponse | null>(null);
+  const [calibBusy, setCalibBusy] = useState(false);
+  const [kbProbeQ, setKbProbeQ] = useState("");
+  const [kbProbeBusy, setKbProbeBusy] = useState(false);
+  const [kbProbeMode, setKbProbeMode] = useState<"search" | "hybrid" | null>(null);
+  const [kbProbeHits, setKbProbeHits] = useState<
+    Array<{ title: string; snippet: string; score?: number; source?: string }>
+  >([]);
+  const [kgRetrieveBusy, setKgRetrieveBusy] = useState(false);
+  const [kgRetrieveHits, setKgRetrieveHits] = useState<
+    Array<{ title: string; snippet: string; score?: number; source?: string }>
+  >([]);
+  const [kgRetrieveStats, setKgRetrieveStats] = useState<string | null>(null);
+  const [productsQ, setProductsQ] = useState("");
+  const [productsBusy, setProductsBusy] = useState(false);
+  const [products, setProducts] = useState<import("../api").KbProductItem[] | null>(null);
+  const [productsTotal, setProductsTotal] = useState(0);
+  const [linkFormUid, setLinkFormUid] = useState("");
+  const [linkCompUid, setLinkCompUid] = useState("");
+  const [linkRatio, setLinkRatio] = useState("0.1");
+  const [linkFormB, setLinkFormB] = useState("");
+  const [linkScore, setLinkScore] = useState("1");
+  const [linkBusy, setLinkBusy] = useState(false);
+
+  async function refreshKgStats() {
+    try {
+      setKgStats(await api.kgStats());
+    } catch {
+      setKgStats(null);
+    }
+  }
+
+  useEffect(() => {
+    void refreshKgStats();
+  }, []);
+
+  async function runIntegrity() {
+    setIntegBusy(true);
+    setReport(null);
+    try {
+      setIntegrity(await api.kbIntegrity());
+    } catch (e) {
+      setReport(`完整性检查失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIntegBusy(false);
+    }
+  }
+
+  async function runCalibration() {
+    setCalibBusy(true);
+    setReport(null);
+    try {
+      setCalibration(await api.kgCalibration());
+    } catch (e) {
+      setReport(`KG 校准读取失败: ${e instanceof Error ? e.message : String(e)}`);
+      setCalibration(null);
+    } finally {
+      setCalibBusy(false);
+    }
+  }
+
+  async function runKbProbe(mode: "search" | "hybrid") {
+    const q = kbProbeQ.trim();
+    if (!q) {
+      setReport("请先输入 KB 检索词");
+      return;
+    }
+    setKbProbeBusy(true);
+    setKbProbeMode(mode);
+    setReport(null);
+    try {
+      if (mode === "search") {
+        const r = await api.kbSearch(q, 6);
+        setKbProbeHits(
+          (r.results || []).map((e) => ({
+            title: e.title || e.identifier || e.source,
+            snippet: e.snippet || "",
+            score: e.relevance,
+            source: e.source,
+          }))
+        );
+      } else {
+        const chunks = await api.kbHybridSearch(q, 8, 0.3);
+        setKbProbeHits(
+          (chunks || []).map((c) => ({
+            title: c.heading_path || c.source_id || c.id,
+            snippet: (c.text || "").slice(0, 220),
+            source: c.source_id,
+          }))
+        );
+      }
+    } catch (e) {
+      setKbProbeHits([]);
+      setReport(`KB ${mode === "search" ? "关键词" : "混合"}检索失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setKbProbeBusy(false);
+    }
+  }
+
+  async function runKgRetrieve() {
+    const q = kbProbeQ.trim();
+    if (!q) {
+      setReport("请先输入检索词再跑 KG retrieve");
+      return;
+    }
+    setKgRetrieveBusy(true);
+    setReport(null);
+    try {
+      const r = await api.kgRetrieve(q, { mode: "auto", kSemantic: 6 });
+      setKgRetrieveHits(
+        (r.evidence || []).map((e) => ({
+          title: e.title || e.identifier || e.source,
+          snippet: e.snippet || "",
+          score: e.relevance,
+          source: e.source,
+        }))
+      );
+      const s = r.stats || {};
+      setKgRetrieveStats(
+        `mode=${r.plan?.mode ?? "?"} · semantic ${s.semantic_hits ?? 0} · mention ${s.mention_hits ?? 0} · chunks ${s.chunks_after_dedupe ?? "?"}`
+      );
+    } catch (e) {
+      setKgRetrieveHits([]);
+      setKgRetrieveStats(null);
+      setReport(`KG retrieve 失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setKgRetrieveBusy(false);
+    }
+  }
+
+  async function runProductsSearch() {
+    setProductsBusy(true);
+    setReport(null);
+    try {
+      const r = await api.kbProducts(productsQ.trim(), 30, 0);
+      setProducts(r.products || []);
+      setProductsTotal(r.total ?? 0);
+    } catch (e) {
+      setProducts(null);
+      setReport(`商业产品检索失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setProductsBusy(false);
+    }
+  }
+
+  async function runNeo4jLinkContains() {
+    const form = linkFormUid.trim();
+    const comp = linkCompUid.trim();
+    if (!form || !comp) {
+      setReport("请填写配方 uid 与化合物 uid 后再建立 CONTAINS 边");
+      return;
+    }
+    const ratio = Number(linkRatio);
+    setLinkBusy(true);
+    setReport(null);
+    try {
+      const r = await api.neo4jLinkContains(form, comp, Number.isFinite(ratio) ? ratio : undefined);
+      setReport(r.ok ? `✓ CONTAINS 已写入: ${form} → ${comp}` : `CONTAINS 失败: ${r.message}`);
+    } catch (e) {
+      setReport(`Neo4j CONTAINS 失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  async function runNeo4jLinkSimilar() {
+    const a = linkFormUid.trim();
+    const b = linkFormB.trim();
+    if (!a || !b) {
+      setReport("请填写两个配方 uid 后再建立 SIMILAR 边");
+      return;
+    }
+    const score = Number(linkScore);
+    setLinkBusy(true);
+    setReport(null);
+    try {
+      const r = await api.neo4jLinkSimilar(a, b, Number.isFinite(score) ? score : 1);
+      setReport(r.ok ? `✓ SIMILAR 已写入: ${a} ↔ ${b}` : `SIMILAR 失败: ${r.message}`);
+    } catch (e) {
+      setReport(`Neo4j SIMILAR 失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  async function runRebuild() {
+    if (!window.confirm("重建知识图谱将从全部已入库资料重新提取实体/关系, 耗时较长, 确定执行?")) return;
+    setRebuildBusy(true);
+    setReport(null);
+    try {
+      const r = await api.kgRebuild();
+      const failed = r.failed_sources ?? 0;
+      setReport(
+        `${failed > 0 ? "⚠" : "✓"} 图谱重建完成: ${r.linked_sources} 源 / ${r.entities_upserted} 实体 / ${r.mentions_upserted} 提及 / ${r.links_created} 链接` +
+          (failed > 0 ? `（${failed} 个源失败，详见后端日志）` : "")
+      );
+      await refreshKgStats();
+    } catch (e) {
+      setReport(`重建失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRebuildBusy(false);
+    }
+  }
+
+  const [relBusy, setRelBusy] = useState(false);
+  const [relTaskId, setRelTaskId] = useState<string | null>(null);
+  const [relStatus, setRelStatus] = useState<string | null>(null);
+  const relAbortRef = useRef<(AbortController & { taskId?: string }) | null>(null);
+
+  async function runRelationsRebuild() {
+    const all = window.confirm(
+      "补语义关系提取（实体已在库，只重跑关系）。\n默认最多处理 50 个源（成本帽）；全库可能很慢。\n入库同步关系仍默认关。确定启动？"
+    );
+    if (!all) return;
+    setRelBusy(true);
+    setReport(null);
+    setRelStatus("queued");
+    const ctrl = new AbortController() as AbortController & { taskId?: string };
+    relAbortRef.current = ctrl;
+    try {
+      const r = await api.kgRelationsRebuild(undefined, { limit: 50 });
+      ctrl.taskId = r.task_id;
+      setRelTaskId(r.task_id);
+      setReport(
+        `关系重建进行中 (task ${r.task_id.slice(0, 8)}…) — 默认 limit=50；可取消`
+      );
+      const final = await awaitTaskStream(
+        r.task_id,
+        (ev) => {
+          setRelStatus(`${ev.status}: ${ev.message ?? ev.stage ?? ""}`.slice(0, 120));
+        },
+        0,
+        ctrl.signal,
+        5 * 60 * 1000,
+      );
+      setRelStatus(`completed: ${final.message ?? ""}`.slice(0, 120));
+      setReport(
+        `✓ 关系重建完成 (task ${r.task_id.slice(0, 8)}…) — 已刷新统计`
+      );
+      await refreshKgStats();
+    } catch (e) {
+      if (ctrl.signal.aborted) {
+        setRelStatus("cancelled");
+        setReport("关系重建已取消");
+      } else {
+        setReport(`关系重建失败: ${e instanceof Error ? e.message : String(e)}`);
+        setRelStatus("failed");
+      }
+    } finally {
+      relAbortRef.current = null;
+      setRelBusy(false);
+    }
+  }
+
+  async function cancelRelationsRebuild() {
+    const abort = relAbortRef.current;
+    if (!abort) return;
+    abort.abort();
+    const tid = abort.taskId || relTaskId;
+    if (tid) {
+      try {
+        await api.cancelTask(tid);
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+
+  async function refreshRelStatus() {
+    if (!relTaskId) return;
+    try {
+      const t = await api.task(relTaskId);
+      setRelStatus(`${t.state}: ${t.message ?? ""}`.slice(0, 120));
+      if (t.state === "completed") {
+        await refreshKgStats();
+      }
+    } catch {
+      setRelStatus("状态查询失败");
+    }
+  }
+
+  async function runNeo4j() {
+    setNeoBusy(true);
+    setReport(null);
+    try {
+      const stats = await api.neo4jStats();
+      setNeo4j(stats);
+      setNeo4jOpen(true);
+      if (stats.reachable !== false) void searchNeo4j("");
+    } catch (e) {
+      setReport(`Neo4j 不可达: ${e instanceof Error ? e.message : String(e)}`);
+      setNeo4j(null);
+      setNeo4jOpen(true); // still open panel so upsert CTA is reachable
+    } finally {
+      setNeoBusy(false);
+    }
+  }
+
+  async function ensureNeo4jSchema() {
+    setNeoBusy(true);
+    setReport(null);
+    try {
+      const r = await api.neo4jEnsureSchema();
+      setReport(r.ok ? "✓ Neo4j schema 已确保（约束/索引）" : "Neo4j schema ensure 未成功");
+      const stats = await api.neo4jStats();
+      setNeo4j(stats);
+      setNeo4jOpen(true);
+      if (stats.reachable !== false) void searchNeo4j("");
+    } catch (e) {
+      setReport(`Neo4j schema ensure 失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setNeoBusy(false);
+    }
+  }
+
+  const [upsertName, setUpsertName] = useState("");
+  const [upsertCas, setUpsertCas] = useState("");
+  const [upsertSmiles, setUpsertSmiles] = useState("");
+  const [upsertBusy, setUpsertBusy] = useState(false);
+
+  async function upsertNeo4jCompound() {
+    const name = upsertName.trim();
+    if (!name) {
+      setReport("请填写化合物名称后再写入 Neo4j");
+      return;
+    }
+    setUpsertBusy(true);
+    setReport(null);
+    try {
+      const r = await api.neo4jUpsertCompound({
+        name,
+        cas_number: upsertCas.trim() || undefined,
+        smiles: upsertSmiles.trim() || undefined,
+      });
+      if (!r.ok) {
+        // The endpoint answers 200 with ok=false when the Bolt write itself failed.
+        setReport(`Neo4j 化合物写入失败: ${r.message}`);
+        return;
+      }
+      setReport(`✓ Neo4j 化合物已写入: ${r.uid ?? name}`);
+      setNeo4jOpen(true);
+      void searchNeo4j(name);
+    } catch (e) {
+      setReport(`Neo4j 化合物写入失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setUpsertBusy(false);
+    }
+  }
+
+  async function upsertNeo4jFormulation() {
+    const name = upsertName.trim();
+    if (!name) {
+      setReport("请填写配方名称后再写入 Neo4j");
+      return;
+    }
+    setUpsertBusy(true);
+    setReport(null);
+    try {
+      const r = await api.neo4jUpsertFormulation({ name });
+      if (!r.ok) {
+        setReport(`Neo4j 配方写入失败: ${r.message}`);
+        return;
+      }
+      setReport(`✓ Neo4j 配方已写入: ${r.uid ?? name}`);
+      setNeo4jOpen(true);
+    } catch (e) {
+      setReport(`Neo4j 配方写入失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setUpsertBusy(false);
+    }
+  }
+
+  const [neo4jOpen, setNeo4jOpen] = useState(false);
+  const [neoQuery, setNeoQuery] = useState("");
+  const [neoCompounds, setNeoCompounds] = useState<import("../api").Neo4jCompound[] | null>(null);
+  const [neoFormulations, setNeoFormulations] = useState<import("../api").Neo4jFormulation[] | null>(null);
+  const [neoBusyBrowse, setNeoBusyBrowse] = useState(false);
+  const [neoSimilar, setNeoSimilar] = useState<Record<string, unknown[]>>({});
+  const [neoFormComps, setNeoFormComps] = useState<Record<string, unknown[]>>({});
+
+  async function searchNeo4j(q: string) {
+    setNeoBusyBrowse(true);
+    try {
+      const [comps, forms] = await Promise.all([api.neo4jCompounds(q, 80), api.neo4jFormulations(50)]);
+      setNeoCompounds(comps);
+      setNeoFormulations(forms);
+    } catch (e) {
+      setReport(`Neo4j 浏览失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setNeoBusyBrowse(false);
+    }
+  }
+
+  async function loadSimilar(uid: string) {
+    if (neoSimilar[uid]) return;
+    try {
+      const rows = await api.neo4jCompoundSimilar(uid);
+      setNeoSimilar((m) => ({ ...m, [uid]: rows }));
+    } catch {
+      /* 静默 */
+    }
+  }
+
+  async function loadFormulationCompounds(uid: string) {
+    if (neoFormComps[uid]) return;
+    try {
+      const rows = await api.neo4jFormulationCompounds(uid);
+      setNeoFormComps((m) => ({ ...m, [uid]: rows }));
+    } catch {
+      /* 静默 */
+    }
+  }
+
+  return (
+    <div className="rounded border border-edge p-3">
+      <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-2">
+        KB / KG 维护 · 诊断
+      </div>
+      <div className="flex flex-wrap gap-2 mb-2">
+        <button
+          type="button"
+          disabled={integBusy}
+          onClick={() => void runIntegrity()}
+          className="text-[10px] border border-edge rounded px-2 py-1 text-slate-300 hover:border-accent/40 hover:text-accent disabled:opacity-50"
+        >
+          {integBusy ? "扫描中…" : "🔍 KB 完整性扫描"}
+        </button>
+        <button
+          type="button"
+          disabled={calibBusy}
+          onClick={() => void runCalibration()}
+          className="text-[10px] border border-edge rounded px-2 py-1 text-slate-300 hover:border-accent/40 hover:text-accent disabled:opacity-50"
+          title="GET /api/kg/calibration — 权重与关系命中计数"
+          data-testid="kg-calibration-btn"
+        >
+          {calibBusy ? "读取中…" : "⚖ KG 校准快照"}
+        </button>
+        <button
+          type="button"
+          disabled={rebuildBusy}
+          onClick={() => void runRebuild()}
+          className="text-[10px] border border-amber-500/40 rounded px-2 py-1 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
+        >
+          {rebuildBusy ? "重建中…" : "♻ 重建知识图谱"}
+        </button>
+        <button
+          type="button"
+          disabled={relBusy}
+          onClick={() => void runRelationsRebuild()}
+          className="text-[10px] border border-edge rounded px-2 py-1 text-slate-300 hover:border-accent/40 hover:text-accent disabled:opacity-50"
+          title="实体/提及已在库, 异步补语义关系(LLM 慢, 全库 10-60 分钟)"
+          data-testid="kg-relations-rebuild-btn"
+        >
+          {relBusy ? "关系重建中…" : "🕸 补语义关系"}
+        </button>
+        {relBusy && (
+          <button
+            type="button"
+            onClick={() => void cancelRelationsRebuild()}
+            className={CANCEL_BUTTON_CLASS}
+            data-testid="kg-relations-rebuild-cancel"
+          >
+            ✕ 取消
+          </button>
+        )}
+        {relTaskId && !relBusy && (
+          <button
+            type="button"
+            onClick={() => void refreshRelStatus()}
+            className="text-[10px] border border-edge rounded px-2 py-1 text-slate-500 hover:text-slate-300"
+            title={relTaskId}
+            data-testid="kg-relations-rebuild-status"
+          >
+            {relStatus ? `状态: ${relStatus}` : "查状态"}
+          </button>
+        )}
+        {relBusy && relStatus && (
+          <span
+            className="text-[10px] text-slate-500"
+            data-testid="kg-relations-rebuild-progress"
+          >
+            {relStatus}
+          </span>
+        )}
+        <button
+          type="button"
+          disabled={neoBusy}
+          onClick={() => void runNeo4j()}
+          className="text-[10px] border border-edge rounded px-2 py-1 text-slate-300 hover:border-accent/40 hover:text-accent disabled:opacity-50"
+        >
+          {neoBusy ? "连接中…" : "🕸 Neo4j 状态"}
+        </button>
+        <button
+          type="button"
+          disabled={neoBusy}
+          onClick={() => void ensureNeo4jSchema()}
+          className="text-[10px] border border-teal-500/40 text-teal-300 rounded px-2 py-1 hover:bg-teal-500/10 disabled:opacity-50"
+          title="POST /api/kg/neo4j/schema/ensure — 创建/确认约束与索引"
+        >
+          确保 Schema
+        </button>
+      </div>
+
+      {kgStats && kgStats.enabled && (
+        <div
+          className={`text-[11px] rounded px-2 py-1.5 mb-1 border ${
+            kgStats.relation_layer_empty
+              ? "border-amber-500/40 text-amber-400"
+              : "border-edge text-slate-400"
+          }`}
+        >
+          <div className="flex flex-wrap gap-1 mb-0.5">
+            <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60">实体 {kgStats.entities}</span>
+            <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60">提及 {kgStats.mentions}</span>
+            <span
+              className={`px-1.5 py-0.5 rounded border ${
+                kgStats.relation_layer_empty
+                  ? "border-amber-500/50 bg-amber-500/10 text-amber-300"
+                  : "border-edge bg-ink/60"
+              }`}
+            >
+              {kgStats.relation_layer_empty ? "⚠ " : ""}关系链接 {kgStats.links}
+            </span>
+            <button
+              type="button"
+              onClick={() => void refreshKgStats()}
+              className="text-[10px] text-slate-500 hover:text-slate-300 underline ml-auto"
+            >
+              刷新
+            </button>
+          </div>
+          {kgStats.relation_layer_empty && (
+            <div title={(kgStats.warnings || []).join(" ")}>
+              关系层为空：请开启「入库关系提取」或点「🕸 补语义关系」重建。
+            </div>
+          )}
+        </div>
+      )}
+      {kgStats && !kgStats.enabled && (
+        <div className="text-[11px] rounded px-2 py-1.5 mb-1 border border-edge text-slate-500">
+          知识图谱未启用（FORMUNEX_KG_ENABLED）
+        </div>
+      )}
+
+      {integrity && (
+        <div
+          className={`text-[11px] rounded px-2 py-1.5 mb-1 border ${
+            integrity.healthy
+              ? "border-emerald-500/40 text-emerald-400"
+              : "border-amber-500/40 text-amber-400"
+          }`}
+        >
+          {integrity.healthy
+            ? "✓ KB 无孤儿引用"
+            : `⚠ ${integrity.total_orphans} 个孤儿引用${integrity.external_backend ? "（外部向量后端）" : ""}`}
+        </div>
+      )}
+      {calibration && (
+        <div
+          className="text-[11px] rounded px-2 py-1.5 mb-1 border border-edge text-slate-400"
+          data-testid="kg-calibration-panel"
+        >
+          <div className="flex flex-wrap gap-1 mb-0.5">
+            <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60">
+              KG {calibration.kg_enabled ? "启用" : "关闭"}
+            </span>
+            <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60 font-mono">
+              inhibits×{calibration.kg_inhibits_penalty}
+            </span>
+            <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60 font-mono">
+              synergizes+{calibration.kg_synergizes_bonus}
+            </span>
+            <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60 font-mono">
+              measured×{calibration.kg_measured_bonus}
+            </span>
+            {calibration.kg_measured_metric_bonus != null && (
+              <span className="px-1.5 py-0.5 rounded border border-edge bg-ink/60 font-mono">
+                metric×{calibration.kg_measured_metric_bonus}/
+                {calibration.kg_measured_metric_penalty ?? "—"}
+              </span>
+            )}
+          </div>
+          <div className="text-[10px] text-slate-500">
+            关系命中 · inhibits {calibration.counts.inhibits} · substitutes{" "}
+            {calibration.counts.substitutes} · synergizes {calibration.counts.synergizes}
+          </div>
+        </div>
+      )}
+      <div
+        className="border border-edge/60 rounded p-2 mb-1 space-y-1.5 bg-ink/30"
+        data-testid="kb-probe-panel"
+      >
+        <div className="text-[10px] text-slate-500">
+          KB 检索探针 · /api/kb/search · hybrid-search
+          <span className="block text-teal-400/80 mt-0.5">
+            完整多路分数 / Golden 批跑见知识中枢 →「检索探针」
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          <input
+            value={kbProbeQ}
+            onChange={(e) => setKbProbeQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void runKbProbe("search");
+            }}
+            placeholder="检索词（如 盐雾 / epoxy）…"
+            className="flex-1 min-w-[8rem] bg-ink border border-edge rounded px-2 py-1 text-[11px]"
+            data-testid="kb-probe-input"
+          />
+          <button
+            type="button"
+            disabled={kbProbeBusy || !kbProbeQ.trim()}
+            onClick={() => void runKbProbe("search")}
+            className="text-[10px] border border-accent/50 text-accent rounded px-2 py-1 disabled:opacity-40"
+            data-testid="kb-search-btn"
+          >
+            {kbProbeBusy && kbProbeMode === "search" ? "…" : "关键词"}
+          </button>
+          <button
+            type="button"
+            disabled={kbProbeBusy || !kbProbeQ.trim()}
+            onClick={() => void runKbProbe("hybrid")}
+            className="text-[10px] border border-teal-500/40 text-teal-300 rounded px-2 py-1 disabled:opacity-40"
+            data-testid="kb-hybrid-btn"
+          >
+            {kbProbeBusy && kbProbeMode === "hybrid" ? "…" : "混合检索"}
+          </button>
+        </div>
+        {kbProbeMode && (
+          <div className="max-h-36 overflow-auto space-y-1">
+            {kbProbeHits.length === 0 ? (
+              <p className="text-[10px] text-slate-600">无命中（或 KB 未启用）</p>
+            ) : (
+              kbProbeHits.map((h, i) => (
+                <div
+                  key={`${h.title}-${i}`}
+                  className="border border-edge/40 rounded px-2 py-1 text-[10px]"
+                >
+                  <div className="flex gap-2 text-slate-300">
+                    <span className="truncate flex-1">{h.title}</span>
+                    {h.score != null && (
+                      <span className="font-mono text-slate-500 shrink-0">
+                        {h.score.toFixed?.(3) ?? h.score}
+                      </span>
+                    )}
+                  </div>
+                  {h.snippet && (
+                    <p className="text-slate-500 line-clamp-2 mt-0.5">{h.snippet}</p>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      <div
+        className="border border-edge/60 rounded p-2 mb-1 space-y-1.5 bg-ink/30"
+        data-testid="kb-products-panel"
+      >
+        <div className="text-[10px] text-slate-500">
+          商业产品牌号 · /api/kb/products
+          {products != null && <span className="ml-1 text-slate-400">· {productsTotal} 总计</span>}
+        </div>
+        <div className="flex flex-wrap gap-1">
+          <input
+            value={productsQ}
+            onChange={(e) => setProductsQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void runProductsSearch();
+            }}
+            placeholder="牌号 / 供应商（如 Epon / Hexion）…"
+            className="flex-1 min-w-[8rem] bg-ink border border-edge rounded px-2 py-1 text-[11px]"
+            data-testid="kb-products-input"
+          />
+          <button
+            type="button"
+            disabled={productsBusy}
+            onClick={() => void runProductsSearch()}
+            className="text-[10px] border border-accent/50 text-accent rounded px-2 py-1 disabled:opacity-40"
+            data-testid="kb-products-btn"
+          >
+            {productsBusy ? "…" : "查询牌号"}
+          </button>
+        </div>
+        {products != null && (
+          <div className="max-h-36 overflow-auto space-y-1">
+            {products.length === 0 ? (
+              <p className="text-[10px] text-slate-600">无匹配牌号</p>
+            ) : (
+              products.map((p, i) => (
+                <div
+                  key={`${p.trade_name}-${p.grade}-${i}`}
+                  className="border border-edge/40 rounded px-2 py-1 text-[10px]"
+                  data-testid="kb-product-row"
+                >
+                  <div className="flex gap-2 text-slate-300">
+                    <span className="truncate flex-1 font-medium">
+                      {p.trade_name}
+                      {p.grade ? ` ${p.grade}` : ""}
+                    </span>
+                    {p.supplier && <span className="text-slate-500 shrink-0">{p.supplier}</span>}
+                    {p.mention_count != null && (
+                      <span className="font-mono text-slate-600 shrink-0">×{p.mention_count}</span>
+                    )}
+                  </div>
+                  <div className="text-slate-500 truncate">
+                    {[p.generic_name, p.cas, p.role].filter(Boolean).join(" · ") || "—"}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+
+      <div
+        className="border border-edge/60 rounded p-2 mb-1 space-y-1.5 bg-ink/30"
+        data-testid="kg-retrieve-panel"
+      >
+        <div className="text-[10px] text-slate-500">KG Retrieve 探针 · /api/kg/retrieve（复用上方检索词）</div>
+        <div className="flex flex-wrap gap-1 items-center">
+          <button
+            type="button"
+            disabled={kgRetrieveBusy || !kbProbeQ.trim()}
+            onClick={() => void runKgRetrieve()}
+            className="text-[10px] border border-violet-500/40 text-violet-300 rounded px-2 py-1 disabled:opacity-40"
+            data-testid="kg-retrieve-btn"
+          >
+            {kgRetrieveBusy ? "…" : "KG Retrieve"}
+          </button>
+          {kgRetrieveStats && (
+            <span className="text-[10px] text-slate-500" data-testid="kg-retrieve-stats">
+              {kgRetrieveStats}
+            </span>
+          )}
+        </div>
+        {kgRetrieveHits.length > 0 && (
+          <div className="max-h-28 overflow-auto space-y-1" data-testid="kg-retrieve-hits">
+            {kgRetrieveHits.map((h, i) => (
+              <div key={`kr-${i}`} className="border border-violet-500/20 rounded px-2 py-1 text-[10px]">
+                <div className="text-slate-300 truncate">{h.title}</div>
+                {h.snippet && <p className="text-slate-500 line-clamp-2 mt-0.5">{h.snippet}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+            {neo4j && (
+        <div className="text-[11px] text-slate-400 rounded px-2 py-1.5 mb-1 border border-edge">
+          Neo4j {neo4j.reachable === false ? "不可达" : `就绪 · ${neo4j.nodes ?? "?"} 节点 / ${neo4j.edges ?? "?"} 边`}
+          {neo4j.compounds != null && ` · ${neo4j.compounds} 化合物`}
+          {neo4j.formulations != null && ` · ${neo4j.formulations} 配方`}
+          <span className="text-slate-600"> (适配层, 与 SQLite 图谱共存)</span>
+        </div>
+      )}
+      {neo4jOpen && (
+        <div className="border border-edge rounded p-2 mb-1 space-y-2">
+          {neo4j?.reachable === false && (
+            <p className="text-[10px] text-amber-400">
+              Neo4j 当前不可达 — 仍可尝试写入（失败会显示错误）。
+            </p>
+          )}
+          <div className="flex gap-2">
+            <input
+              value={neoQuery}
+              onChange={(e) => setNeoQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void searchNeo4j(neoQuery.trim());
+              }}
+              placeholder="搜索化合物(名称/CAS/uid)…"
+              className="flex-1 bg-ink border border-edge rounded px-2 py-1 text-[11px]"
+              disabled={neo4j?.reachable === false}
+            />
+            <button
+              type="button"
+              disabled={neoBusyBrowse || neo4j?.reachable === false}
+              onClick={() => void searchNeo4j(neoQuery.trim())}
+              className="text-[10px] border border-accent/50 text-accent rounded px-2 py-1 disabled:opacity-50"
+            >
+              {neoBusyBrowse ? "…" : "搜索"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setNeo4jOpen(false)}
+              className="text-[10px] text-slate-500 rounded px-1"
+              title="收起"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="border border-edge/50 rounded p-1.5 space-y-1.5 bg-ink/40">
+            <div className="text-[10px] text-slate-500">手动写入图谱（neo4jUpsert*）</div>
+            <div className="flex flex-wrap gap-1">
+              <input
+                value={upsertName}
+                onChange={(e) => setUpsertName(e.target.value)}
+                placeholder="名称 *"
+                className="flex-1 min-w-[6rem] bg-ink border border-edge rounded px-1.5 py-0.5 text-[11px]"
+              />
+              <input
+                value={upsertCas}
+                onChange={(e) => setUpsertCas(e.target.value)}
+                placeholder="CAS"
+                className="w-28 bg-ink border border-edge rounded px-1.5 py-0.5 text-[11px] font-mono"
+              />
+              <input
+                value={upsertSmiles}
+                onChange={(e) => setUpsertSmiles(e.target.value)}
+                placeholder="SMILES"
+                className="flex-1 min-w-[8rem] bg-ink border border-edge rounded px-1.5 py-0.5 text-[11px] font-mono"
+              />
+            </div>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                disabled={upsertBusy || !upsertName.trim()}
+                onClick={() => void upsertNeo4jCompound()}
+                className="text-[10px] border border-teal-500/40 text-teal-300 rounded px-2 py-0.5 disabled:opacity-40"
+              >
+                {upsertBusy ? "…" : "写入化合物"}
+              </button>
+              <button
+                type="button"
+                disabled={upsertBusy || !upsertName.trim()}
+                onClick={() => void upsertNeo4jFormulation()}
+                className="text-[10px] border border-violet-500/40 text-violet-300 rounded px-2 py-0.5 disabled:opacity-40"
+              >
+                {upsertBusy ? "…" : "写入配方"}
+              </button>
+            </div>
+          </div>
+          <div className="border border-edge/50 rounded p-1.5 space-y-1.5 bg-ink/40" data-testid="neo4j-link-panel">
+            <div className="text-[10px] text-slate-500">图谱边写入（neo4jLinkContains / neo4jLinkSimilar）</div>
+            <div className="flex flex-wrap gap-1">
+              <input
+                value={linkFormUid}
+                onChange={(e) => setLinkFormUid(e.target.value)}
+                placeholder="配方 uid *"
+                className="flex-1 min-w-[6rem] bg-ink border border-edge rounded px-1.5 py-0.5 text-[11px] font-mono"
+                data-testid="neo4j-link-form-a"
+              />
+              <input
+                value={linkCompUid}
+                onChange={(e) => setLinkCompUid(e.target.value)}
+                placeholder="化合物 uid"
+                className="flex-1 min-w-[6rem] bg-ink border border-edge rounded px-1.5 py-0.5 text-[11px] font-mono"
+                data-testid="neo4j-link-comp"
+              />
+              <input
+                value={linkRatio}
+                onChange={(e) => setLinkRatio(e.target.value)}
+                placeholder="ratio"
+                className="w-16 bg-ink border border-edge rounded px-1.5 py-0.5 text-[11px] font-mono"
+                data-testid="neo4j-link-ratio"
+              />
+            </div>
+            <div className="flex flex-wrap gap-1">
+              <input
+                value={linkFormB}
+                onChange={(e) => setLinkFormB(e.target.value)}
+                placeholder="相似配方 uid"
+                className="flex-1 min-w-[6rem] bg-ink border border-edge rounded px-1.5 py-0.5 text-[11px] font-mono"
+                data-testid="neo4j-link-form-b"
+              />
+              <input
+                value={linkScore}
+                onChange={(e) => setLinkScore(e.target.value)}
+                placeholder="score"
+                className="w-16 bg-ink border border-edge rounded px-1.5 py-0.5 text-[11px] font-mono"
+                data-testid="neo4j-link-score"
+              />
+            </div>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                disabled={linkBusy || !linkFormUid.trim() || !linkCompUid.trim()}
+                onClick={() => void runNeo4jLinkContains()}
+                className="text-[10px] border border-teal-500/40 text-teal-300 rounded px-2 py-0.5 disabled:opacity-40"
+                data-testid="neo4j-link-contains-btn"
+              >
+                {linkBusy ? "…" : "CONTAINS 边"}
+              </button>
+              <button
+                type="button"
+                disabled={linkBusy || !linkFormUid.trim() || !linkFormB.trim()}
+                onClick={() => void runNeo4jLinkSimilar()}
+                className="text-[10px] border border-violet-500/40 text-violet-300 rounded px-2 py-0.5 disabled:opacity-40"
+                data-testid="neo4j-link-similar-btn"
+              >
+                {linkBusy ? "…" : "SIMILAR 边"}
+              </button>
+            </div>
+          </div>
+          <div className="max-h-56 overflow-auto space-y-1">
+            {(neoCompounds ?? []).map((c) => (
+              <div key={c.uid} className="border border-edge/60 rounded px-2 py-1">
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className="text-slate-200 truncate flex-1" title={c.uid}>
+                    {c.name ?? c.uid}
+                  </span>
+                  {c.cas_number && <span className="font-mono text-slate-500">{c.cas_number}</span>}
+                  {c.molecular_weight != null && (
+                    <span className="font-mono text-slate-500">{c.molecular_weight} g/mol</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void loadSimilar(c.uid)}
+                    className="text-[9px] text-accent2 hover:underline shrink-0"
+                    title="同配方共现化合物(图路径)"
+                  >
+                    相似▾
+                  </button>
+                </div>
+                {c.smiles && <div className="text-[9px] font-mono text-slate-600 truncate">{c.smiles}</div>}
+                {neoSimilar[c.uid] && (
+                  <div className="mt-1 pl-2 border-l border-edge">
+                    {(neoSimilar[c.uid] as Array<{ uid: string; name?: string; co_count?: number }>).map((s) => (
+                      <div key={s.uid} className="text-[10px] text-slate-400 flex gap-1">
+                        <span className="truncate flex-1">↳ {s.name ?? s.uid}</span>
+                        {s.co_count != null && <span className="text-slate-600">×{s.co_count}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            {neoCompounds && neoCompounds.length === 0 && (
+              <div className="text-[10px] text-slate-500 py-1">无匹配化合物</div>
+            )}
+            {!neoCompounds && (
+              <div className="text-[10px] text-slate-500 py-1">点「🕸 Neo4j 状态」加载图谱数据…</div>
+            )}
+          </div>
+          {neoFormulations && neoFormulations.length > 0 && (
+            <div className="border-t border-edge pt-1">
+              <div className="text-[10px] text-slate-500 mb-1">配方(图库)</div>
+              <div className="max-h-28 overflow-auto space-y-1">
+                {neoFormulations.map((f) => (
+                  <div key={f.uid} className="flex items-center gap-2 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => void loadFormulationCompounds(f.uid)}
+                      className="text-slate-300 truncate flex-1 hover:text-accent text-left"
+                      title={f.uid}
+                    >
+                      {f.name ?? f.uid}
+                      {f.target_property ? ` · ${f.target_property}` : ""}
+                    </button>
+                    {neoFormComps[f.uid] && (
+                      <span className="text-slate-600">{(neoFormComps[f.uid] as unknown[]).length} 组分</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {report && <div className="text-[11px] text-slate-300 rounded px-2 py-1.5 mb-1 border border-edge">{report}</div>}
+    </div>
+  );
+}
+
+export default function DependencyManager({ reloadKey = 0 }: { reloadKey?: number }) {
+  const [deps, setDeps] = useState<DependencyInfo[]>([]);
+  const [coreMissing, setCoreMissing] = useState<string[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<string>("");
+  const [result, setResult] = useState<DependencyInstallResult | null>(null);
+  const [showLog, setShowLog] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [chemTools, setChemTools] = useState<ChemToolsStatus | null>(null);
+  const [kbStats, setKbStats] = useState<KBStats | null>(null);
+  const [kbReindexing, setKbReindexing] = useState(false);
+  const [installEnabled, setInstallEnabled] = useState(true);
+
+  async function refresh() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const r = await api.listDependencies();
+      setDeps(r.dependencies ?? []);
+      setCoreMissing(r.online_core_missing ?? []);
+      setInstallEnabled(r.install_enabled !== false);
+    } catch (e) {
+      setDeps([]);
+      setCoreMissing([]);
+      setLoadError(String(e));
+    } finally {
+      setLoading(false);
+    }
+    try {
+      setChemTools(await api.chemicalTools());
+    } catch {
+      setChemTools(null);
+    }
+    try {
+      setKbStats(await api.kbStats());
+    } catch {
+      setKbStats(null);
+    }
+  }
+
+  async function reindexKb() {
+    setKbReindexing(true);
+    try {
+      await api.kbReindex();
+      setKbStats(await api.kbStats());
+    } catch {
+      /* stats card simply keeps the previous numbers */
+    } finally {
+      setKbReindexing(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, [reloadKey]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, DependencyInfo[]>();
+    for (const d of deps) {
+      if (!map.has(d.extra)) map.set(d.extra, []);
+      map.get(d.extra)!.push(d);
+    }
+    return EXTRA_ORDER.filter((e) => map.has(e)).map((e) => ({
+      extra: e,
+      label: EXTRA_LABELS[e] ?? e,
+      items: map.get(e)!,
+    }));
+  }, [deps]);
+
+  function toggle(name: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+  }
+
+  async function run(names: string[], upgrade: boolean) {
+    if (names.length === 0) return;
+    if (!installEnabled) {
+      setResult({
+        ok: false,
+        summary:
+          "服务端已禁用依赖安装（生产默认）。设置 FORMUNEX_DEPS_INSTALL_ENABLED=true 后重启后端。",
+      });
+      return;
+    }
+    setBusy(true);
+    setResult(null);
+    setProgress(`${upgrade ? "更新" : "安装"}中：${names.join(", ")} …`);
+    try {
+      const { task_id } = await api.installDependencies(names, upgrade);
+      const final = await awaitTaskStream(task_id, (ev) =>
+        setProgress(ev.message || "处理中…")
+      );
+      const res = (final.data as unknown as DependencyInstallResult) ?? {
+        ok: false,
+        summary: final.message,
+      };
+      setResult(res);
+      setSelected(new Set());
+      await refresh();
+    } catch (e) {
+      setResult({ ok: false, summary: String(e) });
+    } finally {
+      setBusy(false);
+      setProgress("");
+    }
+  }
+
+  const installedCount = deps.filter((d) => d.installed).length;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-slate-500">
+        检索软件可选依赖的安装状态，勾选后安装、或一键补齐在线模式所需依赖、或更新到最新版。
+        安装在后端机器上执行（pip），完成后需重启后端服务生效。
+      </p>
+      {!installEnabled && (
+        <div
+          className="text-[11px] text-amber-300 border border-amber-500/40 bg-amber-500/10 rounded px-2 py-1.5"
+          data-testid="deps-install-disabled"
+        >
+          服务端已禁用 pip 安装（生产默认关闭）。如需启用：设置{" "}
+          <code className="font-mono">FORMUNEX_DEPS_INSTALL_ENABLED=true</code>{" "}
+          并重启后端。
+        </div>
+      )}
+
+      {/* One-click + bulk actions */}
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => run(coreMissing, false)}
+          disabled={busy || !installEnabled || coreMissing.length === 0}
+          className="text-xs bg-accent/90 hover:bg-accent text-ink font-semibold rounded px-3 py-1.5 disabled:opacity-40"
+          title="安装 LLM + 在线检索所需的全部缺失依赖"
+        >
+          {coreMissing.length === 0
+            ? "✓ 在线核心已就绪"
+            : `一键安装在线核心（${coreMissing.length}）`}
+        </button>
+        <button
+          onClick={() => run([...selected], false)}
+          disabled={busy || !installEnabled || selected.size === 0}
+          className="text-xs border border-edge text-slate-300 rounded px-3 py-1.5 hover:border-accent/40 hover:text-accent disabled:opacity-40"
+        >
+          安装选中（{selected.size}）
+        </button>
+        <button
+          onClick={() => run([...selected], true)}
+          disabled={busy || !installEnabled || selected.size === 0}
+          className="text-xs border border-edge text-slate-300 rounded px-3 py-1.5 hover:border-accent/40 hover:text-accent disabled:opacity-40"
+        >
+          更新选中到最新版
+        </button>
+        <button
+          onClick={refresh}
+          disabled={busy || loading}
+          className="text-xs border border-edge text-slate-400 rounded px-3 py-1.5 hover:text-slate-200 disabled:opacity-40 ml-auto"
+        >
+          {loading ? "刷新中…" : "刷新状态"}
+        </button>
+      </div>
+
+      {loadError && (
+        <div className="text-xs rounded px-3 py-2 border border-rose-500/40 text-rose-400 bg-rose-500/10">
+          无法加载依赖列表：{loadError}
+        </div>
+      )}
+
+      <ChemToolsCard status={chemTools} />
+      <KnowledgeBaseCard stats={kbStats} onReindex={() => void reindexKb()} reindexing={kbReindexing} />
+      <RetentionPurgeCard
+        stats={kbStats}
+        onPurged={() => {
+          void api.kbStats().then(setKbStats).catch(() => undefined);
+        }}
+      />
+
+      <KbDiagnosticsCard />
+
+      {/* Progress / result */}
+      {busy && (
+        <div className="text-xs rounded px-3 py-2 border border-accent/40 text-accent bg-accent/10">
+          ⏳ {progress}
+        </div>
+      )}
+      {result && !busy && (
+        <div
+          className={`text-xs rounded px-3 py-2 border ${
+            result.ok
+              ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+              : "border-rose-500/40 text-rose-400 bg-rose-500/10"
+          }`}
+        >
+          <div>
+            {result.ok ? "✓ " : "✗ "}
+            {result.summary}
+          </div>
+          {(result.stdout || result.stderr) && (
+            <button
+              onClick={() => setShowLog((v) => !v)}
+              className="mt-1 underline text-slate-400 hover:text-slate-200"
+            >
+              {showLog ? "隐藏日志" : "查看 pip 日志"}
+            </button>
+          )}
+          {showLog && (
+            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[10px] text-slate-400 bg-ink/60 rounded p-2">
+              {(result.stdout || "") + "\n" + (result.stderr || "")}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {/* Catalog grouped by extra */}
+      <div className="space-y-3 max-h-[46vh] overflow-auto pr-1">
+        {grouped.length === 0 && !loading && !loadError && (
+          <p className="text-xs text-slate-500 py-2">正在加载依赖目录…</p>
+        )}
+        {grouped.map((g) => (
+          <div key={g.extra}>
+            <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">
+              {g.label}
+            </div>
+            <div className="space-y-1">
+              {g.items.map((d) => (
+                <label
+                  key={d.pip_name}
+                  className="flex items-start gap-2 text-xs cursor-pointer rounded px-1.5 py-1 hover:bg-white/5"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(d.pip_name)}
+                    onChange={() => toggle(d.pip_name)}
+                    className="mt-0.5 accent-sky-400"
+                  />
+                  <span
+                    className={`mt-0.5 w-2 h-2 rounded-full shrink-0 ${
+                      d.installed ? "bg-emerald-400" : "bg-slate-600"
+                    }`}
+                    title={d.installed ? "已安装" : "未安装"}
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="font-mono text-slate-200">{d.pip_name}</span>
+                    {d.installed && d.version && (
+                      <span className="text-emerald-400/80 ml-1">v{d.version}</span>
+                    )}
+                    {!d.installed && (
+                      <span className="text-slate-500 ml-1">未安装</span>
+                    )}
+                    <span className="block text-slate-500 leading-snug">{d.enables}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[11px] text-slate-500 pt-1 border-t border-edge">
+        已安装 {installedCount} / {deps.length} 项。安装大模型库（torch/botorch/sentence-transformers）可能耗时数分钟。
+      </p>
+    </div>
+  );
+}

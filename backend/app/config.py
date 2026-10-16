@@ -1,0 +1,1207 @@
+"""Application configuration.
+
+All settings are environment-driven with safe offline defaults so the platform
+boots and tests run without any external credentials or services.
+"""
+from __future__ import annotations
+
+import os
+import tempfile
+import threading
+from pathlib import Path
+
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEV_ENVS = frozenset({"development", "dev", "test"})
+# Settings that were removed because nothing read them any more. Old .env files
+# (the Settings UI persists toggles there) may still carry them: accepted and
+# ignored, so dev-mode fail-fast on typos does not break an existing deployment.
+_RETIRED_ENV_KEYS = frozenset({
+    "FORMUNEX_PDF_DOWNLOAD",       # superseded by fulltext_enrich / fulltext_fetcher
+    "FORMUNEX_PDF_DOWNLOAD_MAX",
+    "FORMUNEX_CHAT_RERANK_ENABLED",  # LLM rerank dropped from the chat path
+    "FORMUNEX_AGENT_SEARCH_LLM_ASSESS",  # reserved placeholder, never implemented
+    "FORMUNEX_PDF_OCR",  # dead key in repo-root .env; nothing reads it (v27 P0-1)
+    "FORMUNEX_USPTO_API_KEY",  # dead key in repo-root .env; nothing reads it (v27 P0-1)
+    "FORMUNEX_RECOMMEND_AB_ENABLED",  # recommend A/B bucketing removed: no caller ever passed a user id
+    "FORMUNEX_QA_MAX_EVIDENCE",  # never read; chat_rerank_top_k already caps the evidence list
+})
+# Env keys read by subsystems but not declared on Settings.
+_INFRA_ENV_KEYS = frozenset({
+    "FORMUNEX_ENV_FILE",
+    "FORMUNEX_TASK_DIR",
+    "FORMUNEX_TASK_PROGRESS_DIR",
+    "FORMUNEX_TABLES_DIR",
+    "FORMUNEX_BACKEND_BIND",  # docker-compose.yml only: which host address the API port is published on
+    # P1 owner Phase2 多用户开关
+    "FORMUNEX_MULTI_USER",
+    "FORMUNEX_API_TOKENS_JSON",
+    # Test-only lifespan fast-path flag (see app/main.py::_skip_lifespan_bootstrap).
+    "FORMUNEX_SKIP_LIFESPAN_BOOTSTRAP",
+    # Optional Neo4j connection (enabled flag is a Settings field / env-flag).
+    "FORMUNEX_NEO4J_URI",
+    "FORMUNEX_NEO4J_USER",
+    "FORMUNEX_NEO4J_PASSWORD",
+    # BayBE acquisition quality tier, read directly by engines/baybe_engine.py
+    # (_recommender_for): "fast" | "auto" | "thorough". Not a Settings field.
+    "FORMUNEX_BO_QUALITY",
+    # Read straight from the environment by their owners, so dev-mode fail-fast
+    # used to reject a documented override with "Unknown FORMUNEX_* ...":
+    "FORMUNEX_DATA_DIR",    # services/tech_report.py data root (default ./data)
+    "FORMUNEX_RULES_DIR",   # services/rule_loader.py editable rules directory
+    "FORMUNEX_DEEPEVAL",    # scripts/deepeval_gate.py on/off switch (CI)
+    "FORMUNEX_RIGOR_GATE",  # scripts/rigor_gate.py skip switch (CI)
+    # Deployment knobs read by compose / shell scripts, never by the app. They live in the
+    # same ``.env`` that ``env_file:`` hands to the backend container, where dev-mode
+    # fail-fast used to reject them as typos:
+    "FORMUNEX_PG_USER",                # docker-compose.eln.yml  (postgres container)
+    "FORMUNEX_PG_PASSWORD",            # docker-compose.eln.yml
+    "FORMUNEX_PG_DB",                  # docker-compose.eln.yml
+    "FORMUNEX_USE_HOST_NETWORK",       # scripts/deploy-docker.sh
+    "FORMUNEX_DATALAB_PROBE_TIMEOUT_S",  # scripts/start_all.sh
+})
+
+
+def _settings_extra_policy() -> str:
+    """Development/test: reject unknown env keys; production: ignore extras."""
+    env = os.getenv("FORMUNEX_ENVIRONMENT", "development").strip().lower()
+    return "forbid" if env in _DEV_ENVS else "ignore"
+
+
+def _data_env_path() -> Path:
+    """``./data/.env`` — the data dir is CWD-relative by convention (matches
+    ``db_url`` / ``colbert_index_dir``) and is volume-mounted in Docker, so an
+    env file stored there survives container recreation."""
+    return Path("./data").resolve() / ".env"
+
+
+def resolve_env_path(backend_dir: Path | None = None) -> Path:
+    """The single canonical ``.env`` location, shared by reader and writer.
+
+    Historically the Settings UI *wrote* secrets to the repo-root ``.env``
+    while pydantic-settings *read* the CWD-relative ``.env`` — two different
+    files whenever the server didn't start from the repo root (and always in
+    Docker, where writes landed at the container root ``/.env``). Saved
+    settings therefore vanished on restart. Resolution order:
+
+    1. ``FORMUNEX_ENV_FILE`` explicit override;
+    2. first existing among repo-root ``.env``, ``backend/.env``, ``data/.env``;
+    3. creation default: repo-root ``.env`` for a source checkout, or the
+       persistent ``data/.env`` when the package sits at a filesystem root
+       (Docker image ``/app``) or the parent directory is not writable.
+    """
+    override = os.environ.get("FORMUNEX_ENV_FILE")
+    if override:
+        return Path(override)
+    backend = backend_dir or Path(__file__).resolve().parents[1]
+    workspace = backend.parent
+    for candidate in (workspace / ".env", backend / ".env", _data_env_path()):
+        if candidate.exists():
+            return candidate
+    if workspace == Path(workspace.anchor) or not os.access(workspace, os.W_OK):
+        return _data_env_path()
+    return workspace / ".env"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="FORMUNEX_", env_file=".env", extra="ignore")
+
+    app_name: str = "FormuNex"
+    environment: str = "development"
+
+    # LLM (Anthropic Claude). When unset, the LLM service falls back to the
+    # deterministic rule-based synthesiser built on the domain knowledge base.
+    anthropic_api_key: str | None = None
+    llm_model: str = "claude-sonnet-4-6"
+    llm_max_tokens: int = 16384
+    llm_timeout_seconds: float = 60.0
+
+    # Celery / Redis. Production MUST run with task_always_eager=False (real
+    # worker + broker): eager=true makes every .delay() execute the full task
+    # synchronously in the request thread — recommend/ingest hang for minutes
+    # and the frontend proxy times out (502, fixed 2026-09-05). Standalone /
+    # broker-less deployments can opt back in with FORMUNEX_CELERY_EAGER=true.
+    redis_url: str = "redis://localhost:6379/0"
+    # Wire protocol of every Redis connection (broker, result backend, locks, caches). 2 works against any Redis server, from
+    # Windows' 3.0.504 / 5.0.14.1 ports to 7.x; 3 (redis-py 8's own default) needs Redis >= 6.0 and fails with
+    # "unknown command `HELLO`" against anything older. See app/redis_compat.py.
+    redis_protocol: int = 2
+    celery_eager: bool = False
+
+    # CORS origins for the Vite dev server.
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    # Optimization loop defaults.
+    optimize_iterations: int = 24
+    top_n_formulas: int = 5
+
+    # Multi-formulation recommend P1 — Top-N diversity + trade-off analysis.
+    recommend_default_n: int = 6
+    recommend_max_n: int = 12
+    recommend_diversity_enabled: bool = True
+    recommend_diversity_lambda: float = 0.7
+    recommend_tradeoff_enabled: bool = True
+    recommend_uncertainty_flag: bool = True
+    # P0 KG 自进化闭环：台账实测 → 写回 KG 关系（extraction_method="measured"）
+    kg_measured_feedback_enabled: bool = True
+    # Third priority: per-candidate minimal verification DOE for trade-off
+    # recommendations. Generates a small LHS DOE anchored to each Pareto-front
+    # / scenario-pick candidate so the chemist can verify predictions with one
+    # click into the workbench. Off → no verification DOE generated.
+    verification_doe_enabled: bool = True
+    verification_doe_n: int = 4
+
+    # Experiment feedback / model training.
+    # Measured DOE results are persisted in a SQL database (SQLite by default;
+    # point db_url at Postgres etc. for multi-process deployments). Trained
+    # models are rebuilt from this dataset on startup, so no model binaries are
+    # stored. ``experiments_path`` is retained for one-time migration of legacy
+    # JSON datasets into the database.
+    # Default SQLite is for single-process / CI. Production multi-worker /
+    # multi-host must set FORMUNEX_DB_URL=postgresql://... (P1 #25).
+    db_url: str = "sqlite:///./data/formunex.db"
+    experiments_path: str = "./data/experiments.json"
+    # Minimum measured samples before a trained model is used for a metric.
+    min_train_samples: int = 4
+    # Retrain automatically when new experiments are submitted.
+    auto_retrain: bool = True
+
+    # 多 LLM 供应商
+    llm_provider: str = "anthropic"          # 当前激活的供应商
+    llm_base_url: str | None = None          # OpenAI 兼容 API 的自定义 base URL
+    openai_api_key: str | None = None
+    gemini_api_key: str | None = None
+    groq_api_key: str | None = None          # Meta via Groq
+    deepseek_api_key: str | None = None
+    qwen_api_key: str | None = None
+    moonshot_api_key: str | None = None      # Kimi
+    minimax_api_key: str | None = None
+    xai_api_key: str | None = None           # Grok
+    # 通用 OpenAI 兼容自定义端点（HF Inference Endpoints / vLLM / TGI）。base_url
+    # 与 llm_base_url 分开保存，这样在供应商之间来回切换不会互相覆盖。
+    custom_api_key: str | None = None
+    custom_base_url: str | None = None
+
+    # 检索设置
+    search_limit_per_source: int = 50    # 每源单页大小（增量翻页）；不设单源总量上限
+    search_total_limit: int = 300        # 全部来源合并后的总量上限（按相关性排序截断）
+    # RAG 检索 + 配方推荐配置
+    # GPU 加速 ColBERT 检索开关（需 PyLate + CUDA torch）。
+    # True  → PyLate ColBERT (GPU ≥ 4GB VRAM)
+    # False → BM25 + FAISS 混合检索 (纯 CPU，零 AVX2 要求)
+    gpu_enabled: bool = Field(default=False, description="Enable GPU-accelerated ColBERT retrieval")
+
+    # 配方推荐生成模式
+    # "hybrid"   → KB 证据 + LLM 合成（叠加，推荐）
+    # "llm_only" → 纯 LLM 推荐（快速，离线，当前回退）
+    # "kb_only"  → 仅 KB 检索（无 LLM，降级验证）
+    formulation_mode: str = Field(default="hybrid", description="Formulation recommendation mode")
+
+    # 检索后端显式覆盖（覆盖 gpu_enabled 自动检测）
+    # "auto" | "pylate" | "bm25_faiss" | "embedding" | "tfidf"
+    rag_backend: str = "auto"
+
+    # 语义向量化所用的 sentence-transformer。空 = 用默认值
+    # （`sentence-transformers/all-MiniLM-L6-v2`）。
+    #
+    # 默认值是**英文为主**的模型，而本平台检索的是中文专利 —— 这是当前检索质量
+    # 的一个真实短板。可选项见 `rag.EMBEDDING_MODEL_CATALOG` / GET /api/kb/stats：
+    #     BAAI/bge-small-zh-v1.5      体积小，中文优先
+    #     BAAI/bge-m3                 多语种，但大得多
+    #     Qwen/Qwen3-Embedding-0.6B   多语种高维升级档（换后必重建）
+    #     moka-ai/m3e-base            中文，中等体积
+    #
+    # ⚠️ 换模型会让**已有的全部向量作废**（不同模型的向量在不同语义空间，不可比较）。
+    # 换完之后必须点「重建索引」；在那之前 `/api/kb/stats` 会报
+    # `vector_mode == "stale"` 并给出待重建的切块数，而不是让检索悄悄退回关键词。
+    #
+    # 默认值故意没有改动：不把未经验证的默认值推给已有部署。
+    embedding_model: str = ""
+
+    # ColBERT 持久知识库
+    colbert_index_dir: str = "./data/colbert_index"
+    colbert_model: str = "colbert-ir/colbertv2.0"
+    colbert_collection: str = "default"
+    # 单次检索返回的候选数。深度研究把主题拆成子问题后各自检索再合并，所以
+    # 总候选量约为 colbert_top_k × deep_subquestions。
+    colbert_top_k: int = 16
+    colbert_min_score: float = 0.35
+
+    # CRAG Fallback 默认联邦检索源（逗号分隔 env: FORMUNEX_FEDERATED_SOURCES）
+    federated_sources: list[str] = Field(
+        default_factory=lambda: ["patents", "literature", "internet"]
+    )
+    federated_sources_notebooklm: bool = False
+
+    # 可选增强引擎（adapter + 离线回退；缺库或关闭时行为不变）
+    # 启动时用 PubChemPy 按化学名补全知识库的 SMILES/分子量（需 intel extra + 网络）。
+    enrich_compounds: bool = False
+    # 化学工具网关（services/chemtools.py）：工具级化学能力
+    # （名称→SMILES/CAS、官能团、分子专利预筛、爆炸性筛查）。
+    # 缺 rdkit/httpx/molbloom 或关闭开关时所有调用返回中性值，管线行为不变。
+    chemtools_enabled: bool = True
+    chemtools_timeout_s: float = 10.0
+    # 材料替代联网召回（PubChem fastsimilarity_2d）。默认开；失败降级为空列表。
+    external_substitutes: bool = True
+    # SureChEMBL 官方 API：化学鉴定回退 + 替代漏斗结构相似 + 资料检索 content。
+    # 默认开；失败降级为空。检索 source_types 含 "surechembl" 时走 keyword content。
+    surechembl: bool = True
+    surechembl_base_url: str = "https://www.surechembl.org/api"
+    # 材料替代 L4：规则扩召回后可选 LLM 扩名。默认开；无 key/失败降级为空列表。
+    substitute_llm: bool = True
+    # v2 特征集：在 v1 特征向量后追加 6 个重量加权 RDKit 分子描述符
+    # （MolWt/LogP/TPSA/HBD/HBA/芳环数）。需 rdkit；切换后已训模型需重训
+    # （重启后 ModelRegistry 会从存储重训，故重启即可）。默认关闭保证兼容。
+    chemtools_descriptor_features: bool = False
+    # P1 #20: persist trained surrogate artifacts under this directory so restarts
+    # can reload matching data_hash instead of always retraining from scratch.
+    model_persist_enabled: bool = True
+    model_artifacts_dir: str = "./data/models"
+
+    # NotebookLM 作为检索 Source（notebooklm-py 直连库；浏览器会话认证）。
+    # 需 `notebooklm` extra + 一次性 `notebooklm login` 生成会话文件。
+    # 未启用 / 未登录 / 库未装时 search_notebooklm() 静默返回 []。
+    notebooklm_enabled: bool = False
+    notebooklm_notebook_id: str | None = None
+    notebooklm_storage_path: str = "./data/notebooklm_auth.json"
+
+    # 多智能体事件总线（v0.8）。Redis Pub/Sub 仅作预留：默认关闭，
+    # agents.bus.publish() 在关闭 / Redis 不可达 / redis 库缺失时静默 no-op。
+    # 为下一阶段重物理计算（physics_jobs 频道）的异步投递做准备。
+    agent_bus_enabled: bool = False
+
+    # 深度研究外部知识库（Phase 2+ 使用；Phase 1 仅读取配置）
+    # Polite-pool contact for OpenAlex. Default is a non-personal placeholder —
+    # set FORMUNEX_OPENALEX_MAILTO to a real address you control (shared
+    # personal defaults caused 429s when many deployments reused one mailbox).
+    # 2026-10-11：默认 None，经设置界面/API 配置，不硬编码占位邮箱。
+    openalex_mailto: str | None = None
+    # ── OpenAlex 多臂检索（2026-09-11）──────────────────────────────────────
+    # OpenAlex 把空格分隔的词按 AND 连接并做词干化，而查询串由 LLM 扩展生成、
+    # 长度每次不同 —— 实测同一主题的召回在 1 条到几千条之间抽奖（「铝合金碱性
+    # 脱脂剂」基线只返回 1 条、领域命中率 0%）。三臂叠加修复断崖：精确臂保留
+    # 用户意图，召回臂把扩展词改成 OR 并锚定基材，广谱臂用领域词表兜底。
+    # 实测数量提升 2–37×，领域命中率不降反升，异基材噪声下降。
+    openalex_multi_arm: bool = True
+    openalex_arm_precise: bool = True
+    openalex_arm_recall: bool = True
+    # 广谱臂单臂可返 14 万条，只在精确臂∪召回臂去重后不足时兜底触发。
+    openalex_arm_broad: bool = True
+    openalex_arm_broad_threshold: int = 30
+    # 精确臂词数上限：实测 >10 词开始断崖（8 词 219 条 vs 2 词 362 条）。
+    openalex_arm_precise_max_terms: int = 8
+    # 每个 OR 组的词数上限。OpenAlex 规定「>5 个布尔运算符」的查询降为
+    # 5 req/s（reason=broad_boolean_query），所以两组各 3 词 = 2+2+1 = 5 运算符，
+    # 正好留在快车道。实测代价：同主题 78,763 vs 128,494 库内总数 —— 只取首页时
+    # 无差别，而两者都远超它要修复的 89 条基线。
+    openalex_arm_group_terms: int = 3
+    # 臂间权重（相关性加性增量）。臂1 命中必须压过广谱臂，否则 14 万条的广谱
+    # 结果会把精确命中挤出候选。
+    openalex_arm_weight_precise: float = 0.06
+    openalex_arm_weight_recall: float = 0.0
+    openalex_arm_weight_broad: float = -0.06
+    # OpenAlex 内容库（Content Archive，2026-09 接入）：缓存的 ~50M PDF 与
+    # ~43M GROBID TEI XML，按篇计费（$0.01/篇，免费账号 $1/天）。
+    # 它绕开出版商墙——Unpaywall 给的 pdf_url 常落在 Cloudflare 403 的镜像上，
+    # 而 OpenAlex 的文件由自己托管。缺 key 时该档自动跳过，行为与从前一致。
+    openalex_api_key: str | None = None
+    openalex_content_enabled: bool = True
+    # 2026-10-11：默认 None，经设置界面/API 配置，不硬编码占位邮箱。
+    unpaywall_mailto: str | None = None  # Unpaywall polite-pool email
+    # Semantic Scholar Graph API key (https://www.semanticscholar.org/product/api#api-key). Optional: without it the API is
+    # shared with every other anonymous caller and answers 429 under load; with it you get a dedicated rate limit.
+    semantic_scholar_api_key: str | None = None
+    epo_consumer_key: str | None = None      # EPO OPS API consumer key
+    epo_consumer_secret: str | None = None     # EPO OPS API consumer secret
+
+    # 检索增强 API（Phase 0+）
+    serpapi_api_key: str | None = None
+    tavily_api_key: str | None = None
+
+    # 互联网检索的兜底档：Tavily → SerpAPI → DuckDuckGo。
+    # DuckDuckGo 是唯一**不需要 API key** 的一档，所以默认保留——没有任何密钥也
+    # 能用是本项目的设计属性（测试套件依赖它离线运行）。
+    # 但它的结果质量明显弱于前两档；关掉之后，若没有可用密钥就**诚实地返回空**，
+    # 而不是塞一批低质量结果冒充检索成功。
+    # 每一档都会把自己的名字写进 `Evidence.source`，所以关它之前可以先看看到底
+    # 有多少结果是它给的。
+    web_search_allow_ddgs: bool = True
+    domain_profile_search: bool = True  # P0: apply DomainSearchProfile to retrieval
+    openalex_concept_filter: bool = True  # P0: OpenAlex concepts.id filter
+    patent_cpc_filter: bool = True  # P0: append CPC=(…) to patent queries
+    openalex_enabled: bool = True
+
+    # B-8: provider 熔断器（连续失败阈值 / 熔断冷却秒数）。
+    provider_breaker_threshold: int = 5
+    provider_breaker_cooldown_sec: float = 300.0
+
+    # 检索结果内容过滤（KB P0）：规则层默认开启（保守规则：垃圾域名/
+    # 空洞摘要/近重复 SimHash）；LLM 批量质量判定默认关闭（每次检索一次调用）。
+    content_filter_enabled: bool = True
+    content_filter_min_snippet_chars: int = 40
+    content_filter_blocked_domains: list[str] = Field(default_factory=list)
+    content_filter_llm_judge: bool = False
+    # LLM 质量判定只检查排序靠前的 N 条（其余直接保留）。全量判定把 161 条
+    # 拼进一个 prompt（约 24K 字符）会让 DeepSeek 单次调用耗时数百秒，触发
+    # 前端 300s stall；限制到 N 条（约 12K 字符）降到秒级，而尾部低相关结果
+    # 即使被丢弃对最终 top-k 影响也小。
+    content_filter_llm_judge_max_items: int = 60
+
+    # Search-stream LLM rerank (Phase B R-2a): reorder the head of the ranked list;
+    # remaining slots up to search_total_limit are kept in rule-rank order.
+    search_rerank_enabled: bool = True
+    # v7: search_rerank_top_k 已删除（死开关，全仓库零读取）。
+    search_rerank_llm_batch: int = 50    # 送入 LLM 评分的候选数（控制成本）
+    # P1 #15: cross-encoder rerank (sentence-transformers CrossEncoder).
+    # v29 Phase5: 默认启用 —— bge-reranker-base 已在本地缓存时自动使用，
+    # 未缓存时回退 LLM（rag.py 的 cross_encoder_model_cached 保护），
+    # 避免生产首次查询触发 ~1GB 下载。
+    # Backend: auto prefers cross_encoder when enabled+available, else LLM.
+    cross_encoder_rerank_enabled: bool = True
+    cross_encoder_model: str = "BAAI/bge-reranker-base"
+    search_rerank_backend: str = "auto"  # auto | cross_encoder | llm
+
+    # 深度研究：写报告的 LLM 能看到多少证据。原本硬编码 12 条 × 每条 300 字符
+    # ≈ 3.6 KB，是「深度研究不够深」最大的单点原因——全文抓回来、切好块、入了
+    # 库，到提示词这里又被砍成三分之一。0 = 不限制每条长度。
+    deep_report_evidence_count: int = 24
+    deep_report_snippet_chars: int = 1200
+    # 主题拆解成几个子问题分别检索（1 = 关闭，退回单轮检索）。这是唯一能产生
+    # 新检索角度的机制：QueryExpander 只产同义词与 IPC 号，且只在条件性的
+    # fallback 里才跑，正常成功路径从不扩展查询。
+    deep_subquestions: int = 4
+    # 用假设性答案改进检索（HyDE）。生成内容只用于检索，绝不进入报告正文。
+    deep_hyde_enabled: bool = True
+    # A: HyDE 覆盖的前 N 个查询（含主查询，i < N）。默认 2 = 主查询 + 第 1
+    # 个子问题；每多 1 次 HyDE = 1 次 LLM 调用。0 = 完全关闭（旧行为）。
+    deep_hyde_subquestions: int = 2
+
+    # PDF 解析器层级（KB P1）："auto" = hybrid → Docling → marker → MinerU →
+    # MarkItDown → pypdf 逐级回退；指定名称则固定首选（仍向下回退）。
+    pdf_parser: str = "auto"
+    # 版面分析（pymupdf4llm 的 hybrid 层）。实测代价与收益：
+    #   开：~350MB 峰值、~176ms/页；关：~150MB、~12ms/页
+    # 关掉快 25 倍且省一半内存，单栏页面输出完全一致——但**双栏页面会左右
+    # 交错**（"Left column line one about Right column line one about"），两句
+    # 无关的话被合成一个 chunk、一个向量。论文与专利多为双栏，所以默认开启，
+    # 正确性优先；内存实在紧张的机器可关掉，代价如上。
+    pdf_layout_analysis: bool = True
+    # pymupdf4llm 版面解析层自带的逐页 OCR。**它的库默认值是 True**，而这一层
+    # 跑在解析级联的最前面、对每一份 PDF 都跑——于是只要机器上装了 Tesseract，
+    # 每篇文档的每一页都会先被 OCR 一遍，不受任何设置约束。VPS 上实测：一次
+    # 51.7s 的 arXiv 解析里约 50s 花在这里，而 kb_ingest 的 7200s 软时限被打满
+    # 时，日志里正在跑的也正是它（`OCR on page.number=…`）。
+    # 关掉之后扫描件并没有失去出路：`looks_scanned` 会把它们交给 `_parse_scanned`
+    # （MinerU OCR）或本地 rapidocr——那才是为扫描件准备的层。
+    # ⚠️ 顺带修好一个探测撒谎：`char_count` 是在 `to_markdown()` 把 OCR 结果写回
+    # 页面**之后**读的，所以开着 OCR 时 `looks_scanned` 实际含义是"连 OCR 之后
+    # 都没有文字"，比"这是扫描件"严格得多，扫描件因此被逐页升级而不是走扫描件
+    # 分支。关掉后该信号才回到它声称的语义。
+    pdf_local_ocr: bool = False
+    # 公式增强（Docling）：显示公式转 LaTeX $$…$$，化学反应方程式保真。
+    # 首次使用会额外下载公式识别模型。
+    pdf_formula_enrichment: bool = True
+
+    # ── MinerU 云端解析 ──────────────────────────────────────────────────
+    # 把本地解析不好的**单页**（密集表格、公式、图表）升级到 MinerU 云端。
+    # ⚠️ 被升级的页面会上传至 mineru.net（第三方），故默认关闭，必须显式开启。
+    # 本地 OCR（RapidOCR / ONNX Runtime，纯 CPU，模型随 wheel 分发无需下载）。
+    # 扫描件没有文字层，此前只能靠 MinerU 云端 OCR；未配置 MinerU 时整篇无法入库。
+    rapidocr_enabled: bool = True
+    # 实测：峰值内存随像素数走（120dpi 372MB / 150dpi 557MB / 200dpi 659MB），
+    # 而更高 DPI 并没有更准——只是把一行切成更多段。150 是留给真实噪声扫描件的
+    # 折中值。
+    rapidocr_dpi: int = 120
+    rapidocr_max_pages: int = 30
+    # ORT 默认用满所有核心，会在 OCR 期间把 web worker 饿死。线程数不影响峰值
+    # 内存（实测 4/1/2 线程都是 ~656MB），只影响单页耗时。
+    rapidocr_threads: int = 4
+    # 扫描页本地 OCR 的置信度门槛（0..1）。平均置信度 >= 此值才用本地结果，
+    # 否则回退 MinerU 结构化解析。0 = 永远用本地（不校验质量）。
+    rapidocr_min_confidence: float = 0.75
+
+    mineru_enabled: bool = False
+    mineru_api_key: str | None = None
+    mineru_base_url: str = "https://mineru.net/api/v4"
+    # SDK 侧等待任务完成的上限。解析在线程池里跑，不会阻塞事件循环。
+    # 这是**整份文档**（扫描件走 `_parse_scanned`）的额度。
+    mineru_timeout_s: float = 300.0
+    # **单页升级**的额度，独立于上面那个。逐页升级是串行的，所以超时不是"不阻塞"
+    # 而是逐页累加：按 300s × 20 页算，一份文档最坏能空等 6000 秒。网络不通时
+    # 把它调大只会把等待翻倍，所以这里给单页一个短得多的额度；整份扫描件的上传
+    # 体积大得多，仍用上面的 300s。
+    mineru_page_timeout_s: float = 90.0
+    # 批量升级：把同一份文档的多个升级页合并为一次 MinerU batch 提交（服务端并行），
+    # 替代逐页串行往返——实测多图表 PDF 单页串行要 2-3 分钟/页，批量可 5-10× 提速。
+    # 关闭则退回逐页串行（旧行为，保留作一键回退开关）。
+    mineru_batch_enabled: bool = True
+    # 批量提交的轮询超时（SDK batch 默认 1800s，单页是 300s）。
+    mineru_batch_timeout_s: float = 1800.0
+    # 连续多少页升级失败就放弃这份文档的升级。没有它，一条不通的网络会被
+    # 逐页原样重试一遍——同一个错误付 20 次超时的钱。0 = 不熔断。
+    mineru_max_page_failures: int = 3
+    # 单文档最多升级多少页——防止一份 200 页扫描件一次吃掉大半日配额。
+    # 超出部分保留本地解析结果并记警告。
+    mineru_max_pages_per_doc: int = 10
+    # 本地预检体积上限（服务端为 200MB）。超限直接不发，省一次往返与配额。
+    mineru_max_upload_mb: int = 200
+    # ── Phase 1：云端公式/表格识别显式开关 ─────────────────────────────
+    # SDK 只在显式设置时才发送 enable_formula/enable_table；不传则走服务端
+    # 默认，公式识别可能静默关闭（本地管线的 mfr_enable 陷阱的云端等价物）。
+    # 这里默认全开并在调用时打日志，关掉必须是有意为之。
+    mineru_formula_enabled: bool = True
+    mineru_table_enabled: bool = True
+    # ── Phase 1：mineru_cloud 一等后端的按页质量自适应 ────────────────
+    # 整份文档的页面都有可用文本层时跳过云端调用（省配额）；False = 显式
+    # 指定 mineru_cloud 时也全量走云端。
+    mineru_cloud_adaptive_skip: bool = True
+    # 单页可用字符数阈值：低于此值视为"脏页"（扫描/表格页），值得升级。
+    mineru_cloud_min_chars_per_page: int = 50
+    # ── Phase 1：公式守门员 ──────────────────────────────────────────
+    # 仅统计 MinerU 漏网的公式（计数器+日志），默认不开 LLM 纠错。
+    # 开启后对漏网块做单块 DeepSeek LaTeX/SMILES 归一化（每块 1 次调用）。
+    formula_gatekeeper_llm_enabled: bool = False
+    # 内容哈希缓存目录：同一份文件重复解析既费钱又费时。
+    mineru_cache_dir: str = "./data/mineru_cache"
+    # ═══ 入库收尾自动清理（省空间）════
+    # 源文档全文（source_documents.full_text）在切块完成后冗余——切块已覆盖全文，
+    # 检索走 document_chunks + kb_mentions，不再读 full_text（仅 reindex 重建会读）。
+    # 入库后清空 full_text，保留行元数据（content_hash 去重 / 左栏列表 / source_guide）。
+    prune_source_fulltext: bool = True
+    # MinerU 云端解析缓存：content_hash 去重会拦截重复 PDF（解析前就跳过），缓存几乎
+    # 没有复用机会，反而累积到数百 MB。开启后 parse 不读不写缓存（历史缓存需手动清）。
+    prune_mineru_cache: bool = True
+    # 一页图片面积占比超过此值即视为"有值得看的图"，触发升级。
+    hybrid_image_area_threshold: float = 0.20
+    # 视觉解析断路器：连续 N 次永久性失败（端点暂停/鉴权拒绝）后，
+    # 跳过当前文档剩余所有图片的视觉解析，直接降级为占位符。
+    # 0 = 不断路（始终尝试）。建议 3。
+    vision_max_consecutive_failures: int = 3
+
+    # 检索结果全文获取（KB P0）：把摘要级命中升级为全文分块并持久化原文。
+    # 专利 PDF（USPTO/EPO/Google）+ OA 文献 PDF（OpenAlex/arXiv）+ 网页正文
+    # （trafilatura 优先）。v2 决策①：默认开启，一律全文下载。
+    fulltext_enrich: bool = True
+    fulltext_max_docs: int = 8
+    fulltext_timeout_s: float = 20.0
+    # v2 P1-9: PDF 内嵌结构图 → vision → SMILES 入库。默认关闭（vision 调用有成本）。
+    pdf_embedded_image_vision: bool = False
+
+    # W2-1 (P1-6)：全文 chunk 级 FTS5 索引（页码/章节/字符偏移），默认开启；
+    # 索引失败 fail-open，不影响 KB 写入。
+    source_fts_enabled: bool = True
+
+    # W2-3 (P1-18)：PDF 表格结构抽取契约（recipe/performance/tds_sds 分类）。
+    # 默认开启；解析失败 fail-open，TableAsset 以 sidecar JSON 持久化。
+    table_extract_enabled: bool = True
+
+    # W2-4 (P1-1)：Agent 记忆系统（全局/项目/about-you 三域，FTS5 召回）。
+    # 默认关闭，浸泡后开启；写入门控拒绝密钥与 prompt 注入。
+    agent_memory_enabled: bool = False
+
+    # W2-7 (P1-3)：MCP 逐工具审批三态（allow/ask/block）。
+    # 默认关闭；ask 无决策时默认 deny 并写审计日志，前端审批 UI 后置。
+    mcp_approval_enabled: bool = False
+
+    # W2-8 (P1-12)：turn-stop 自动审计（reviewer）。
+    # 默认关闭，按会话 opt-in；evidence 路径已内联 review 的 turn 不重复触发。
+    auto_audit_enabled: bool = False
+
+    # W3-2 (P1-21)：交叉编码器 rerank 插件。
+    # 默认关闭；模型名为空时不加载模型，直接走 llm/原序回退。
+    rerank_plugin_enabled: bool = False
+    rerank_model: str = ""
+
+    # 专利全文优先用 Google Patents 落地页的 HTML 正文，而不是 PDF。
+    # 三条理由，都实测过：
+    #   1. 一次请求（~0.7 s）而不是两次；
+    #   2. **完全不需要 OCR** —— 扫描版专利走 RapidOCR 是 ~2 s/页、上限 30 页，
+    #      落地页是现成文本，0 秒；
+    #   3. `itemprop="abstract|description|claims"` 是结构化分段，比从 PDF 版面
+    #      重建的 Markdown 干净；中日文专利还白拿一份英文机器翻译对照。
+    # PDF 唯一的优势是图表/化学结构图，而那要靠 MinerU 才能送进视觉模型
+    # （`mineru_enabled` 默认关），所以今天从 PDF 拿不到 HTML 拿不到的东西。
+    # 设为 false 则优先下载 PDF，落地页无 PDF 时仍回落到 HTML 正文。
+    patent_prefer_html: bool = True
+
+    
+    kb_ingest_auto: bool = True
+    # 每批后台入库最多下载多少篇全文。**0 = 不限制**，即检索到的每一条可获取
+    # 全文的资料都入库——这是默认值，因为「搜到了但没入库」对使用者来说就是
+    # 数据丢失。设成正数只在需要控制外部请求量/磁盘时才有意义。
+    kb_ingest_max_docs: int = 0
+    # ── 每项目入库配额（2026-09-11）────────────────────────────────────────
+    # kb_ingest_max_docs 是**每批**上限，管不住项目长期累积；而 OCR 是内存瓶颈
+    # （pymupdf4llm ~350MB/篇、扫描件 OCR ~557MB，本机 4 核取 3 路并发已近上限）。
+    # 这两个配额按**项目**累计，到顶后自动入库停止新增（手动单篇入库不受限）。
+    kb_project_source_quota: int = 300   # 0 = 不限；每项目资料总数上限
+    kb_project_pdf_quota: int = 50       # v2 决策②：不再作为降级门（超限不降级），
+                                        # 仅作成本监控告警阈值；0 = 不告警
+    # 相关性闸影子模式（2026-09-11 / W2；Top-5 #1 2026-09-25 默认翻转为真闸）：
+    # relevance 实为名次代理（_ranked = 1.0 - 0.02*位置）。False（默认）=
+    # 按 topicality 真闸（阈值 kb_ingest_min_relevance）。True = 只记录将拒收率，
+    # 不改入库（校准/回滚用）。看 GET /api/kb/relevance-shadow/stats。
+    kb_relevance_shadow: bool = False
+    # 并发获取全文的线程数。**瓶颈是解析内存而不是网络**：每篇 PDF 都会走完整
+    # 解析级联，pymupdf4llm 峰值约 350 MB、扫描件走 OCR 约 557 MB，所以在
+    # 2.2 GB 的机器上 3 路并发已经接近上限。入库（切块+向量+写库）保持串行，
+    # 避免 SQLite 写冲突。
+    kb_ingest_workers: int = 3
+    # ── P1-2: PDF 下载链路三件套（2026-10-01）──────────────────────────────
+    kb_pdf_cache_enabled: bool = True   # PDF 磁盘缓存（URL-hash 命名）
+    kb_pdf_cache_dir: str = "pdf_cache"  # 相对 backend/data；绝对路径则直接用
+    kb_pdf_cache_ttl_s: int = 604800   # 缓存有效期；0 = 永不过期
+    kb_pdf_retry_attempts: int = 2      # timeout/5xx 总尝试次数（含首次）
+    kb_403_blocklist_ttl_s: int = 600   # 403 host 短期拉黑；0 = 关闭
+    # SSE 进度流的最大保持时长。构建一个几百篇文档的知识库需要几十分钟，原本
+    # Redis 路径 1 小时、无 Redis 回退 120 秒都可能在任务健康运行时切断。
+    # 客户端在流关闭后会自动改用轮询，所以这个值只决定「连接保持多久」，
+    # 不决定「任务能跑多久」。
+    task_stream_timeout_s: float = 21600.0  # 6 小时
+
+    # Celery 单任务时限。此前硬编码为 600 / 900 秒（10 / 15 分钟），这与
+    # 「取消超时限制」的其余三层直接矛盾：前端已无墙钟上限、SSE 截止 6 小时、
+    # `kb_ingest_max_docs=0` 不限篇数——然后 Celery 在第 15 分钟把任务杀掉。
+    # 几百篇的知识库构建必然超过 15 分钟，于是前端安静地盯着一个早已被杀死的任务。
+    #
+    # 这两个值**必须小于 `task_stream_timeout_s`**：流要比任务活得久，才能把
+    # 任务的失败状态报出来。反过来（流先断）就是之前那个「构建中断」的假象。
+    #
+    # 注意：`soft_time_limit` 是**每个任务**的，与 `celery -c` 并发数无关——
+    # 并发只决定一个卡死的任务会占住几个 worker 槽位，不决定单个任务能跑多久。
+    celery_soft_time_limit_s: int = 14400  # 4 小时：抛 SoftTimeLimitExceeded，任务可自报
+    celery_hard_time_limit_s: int = 18000  # 5 小时：强杀，防止卡死的任务永久占槽（须 < task_stream_timeout_s 21600）
+    # 主题雷达（Celery Beat）：按计划周期性检索并把相关文献回填知识库。默认关闭；
+    # 需要单独的 beat 进程（compose: `--profile radar`，或 `celery … worker -B`）。
+    # topics 为 JSON 数组，每项：{"query": "...", "project_id": "...", "cron": "0 1 * * 1",
+    # "total_limit": 100, "source_types": ["literature"]}；cron 为 5 段（分 时 日 月 周），缺省
+    # 每周一 01:00。非法项会被跳过并记入日志，不影响 worker 启动。
+    topic_radar_enabled: bool = False
+    topic_radar_topics: str = ""
+    kb_ingest_min_relevance: float = 0.45  # 0 = off; e.g. 0.5 filters low-relevance rows
+    # Top-5 #2（2026-09-25）：检索期负向收缩。True=合并 DomainSearchProfile.search_deny
+    # 与扩展 negative_terms，命中且 allow 不足时打 domain_match=none / 排序惩罚。
+    kb_search_deny_enabled: bool = True
+    # 主题预筛(永久规则 2026-09):自动入库前按项目主题锚词过滤领域外文献
+    # (磁性/储氢/电池/半导体/天文/纯力学等)。True=强制; 项目标题无领域锚词
+    # 或显式置 false 时不过滤(显式手动路径不受影响)。
+    kb_ingest_topic_filter: bool = True
+    kb_ingest_patent_exempt: bool = False  # P0: patents need CPC/topic hit (no blind exempt)
+    workbench_auto_train: bool = True  # Completed workbench rows → ModelRegistry on sync
+    auto_loop_on_sync: bool = False  # After sync ingests training rows, dispatch closed-loop task
+    # W5 / W3′（2026-09-25）：闭环成功后是否自动把 next_doe adopt 进台账。
+    # 默认关——避免静默改写实验台；需 Settings / LoopModal 显式打开。
+    auto_adopt_next_doe_on_loop: bool = False
+    # How long "暂停闭环" holds before the pause lapses on its own (hours; 0 = until somebody resumes). A lapse is
+    # logged and shown in the loop panel; the API can override it per request (``ttlHours``).
+    doe_cycle_pause_ttl_hours: float = Field(default=24.0, ge=0, le=24 * 366)
+    # Closed-loop RMSE plateau detection (Phase C L-2): skip optimize+DOE when flat.
+    loop_convergence_enabled: bool = True
+    loop_convergence_eps: float = 0.01
+    loop_convergence_patience: int = 2
+
+    # Optional Neo4j graph-store adapter (sibling to SQLite KG). Must be a
+    # Settings field so Settings UI / env_flags promote it into os.environ —
+    # previously a file-only FORMUNEX_NEO4J_ENABLED was a dead key.
+    neo4j_enabled: bool = False
+
+    # Knowledge graph P0 — entity index + enumerative RAG (default off for CI).
+    kg_enabled: bool = True
+    # 入库时的 KG 链接拆成两段：实体提及（快，枚举 RAG 根基）与关系提取
+    # （慢，尤其 LLM 关系每 chunk 一次 API 调用）。默认只做实体，关系后置。
+    # kg_link_on_ingest 保留为兼容别名；新逻辑用下面两个字段。
+    kg_link_on_ingest: bool = True
+    kg_entities_on_ingest: bool = True
+    kg_relations_on_ingest: bool = False
+    kg_enumerative_scan_limit: int = 500
+    kg_enumerative_chunk_cap: int = 200
+    kg_enumerative_llm_cap: int = 32
+    kg_enumerative_max_sources: int = 8
+    kg_hybrid_semantic_k: int = 12
+    kg_hybrid_enumerative_k: int = 12
+    kg_trade_product_link_min_conf: float = 0.85
+    kg_llm_product_hint: bool = False
+    kg_chat_entity_refs_on_evidence: bool = True
+    kg_element_map_path: str = "app/resources/kg_elements.json"
+    kg_relation_extract_enabled: bool = False
+    kg_llm_relation_extract: bool = False
+    kg_relation_min_confidence: float = 0.55
+    kg_multimodal_fusion_enabled: bool = False
+    # KG → recommendation ranking weights (second priority). Soft constraints:
+    # an INHIBITS relation between skeleton materials multiplies the
+    # formulation score (sinks it in ranking, never deletes); SYNERGIZES gives
+    # a mild bonus when explicitly enabled. KG disabled → both treated as 1.0.
+    kg_inhibits_penalty: float = 0.5
+    kg_synergizes_bonus: float = 1.0  # 1.0 = disabled by default
+    kg_measured_bonus: float = 1.15  # 兜底：材料有任意 measured 边时加成（无目标指标命中时）
+    # 指标感知实测调权（mat→prop:{metric}）：好/差/仅存在
+    kg_measured_metric_bonus: float = 1.12
+    kg_measured_metric_penalty: float = 0.92
+    kg_measured_metric_presence: float = 1.05
+
+    # KG v10 — 文献↔实测矛盾检测
+    kg_contradiction_threshold: float = 0.3  # 冲突强度阈值：低于此不标记
+    kg_contradiction_demote: bool = True  # 冲突替代候选是否在 discover 排序中置后
+
+    # Chat P0 — multi-turn, structured answers, soft clarification.
+    chat_multi_turn_enabled: bool = True
+    chat_structured_enabled: bool = True
+    chat_clarification_enabled: bool = True
+    chat_claim_check_enabled: bool = True
+    # 增量 #7: 子问题分解（多跳检索）—— 复杂问题拆成子问题多路检索。
+    # 默认关闭（需 LLM 调用，有延迟）；开启后仅对长问题（>40 字）生效。
+    chat_subquestions_enabled: bool = False
+    # P2-2 — 证据不足拒答硬门：unsupported claim 占比超阈值或零召回时，
+    # 用拒答模板替换答案（直接上硬门，无 report-only 过渡）。
+    chat_abstention_threshold: float = 0.5
+    # P2-1 — 数值一致性运行时检查（答案带单位数字 vs 所引证据）。
+    chat_numeric_check_enabled: bool = True
+    # P2-3 — 答案尾「证据冲突」段（conflicting 判词显式透出）。
+    chat_conflict_section_enabled: bool = True
+    # Skills / Evidence / Connectors / MCP (OpenScience-inspired upgrade, default conservative).
+    chat_composer_plus_enabled: bool = True
+    chat_skills_runtime_enabled: bool = True
+    # off | paperqa | hybrid_strict — global default; per-request mode overrides when set.
+    evidence_synthesis_mode: str = "off"
+    evidence_doi_verify_enabled: bool = True
+    # Wave C — OpenAlex citation-graph expand on Evidence answers (fail-open).
+    citation_expand_enabled: bool = True
+    # Wave C — structured evidence_provenance on ChatResponse (default on).
+    evidence_provenance_enabled: bool = True
+    # Wave D — claim→passage sources_audit table on ChatResponse (default on).
+    sources_audit_enabled: bool = True
+    # Wave D — preflight locator honesty (EnvFlag registry is bool-only).
+    # enabled=false → off; enabled+!blocking → warning; both true → blocking.
+    citation_locator_preflight_enabled: bool = True
+    citation_locator_preflight_blocking: bool = False
+    # Wave D — batch OA enrich into literature manifest (default on).
+    literature_oa_enrich_enabled: bool = True
+    # Wave D2 — lightweight RO-Crate steel-stamp export (default off; soak then enable).
+    ro_crate_export_enabled: bool = False
+    evidence_reviewer_enabled: bool = False
+    # Bounded reviewer→LLM repair loop after evidence_reviewer (default off).
+    evidence_reviewer_fix_loop_enabled: bool = False
+    # Wave 1 — LLM rubric reviewer (default off; falls back to heuristics).
+    evidence_reviewer_llm_enabled: bool = False
+    evidence_reviewer_model: str = ""  # empty → inherit chat llm_model
+    # Wave 6 — evals 严谨性 rubric 门禁阈值（P1-38；scripts/rigor_gate.py 默认开启）。
+    # 可用环境变量 FORMUNEX_EVALS_RIGOR_THRESHOLDS 以 JSON 覆盖子项。
+    evals_rigor_thresholds: dict[str, float] = Field(
+        default={
+            "citation_veracity": 1.0,
+            "coverage": 0.8,
+            "numeric_consistency": 1.0,
+        },
+        description="Rigor rubric gate thresholds per metric",
+    )
+    # Wiki/STORM export steel-stamp (citation/placeholder/numeric). Default on for export.
+    publication_preflight_enabled: bool = True
+    # Wave B — PaperQA engine kill-switch (orthogonal to evidence_synthesis_mode).
+    paperqa_enabled: bool = True
+    paperqa_llm_model: str = ""  # empty → inherit chat llm_model
+    paperqa_embedding: str = ""  # empty → OpenAI emb if key else skip/default
+    # Wave 5 — query-aware evidence compression tier 1 (default on; fail-open).
+    query_compress_enabled: bool = True
+    # F-1: token 单位。默认 3000 ≈ chat_context_max_chars(12000 字符)/4，
+    # 与 _build_context 的真实截断线对齐；之前误配 12000 使压缩预算保证失效。
+    query_compress_token_budget: int = 3000
+    # Wave 5 — tier 2 LLM rewrite layer.
+    # Default ON since 2026-09-28 (Wave 1 ablation): under tight token budgets
+    # tier-1's mechanical 400-char truncation drops buried key numbers
+    # (rigor numeric_consistency 0.0), while tier-2 query-focused summaries
+    # preserve them (1.0) at the cost of 1 batched LLM call per query that
+    # has long (>=1500 char) evidence. Override via
+    # FORMUNEX_QUERY_COMPRESS_LLM_ENABLED=false to disable.
+    query_compress_llm_enabled: bool = True
+    # Round 3 Wave 1 — agentic iterative retrieval (retrieve -> assess gap ->
+    # rewrite -> retrieve). Default OFF until golden A/B decides (see
+    # tests/test_agent_search_loop.py). Downstream rerank/compression/
+    # synthesis are untouched; the loop only changes the retrieval stage.
+    # Override via FORMUNEX_AGENT_SEARCH_ENABLED=true to enable.
+    agent_search_enabled: bool = False
+    agent_search_max_iters: int = 3
+    agent_search_time_budget_s: float = 20.0
+    # Phase 2 — retrieval_by_children: score sentence-level children at query
+    # time, present the parent block. Default OFF until golden A/B decides
+    # (see tests/test_phase2_children_ab.py). Override via
+    # FORMUNEX_KB_CHILDREN_RETRIEVAL_ENABLED=true.
+    kb_children_retrieval_enabled: bool = False
+    # Candidate multiplier for the parent pool before children re-rank.
+    kb_children_candidate_mult: int = 3
+    # Phase 2 — patent tag stitching: when a hit carries meta.patent_tags
+    # (claim_no/example_no), pull sibling chunks with the same tag into
+    # context (Claims<->Examples stitching, zero LLM cost).
+    kb_patent_stitch_enabled: bool = True
+    kb_patent_stitch_max_siblings: int = 2
+    # KB near-duplicate dedup at ingest (2026-10-01): two layers applied to
+    # chunk rows after embedding, before ChunkStore.replace_for_source[_in].
+    # L1 exact (normalized-text sha256) is zero-false-positive → default ON.
+    # L2 near (same-lang embedding cosine >= threshold vs live DB vectors)
+    # is opt-in; audit mode only logs what *would* be skipped.
+    kb_dedup_exact_enabled: bool = True
+    kb_near_dedup_enabled: bool = False
+    kb_near_dedup_audit: bool = True
+    kb_near_dedup_threshold: float = 0.98
+    # Phase 4 — Text2SQL hybrid routing in the chat chain. When True and the
+    # question carries structured signals, deterministic SQL rows are
+    # prepended to the answer prompt (fail-open: SQL failure falls back to
+    # the pure-literature path and never blocks the answer). Single boolean
+    # kill-switch via FORMUNEX_TEXT2SQL_ROUTING_ENABLED=false.
+    text2sql_routing_enabled: bool = True
+    # Phase 3 — page thumbnails + VLM chart fallback (opt-in, default OFF).
+    # Thumbnails are rendered at ingest (PyMuPDF, PDF only) into
+    # <db_dir>/thumbnails/<source_id>/ and fed to the vision role only when
+    # vlm_fallback_enabled. Zero cost when disabled.
+    page_thumbnail_enabled: bool = False
+    page_thumbnail_dpi: int = 40
+    vlm_fallback_enabled: bool = False
+    # Max page images per VLM call (cost gate: ~1100 tokens/image at 40 DPI).
+    vlm_max_pages: int = 4
+    # Wave B — project literature manifest / frozen corpus.
+    literature_manifest_enabled: bool = True
+    frozen_corpus_required_for_export: bool = False
+    # Wave E-Lit — Hub Literature Library catalog (default off; soak then enable).
+    literature_library_enabled: bool = False
+    # Wave B — light smart screening (default off).
+    literature_screening_enabled: bool = False
+    screening_auto_freeze: bool = False
+    # W6-2 — manifest 超过该条目数时筛选走后台 job（默认 500）。
+    screening_async_threshold: int = 500
+    # W6-3 — Smart Collections 自动刷新：GET /api/collections 顺带触发到期
+    # 集合的后台刷新（默认开；关闭后只剩手动 refresh 与 celery beat 任务）。
+    smart_collections_auto_refresh: bool = True
+    # Wave 4 — artifact version lineage / immutable snapshots (P1-16, default on).
+    artifact_versions_enabled: bool = True
+    literature_screening_required_for_export: bool = False
+    connectors_builtin_enabled: bool = True
+    # Wave D2 — MCP 调用重试（默认 2 次指数退避；仅超时/连接类错误）。
+    mcp_client_enabled: bool = False
+    # Wave D2 — MCP 调用重试（默认 2 次指数退避；仅超时/连接类错误）。
+    mcp_tool_retries: int = 2
+    mcp_retry_backoff_s: float = 0.5
+    # Wave 1 — retrieval MMR diversity rerank (default off).
+    search_mmr_enabled: bool = False
+    search_mmr_lambda: float = 0.7
+    # Wave 1 — session-level search cache TTL seconds (0=disabled).
+    search_cache_ttl_s: int = 600
+    # B-15 — per-round deadline for iter_search multi-source paging (seconds).
+    search_round_deadline_s: float = 240
+    # Wave 1 — artifact reproducibility audit as preflight check (default off).
+    preflight_artifact_audit_enabled: bool = False
+    # Chat native chem tool-calling (OpenAI-compatible tools → chemtools / SureChemBL / OCSR).
+    chat_chem_tools_enabled: bool = True
+    chat_chem_tools_max_rounds: int = 4
+    chat_history_max_turns: int = 12
+    chat_rewrite_context_turns: int = 6
+    # B-2 — 对话历史 token 预算：trim_history 在 max_turns 硬截断之外再按
+    # token 预算压缩；超限的旧轮次折叠为一条确定性摘要，不再静默丢弃。
+    chat_history_token_budget: int = 6000
+    # 问答检索：BM25/ColBERT 召回 top-N 候选，直取 top-k（不再做 LLM 二次精排——
+    # 实测 30-76 s/问、收益边际，旧开关 chat_rerank_enabled 已移除）。
+    chat_rerank_candidates: int = 50    # 召回候选数
+    chat_rerank_top_k: int = 20         # 保留条数
+    chat_context_max_chars: int = 12000  # 交给 LLM 的全文 chunk 总字符预算
+
+    # 持久知识库 v2（KB P2）：每个 SourceDocument 结构感知切块入
+    # document_chunks 表（装了 sentence-transformers 则带归一化向量），
+    # 问答检索覆盖整个累计语料而非单次请求携带的 sources。纯本地无网络。
+    kb_v2_enabled: bool = True
+    # LLM Wiki 混成（W0–W2）：规范 Markdown 页 + 入库后异步编译。默认开；
+    # 关闭后 API/编译全停，chat/DOE 行为与升级前一致（W3/W4 另旗标默认关）。
+    wiki_enabled: bool = True
+    wiki_compile_on_ingest: bool = True
+    wiki_chat_blend: bool = True
+    # Chat 双轨权重：balanced | wiki_first | raw_first（不影响 Claims 只认 Raw）
+    wiki_chat_mode: str = Field(
+        default="balanced",
+        description="Wiki/Raw blend mode for chat: balanced | wiki_first | raw_first",
+    )
+    wiki_doe_constraints: bool = True
+    wiki_lint_on_compile: bool = True
+    wiki_neo4j_project: bool = False
+    # Phase 2: Wiki FTS5 (title/path/flags/body). Default on — deterministic, no LLM.
+    wiki_fts_enabled: bool = True
+    # Phase 2: L2 theme LLM/template compiler. Default OFF.
+    wiki_llm_themes_enabled: bool = False
+    # Phase 4: project dossier wiki (project_id primary key).
+    # Top-5 #3（2026-09-25）：产品化开闸 — 默认 ON（Claims/DOE 仍隔离；可关）。
+    wiki_project_dossier_enabled: bool = True
+    # Phase 4: allow LLM narrative on dossier sections (tables stay deterministic).
+    wiki_dossier_llm_narrative: bool = False
+    # Phase 4: event-driven auto patch. Default OFF — manual API first.
+    wiki_dossier_auto_patch: bool = False
+    # Optional vertical prompt addendum id (e.g. "silane"); empty = none.
+    wiki_dossier_vertical_addendum: str = ""
+    # Phase 5: generate Hub reports from DossierPack.
+    # Top-5 #3：与卷宗一并默认 ON（draft_not_claims；可关）。
+    wiki_dossier_report_enabled: bool = True
+    # STORM longform report (async L2 draft). Top-5′ #2（2026-09-25）：
+    # 默认 ON（draft_not_claims；受 wiki_storm_max_sections 成本帽；可关）。
+    # 不改同步短 Report；并行分章仍默认关。
+    wiki_storm_report_enabled: bool = True
+    # Cap sections for STORM drafting (cost / latency guardrails).
+    wiki_storm_max_sections: int = 6
+    # P5: draft ready sections (depends_on satisfied) in a thread pool. Default OFF.
+    wiki_storm_parallel: bool = False
+    # Max workers per wave when wiki_storm_parallel is on (clamped 1–8).
+    wiki_storm_parallel_workers: int = 3
+    # P1 #16: after stitch_and_polish, run claim_checker (fail-open footer).
+    # Default on — draft reports get a verification appendix when claims look
+    # weak; checker failures never block the report.
+    wiki_storm_claim_check: bool = True
+    # Wave B: when claim_check sets needs_regenerate, rewrite failed sections
+    # once (fail-open; never Claims evidence). Default OFF — cost / nondeterminism.
+    wiki_storm_claim_regenerate: bool = False
+    # Wave A: per-query / total evidence caps for STORM section grounding.
+    wiki_storm_section_query_k: int = 6
+    wiki_storm_section_evidence_cap: int = 10
+    # Optional CE rerank on STORM section candidates (default OFF).
+    wiki_storm_section_rerank: bool = False
+    # Wave B: chat main path cross-encoder (default OFF — CPU latency).
+    chat_cross_encoder_enabled: bool = False
+    cross_encoder_timeout_s: float = 2.5
+    cross_encoder_max_candidates: int = 30
+    # Wave D: hybrid fusion mode — rrf (default) or weighted (A/B via golden).
+    # v29 Phase3 B-5: rrf 为默认 —— rank-based 融合不受 per-channel max 归一化
+    # 放大噪声的影响，hard-negative 场景下比 weighted 更稳健。
+    # v3 检索调优：weighted + 0.85 —— eval 实证 RRF(k=60) 在跨语言 query 上
+    # 稀释 BM25 决定性信号（不同模型 cosine 不可比），weighted 保留幅度。
+    # test_evals_retrieval_qa.py 全绿（25 passed）。
+    kb_hybrid_fusion: str = "weighted"  # rrf | weighted
+    # P1 #26: Langfuse tracing (MIT). Default OFF — no network without keys.
+    # When enabled + keys present, llm.complete_json / search rerank emit spans.
+    langfuse_enabled: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+    # Wiki page [[wikilink]] graph for Hub canvas (not materials KG).
+    # Top-5‴ #5（2026-09-25）：默认 ON（可关；≠ 材料 KG / Neo4j）。
+    wiki_page_graph_enabled: bool = True
+    # S2: inject deterministic wiki catalog snippet into L2 theme compile. Default OFF.
+    wiki_catalog_inject_themes: bool = False
+    # S4: allow Chat/Deep Research 「存为 Wiki 草稿」→ queries/.
+    # Top-5 #3：默认 ON（unreviewed draft；不进 Claims/DOE；可关）。
+    wiki_chat_save_draft: bool = True
+    # Phase 3: embed wiki page summaries into document_chunks (source_kind=wiki).
+    # Top-5‴ #1（2026-09-25）：默认 ON — 双轨；不关 Raw RAG；Claims 仍滤 wiki。
+    wiki_embed_enabled: bool = True
+    # Top-5‴ #2：下一轮 predicted 用台账 prediction_bias.mean_error 软校准。
+    # 默认关 —— 避免静默改分；需 Settings / 显式环境变量打开。
+    prediction_bias_soft_correct: bool = False
+    prediction_bias_soft_correct_min_n: int = 3
+    # 每篇文档最多持久化多少切块。这是全文成功抓取之后**唯一**还会静默丢内容
+    # 的地方：200 × 1600 ≈ 32 万字符，长专利/综述会被截断。
+    kb_max_chunks_per_source: int = 600
+    kb_search_scan_limit: int = 5000
+    # Post-A′ #3: when scan near cap OR recent hybrid p95 ≥ this (ms), cosine
+    # runs only on top-N BM25 candidates (in-process; no Qdrant).
+    kb_hybrid_ann_gate_p95_ms: float = 800.0
+    kb_hybrid_ann_candidate_pool: int = 800
+    # Option A stage-2: when ANN gate is on and embedding dim ≥ this, score the
+    # BM25 candidate subset via a process-local float32 matmul (still no Qdrant).
+    # Below the threshold keep the measured plain-_dot loop (JSON→matrix churn
+    # dominates at 384d). Higher-dim upgrades (bge-m3 / Qwen3-Embedding) benefit.
+    kb_hybrid_ann_matrix_min_dim: int = 512
+    # Hysteresis: after the gate fires, keep the ANN path for this many further
+    # hybrid queries even if p95 briefly cools (avoids flap; still in-process).
+    kb_hybrid_ann_sticky_queries: int = 3
+    # C-1: process-local faiss ANN over the full vector corpus (bypasses the
+    # 5000 scan cap for the vector half). Fail-open: when False or the index
+    # is unusable, retrieval falls back to the pre-C-1 brute-force path.
+    kb_ann_enabled: bool = True
+    # W4: recommended age (days) for archived-source retention purge UI/stats.
+    # 0 = retention disabled (no auto purge; POST /retention/purge still needs
+    # explicit days+confirm for any physical delete).
+    kb_archive_retention_days: int = 0
+    # W4: when False, upsert writes normalized supplier links then clears
+    # materials.suppliers_json (read path still hydrates from link tables).
+    materials_suppliers_json_dual_write: bool = True
+    kb_chat_top_k: int = 20
+    # 双语资料分流(2026-09-04): 中文子库 bge / 英文子库 MiniLM 按查询
+    # 语言路由, 乱码/未标 chunk 不参与双语检索; 默认关(现状全库单模型),
+    # 生产经 FORMUNEX_KB_BILINGUAL=true 显式开启——开启前须先跑
+    # scripts/backfill_chunk_lang.py + scripts/reembed_zh_chunks.py。
+    # P2: 设 FORMUNEX_EMBEDDING_MODEL=bge-m3 或 Qwen/Qwen3-Embedding-0.6B
+    # （多语种统一向量空间）后重建索引，跨语查询可直接 cosine，无需译英。
+    kb_bilingual: bool = False
+    # 中文问 → LLM 译英 → 英文子库二次检索(跨语通道); 失败自动降级
+    # 为仅中文子库。依赖 kb_bilingual。统一多语种 embedding 时跳过此路径。
+    kb_query_translate: bool = True
+    # 检索命中的切块交给 LLM 之前保留多少字符。切块本身是 1600
+    # （ingest_chunk_max_chars），此前这里硬编码 600，等于把已经入库的全文
+    # 又砍掉三分之二才给模型看。0 = 不截断，完整交出切块。
+    kb_snippet_max_chars: int = 0
+    # 推荐/研究图检索时并入的持久 KB chunk 数（0 = 关闭该融合）。
+    kb_recommend_top_k: int = 4
+    # 探针 ↔ 推荐 ↔ 会话 BM25FAISSStore 共享：BM25 权重 α（默认 0.85）。
+    kb_hybrid_alpha: float = 0.85
+    # S-1: 跨语言查询扩展。中文查询自动翻译为英文并行检索，结果融合。
+    # 成本约 ¥0.00031/中文查询，失败自动降级。默认开启（2026-10-11 Cheng 批准）。
+    crosslingual_expand_enabled: bool = True
+    # S-6: 无结果时 LLM 改写查询重试。默认开启（2026-10-11 Cheng 批准）。
+    query_rewrite_on_empty_enabled: bool = True
+    # S-4: 按查询特征动态调整 alpha。默认开启（2026-10-11 Cheng 批准）。
+    dynamic_alpha_enabled: bool = True
+    # D-5: PDF 下载前 HEAD 预检（大小/类型）。默认开启（2026-10-11 Cheng 批准）。
+    pdf_precheck_enabled: bool = True
+    # N-2/N-3: 配方化学有效性校验 + 兼容性检查。默认开启。
+    chem_validate_enabled: bool = True
+    # N-1: 多候选共识（生成 3N 聚类选中心）。默认关闭（增加 LLM 成本）。
+    recommend_consensus_enabled: bool = False
+    # N-4: 提示词模板 A/B 优选。默认关闭。
+    prompt_ab_enabled: bool = False
+    # N-5: 配比智能补全。默认开启。
+    ratio_completion_enabled: bool = True
+    # P2 A/B: hybrid 融合前化学实体加成（CAS/分子式/牌号/SMILES）。
+    # legacy search_chunks 的加性 0.2/0.3 是按 cosine 0-1 尺度调的，直接加到
+    # RRF 融合分（~0.02）上会主导排序。此处对归一化分量（0-1 尺度）做加性，
+    # 再进融合。默认关，A/B 验证后再决定。
+    kb_hybrid_entity_boost: bool = False
+    # PageIndex 借鉴 A1: 本地 tier 编号标题规则扩展（Roman/CJK/字母/Chapter）。
+    # 纯文本规则，零 LLM，默认开；关则退回原有三组正则。
+    pdf_heading_rules_extended: bool = True
+    # PageIndex 借鉴 A3: heading 粗召回 bonus（hybrid 融合前加性）。
+    # 默认关，golden A/B 验证后再决定。
+    kb_heading_boost: bool = False
+    kb_heading_boost_weight: float = 0.15
+    # 推荐/研究 KB 融合走 hybrid_search_scored（探针同栈）；关则退回 search_chunks。
+    kb_recommend_use_hybrid: bool = True
+    # 有 project_id 时是否并入全局资料（对齐探针 project_global）。
+    kb_recommend_include_global: bool = True
+    # 仅推荐/研究融合路径的可选 LLM 精排（默认关；不改动 search_rerank_enabled）。
+    kb_recommend_rerank_enabled: bool = False
+    # PageIndex 借鉴 A2: PDF 内嵌书签 → heading_path 补充源。默认开（2026-10-11 实测 24 篇论文 58% 书签可用）；
+    # 开启后 parse 成功时读一次书签，chunking 给空 heading_path 的 chunk 按页补充。
+    pdf_bookmark_headings_enabled: bool = True
+
+    # 化学/产品实体抽取（KB stream P2）：入库切块时识别 CAS/分子式/SMILES/反应式
+    # 与商业牌号（规则层离线；LLM 层搭 source_guide 便车），写入 chunk 元数据与
+    # kb_products 产品登记簿。
+    chem_extract_enabled: bool = True
+    product_extract_enabled: bool = True
+
+    # 材料空间：把 RAW_MATERIALS 从模块字面量升级为 materials 表，使成分选择
+    # 可在运行时扩展（手工录入 / 从 kb_products 提升），并为逆向设计与材料替代
+    # 提供候选池。关闭时 RAW_MATERIALS 退回纯种子字面量，行为与升级前一致。
+    material_store_enabled: bool = True
+    # 图片结构化解析（VLM）：上传图片→表格 Markdown / 分子结构图→SMILES（RDKit 验证）。
+    #
+    # 视觉是一个独立的「角色」，可以配到与文本完全不同的供应商上——因为「最好的
+    # 文本模型」与「能看图的模型」经常不是同一家：DeepSeek 直接拒绝 image_url，
+    # 而它可能正是你想用的文本模型。vision_provider 留空 = 完整跟随文本角色
+    # （历史行为）。解析逻辑见 services/llm_roles.py。
+    vision_extract_enabled: bool = True
+    vision_provider: str = ""                 # 空 = 跟随 llm_provider
+    vision_model: str = ""                    # 空 = 跟随该角色的供应商默认/文本模型
+    vision_base_url: str | None = None
+    vision_api_key: str | None = None         # 空则回落到 {vision_provider}_api_key
+    # 视觉超时与文本分开：租用端点的冷启动是分钟级，文本的 60s 必然第一次就失败。
+    vision_timeout_seconds: float = 300.0
+    # 0 = 跟随 llm_max_tokens。整页表格转录很可能需要更多（截断会让 JSON 解析失败，
+    # 表现为整图降级），但我还没有真实专利页的实测数据，所以这里只留旋钮不改默认。
+    vision_max_tokens: int = 0
+    # 自定义端点 scale-to-zero 冷启动：HF 代理在副本启动期间返回 503，带上
+    # X-Scale-Up-Timeout 它会改为挂住请求直到就绪。0 = 不发该头。
+    vision_scale_up_timeout: int = 600
+
+    # ═══ OCSR 离线结构识别（MolScribe）════
+    # 化学结构图离线识别为 SMILES，作为主路径（免 token，省费用），视觉 LLM 兜底。
+    # 运行在独立 molscribe Celery worker（独立 venv，torch-cpu），不占主服务内存。
+    # 2026-10-11：默认开启（后台队列串行，不阻塞主流程）。
+    ocsr_enabled: bool = True
+    # Celery 队列名（独立 worker 消费）
+    molscribe_queue: str = "molscribe"
+    # MolScribe 单张识别超时。CPU 推理预热后 ~3-8s/张；但 worker 冷启动时首个任务要等
+    # 模型加载（~35s）。预热钩子把加载挪到 worker 启动时，仍要覆盖「主 worker 先发任务、
+    # molscribe worker 尚未就绪」的窗口，故给 180s 余量。超时后回退视觉 LLM，非硬失败。
+    molscribe_timeout_s: float = 180.0
+    # ═══ 化学视觉硬件自适应 ═══
+    # auto：启动时检测硬件自动选 tier；可手动 pin（molscribe/molparser-mobile/vision-llm/off）。
+    # 语义与 pdf_parser="auto" 一致：pin 某 tier 后，更轻的 tier 作为 fallback。
+    chem_vision_backend: str = "auto"
+
+    # Source Guide LLM extraction (ingest pipeline)
+    source_guide_enabled: bool = True
+    source_guide_max_chars: int = 12000
+    ingest_max_chunks: int = 40
+    ingest_chunk_max_chars: int = 1600
+    ingest_chunk_overlap: int = 200
+
+    # DOE workbench / campaign persistence (Headless ELN).
+    # Top-5″ #2（2026-09-25）：产品默认 soft-degrade —
+    # ``auto`` 探测 Datalab，可达则以其为 SSOT；不可达且 ``datalab_required=false``
+    # 时回退 sqlite「本地台账」。Docker ELN 栈仍显式 ``datalab`` + REQUIRED=true。
+    # 显式 ``sqlite`` 仍主要用于 CI/单测隔离。
+    campaign_backend: str = "auto"  # datalab | auto | sqlite
+    datalab_api_url: str = "http://localhost:5001"
+    datalab_api_token: str = ""  # DATALAB-API-KEY header（平台非 TESTING 模式必需）
+    datalab_timeout_seconds: float = 30.0
+    datalab_max_connections: int = 10
+    datalab_max_keepalive_connections: int = 5
+    # Soft-degrade default: ELN optional. Set true for ELN-mandatory deploys.
+    datalab_required: bool = False
+
+    # Experiment training persistence (Headless ELN) — same auto semantics.
+    experiment_backend: str = "auto"  # datalab | auto | sqlite（sqlite = CI only）
+
+    # API security — unset env defers to environment: off in dev/test, on in production.
+    api_auth_enabled: bool | None = None
+    # How many reverse proxies (nginx in the shipped compose) sit in front of the API and append the peer they saw to
+    # X-Forwarded-For. 0 = none: the TCP peer is the client. Without this every user behind the proxy shares one
+    # rate-limit bucket (the proxy's address); setting it higher than the real number lets a client choose its own bucket.
+    trusted_proxy_hops: int = Field(default=0, ge=0, le=5)
+    api_token: str | None = None
+    ingest_max_upload_bytes: int = 20 * 1024 * 1024  # 20 MiB per file
+    # P2: URL 下载上限 —— 无上限时一个超大 PDF/页面可吃掉 worker 内存。
+    ingest_max_url_bytes: int = 20 * 1024 * 1024  # 20 MiB per URL fetch
+    # v3 P1 M-7: D-2 规模守卫配置化 —— 此前只在 getattr 默认值里，不可配置
+    parse_max_file_mb: float = 200.0  # 解析文件大小上限（MB）
+    parse_max_pdf_pages: int = 2000  # PDF 页数上限
+    ingest_upload_timeout_s: float = 300.0  # 单文件上传超时（秒）
+    ingest_batch_timeout_s: float = 600.0  # 批量上传总超时（秒）
+    # Server-side pip install via POST /api/dependencies/install. Unset → on in
+    # development/test, **off** in production (opposite of api_auth_enabled).
+    deps_install_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def _default_api_auth_for_environment(self) -> "Settings":
+        if self.api_auth_enabled is not None:
+            return self
+        env = self.environment.strip().lower()
+        object.__setattr__(self, "api_auth_enabled", env in ("production", "prod"))
+        return self
+
+    @model_validator(mode="after")
+    def _default_deps_install_for_environment(self) -> "Settings":
+        if self.deps_install_enabled is not None:
+            return self
+        env = self.environment.strip().lower()
+        object.__setattr__(
+            self, "deps_install_enabled", env not in ("production", "prod")
+        )
+        return self
+
+    def get_active_api_key(self) -> str | None:
+        """根据 llm_provider 返回对应的 API key（读取 runtime overlay）。"""
+        from .services.runtime_secrets import effective_setting
+
+        attr = PROVIDER_KEY_ATTR.get(str(effective_setting(self, "llm_provider")))
+        if not attr:
+            return None
+        return effective_setting(self, attr)
+
+
+#: provider id → the ``Settings`` attribute holding its API key.
+#:
+#: Shared by :meth:`Settings.get_active_api_key` and the role resolver
+#: (``services/llm_roles.py``) so the two cannot drift apart. A provider missing
+#: from this map reads as "no key configured" — which is why ``custom`` has to be
+#: here: without it, selecting the custom endpoint for the text role silently
+#: looked like a missing key rather than a missing mapping.
+PROVIDER_KEY_ATTR: dict[str, str] = {
+    "anthropic": "anthropic_api_key",
+    "openai": "openai_api_key",
+    "gemini": "gemini_api_key",
+    "groq": "groq_api_key",
+    "deepseek": "deepseek_api_key",
+    "qwen": "qwen_api_key",
+    "moonshot": "moonshot_api_key",
+    "minimax": "minimax_api_key",
+    "xai": "xai_api_key",
+    "custom": "custom_api_key",
+}
+
+
+def _audit_formunex_env() -> None:
+    """In development/test, fail fast on typoed FORMUNEX_* env keys."""
+    if _settings_extra_policy() != "forbid":
+        return
+    known = {f"FORMUNEX_{name.upper()}" for name in Settings.model_fields}
+    known |= _INFRA_ENV_KEYS | _RETIRED_ENV_KEYS
+    unknown = sorted(k for k in os.environ if k.startswith("FORMUNEX_") and k not in known)
+    if unknown:
+        raise ValueError(
+            "Unknown FORMUNEX_* environment variables: " + ", ".join(unknown)
+        )
+
+
+_settings_lock = threading.Lock()
+_settings_value: Settings | None = None
+# Bumped by every ``cache_clear()``; see ``get_settings``.
+_settings_generation = 0
+
+
+def _build_settings() -> Settings:
+    # Read the CWD .env (legacy behaviour) plus the canonical resolved path;
+    # the resolved file — where the Settings UI persists — takes precedence.
+    from .env_compat import alias_legacy_env_files, alias_legacy_environ
+
+    alias_legacy_environ()
+    alias_legacy_env_files((".env", resolve_env_path()))
+    settings = Settings(_env_file=(".env", str(resolve_env_path())))
+    _audit_formunex_env()
+    return settings
+
+
+def get_settings() -> Settings:
+    """Process-wide ``Settings`` singleton, built lazily and thread-safe.
+
+    Behaves like the ``functools.lru_cache`` it replaces (including
+    ``get_settings.cache_clear()``) with one difference that matters: a build
+    that was already running when ``cache_clear()`` happened is discarded and
+    redone. With ``lru_cache`` two concurrent misses both build and the *first
+    to finish* is cached — so a background thread that started building before
+    an environment change (a UI settings update, a test's ``monkeypatch``) could
+    finish first and pin the stale object, while the caller that cleared the
+    cache received a correct one it could not keep. The next reader then saw the
+    old values: e.g. API auth silently switched off after it had been enabled.
+    """
+    global _settings_value
+    while True:
+        cached = _settings_value
+        if cached is not None:
+            return cached
+        generation = _settings_generation
+        built = _build_settings()
+        with _settings_lock:
+            if generation == _settings_generation:
+                if _settings_value is None:
+                    _settings_value = built
+                return _settings_value
+        # cache_clear() ran while we were building: ``built`` may reflect the
+        # pre-change environment. Discard it and rebuild.
+
+
+def _clear_settings_cache() -> None:
+    global _settings_value, _settings_generation
+    with _settings_lock:
+        _settings_generation += 1
+        _settings_value = None
+
+
+get_settings.cache_clear = _clear_settings_cache  # type: ignore[attr-defined]
+
+
+# ── process-environment settings that are not ``Settings`` fields ──────────────────────────────────────────────────
+# They are read on every call (tests ``monkeypatch.setenv`` after import, and these have no ``.env`` form), so each
+# lives here once instead of being re-parsed at every call site.
+
+def task_dir() -> Path:
+    """Where task snapshots and progress files live (``FORMUNEX_TASK_DIR``, default: a temp subdirectory)."""
+    return Path(os.environ.get("FORMUNEX_TASK_DIR") or Path(tempfile.gettempdir()) / "formunex_tasks")
+
+
+def multi_user_enabled() -> bool:
+    """``FORMUNEX_MULTI_USER`` — per-owner API tokens instead of the single platform token."""
+    return os.environ.get("FORMUNEX_MULTI_USER", "").strip().lower() in ("1", "true", "yes")
+
+
+def api_tokens_json() -> str:
+    """``FORMUNEX_API_TOKENS_JSON`` — the owner/token mapping used in multi-user mode (``""`` when unset)."""
+    return os.environ.get("FORMUNEX_API_TOKENS_JSON", "").strip()
+
+
+def source_checkout_mode() -> bool:
+    """True when started from a source checkout (``start-dev.sh`` sets ``FORMUNEX_ENV_FILE``), not a container."""
+    return bool(os.environ.get("FORMUNEX_ENV_FILE"))

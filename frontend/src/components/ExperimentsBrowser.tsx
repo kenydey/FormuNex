@@ -1,0 +1,433 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  api,
+  formatApiError,
+  type Attachment,
+  type ExperimentSearchHit,
+  type ExperimentSummary,
+  type QCMeasurementView,
+} from "../api";
+import { useStore } from "../store";
+
+/**
+ * Browse stored experiments (training corpus / ELN-backed rows) and
+ * cross-campaign workbench search.
+ *
+ * Embedded as the "检索 / 历史" tab inside WorkbenchModal (no longer a
+ * separate right-rail Action). Search hits can jump back into the ledger.
+ *
+ * P3 follow-up: when a row is selected, also load typed QC measurements and
+ * legacy experiment attachments (upload/list) — these API clients were orphaned
+ * after the workbench path landed its own attachment endpoints.
+ *
+ * P4: cross-campaign keyword search via GET /api/experiments/search.
+ */
+export default function ExperimentsBrowser({
+  onOpenWorkbenchHit,
+}: {
+  /** Open a search hit in the workbench ledger tab. */
+  onOpenWorkbenchHit?: (hit: ExperimentSearchHit) => void;
+} = {}) {
+  const activeProjectId = useStore((s) => s.activeProjectId);
+  const domain = useStore((s) => s.requirement.domain);
+  const [rows, setRows] = useState<ExperimentSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [scope, setScope] = useState<"project" | "all">("project");
+  const [selected, setSelected] = useState<ExperimentSummary | null>(null);
+
+  const [typedMeasurements, setTypedMeasurements] = useState<QCMeasurementView[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [detailBusy, setDetailBusy] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const [searchQ, setSearchQ] = useState("");
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchHits, setSearchHits] = useState<ExperimentSearchHit[] | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  // Up-2: Datalab 手动同步
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+
+  async function onSyncDatalab() {
+    if (!selected || syncBusy) return;
+    setSyncBusy(true);
+    setSyncMsg(null);
+    setDetailError(null);
+    try {
+      const r = (await api.syncExperimentFromDatalab(selected.id)) as {
+        synced?: number;
+        errors?: unknown[];
+      };
+      const n = r.synced ?? 0;
+      const errs = Array.isArray(r.errors) ? r.errors.length : 0;
+      if (n === 0 && errs > 0) {
+        setSyncMsg("Datalab 不可达，已跳过（fail-open），本地数据未动。");
+      } else {
+        setSyncMsg(`同步完成：${n} 条测量已回写${errs ? `，${errs} 项失败` : ""}。`);
+      }
+    } catch (e) {
+      setDetailError(formatApiError(e));
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const list = await api.listExperiments({
+          domain,
+          project_id: scope === "project" && activeProjectId ? activeProjectId : undefined,
+          limit: 100,
+        });
+        if (!cancelled) {
+          setRows(list);
+          setSelected(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setRows([]);
+          setError(formatApiError(e));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, domain, scope]);
+
+  useEffect(() => {
+    if (!selected) {
+      setTypedMeasurements([]);
+      setAttachments([]);
+      setDetailError(null);
+      return;
+    }
+    let cancelled = false;
+    setDetailBusy(true);
+    setDetailError(null);
+    void (async () => {
+      try {
+        const [meas, atts] = await Promise.all([
+          api.experimentMeasurements(selected.id).catch(() => null),
+          api.getAttachments(selected.id).catch(() => [] as Attachment[]),
+        ]);
+        if (cancelled) return;
+        setTypedMeasurements(meas?.measurements ?? []);
+        setAttachments(atts);
+      } catch (e) {
+        if (!cancelled) setDetailError(formatApiError(e));
+      } finally {
+        if (!cancelled) setDetailBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
+
+  async function uploadAttachment() {
+    if (!selected) return;
+    const file = fileRef.current?.files?.[0];
+    if (!file) return;
+    setUploadBusy(true);
+    setDetailError(null);
+    try {
+      await api.uploadAttachment(file, selected.id);
+      const atts = await api.getAttachments(selected.id);
+      setAttachments(atts);
+      if (fileRef.current) fileRef.current.value = "";
+    } catch (e) {
+      setDetailError(formatApiError(e));
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  async function runCrossCampaignSearch() {
+    const q = searchQ.trim();
+    setSearchBusy(true);
+    setSearchError(null);
+    try {
+      const hits = await api.searchExperiments(q);
+      setSearchHits(hits);
+    } catch (e) {
+      setSearchHits(null);
+      setSearchError(formatApiError(e));
+    } finally {
+      setSearchBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3" data-testid="experiments-browser">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] text-slate-500">
+          跨批次检索台账行，并浏览已回灌的训练实验记录（QC / 语料审计）。
+        </p>
+        <div className="flex gap-1 text-[10px]">
+          <button
+            type="button"
+            onClick={() => setScope("project")}
+            className={`px-2 py-0.5 rounded border ${
+              scope === "project"
+                ? "border-accent text-accent bg-accent/10"
+                : "border-edge text-slate-500"
+            }`}
+            disabled={!activeProjectId}
+            title={activeProjectId ? "仅当前项目" : "请先打开项目"}
+          >
+            当前项目
+          </button>
+          <button
+            type="button"
+            onClick={() => setScope("all")}
+            className={`px-2 py-0.5 rounded border ${
+              scope === "all"
+                ? "border-accent text-accent bg-accent/10"
+                : "border-edge text-slate-500"
+            }`}
+          >
+            全部
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="border border-edge/50 rounded-lg p-2 space-y-1.5 bg-ink/30"
+        data-testid="experiments-cross-search"
+      >
+        <div className="text-[10px] text-slate-500">
+          跨 Campaign 关键词搜索 · /api/experiments/search
+        </div>
+        <div className="flex gap-1">
+          <input
+            value={searchQ}
+            onChange={(e) => setSearchQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void runCrossCampaignSearch();
+            }}
+            placeholder="tags / notes / params（空=全部行）…"
+            className="flex-1 bg-ink border border-edge rounded px-2 py-1 text-[11px]"
+            data-testid="experiments-search-input"
+          />
+          <button
+            type="button"
+            disabled={searchBusy}
+            onClick={() => void runCrossCampaignSearch()}
+            className="text-[10px] border border-accent/50 text-accent rounded px-2 py-1 disabled:opacity-40"
+            data-testid="experiments-search-btn"
+          >
+            {searchBusy ? "…" : "搜索"}
+          </button>
+          {searchHits != null && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchHits(null);
+                setSearchError(null);
+              }}
+              className="text-[10px] text-slate-500 px-1"
+              title="清除搜索结果"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        {searchError && (
+          <p className="text-[11px] text-rose-400 border border-rose-500/30 bg-rose-500/10 rounded px-2 py-1">
+            {searchError}
+          </p>
+        )}
+        {searchHits != null && (
+          <div className="max-h-40 overflow-auto divide-y divide-edge/30 border border-edge/40 rounded">
+            {searchHits.length === 0 ? (
+              <p className="text-[10px] text-slate-600 px-2 py-2">无匹配行</p>
+            ) : (
+              searchHits.map((h, i) => (
+                <button
+                  key={`${h.campaign_id}-${h.row_id}-${h.item_id}-${i}`}
+                  type="button"
+                  onClick={() => onOpenWorkbenchHit?.(h)}
+                  className="w-full text-left px-2 py-1.5 text-[11px] hover:bg-accent/10 transition-colors disabled:opacity-60"
+                  data-testid="experiments-search-hit"
+                  disabled={!onOpenWorkbenchHit}
+                  title={onOpenWorkbenchHit ? "在台账中打开该行" : undefined}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-accent2">row #{h.row_id}</span>
+                    <span className="text-slate-300 truncate flex-1">
+                      {h.campaign_name || `campaign ${h.campaign_id}`}
+                    </span>
+                    <span className="text-[10px] text-slate-500">{h.status}</span>
+                    {onOpenWorkbenchHit && (
+                      <span className="text-[10px] text-accent shrink-0">打开台账 →</span>
+                    )}
+                  </div>
+                  {h.item_id && (
+                    <div className="text-[10px] font-mono text-slate-600 truncate">{h.item_id}</div>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div className="text-xs text-rose-400 border border-rose-500/30 bg-rose-500/10 rounded px-2 py-1.5">
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-sm text-slate-500 py-6 text-center">加载实验列表…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-slate-500 py-6 text-center">暂无实验记录</p>
+      ) : (
+        <div className="max-h-80 overflow-y-auto border border-edge/50 rounded-lg divide-y divide-edge/40">
+          {rows.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => setSelected(r)}
+              className={`w-full text-left px-3 py-2 hover:bg-accent/5 transition-colors ${
+                selected?.id === r.id ? "bg-accent/10" : ""
+              }`}
+            >
+              <div className="flex items-center gap-2 text-xs">
+                <span className="font-mono text-accent2">#{r.id}</span>
+                <span className="text-slate-200 truncate">{r.label || "（无标签）"}</span>
+                <span className="ml-auto text-[10px] text-slate-500">{r.source || "—"}</span>
+              </div>
+              <div className="mt-0.5 text-[10px] text-slate-500 flex gap-2">
+                <span>{r.domain}</span>
+                <span>·</span>
+                <span>{r.measurement_count} 测量</span>
+                {r.created_at && (
+                  <>
+                    <span>·</span>
+                    <span className="font-mono">{r.created_at.slice(0, 16).replace("T", " ")}</span>
+                  </>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selected && (
+        <div className="border border-edge rounded-lg p-3 bg-ink/40 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-xs uppercase tracking-widest text-accent2">
+              实验 #{selected.id} · 实测摘要
+              {detailBusy && <span className="ml-2 normal-case text-slate-500">加载中…</span>}
+            </h4>
+            <button
+              type="button"
+              onClick={() => void onSyncDatalab()}
+              disabled={syncBusy}
+              data-testid="experiments-sync-datalab"
+              title="从 Datalab 拉取该实验的测量数据并回写（Datalab 不可达时跳过）"
+              className="text-[11px] px-2.5 py-1 rounded border border-accent/50 text-accent hover:bg-accent/10 disabled:opacity-40"
+            >
+              {syncBusy ? "同步中…" : "从 Datalab 同步"}
+            </button>
+          </div>
+          {syncMsg && (
+            <p className="text-[11px] text-emerald-300/90 border border-emerald-500/30 bg-emerald-500/10 rounded px-2 py-1">
+              {syncMsg}
+            </p>
+          )}
+
+          {detailError && (
+            <p className="text-[11px] text-rose-400 border border-rose-500/30 bg-rose-500/10 rounded px-2 py-1">
+              {detailError}
+            </p>
+          )}
+
+          {Object.keys(selected.measured || {}).length === 0 ? (
+            <p className="text-[11px] text-slate-500">无 measured 快照（可能仅有 typed measurements）</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-1.5">
+              {Object.entries(selected.measured).map(([k, v]) => (
+                <div
+                  key={k}
+                  className="flex justify-between text-[11px] border border-edge/40 rounded px-2 py-1"
+                >
+                  <span className="text-slate-400 truncate">{k}</span>
+                  <span className="font-mono text-slate-200">{v}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {typedMeasurements.length > 0 && (
+            <div>
+              <h5 className="text-[10px] text-slate-500 mb-1">
+                结构化测量 · {typedMeasurements.length}
+              </h5>
+              <div className="space-y-0.5 max-h-28 overflow-auto">
+                {typedMeasurements.map((m, i) => (
+                  <div
+                    key={`${m.metric}-${i}`}
+                    className="flex items-center gap-2 text-[11px] border border-edge/30 rounded px-2 py-0.5"
+                  >
+                    <span className="text-slate-400 truncate flex-1">{m.metric}</span>
+                    <span className="font-mono text-slate-200">
+                      {m.value}
+                      {m.unit ? ` ${m.unit}` : ""}
+                    </span>
+                    {m.passed === true && <span className="text-emerald-400">✓</span>}
+                    {m.passed === false && <span className="text-rose-400">✗</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <h5 className="text-[10px] text-slate-500 mb-1">附件 · {attachments.length}</h5>
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                ref={fileRef}
+                type="file"
+                className="flex-1 text-[10px] text-slate-400 file:mr-2 file:px-2 file:py-0.5
+                           file:rounded file:border file:border-edge file:bg-panel file:text-slate-300"
+              />
+              <button
+                type="button"
+                disabled={uploadBusy}
+                onClick={() => void uploadAttachment()}
+                className="text-[10px] border border-accent/50 text-accent rounded px-2 py-1 disabled:opacity-40"
+              >
+                {uploadBusy ? "上传中…" : "上传"}
+              </button>
+            </div>
+            {attachments.length === 0 ? (
+              <p className="text-[10px] text-slate-600">暂无附件</p>
+            ) : (
+              <ul className="space-y-0.5 max-h-24 overflow-auto">
+                {attachments.map((a) => (
+                  <li key={a.id} className="text-[11px] text-slate-400 flex gap-2 truncate">
+                    <span className="text-slate-500 shrink-0">{a.kind || "file"}</span>
+                    <span className="truncate">{a.filename || a.source_document_id}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

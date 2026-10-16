@@ -1,0 +1,657 @@
+"""POST /api/ingest — Local file upload, URL fetch, pasted text, and batch upload."""
+from __future__ import annotations
+
+from datetime import datetime
+import hashlib
+import json
+import logging
+import os
+import re
+import shutil
+import tempfile
+import time
+import uuid
+from typing import Any, Literal
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from ..config import get_settings
+from ..domain.schemas import Evidence, SourceGuideSchema
+from ..services import colbert_store
+from ..services.ingestion import ingest_text, ingest_url
+from ..db.source_store import get_source_store
+from ..worker.tasks import dispatch_file_ingest
+from ._uploads import read_upload_capped
+from .tasks import accepted_response
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+class IngestResponse(BaseModel):
+    filename: str
+    evidence: list[Evidence]
+    total: int
+    source_id: str | None = None
+    source_guide: SourceGuideSchema | None = None
+    extraction_status: str = "skipped"
+    # P2: 解析截断等用户可见提示。
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SourceDocumentResponse(BaseModel):
+    id: str
+    filename: str
+    title: str
+    source_kind: str
+    raw_text_chars: int
+    source_guide: SourceGuideSchema | None = None
+    extraction_status: str
+    extraction_error: str | None = None
+    created_at: datetime
+
+
+class IngestUrlRequest(BaseModel):
+    url: str = Field(min_length=8)
+
+
+class IngestTextRequest(BaseModel):
+    text: str = Field(min_length=1)
+    title: str = ""
+
+
+class IngestTaskRequest(BaseModel):
+    """统一摄取入口: 按 identifier 拉全文入库(2026-09-05 P1)."""
+    doc_type: str = Field(pattern="^(patent|paper|web)$")
+    identifier: str = Field(min_length=3)
+
+
+async def _read_upload_capped(file: UploadFile, filename: str) -> bytes:
+    """分块读取上传文件，累计字节数；超限即停并抛 413。
+
+    B-17：此前先 ``await file.read()`` 全量读入内存再检查大小，大文件可致
+    内存耗尽（DoS）。此处按 1MiB 分块读，一旦累计字节超过
+    ``ingest_max_upload_bytes`` 立刻 413，不再继续读后续字节。
+
+    v29 Phase4 L-10: 上传超时保护 —— 慢速上传（如 10KB/s 传 100MB）
+    会占用连接数小时。超 ingest_upload_timeout_s（默认 300s）抛 408。
+    """
+    import asyncio
+
+    timeout_s = float(get_settings().ingest_upload_timeout_s or 300)
+    try:
+        content = await asyncio.wait_for(
+            read_upload_capped(
+                file, filename, limit=get_settings().ingest_max_upload_bytes
+            ),
+            timeout=timeout_s,
+        )
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+
+        logger.warning("上传超时: %s (>%.0fs)", filename, timeout_s)
+        raise HTTPException(408, f"上传超时（>{timeout_s:.0f}s），请重试或压缩文件")
+    # v29 Phase4 M-16: 魔数校验 —— 扩展名与文件头不符时拒绝，
+    # 防伪装文件（如 .pdf 实际是 exe）。
+    _check_magic(content, filename)
+    return content
+
+
+# v29 Phase4 M-16: 常见文件魔数
+# v3 P1 M-5: 扩展覆盖 —— 补 doc/xls/ppt（OLE2）、rtf
+_MAGIC_BY_EXT = {
+    "pdf": [b"%PDF"],
+    "docx": [b"PK\x03\x04"],  # zip
+    "xlsx": [b"PK\x03\x04"],  # zip
+    "pptx": [b"PK\x03\x04"],  # zip
+    "doc": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],  # OLE2
+    "xls": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],  # OLE2
+    "ppt": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],  # OLE2
+    "rtf": [b"{\\rtf"],
+    "png": [b"\x89PNG\r\n\x1a\n"],
+    "jpg": [b"\xff\xd8\xff"],
+    "jpeg": [b"\xff\xd8\xff"],
+    "gif": [b"GIF87a", b"GIF89a"],
+}
+
+
+def _check_magic(content: bytes, filename: str) -> None:
+    """校验文件魔数，不符时抛 415。未知扩展名跳过（fail-open）。"""
+    from fastapi import HTTPException
+
+    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
+    magics = _MAGIC_BY_EXT.get(ext)
+    if not magics or len(content) < 8:
+        return  # 未知类型或太小，跳过
+    if not any(content.startswith(m) for m in magics):
+        # v3 P1 M-6: 文件名消毒 —— 防日志注入/响应头注入，不回显原始文件名
+        safe_name = "".join(c for c in filename if c.isprintable())[:50]
+        logger.warning("上传文件魔数不符: %s (ext=%s)", safe_name, ext)
+        raise HTTPException(415, f"文件类型与扩展名不符: {safe_name}")
+
+
+def _to_ingest_response(filename: str, outcome) -> IngestResponse:
+    return IngestResponse(
+        filename=filename,
+        evidence=outcome.evidence,
+        total=len(outcome.evidence),
+        source_id=outcome.source_id,
+        source_guide=outcome.source_guide,
+        extraction_status=outcome.extraction_status,
+        warnings=list(getattr(outcome, "warnings", None) or []),
+    )
+
+
+_UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+)
+
+
+def _disk_name(filename: str) -> str:
+    """A name that is valid on every file system and cannot leave the directory it is joined to.
+
+    ``os.path.basename`` only knows the separators of the OS the server runs on, so a client's ``..\\x`` survived on
+    Linux; ``:``, ``?`` and ``*`` are fine in a macOS / Linux client's file name but make ``open()`` fail on Windows
+    (an upload of ``TDS: epoxy primer.pdf`` was a 500 there); ``CON`` / ``NUL`` are devices, not files.
+    """
+    base = re.split(r"[\\/]", filename or "")[-1]
+    base = _UNSAFE_NAME_CHARS.sub("_", base).strip(" .")
+    stem, ext = os.path.splitext(base)
+    if stem.lower() in _WINDOWS_DEVICE_NAMES:
+        stem = f"_{stem}"
+    return (stem[:100] + ext[:20]) or "upload"
+
+
+def _write_upload(content: bytes, filename: str, dest_dir: str) -> str:
+    """Persist one uploaded part to the temp dir the task will read from.
+
+    The name is flattened and sanitised (see :func:`_disk_name`); the original name is still what the parser
+    sniffs — it travels beside the path, not in it. Every part gets a directory of its own: two parts called
+    ``datasheet.pdf`` (a folder upload with the same file name in several sub-folders) used to land on the same path,
+    so the first was silently replaced by the second, which was then ingested twice.
+    """
+    part_dir = os.path.join(dest_dir, uuid.uuid4().hex[:12])
+    os.makedirs(part_dir)
+    path = os.path.join(part_dir, _disk_name(filename))
+    with open(path, "wb") as fh:
+        fh.write(content)
+    return path
+
+
+@router.post("/ingest")
+async def ingest_document(file: UploadFile = File(...)):
+    """Queue a single-file ingest: 202 + task_id, results via SSE/poll.
+
+    Parsing (OCR on a scan) can run for minutes; doing it inside the request
+    is what let a proxy in front of uvicorn cut the connection and show the
+    user a 502 for work that had actually completed.
+    """
+    started = time.time()
+    content = await _read_upload_capped(file, file.filename or "upload")
+    filename = file.filename or "upload"
+
+    upload_dir = tempfile.mkdtemp(prefix="formunex_upload_")
+    path = _write_upload(content, filename, upload_dir)
+    task_id = dispatch_file_ingest([{"name": filename, "path": path}], upload_dir=upload_dir)
+    if not task_id:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=503,
+            detail="后台任务队列不可用，无法提交解析任务（请检查 Redis / celery worker）",
+        )
+    logger.info(
+        "Ingest queued: %s (%d KiB) in %.0fms → task %s",
+        filename, len(content) // 1024, (time.time() - started) * 1000, task_id,
+    )
+    return accepted_response(task_id, "file_ingest")
+
+
+@router.post("/ingest/batch")
+async def ingest_batch(files: list[UploadFile] = File(...)):
+    """Queue a multi-file ingest: 202 + task_id, results via SSE/poll."""
+    import asyncio
+
+    started = time.time()
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+    if len(files) > 20:
+        raise HTTPException(status_code=413, detail="最多同时上传20个文件")
+
+    # v3 P1 H-2: 批量总超时 —— 单文件 300s，20 文件串行可占连接 100 分钟。
+    # 总超时可配置，超限抛 408。
+    BATCH_TIMEOUT = float(get_settings().ingest_batch_timeout_s or 600)
+    upload_dir = tempfile.mkdtemp(prefix="formunex_upload_")
+    queued: list[dict] = []
+    seen: set[str] = set()
+    try:
+        async def _read_all():
+            for f in files:
+                name = f.filename or "upload"
+                content = await _read_upload_capped(f, name)
+                digest = hashlib.sha256(content).hexdigest()
+                if digest in seen:  # byte-identical file picked twice in one dialog
+                    continue
+                seen.add(digest)
+                queued.append({"name": name, "path": _write_upload(content, name, upload_dir)})
+
+        try:
+            await asyncio.wait_for(_read_all(), timeout=BATCH_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise HTTPException(408, f"批量上传超时（>{BATCH_TIMEOUT:.0f}s），请分批上传")
+    except HTTPException:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise
+
+    task_id = dispatch_file_ingest(queued, upload_dir=upload_dir)
+    if not task_id:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=503,
+            detail="后台任务队列不可用，无法提交解析任务（请检查 Redis / celery worker）",
+        )
+    logger.info(
+        "Ingest batch queued: %d file(s) in %.0fms → task %s",
+        len(queued), (time.time() - started) * 1000, task_id,
+    )
+    return accepted_response(task_id, "file_ingest")
+
+
+@router.post("/ingest/url", response_model=IngestResponse)
+def ingest_from_url(req: IngestUrlRequest):
+    try:
+        outcome = ingest_url(req.url.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("ingest_url failed")
+        raise HTTPException(status_code=502, detail="文件处理失败") from exc
+    # P0-1: "skipped" 现仅表示无真实文本/占位（有文本但 guide 未跑为
+    # "no_guide"），故按 status 门禁即可正确索引真实文档。
+    # v18-16: 与 worker/tasks.py:901 对齐（!= "skipped"），否则离线部署
+    #（无 LLM key → no_guide）下 ColBERT 索引恒空。
+    if outcome.extraction_status != "skipped":
+        colbert_store.index_evidence(outcome.evidence)
+    return _to_ingest_response(req.url, outcome)
+
+
+@router.post("/ingest/text", response_model=IngestResponse)
+def ingest_from_text(req: IngestTextRequest):
+    title = req.title or "Pasted text"
+    outcome = ingest_text(req.text, title)
+    # P0-1: "skipped" 现仅表示无真实文本/占位（有文本但 guide 未跑为
+    # "no_guide"），故按 status 门禁即可正确索引真实文档。
+    # v19-fix: 与 URL 路径（213行）对齐，用 != "skipped"（v18-16 漏改）。
+    if outcome.extraction_status != "skipped":
+        colbert_store.index_evidence(outcome.evidence)
+    return _to_ingest_response(title, outcome)
+
+
+@router.post("/ingest/task", response_model=IngestResponse)
+def ingest_from_task(req: IngestTaskRequest):
+    """DOI/arXiv id/专利号/URL → 全文 → 入库(编排见 services.document_task)."""
+    from ..services.document_task import resolve_document
+
+    try:
+        outcome = resolve_document(req.doc_type, req.identifier.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if outcome.error:
+        raise HTTPException(status_code=502, detail=outcome.error)
+    # P0-1: "skipped" 现仅表示无真实文本/占位（有文本但 guide 未跑为
+    # "no_guide"），故按 status 门禁即可正确索引真实文档。
+    # v19-fix: 与 URL 路径（213行）对齐，用 != "skipped"（v18-16 漏改）。
+    if outcome.extraction_status != "skipped":
+        colbert_store.index_evidence(outcome.evidence)
+    return _to_ingest_response(outcome.identifier, outcome)
+
+
+@router.get("/sources/{source_id}", response_model=SourceDocumentResponse, include_in_schema=False)
+def get_source(source_id: str):
+    row = get_source_store().get(source_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    guide = None
+    if row.source_guide:
+        guide = SourceGuideSchema.model_validate(row.source_guide)
+    return SourceDocumentResponse(
+        id=row.id,
+        filename=row.filename,
+        title=row.title,
+        source_kind=row.source_kind,
+        raw_text_chars=row.raw_text_chars,
+        source_guide=guide,
+        extraction_status=row.extraction_status,
+        extraction_error=row.extraction_error,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/sources/{source_id}/tables", response_model=dict)
+def get_source_tables(source_id: str):
+    """Table assets extracted from a source (W2-3 table contract; W3-7 UI).
+
+    Passes through the raw sidecar payload so W3-1 PropertySet fields
+    (``property_set``) survive without schema changes. Fail-open: a missing
+    or corrupt sidecar yields an empty table list, never a 500.
+    """
+    from ..services import table_contract as _tc
+
+    tables: list[dict] = []
+    try:
+        path = _tc._tables_path(source_id)
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            raw = payload.get("tables", [])
+            if isinstance(raw, list):
+                tables = [t for t in raw if isinstance(t, dict)]
+    except Exception:
+        logger.exception("get_source_tables failed (fail-open)")
+    return {"source_id": source_id, "tables": tables}
+
+
+# ── W3-5 (P1-36/37): paper detail aggregation + batch export ────────────────
+
+_DETAIL_MAX_CHUNKS = 200
+_DETAIL_CHUNK_TEXT_LIMIT = 4000
+_EXPORT_MAX_SOURCES = 10
+
+
+class DetailChunk(BaseModel):
+    ord: int
+    page_no: int | None = None
+    heading_path: str = ""
+    text: str = ""
+    chars: int = 0
+
+
+class DetailTableSummary(BaseModel):
+    table_id: str
+    page_no: int = 1
+    caption: str = ""
+    kind: str = "other"
+    n_rows: int = 0
+    n_cols: int = 0
+    # W3-1 (P1-19) normalizer output, read raw from the sidecar when present.
+    property_set: dict[str, Any] | None = None
+
+
+class SourceDetailResponse(BaseModel):
+    id: str
+    filename: str
+    title: str
+    source_kind: str
+    raw_text_chars: int
+    extraction_status: str
+    created_at: datetime
+    has_fulltext: bool
+    total_chunks: int
+    chunks_truncated: bool
+    chunks: list[DetailChunk]
+    tables: list[DetailTableSummary]
+    provenance_upstream: list[dict[str, Any]]
+
+
+class SourceExportRequest(BaseModel):
+    source_ids: list[str] = Field(default_factory=list)
+    format: Literal["docx", "pdf", "html", "md"] = "docx"
+
+
+def _detail_session_factory(store):
+    """Indirection for test injection (fail-open path)."""
+    return store._session_factory
+
+
+def _read_detail_chunks(store, source_id: str) -> tuple[list[DetailChunk], int]:
+    """Fail-open chunk read. Returns (chunks, total_count)."""
+    try:
+        from sqlalchemy import func, select
+
+        from ..db.models import DocumentChunk
+
+        sf = _detail_session_factory(store)
+        with sf() as session:
+            total = (
+                session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunk)
+                    .where(DocumentChunk.source_id == source_id)
+                ).scalar()
+                or 0
+            )
+            rows = (
+                session.execute(
+                    select(DocumentChunk)
+                    .where(DocumentChunk.source_id == source_id)
+                    .order_by(DocumentChunk.ord)
+                    .limit(_DETAIL_MAX_CHUNKS)
+                )
+                .scalars()
+                .all()
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("source detail: chunk read failed (fail-open)", exc_info=True)
+        return [], 0
+    chunks: list[DetailChunk] = []
+    for r in rows:
+        raw = r.text or ""
+        text = (
+            raw[:_DETAIL_CHUNK_TEXT_LIMIT] + "…"
+            if len(raw) > _DETAIL_CHUNK_TEXT_LIMIT
+            else raw
+        )
+        chunks.append(
+            DetailChunk(
+                ord=r.ord,
+                page_no=r.page_no,
+                heading_path=r.heading_path or "",
+                text=text,
+                chars=len(raw),
+            )
+        )
+    return chunks, total
+
+
+def _read_property_sets(source_id: str) -> dict[str, dict[str, Any]]:
+    """Raw sidecar read for W3-1 (P1-19) PropertySet output. {} when absent."""
+    try:
+        import json
+
+        from ..services import table_contract
+
+        path = table_contract._tables_path(source_id)  # noqa: SLF001
+        if not path.exists():
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        out: dict[str, dict[str, Any]] = {}
+        for ps in payload.get("property_sets", []) or []:
+            if isinstance(ps, dict) and ps.get("table_id"):
+                out[str(ps["table_id"])] = ps
+        return out
+    except Exception:  # noqa: BLE001
+        logger.warning("source detail: property_set read failed (fail-open)", exc_info=True)
+        return {}
+
+
+def _read_detail_tables(source_id: str) -> list[DetailTableSummary]:
+    try:
+        from ..services import table_contract
+
+        assets = table_contract.load_tables(source_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("source detail: table read failed (fail-open)", exc_info=True)
+        return []
+    prop_sets = _read_property_sets(source_id)
+    summaries: list[DetailTableSummary] = []
+    for a in assets or []:
+        try:
+            summaries.append(
+                DetailTableSummary(
+                    table_id=a.table_id,
+                    page_no=a.page_no,
+                    caption=a.caption or "",
+                    kind=a.kind or "other",
+                    n_rows=len(a.rows or []),
+                    n_cols=len(a.headers or []),
+                    property_set=prop_sets.get(a.table_id),
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("source detail: bad table asset skipped", exc_info=True)
+    return summaries
+
+
+def _read_upstream_edges(source_id: str) -> list[dict[str, Any]]:
+    try:
+        from ..services import provenance
+
+        edges = provenance.lineage("source", source_id, depth=3)
+        return [dict(e) for e in (edges or [])]
+    except Exception:  # noqa: BLE001
+        logger.warning("source detail: lineage read failed (fail-open)", exc_info=True)
+        return []
+
+
+@router.get("/sources/{source_id}/detail", response_model=SourceDetailResponse)
+def get_source_detail(source_id: str):
+    """P1-36: one-call paper detail — metadata + chunks + tables + lineage."""
+    row = get_source_store().get(source_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    chunks, total = _read_detail_chunks(get_source_store(), source_id)
+    return SourceDetailResponse(
+        id=row.id,
+        filename=row.filename,
+        title=row.title,
+        source_kind=row.source_kind,
+        raw_text_chars=row.raw_text_chars,
+        extraction_status=row.extraction_status,
+        created_at=row.created_at,
+        has_fulltext=bool(getattr(row, "full_text", None)),
+        total_chunks=total,
+        chunks_truncated=total > len(chunks),
+        chunks=chunks,
+        tables=_read_detail_tables(source_id),
+        provenance_upstream=_read_upstream_edges(source_id),
+    )
+
+
+def _assemble_sources_markdown(docs, missing: list[str]) -> str:
+    from ..services import table_contract
+
+    lines = ["# 文献批量导出", ""]
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    note = f"导出时间：{stamp}；共 {len(docs)} 篇"
+    if missing:
+        note += f"；{len(missing)} 篇未找到已跳过"
+    lines.append(note)
+    refs: list[str] = []
+    for i, doc in enumerate(docs, 1):
+        lines += ["", f"## {i}. {doc.title or doc.filename}", ""]
+        lines.append(f"- 文件名：{doc.filename}")
+        lines.append(f"- 类型：{doc.source_kind}")
+        lines.append(f"- 入库时间：{doc.created_at}")
+        lines.append(f"- 全文字符数：{doc.raw_text_chars}")
+        guide = doc.source_guide if isinstance(doc.source_guide, dict) else {}
+        summary = (guide.get("summary") or "").strip()
+        if summary:
+            lines += ["", "### 摘要", "", summary]
+        entities = [str(e) for e in (guide.get("key_entities") or [])][:30]
+        if entities:
+            lines += ["", "### 关键实体", "", "、".join(entities)]
+        try:
+            tables = table_contract.load_tables(doc.id)
+        except Exception:  # noqa: BLE001
+            tables = []
+        if tables:
+            kinds: dict[str, int] = {}
+            for t in tables:
+                kinds[t.kind or "other"] = kinds.get(t.kind or "other", 0) + 1
+            lines += [
+                "",
+                "### 表格",
+                "",
+                "共 %d 张：" % len(tables)
+                + "、".join(f"{k}×{v}" for k, v in sorted(kinds.items())),
+            ]
+        refs.append(f"[{i}] {doc.title or doc.filename}（source_id={doc.id}）")
+    lines += ["", "## 引用清单", ""]
+    lines += [f"- {r}" for r in refs]
+    return "\n".join(lines) + "\n"
+
+
+@router.post("/sources/export")
+def export_sources(body: SourceExportRequest) -> Response:
+    """P1-37: export up to 10 sources as one docx/pdf/html/md file."""
+    from ..services.wiki.report_export import export_bytes
+
+    ids = [s.strip() for s in (body.source_ids or []) if s and s.strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="source_ids 不能为空")
+    if len(ids) > _EXPORT_MAX_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"一次最多导出 {_EXPORT_MAX_SOURCES} 篇",
+        )
+    store = get_source_store()
+    docs, missing = [], []
+    for sid in ids:
+        row = store.get(sid)
+        if row is None:
+            missing.append(sid)
+        else:
+            docs.append(row)
+    if not docs:
+        raise HTTPException(status_code=404, detail="Source not found")
+    markdown = _assemble_sources_markdown(docs, missing)
+    try:
+        payload, media_type, ext = export_bytes(
+            markdown, body.format, title="文献批量导出"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="sources_export.{ext}"'},
+    )
+
+
+@router.get("/documents/{source_id}/file")
+def get_source_file(source_id: str):
+    """PageIndex 借鉴 P6: 源文件下载 —— 浏览器内打开（inline），支持 #page=N 跳页。
+
+    前端用 window.open(url + '#page=N', '_blank') 在新页面打开并跳到指定页。
+    """
+    from fastapi.responses import FileResponse
+
+    from ..services.source_files import find_source_file
+
+    # 基础校验：source_id 格式（防路径遍历）
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", source_id or ""):
+        raise HTTPException(status_code=400, detail="invalid source_id")
+    path = find_source_file(source_id)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="源文件不存在（可能为历史数据或非本地上传）")
+    # 按扩展名给 media_type，PDF 浏览器内打开
+    _media = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".txt": "text/plain",
+        ".md": "text/markdown",
+    }
+    media_type = _media.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        # inline: 浏览器内打开而非下载；PDF 阅读器支持 #page=N
+        headers={"Content-Disposition": f'inline; filename="{path.name}"'},
+    )

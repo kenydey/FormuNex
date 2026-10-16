@@ -1,0 +1,333 @@
+"""ProjectSpec helpers — normalize free-text requirements and derive DOE levers."""
+from __future__ import annotations
+
+from .levers import substrate_default_levers
+from .schemas import DOEFactor, Formulation, LeverSpec, ObjectiveSpec, ProductDomain, Requirement, Substrate
+
+# Roles typically held fixed (solvent fills to 100%).
+_FIXED_ROLES = frozenset({"solvent", "pigment", "filler", "additive"})
+_PROCESS_KEYS = frozenset({"cure_temperature_c"})
+
+_DOMAIN_LABELS: dict[ProductDomain, str] = {
+    ProductDomain.anticorrosion_coating: "防腐蚀涂料",
+    ProductDomain.degreaser: "脱脂剂",
+    ProductDomain.surface_treatment: "表面处理剂",
+    ProductDomain.autodeposition_coating: "自沉积涂料",
+}
+
+_LEGACY_CONSTRAINT_LABELS: dict[str, str] = {
+    "voc_limit_gpl": "VOC 上限",
+    "cure_temperature_c": "固化温度上限",
+    "ph_target": "pH 目标",
+    "salt_spray_hours": "耐盐雾目标",
+    "film_weight_gsm": "干膜重目标",
+    "cleaning_efficiency": "清洗率目标",
+}
+
+
+def normalize_constraints(req: Requirement) -> dict[str, float]:
+    """Merge legacy scalar constraint fields with ``constraint_values`` (SSOT)."""
+    out: dict[str, float] = {}
+    if req.voc_limit_gpl is not None:
+        out[_LEGACY_CONSTRAINT_LABELS["voc_limit_gpl"]] = float(req.voc_limit_gpl)
+    if req.cure_temperature_c is not None:
+        out[_LEGACY_CONSTRAINT_LABELS["cure_temperature_c"]] = float(req.cure_temperature_c)
+    if req.ph_target is not None:
+        out[_LEGACY_CONSTRAINT_LABELS["ph_target"]] = float(req.ph_target)
+    if req.salt_spray_hours:
+        out[_LEGACY_CONSTRAINT_LABELS["salt_spray_hours"]] = float(req.salt_spray_hours)
+    if req.film_weight_gsm:
+        out[_LEGACY_CONSTRAINT_LABELS["film_weight_gsm"]] = float(req.film_weight_gsm)
+    if req.cleaning_efficiency:
+        out[_LEGACY_CONSTRAINT_LABELS["cleaning_efficiency"]] = float(req.cleaning_efficiency)
+    for key, raw in (req.constraint_values or {}).items():
+        if raw is not None:
+            out[key] = float(raw)
+    return out
+
+
+_LEGACY_LEVERS: dict[ProductDomain, list[tuple[str, float, float]]] = {
+    ProductDomain.anticorrosion_coating: [
+        ("Zinc phosphate", 2.0, 14.0),
+        ("Bisphenol-A epoxy (DGEBA)", 28.0, 48.0),
+        ("Polyamide hardener", 8.0, 22.0),
+    ],
+    ProductDomain.degreaser: [
+        ("Nonionic surfactant (C12-14 EO7)", 2.0, 12.0),
+        ("Sodium metasilicate", 2.0, 14.0),
+    ],
+    # surface_treatment: use substrate_default_levers() in levers.py (SSOT)
+    ProductDomain.autodeposition_coating: [
+        ("Ferric fluoride (FeF3)", 0.2, 2.5),
+        ("Acidic-stable epoxy-acrylic emulsion", 5.0, 16.0),
+        ("Hydrofluoric acid (HF)", 0.05, 0.6),
+    ],
+}
+
+
+def effective_project_id(req: Requirement) -> str:
+    if req.project_id:
+        return req.project_id
+    if req.product_type:
+        return req.product_type.strip().lower().replace(" ", "_")[:64]
+    return req.domain.value
+
+
+def normalize_requirement(req: Requirement) -> Requirement:
+    """Fill product_type/application from legacy fields when empty."""
+    data = req.model_dump()
+    if not data.get("product_type"):
+        data["product_type"] = _DOMAIN_LABELS.get(req.domain, req.domain.value)
+    if not data.get("application"):
+        data["application"] = req.substrate.value
+    if not data.get("project_id"):
+        data["project_id"] = effective_project_id(req)
+    return Requirement(**data)
+
+
+def primary_objective(req: Requirement) -> str:
+    objectives = getattr(req, "objectives", None) or []
+    if objectives:
+        return objectives[0].metric
+    from ..pipeline.workflow import OBJECTIVE
+
+    try:
+        return OBJECTIVE.get(req.domain, "salt_spray_hours")
+    except TypeError:
+        # Test stubs may use an unhashable SimpleNamespace domain.
+        return "salt_spray_hours"
+
+
+def default_objectives_for(req: Requirement) -> list[ObjectiveSpec]:
+    from ..pipeline.workflow import default_objectives
+
+    return default_objectives(req.domain)
+
+
+def _bounds_from_pct(
+    current: float, *, margin: float = 0.3, cap: float | None = 100.0
+) -> tuple[float, float]:
+    """Bounds around *current*, clamped to *cap*.
+
+    The 100 ceiling is a percent ceiling, so it only applies to wt%/%. A g/L
+    bath concentration legitimately exceeds 100, and clamping it there would
+    silently narrow the search range.
+    """
+    lo = max(0.0, current * (1.0 - margin))
+    hi = current * (1.0 + margin)
+    if cap is not None:
+        hi = min(cap, hi)
+    if hi - lo < 1.0:
+        hi = lo + 1.0
+        if cap is not None:
+            hi = min(cap, hi)
+    return round(lo, 4), round(hi, 4)
+
+
+def derive_levers_from_formulation(
+    form: Formulation, *, defaults: list[LeverSpec] | None = None
+) -> list[LeverSpec]:
+    """Pick adjustable ingredients from a formulation (exclude fixed roles).
+
+    *defaults* is the substrate SSOT (``levers.py``). An ingredient it names
+    keeps that lever's unit, and its amount is expressed in that unit.
+
+    That is not a labelling detail. Surface-treatment baths are specified in
+    g/L — 5–30 g/L for hexafluorozirconic acid — while a Formulation stores
+    wt%. Emitting the wt% number under a g/L label (or vice versa) is a **10×
+    error** in a real formulation, which is why ``test_g_per_litre_slot_does_
+    not_shift_by_ten`` exists. Deriving levers from the formulation without
+    consulting the SSOT reintroduced exactly that.
+    """
+    from .genome import Slot  # local: genome imports knowledge, project_spec does not need it eagerly
+
+    by_name = {d.name: d for d in (defaults or [])}
+    levers: list[LeverSpec] = []
+    for ing in form.ingredients:
+        if ing.role in _FIXED_ROLES:
+            continue
+        if ing.weight_pct <= 0:
+            continue
+        spec = by_name.get(ing.name)
+        unit = spec.unit if spec else "wt%"
+        amount = Slot.from_wt_pct(ing.weight_pct, unit)
+        lo, hi = _bounds_from_pct(amount, cap=100.0 if unit in ("wt%", "%") else None)
+        levers.append(LeverSpec(name=ing.name, low=lo, high=hi, unit=unit))
+    return levers[:6]
+
+
+def derive_process_levers(req: Requirement) -> list[LeverSpec]:
+    levers: list[LeverSpec] = []
+    cure = req.cure_temperature_c
+    if cure is not None and req.domain == ProductDomain.anticorrosion_coating:
+        high = float(cure)
+        low = max(20.0, cure - 30)
+        # A cure target at/below the 20 C floor leaves no range to explore;
+        # emitting low>=high produced a zero-width or inverted factor that
+        # decode() silently mapped backwards.
+        if low < high:
+            levers.append(LeverSpec(name="cure_temperature_c", low=low, high=high, unit="C"))
+    return levers
+
+
+def default_levers_for(
+    domain: ProductDomain,
+    substrate: Substrate = Substrate.carbon_steel,
+    *,
+    cure_temperature_c: float | None = None,
+) -> list[LeverSpec]:
+    """UI / API default DOE levers — same resolution as ``resolve_levers`` without explicit levers."""
+    req = Requirement(
+        domain=domain,
+        substrate=substrate,
+        cure_temperature_c=cure_temperature_c,
+        levers=[],
+    )
+    return resolve_levers(req)
+
+
+def _merge_explicit_levers(
+    derived: list[LeverSpec], explicit: list[LeverSpec] | None
+) -> list[LeverSpec]:
+    """Merge user-explicit levers over formulation-derived ones (F-2).
+
+    Explicit levers win on name match (replace) and are appended when new.
+    Without this, ``resolve_levers`` priority 1 (formulation-derived) silently
+    discards everything the user configured in LeversEditor — including
+    Up-4A discrete factors — on the real ``generateDoe`` path.
+    """
+    if not explicit:
+        return derived
+    explicit_by_name = {e.name: e for e in explicit}
+    merged: list[LeverSpec] = []
+    seen: set[str] = set()
+    for lever in derived:
+        merged.append(explicit_by_name.get(lever.name, lever))
+        seen.add(lever.name)
+    for lever in explicit:
+        if lever.name not in seen:
+            merged.append(lever)
+    return merged
+
+
+def resolve_levers(req: Requirement, form: Formulation | None = None) -> list[LeverSpec]:
+    """Resolve DOE levers: formulation-derived, then explicit user levers merged
+    over them (explicit wins on name match), then substrate defaults, legacy.
+    """
+    # Substrate defaults are the SSOT for units and natural ranges. They are
+    # resolved first so the formulation-derived path below can honour them:
+    # deriving levers from ingredient weights alone loses the g/L unit and
+    # lands every bath formulation 10x off.
+    substrate_levers = substrate_default_levers(req)
+    # Priority 1: derive from active formulation ingredients (most context-aware)
+    source = form or req.active_formulation
+    if source and source.ingredients:
+        derived = derive_levers_from_formulation(source, defaults=substrate_levers)
+        if derived:
+            # F-2: explicit user levers (e.g. discrete factors from LeversEditor)
+            # are merged over the derived set instead of being silently dropped.
+            merged = _merge_explicit_levers(derived, req.levers)
+            names = {l.name for l in merged}
+            return merged + [l for l in derive_process_levers(req) if l.name not in names]
+    # Priority 2: explicit user-specified levers
+    if req.levers:
+        return list(req.levers)
+    # Priority 3: substrate-aware defaults
+    if substrate_levers:
+        return substrate_levers
+    # Priority 4: legacy domain table
+    legacy = _LEGACY_LEVERS.get(req.domain, [])
+    levers = [LeverSpec(name=n, low=lo, high=hi, unit="wt%") for n, lo, hi in legacy]
+    return levers + derive_process_levers(req)
+
+
+def levers_to_doe_factors(levers: list[LeverSpec]) -> list[DOEFactor]:
+    # Up-4A: 透传 kind/levels，离散因子进入生产链。
+    # v8: material_map 已删（LeverSpec 是 SSOT，reconstruct 直接读 lever）。
+    return [
+        DOEFactor(
+            name=l.name,
+            low=l.low,
+            high=l.high,
+            unit=l.unit,
+            kind=l.kind,
+            levels=list(l.levels) if l.levels else None,
+        )
+        for l in levers
+    ]
+
+
+def lever_snapshot_from_plan(plan, req: Requirement | None = None) -> list[dict]:
+    """Persist DOE levers on Campaign — derive from plan.runs when factors list is empty."""
+    from .schemas import ProductDomain
+
+    if req and req.levers:
+        return [lev.model_dump() for lev in req.levers]
+    if plan.factors:
+        # Up-4A: 快照带 kind/levels，离散因子 round-trip 不丢失。
+        return [
+            {
+                "name": f.name,
+                "low": f.low,
+                "high": f.high,
+                "unit": f.unit,
+                "kind": getattr(f, "kind", "continuous"),
+                "levels": list(f.levels) if getattr(f, "levels", None) else None,
+            }
+            for f in plan.factors
+        ]
+
+    domain = plan.domain or (req.domain if req else ProductDomain.anticorrosion_coating)
+    if req:
+        resolved = {lev.name: (lev.low, lev.high, lev.unit) for lev in resolve_levers(req)}
+    else:
+        resolved = {}
+    legacy_map = {name: (lo, hi) for name, lo, hi in _LEGACY_LEVERS.get(domain, [])}
+    keys: list[str] = []
+    seen: set[str] = set()
+    values: dict[str, list[float]] = {}
+    str_values: dict[str, list[str]] = {}  # v9: 离散 str 水平单独收集
+    for run in plan.runs:
+        for key, raw in (run.natural or {}).items():
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+            if isinstance(raw, str) and raw.strip():
+                # v9: 字符串水平保留原值（float() 会跳过导致信息丢失）。
+                if raw not in str_values.setdefault(key, []):
+                    str_values[key].append(raw)
+                continue
+            try:
+                values.setdefault(key, []).append(float(raw))
+            except (TypeError, ValueError):
+                continue
+
+    snapshot: list[dict] = []
+    for name in keys:
+        if name in resolved:
+            lo, hi, unit = resolved[name]
+        elif name in legacy_map:
+            lo, hi = legacy_map[name]
+            unit = "C" if name in ("cure_temperature_c", "bath_temperature_c") else "wt%"
+        elif str_values.get(name):
+            # v9: runs 里是字符串水平 → 重建离散因子，而非伪造连续范围。
+            # v10: 补 low/high/unit（DOEFactor/LeverSpec 的 low/high 必填，
+            # 缺失会导致 ValidationError；离散水平用序号索引作占位范围）。
+            _levels = str_values[name]
+            snapshot.append({
+                "name": name,
+                "low": 0.0,
+                "high": float(len(_levels) - 1),
+                "unit": "",
+                "kind": "discrete",
+                "levels": _levels,
+            })
+            continue
+        else:
+            samples = values.get(name) or [50.0]
+            lo, hi = _bounds_from_pct(sum(samples) / len(samples))
+            unit = "C" if name in ("cure_temperature_c", "bath_temperature_c") else (
+                "min" if name == "immersion_time_min" else "wt%"
+            )
+        snapshot.append({"name": name, "low": lo, "high": hi, "unit": unit})
+    return snapshot

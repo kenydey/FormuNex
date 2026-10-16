@@ -1,0 +1,920 @@
+"""Async knowledge-base ingest queue — search results → full text → KB.
+
+The search path streams abstract-level hits to the frontend immediately; this
+module is the *background* half of the pipeline.  A dispatched ingest job
+walks the fetchable evidence rows **one by one** (per-document status is more
+useful to the UI than raw throughput, and sequential fetching is polite to
+upstream sites):
+
+    queued → fetching → indexing → indexed | skipped | failed | unsupported
+
+Every transition is reported through ``status_cb`` so the Celery task can
+publish SSE events; the frontend paints per-document badges from them.
+
+Reuses the fulltext_fetcher registry (patent PDF / OA literature PDF / web
+page) and the standard persistence path (``SourceDocument`` + ``kb_index``),
+so parsing, chunking and embedding behave exactly like every other ingest
+route.  Dedup is two-tier: ``origin_url`` before the download is attempted,
+content hash afterwards (inside ``_persist_fulltext``).
+"""
+from __future__ import annotations
+
+import logging
+import re
+from typing import Any, Callable
+
+from ..config import get_settings
+from ..domain.schemas import Evidence
+from . import ingest_timing as timing
+from .errors import degrade_return
+
+logger = logging.getLogger(__name__)
+
+# Terminal per-document states (anything else is transient).
+TERMINAL_STATES = frozenset({"indexed", "skipped", "failed", "unsupported"})
+
+StatusCb = Callable[[dict[str, Any]], None]
+
+
+def ingest_enabled() -> bool:
+    """Auto-dispatch switch: async KB build after search / research tasks."""
+    settings = get_settings()
+    return bool(settings.kb_ingest_auto and settings.kb_v2_enabled)
+
+
+# ── 主题预筛(永久规则 2026-09) ─────────────────────────────────────────────
+# 背景: 自动入库按 relevance+fetchable 全收, 会吞进磁性/储氢/电池/半导体/
+# 天文/纯力学等与"金属表面处理/配方研发"无关的检索结果(2026-09-04 一次吞 29 篇)。
+# 规则: 项目标题含领域锚词时, 入库前按 高判别词≥1 或 低判别词≥2 放行,
+# 反向硬拦词命中且高判别词<2 时拦截。专利豁免(主动 IP 检索), 无锚词不过滤。
+
+# 高判别词(工艺/功能/配方/腐蚀领域)——命中任一即视为领域内(子串匹配, stem 安全)
+_TOPIC_HIGH = [
+    # 中文
+    "钝化", "转化膜", "防腐", "防锈", "涂层", "涂料", "树脂", "乳液", "聚合物",
+    "磷化", "缓蚀", "清洗", "脱脂", "预处理", "电泳", "阳极氧化", "喷涂",
+    "表面处理", "成膜", "硅烷", "溶胶", "漆", "固化剂", "环氧", "聚氨酯",
+    "丙烯酸", "粘结剂", "颜料", "助剂", "盐雾", "防腐蚀",
+    # 英文(词干, 子串匹配)
+    "corrosi", "passivat", "coating", "paint", "resin", "emulsion", "polymer",
+    "conversion", "phosphat", "chromat", "inhibit", "pretreat", "pickling",
+    "degreas", "anodiz", "electrodeposit", "primer", "adhesion", "sol-gel",
+    "silane", "curing", "epoxy", "polyurethane", "acrylic", "binder",
+    "pigment", "formulation", "salt spray", "surface treatment",
+]
+# 低判别词(基材/金属/合金)——需 ≥2 才放行
+_TOPIC_LOW = [
+    "镁", "铝", "锌", "钢", "铁", "铜", "钛", "镍", "合金", "金属",
+    "底材", "基材", "不锈钢", "碳钢",
+    "magnesium", "aluminum", "aluminium", "zinc", "steel", "iron", "copper",
+    "titanium", "nickel", "alloy", "metal", "substrate", "stainless",
+]
+# 反向硬拦(领域外强信号)——命中且高判别词 <2 → 拦截
+_TOPIC_BLOCK = [
+    "磁性", "超导", "电池", "半导体", "光伏", "天文", "星际", "核聚变",
+    "生物医学", "植入", "可降解", "硬化", "位错", "疲劳", "储氢", "高熵",
+    "刀具", "准晶",
+    "magnetic", "magnetoresist", "superconduct", "battery", "electrode",
+    "photovoltaic", "perovskite", "semiconductor", "astronom", "interstellar",
+    "gravitat", "nuclear", "fusion", "quasicrystal", "biomedical", "implant",
+    "biodegrad", "dental", "dislocation", "hardening", "tensile", "creep",
+    "fatigue", "high-entropy", "nanolamellar", "electrolyzer", "hydride",
+    "heusler", "quasar", "doping", "hydrogen storage", "cutting",
+]
+# 需要词边界而非子串的短反向词(避免 hall∈shall 之类误伤)
+_TOPIC_BLOCK_WORD = ["hall", "doping"]
+
+
+def _topic_anchor(project_id: str | None = None, query: str | None = None) -> tuple[set[str], set[str]] | None:
+    """项目标题/副标题(缺省时用检索 query)中命中的领域词 → (高判别锚, 低判别锚)。
+
+    返回 None = 无领域锚词(或查不到项目)——调用方应跳过过滤(宁吞勿误杀)。
+    search API 不带 project 上下文时, query 即本次检索意图的锚。
+    """
+    text = ""
+    if project_id:
+        try:
+            from ..db.database import default_session_factory
+            from ..db.models import ProjectRow
+
+            with default_session_factory()() as session:
+                proj = session.get(ProjectRow, project_id)
+                if proj is not None:
+                    text = " ".join(
+                        str(x) for x in (proj.title, proj.headline) if x
+                    )
+        except Exception:
+            logger.warning("kb_ingest topic anchor lookup failed for %s", project_id, exc_info=True)
+            return None
+    if not text:
+        text = query or ""
+    text = text.lower()
+    high = {w for w in _TOPIC_HIGH if w in text}
+    low = {w for w in _TOPIC_LOW if w in text}
+    if not high and not low:
+        logger.info(
+            "kb_ingest topic filter: 锚文本(project=%s)无领域词,跳过过滤",
+            bool(project_id),
+        )
+        return None
+    return high, low
+
+
+def _topic_hits(text: str) -> tuple[int, int, int]:
+    """(高判别命中数, 低判别命中数, 反向命中数)——每词计一次, 词内去重。"""
+    n_high = sum(1 for w in _TOPIC_HIGH if w in text)
+    n_low = sum(1 for w in _TOPIC_LOW if w in text)
+    n_block = sum(1 for w in _TOPIC_BLOCK if w in text)
+    for w in _TOPIC_BLOCK_WORD:  # 词边界版
+        if re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", text):
+            n_block += 1
+    return n_high, n_low, n_block
+
+
+def topic_gate(
+    evidence_text: str,
+    *,
+    kind: str | None = None,
+    domain=None,
+    cpc_codes: list[str] | None = None,
+) -> bool:
+    """领域相关性判定(不含项目锚前置检查)。
+
+    P0: patents no longer blindly exempt — require CPC/prefix hit OR lexical allow
+    when ``kb_ingest_patent_exempt`` is False (default). Profile deny words block.
+    """
+    from ..config import get_settings
+    from ..domain.search_profiles import resolve_profile
+    from .domain_tagging import lexical_hits
+
+    text = (evidence_text or "")
+    text_l = text.lower()
+    profile = resolve_profile(domain)
+
+    if kind == "patent":
+        if get_settings().kb_ingest_patent_exempt:
+            return True
+        # CPC / domain-tag hit OR lexical allow ≥1
+        if profile is not None:
+            allow, deny = lexical_hits(text, profile)
+            if deny and allow < 2:
+                return False
+            if allow >= 1:
+                return True
+            prefs = [p.upper() for p in profile.cpc_prefixes]
+            blob = text.upper()
+            if any(p and p in blob for p in prefs):
+                return True
+            if cpc_codes and any(
+                any(str(c).upper().startswith(p) for p in prefs if p) for c in cpc_codes
+            ):
+                return True
+            return False
+        # No profile: fall through to generic high/low rules (no blind exempt)
+    
+    if profile is not None:
+        allow, deny = lexical_hits(text, profile)
+        if deny and allow < 2:
+            return False
+        if allow >= 1:
+            return True
+        # still allow generic high/low path below as weak channel
+
+    n_high, n_low, n_block = _topic_hits(text_l)
+    if n_block and n_high < 2:
+        return False
+    if n_high >= 1:
+        return True
+    if n_low >= 2:
+        return True
+    return False
+
+
+def _doc_meta(ev: Evidence, kind: str | None) -> dict[str, Any]:
+    return {
+        "identifier": ev.identifier,
+        "title": (ev.title or ev.identifier)[:200],
+        "kind": kind or "unsupported",
+        "status": "queued",
+        "source_id": None,
+        "error": None,
+    }
+
+
+def select_ingest_targets(
+    evidence: list[Evidence], *,
+    max_docs: int | None = None, project_id: str | None = None, query: str | None = None,
+    skip_topic_filter: bool = False,
+    domain=None,
+    write_audit: bool = True,
+) -> list[tuple[Evidence, str]]:
+    """The top fetchable rows in rank order, as (evidence, kind) pairs.
+
+    Applies the topic pre-filter (permanent rule 2026-09): when the project
+    (or the search query, when no project context exists) carries domain
+    anchor words and the filter is enabled, off-domain rows (magnetism /
+    hydrides / batteries / semiconductors / astronomy / pure mechanics …) are
+    dropped before fetching.  Rows are only skipped with a log line; the
+    user-facing search result list is untouched.
+
+    ``skip_topic_filter`` is for user-clicked one-shot ingest (P3.2) so a
+    deliberate Evidence row is never silently dropped by the auto pre-filter.
+    """
+    from . import fulltext_fetcher as ff
+
+    # 0 (or None) means no cap: every fetchable hit is ingested. "Searched but
+    # not stored" reads as data loss to whoever ran the search, so the default
+    # is to store everything and let the operator opt into a limit.
+    limit = max_docs if max_docs is not None else get_settings().kb_ingest_max_docs
+    min_rel = get_settings().kb_ingest_min_relevance
+    topic_filter = get_settings().kb_ingest_topic_filter and not skip_topic_filter
+    anchor = _topic_anchor(project_id, query) if topic_filter else None
+    settings = get_settings()
+    # Per-project quota. `kb_ingest_max_docs` bounds a single batch, which cannot
+    # bound a project that accumulates across many runs — and the ingest cost is
+    # per-project cumulative (OCR is the memory bottleneck, not the network).
+    src_quota = int(settings.kb_project_source_quota or 0)
+    if project_id and src_quota > 0:
+        try:
+            from ..db.source_store import get_source_store
+
+            used = get_source_store().count_for_project(project_id)
+        except Exception as exc:
+            used = degrade_return(logger, exc, "source quota lookup failed", 0)
+        room = max(0, src_quota - used)
+        if room <= 0:
+            logger.info(
+                "kb_ingest 项目配额已满: %s (%s/%s)，本轮不再新增", project_id, used, src_quota
+            )
+            return []
+        limit = room if not limit else min(limit, room)
+    shadow = settings.kb_relevance_shadow
+    shadow_scores: list[float] = []
+    shadow_would_reject_ids: set[str] = set()
+    topic_reject_ids: set[str] = set()
+    threshold = float(settings.kb_ingest_min_relevance or 0.45)
+    if threshold <= 0:
+        threshold = 0.45
+    from .literature import _keywords
+
+    query_has_kws = bool(_keywords(query or ""))
+    targets: list[tuple[Evidence, str]] = []
+    seen: set[str] = set()
+    for ev in evidence:
+        if limit and len(targets) >= limit:
+            break
+        topicality = _topicality(ev, query or "")
+        if shadow:
+            shadow_scores.append(topicality)
+            if topicality < threshold:
+                eid = (getattr(ev, "identifier", None) or "").strip()
+                if eid:
+                    shadow_would_reject_ids.add(eid)
+            # Legacy rank-proxy gate stays active only while shadowing — it is
+            # nearly a no-op on page-one hits (relevance ≈ 1.0 - 0.02*pos).
+            if min_rel > 0 and (ev.relevance or 0) < min_rel:
+                if write_audit:
+                    write_ingest_audit(
+                        project_id=project_id,
+                        domain=str(domain) if domain else None,
+                        query=query,
+                        evidence_id=getattr(ev, "identifier", None),
+                        source=getattr(ev, "source", None),
+                        action="skip",
+                        reason="low_relevance",
+                        domain_match=getattr(ev, "domain_match", None),
+                    )
+                continue
+        else:
+            # Enforce: drop rows whose keyword-overlap score is below threshold.
+            # Skip when the query yields no keywords (score would be 0 for all).
+            if query_has_kws and topicality < threshold:
+                if write_audit:
+                    write_ingest_audit(
+                        project_id=project_id,
+                        domain=str(domain) if domain else None,
+                        query=query,
+                        evidence_id=getattr(ev, "identifier", None),
+                        source=getattr(ev, "source", None),
+                        action="skip",
+                        reason="low_topicality",
+                        domain_match=getattr(ev, "domain_match", None),
+                    )
+                continue
+        if getattr(ev, "domain_match", None) == "none":
+            if write_audit:
+                write_ingest_audit(
+                    project_id=project_id,
+                    domain=str(domain) if domain else None,
+                    query=query,
+                    evidence_id=getattr(ev, "identifier", None),
+                    source=getattr(ev, "source", None),
+                    action="skip",
+                    reason="domain_match_none",
+                    domain_match="none",
+                )
+            continue
+        ident = (ev.identifier or "").strip()
+        if not ident or ident in seen:
+            continue
+        kind = ff.classify(ev)
+        if kind:
+            if anchor is not None:
+                text = " ".join(
+                    str(x)
+                    for x in (ev.title, ev.snippet, ev.identifier)
+                    if x
+                )
+                if not topic_gate(text, kind=kind, domain=domain):
+                    topic_reject_ids.add(ident)
+                    logger.warning(
+                        "kb_ingest 主题预筛拦截: %s (%s)",
+                        (ev.title or ev.identifier)[:90],
+                        ev.identifier,
+                    )
+                    if write_audit:
+                        write_ingest_audit(
+                            project_id=project_id,
+                            domain=str(domain) if domain else None,
+                            query=query,
+                            evidence_id=ev.identifier,
+                            source=ev.source,
+                            action="skip",
+                            reason="topic_miss",
+                            domain_match=getattr(ev, "domain_match", None),
+                        )
+                    continue
+            targets.append((ev, kind))
+            seen.add(ident)
+            if write_audit:
+                write_ingest_audit(
+                    project_id=project_id,
+                    domain=str(domain) if domain else None,
+                    query=query,
+                    evidence_id=ident,
+                    source=ev.source,
+                    action="accept",
+                    reason="ok",
+                    domain_match=getattr(ev, "domain_match", None),
+                )
+    if shadow and shadow_scores:
+        both = shadow_would_reject_ids & topic_reject_ids
+        _log_relevance_shadow(
+            shadow_scores,
+            threshold=threshold,
+            project_id=project_id,
+            domain=str(domain) if domain else None,
+            query=query,
+            topic_only_reject=len(topic_reject_ids - shadow_would_reject_ids),
+            both_reject=len(both),
+            shadow_only_reject=len(shadow_would_reject_ids - topic_reject_ids),
+        )
+    return targets
+
+
+def _topicality(ev: Evidence, query: str) -> float:
+    """Share of query keywords present in the row's title+snippet (0..1).
+
+    This is what `relevance` *should* be. It is currently a rank-position proxy
+    (`search_providers._ranked = 1.0 - 0.02 * position`), so
+    `kb_ingest_min_relevance = 0.45` behaves as "position < 27.5" and waves the
+    whole first page through — it filters on how far down the list OpenAlex put
+    a row, not on whether the row is about the topic.
+    """
+    from .literature import _keywords
+
+    kws = _keywords(query or "")
+    if not kws:
+        return 0.0
+    blob = f"{getattr(ev, 'title', '') or ''} {getattr(ev, 'snippet', '') or ''}".casefold()
+    return sum(1 for k in kws if k in blob) / len(kws)
+
+
+def _log_relevance_shadow(
+    scores: list[float],
+    *,
+    threshold: float = 0.45,
+    project_id: str | None = None,
+    domain: str | None = None,
+    query: str | None = None,
+    topic_only_reject: int = 0,
+    both_reject: int = 0,
+    shadow_only_reject: int = 0,
+) -> None:
+    """Record what topicality enforce would reject while ``kb_relevance_shadow``.
+
+    Shadow mode calibrates the threshold against real traffic before ops flip
+    ``kb_relevance_shadow=False`` (W2). Persist a batch summary (JSONL + audit)
+    so reject rates are readable without scraping process logs. When shadow is
+    off, :func:`select_ingest_targets` enforces topicality and skips this path.
+    """
+    ordered = sorted(scores)
+    n = len(ordered)
+
+    def _pct(p: float) -> float:
+        return ordered[min(n - 1, int(p * n))]
+
+    would_reject = sum(1 for s in ordered if s < threshold)
+    logger.info(
+        "relevance shadow: n=%s p10=%.2f p50=%.2f p90=%.2f | 按 topicality>=%.2f 门槛将拒绝 %s/%s (%.1f%%) "
+        "| overlap shadow_only=%s topic_only=%s both=%s",
+        n,
+        _pct(0.10),
+        _pct(0.50),
+        _pct(0.90),
+        threshold,
+        would_reject,
+        n,
+        (would_reject / n * 100) if n else 0.0,
+        shadow_only_reject,
+        topic_only_reject,
+        both_reject,
+    )
+    try:
+        from .kb_ingest_audit import record_relevance_shadow_batch
+
+        record_relevance_shadow_batch(
+            scores=scores,
+            threshold=threshold,
+            project_id=project_id,
+            domain=domain,
+            query=query,
+            topic_only_reject=topic_only_reject,
+            both_reject=both_reject,
+            shadow_only_reject=shadow_only_reject,
+        )
+    except Exception:
+        logger.debug("relevance shadow persist skipped", exc_info=True)
+
+
+def _origin_lookup_keys(ev: Evidence) -> list[str]:
+    """Identifier + landing URL variants used for origin_url dedup."""
+    keys: list[str] = []
+    for raw in (ev.identifier, getattr(ev, "url", None), getattr(ev, "url_alt", None)):
+        s = (raw or "").strip()
+        if s and s not in keys:
+            keys.append(s)
+    return keys
+
+
+def _fetch_one(
+    ev: Evidence, kind: str, timeout: float, emit: StatusCb, doc: dict[str, Any],
+) -> tuple[str | None, bytes | None, list | None]:
+    """Acquire one document's full text. Network-bound; safe to run in parallel.
+
+    Returns (text, pdf_bytes, tables), or (None, None, None) when the document
+    is already known (status ``skipped``) or unobtainable (status ``failed``).
+    Mutates *doc*.
+
+    2026-10-11 Phase 1 P0-1c: 返回完整 FetchedFulltext 三元组，不再只取 .text。
+    """
+    from ..db.source_store import get_source_store
+    from . import fulltext_fetcher as ff
+
+    # Dedup tier 1: this URL / patent id / DOI was already acquired
+    # (compact ↔ hyphen ↔ Google Patents URL aliases).
+    try:
+        existing = get_source_store().find_by_origin_urls(_origin_lookup_keys(ev))
+    except Exception as exc:
+        existing = degrade_return(logger, exc, "kb_ingest dedup lookup failed", None)
+    if existing is not None:
+        # P1-1: a row whose last ingest failed is retried, not skipped —
+        # tier-1 dedup only covers successfully acquired documents.
+        if existing.ingest_status == "failed":
+            logger.info(
+                "kb_ingest 重试上次失败的文档: %s (上次: %s)",
+                ev.identifier, (existing.ingest_error or "")[:120],
+            )
+        else:
+            doc.update(
+                status="skipped", skip_reason="already_ingested",
+                source_id=existing.id,
+            )
+            emit(doc)
+            return None, None, None
+
+    # Content-filter blocklist: skip marketplace / junk landing URLs before fetch.
+    try:
+        from .kb_retrieval_gate import is_blocked_origin_url
+
+        landing = (getattr(ev, "url", None) or "").strip()
+        if get_settings().content_filter_enabled and is_blocked_origin_url(landing):
+            doc.update(
+                status="skipped", skip_reason="blocked_domain",
+                error="blocked_domain",
+            )
+            emit(doc)
+            return None, None, None
+    except Exception as exc:
+        degrade_return(logger, exc, "kb_ingest blocklist check failed", None)
+
+    doc["status"] = "fetching"
+    emit(doc)
+    fetch_reason: str | None = None
+    try:
+        with timing.span("fetch"):
+            _hit = ff._dispatch_fetch(kind, ev, timeout)
+            text = _hit.text if _hit else None
+            pdf_bytes = _hit.pdf_bytes if _hit else None
+            tables = _hit.tables if _hit else None
+            doc["acquisition"] = ff._last_acquisition()
+    except ff.FetchError as fe:
+        text = None
+        pdf_bytes = None
+        tables = None
+        fetch_reason = fe.reason
+    except Exception as exc:
+        text = degrade_return(logger, exc, f"kb_ingest fetch failed ({kind})", None)
+        pdf_bytes = None
+        tables = None
+    # Recorded even when empty: "how much did the web channel actually return"
+    # is the question, and a zero is as much of an answer as a large number.
+    timing.note(chars=len(text or ""))
+    if not text:
+        error = (
+            f"全文获取失败（{fetch_reason}）"
+            if fetch_reason
+            else "全文获取失败（无 OA 版本 / 下载超时 / 解析为空）"
+        )
+        doc.update(status="failed", error=error)
+        emit(doc)
+        return None, None, None
+    return text, pdf_bytes, tables
+
+
+def _index_one(
+    text: str,
+    ev: Evidence,
+    kind: str,
+    emit: StatusCb,
+    doc: dict[str, Any],
+    *,
+    project_id: str | None = None,
+    pdf_bytes: bytes | None = None,
+    tables: list | None = None,
+) -> None:
+    """Chunk, embed and persist one document. Kept serial — SQLite writers."""
+    from . import fulltext_fetcher as ff
+
+    doc["status"] = "indexing"
+    emit(doc)
+    source_id = ff._persist_fulltext(  # hash-dedup + chunk + embed inside
+        text, ev, kind,
+        project_id=project_id,
+        acquisition=doc.get("acquisition"),
+        pdf_bytes=pdf_bytes,
+        tables=tables,
+    )
+    if source_id:
+        doc.update(status="indexed", source_id=source_id)
+    else:
+        doc.update(status="failed", error="入库失败（存储或索引异常）")
+    emit(doc)
+
+
+def _skipped_by_reason(docs: list[dict[str, Any]]) -> dict[str, int]:
+    """P1-1: subdivide ``skipped`` by reason (already_ingested | blocked_domain | …)."""
+    counts: dict[str, int] = {}
+    for d in docs:
+        if d.get("status") == "skipped":
+            reason = d.get("skip_reason") or "unknown"
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _persist_ingest_failures(
+    docs: list[dict[str, Any]],
+    targets: list[tuple[Any, str]],
+    *,
+    project_id: str | None,
+) -> None:
+    """P1-1: write each failed document's reason to ``source_documents``.
+
+    Keyed by canonical origin URL so the failure is queryable per document.
+    Failed rows are retried on later runs (tier-1 dedup ignores them) and
+    revived in place on success — one row per origin. Never raises.
+    """
+    failed = [(d, t) for d, t in zip(docs, targets) if d.get("status") == "failed"]
+    if not failed:
+        return
+    try:
+        from ..db.source_store import get_source_store
+        from .patent_ids import canonical_origin_url
+
+        store = get_source_store()
+        for doc, (ev, kind) in failed:
+            try:
+                origin = canonical_origin_url(
+                    ev.identifier, url=getattr(ev, "url", None)
+                )
+                store.record_ingest_failure(
+                    origin_url=origin,
+                    filename=(ev.identifier or "")[:500],
+                    title=(ev.title or "")[:500],
+                    source_kind=(kind or "web")[:32],
+                    project_id=project_id,
+                    error=str(doc.get("error") or "未知失败"),
+                )
+            except Exception as exc:
+                degrade_return(
+                    logger, exc,
+                    f"kb_ingest 失败落盘异常 ({doc.get('identifier')})", None,
+                )
+    except Exception as exc:
+        degrade_return(logger, exc, "kb_ingest 失败落盘初始化异常", None)
+
+
+def _backfill_product_structures() -> dict:
+    """Resolve 牌号 → CAS/SMILES for the batch, once per product.
+
+    Never raises and never fails the ingest: every document is already chunked,
+    embedded and searchable by this point. The only thing missing until this
+    finishes is synonym expansion when a *query* names a trade name — a recall
+    enhancement, read at query time, so it starts working the moment this lands
+    without any reindex.
+    """
+    settings = get_settings()
+    if not settings.product_extract_enabled:
+        return {"attempted": 0, "resolved": 0, "mentions_covered": 0}
+    try:
+        from ..db.product_store import get_product_store
+
+        return get_product_store().backfill_structures()
+    except Exception as exc:
+        return degrade_return(
+            logger, exc, "product structure backfill failed",
+            {"attempted": 0, "resolved": 0, "mentions_covered": 0},
+        )
+
+
+def ingest_evidence_docs(
+    evidence: list[Evidence],
+    *,
+    max_docs: int | None = None,
+    status_cb: StatusCb | None = None,
+    project_id: str | None = None,
+    query: str | None = None,
+    skip_topic_filter: bool = False,
+    skip_product_backfill: bool = False,
+) -> dict[str, Any]:
+    """Sequentially acquire + index the fetchable subset of *evidence*.
+
+    Returns a summary dict (also the Celery task result):
+    ``{"docs": [...], "total", "indexed", "skipped", "failed"}``.
+    Never raises — one bad document must not kill the rest of the queue.
+    """
+    import concurrent.futures
+
+    settings = get_settings()
+    emit: StatusCb = status_cb or (lambda meta: None)
+    timeout = settings.fulltext_timeout_s
+    targets = select_ingest_targets(
+        evidence,
+        max_docs=max_docs,
+        project_id=project_id,
+        query=query,
+        skip_topic_filter=skip_topic_filter,
+    )
+
+    docs = [_doc_meta(ev, kind) for ev, kind in targets]
+    for doc in docs:  # announce the full queue up front
+        emit(doc)
+
+    # Per-project PDF quota: v2 决策② —— 不再作为降级门，仅监控告警。
+    pdf_quota = int(settings.kb_project_pdf_quota or 0)
+    if project_id and pdf_quota > 0:
+        from ..db.source_store import get_source_store
+
+        try:
+            pdf_used = get_source_store().count_for_project(project_id, acquisition="pdf")
+        except Exception as exc:
+            pdf_used = degrade_return(logger, exc, "pdf quota lookup failed", 0)
+        if pdf_used >= pdf_quota:
+            logger.warning(
+                "kb_ingest PDF 配额超限: %s (%s/%s)，继续执行（v2: quota 仅监控）",
+                project_id, pdf_used, pdf_quota,
+            )
+
+    # Fetch concurrently, index serially, and pipeline the two. Fetching is
+    # network-bound and is the whole cost of a large batch — 340 documents one
+    # at a time, at a 20 s timeout each, is over an hour. Indexing stays on one
+    # thread because it writes SQLite and because a fetch may run the PDF
+    # parser cascade, whose peak (~350 MB, or ~557 MB when a scan goes through
+    # OCR) is what bounds the worker count on a small host — not the sockets.
+    workers = max(1, settings.kb_ingest_workers)
+
+    def _fetch(i: int) -> tuple[int, tuple[str | None, bytes | None, list | None]]:
+        ev, kind = targets[i]
+        try:
+            # `track` spans threads: this runs in a worker, the matching index
+            # phase runs on the main thread, and both land in one record.
+            with timing.track(ev.identifier or "", kind):
+                return i, _fetch_one(ev, kind, timeout, emit, docs[i])
+        except Exception as exc:
+            degrade_return(logger, exc, "kb_ingest fetch failed", None)
+            docs[i].update(status="failed", error=str(exc)[:200])
+            return i, (None, None, None)
+
+    def _index(i: int, fetched: tuple[str | None, bytes | None, list | None]) -> None:
+        ev, kind = targets[i]
+        text, pdf_bytes, tables = fetched
+        if text:
+            try:
+                with timing.track(ev.identifier or "", kind):
+                    _index_one(text, ev, kind, emit, docs[i], project_id=project_id,
+                               pdf_bytes=pdf_bytes, tables=tables)
+            except Exception as exc:  # one bad document must not kill the queue
+                degrade_return(logger, exc, "kb_ingest document failed", None)
+                docs[i].update(status="failed", error=str(exc)[:200])
+        timing.finish(ev.identifier or "", docs[i]["status"])
+
+    with timing.batch("kb_ingest"):
+        if workers == 1 or len(targets) <= 1:
+            for i in range(len(targets)):
+                _index(*_fetch(i))
+        else:
+            # `as_completed`, not `ex.map`: map returns an iterator that yields
+            # in submission order, so one slow download at the head held back
+            # every document behind it and nothing was indexed until the last
+            # fetch finished. It also meant every fetched full text — up to
+            # several hundred documents — sat in memory at once waiting for
+            # the indexing phase to start.
+            #
+            # Indexing now happens in completion order. Content-hash dedup
+            # therefore resolves to whichever of two byte-identical documents
+            # finished first rather than to the higher-ranked one; the stored
+            # text is the same either way, only the recorded origin_url differs.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(_fetch, i): i for i in range(len(targets))}
+                for fut in concurrent.futures.as_completed(futures):
+                    try:
+                        idx, text = fut.result()
+                    except Exception as exc:  # _fetch catches, but never trust that
+                        idx = futures[fut]
+                        degrade_return(logger, exc, "kb_ingest fetch crashed", None)
+                        docs[idx].update(status="failed", error=str(exc)[:200])
+                        text = None
+                    _index(idx, text)
+
+    # P1-1: persist per-document failures so they are queryable (previously
+    # they only lived in the in-memory summary / task result). Fail-open:
+    # observability must never break the batch itself.
+    _persist_ingest_failures(docs, targets, project_id=project_id)
+
+    # Structure linking was deferred out of every document (see
+    # `kb_index._attach_entities`); resolve it once per product now that the
+    # batch is done. Outside `timing.batch` on purpose — it is not part of any
+    # document's cost and folding it in would misattribute it.
+    # One-shot user clicks skip this: PubChem backfill can take tens of seconds
+    # and must not block the 「入库全文」 response.
+    structures = (
+        {"attempted": 0, "resolved": 0, "mentions_covered": 0}
+        if skip_product_backfill
+        else _backfill_product_structures()
+    )
+
+    summary = {
+        "docs": docs,
+        "total": len(docs),
+        "indexed": sum(1 for d in docs if d["status"] == "indexed"),
+        "skipped": sum(1 for d in docs if d["status"] == "skipped"),
+        "failed": sum(1 for d in docs if d["status"] == "failed"),
+        # P1-1: skipped sub-reasons (already_ingested | blocked_domain | …).
+        "skipped_by_reason": _skipped_by_reason(docs),
+        "product_structures": structures,
+    }
+    logger.info(
+        "kb_ingest: %d indexed / %d skipped / %d failed of %d (skipped: %s)",
+        summary["indexed"], summary["skipped"], summary["failed"], summary["total"],
+        summary["skipped_by_reason"] or "-",
+    )
+    if summary["failed"]:
+        # P1-1: batch-end failure report — the per-document reasons that used
+        # to be visible only in the raw docs list.
+        for d in docs:
+            if d["status"] == "failed":
+                logger.warning(
+                    "kb_ingest 失败: %s [%s] %s",
+                    d.get("identifier"), d.get("kind"),
+                    (d.get("error") or "")[:200],
+                )
+    return summary
+
+
+def ingest_single_evidence(
+    ev: Evidence,
+    *,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """User-clicked one-shot fulltext ingest (P3.2).
+
+    Bypasses the auto topic pre-filter and ``kb_ingest_auto`` gate. Returns a
+    flat result for ``POST /api/kb/ingest-evidence``:
+    ``{ok, status, source_id, canonical_id, reason, kind}``.
+    """
+    from ..db.source_store import get_source_store
+    from . import fulltext_fetcher as ff
+    from .patent_ids import canonical_origin_url, normalize_patent_pub
+
+    ident = (ev.identifier or "").strip()
+    _office, compact = normalize_patent_pub(ident)
+    if not compact:
+        _office, compact = normalize_patent_pub(getattr(ev, "url", None) or "")
+    canonical = compact or canonical_origin_url(ident, url=getattr(ev, "url", None)) or ident or None
+
+    kind = ff.classify(ev)
+    if not kind:
+        return {
+            "ok": False,
+            "status": "failed",
+            "source_id": None,
+            "canonical_id": canonical,
+            "reason": f"不支持入库全文: source={ev.source!r} id={ident!r}",
+            "kind": "unsupported",
+            "task_id": None,
+            "status_url": None,
+        }
+
+    # Fast-path dedup before fetch/index/backfill — one-click UX must stay snappy.
+    # A row whose last ingest failed is not "already ingested": fall through to
+    # the real ingest, which retries it (``_fetch_one``) and revives the row.
+    try:
+        existing = get_source_store().find_by_origin_urls(
+            _origin_lookup_keys(ev), include_failed=False
+        )
+    except Exception as exc:
+        existing = degrade_return(logger, exc, "ingest_single dedup failed", None)
+    if existing is not None:
+        return {
+            "ok": True,
+            "status": "skipped",
+            "source_id": existing.id,
+            "canonical_id": canonical,
+            "reason": None,
+            "kind": kind,
+            "task_id": None,
+            "status_url": None,
+        }
+
+    summary = ingest_evidence_docs(
+        [ev],
+        max_docs=1,
+        project_id=project_id,
+        skip_topic_filter=True,
+        skip_product_backfill=True,
+    )
+    docs = summary.get("docs") or []
+    if not docs:
+        return {
+            "ok": False,
+            "status": "failed",
+            "source_id": None,
+            "canonical_id": canonical,
+            "reason": "无可入库目标（已被过滤或标识无效）",
+            "kind": kind,
+            "task_id": None,
+            "status_url": None,
+        }
+    doc = docs[0]
+    status = doc.get("status") or "failed"
+    source_id = doc.get("source_id")
+    reason = doc.get("error")
+    ok = status in {"indexed", "skipped"}
+    return {
+        "ok": ok,
+        "status": status,
+        "source_id": source_id,
+        "canonical_id": canonical,
+        "reason": reason,
+        "kind": kind,
+        "task_id": None,
+        "status_url": None,
+    }
+
+
+def write_ingest_audit(
+    *,
+    project_id: str | None,
+    domain: str | None,
+    query: str | None,
+    evidence_id: str | None,
+    source: str | None,
+    action: str,
+    reason: str,
+    domain_match: str | None = None,
+) -> None:
+    """Append one ingest audit row (SQLite when available; else JSONL)."""
+    try:
+        from .kb_ingest_audit import record_ingest_audit
+        record_ingest_audit(
+            project_id=project_id,
+            domain=domain,
+            query=query,
+            evidence_id=evidence_id,
+            source=source,
+            action=action,
+            reason=reason,
+            domain_match=domain_match,
+        )
+    except Exception:
+        logger.debug("ingest audit write skipped", exc_info=True)

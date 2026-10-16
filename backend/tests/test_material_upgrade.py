@@ -1,0 +1,205 @@
+"""Material import/export + promote pipeline tests."""
+from __future__ import annotations
+
+import io
+import json
+
+from fastapi.testclient import TestClient
+
+from app.domain.knowledge import RAW_MATERIALS
+from app.main import app
+from app.services import material_io
+from app.services.grounded_recommend import ground_recommended_formulas
+from app.services.material_promote import propose_material
+from app.domain.schemas import ProductDomain, RecommendedFormula, RecommendedFormulaComponent
+
+client = TestClient(app)
+
+
+def test_csv_roundtrip_import_commit_and_export():
+    unique = "P8ResinZ9q1"
+    csv_body = (
+        "name,role,cas_no,availability\n"
+        f"{unique},resin,999-11-1,in_stock\n"
+        "P8FillerZ9q2,filler,,in_stock\n"
+    ).encode("utf-8")
+    records = material_io.detect_and_parse("batch.csv", csv_body)
+    assert len(records) == 2
+    preview = material_io.commit_import(records, origin="import")
+    assert preview.errors == 0
+    assert preview.creates + preview.updates == 2
+    RAW_MATERIALS.refresh()
+    assert unique in RAW_MATERIALS
+
+    exported = material_io.export_records(q=unique)
+    assert any(r["name"] == unique for r in exported)
+    # Idempotent re-import
+    again = material_io.commit_import(records, origin="import")
+    assert again.creates == 0
+    assert again.updates >= 1
+
+
+def test_import_api_dry_run_and_commit():
+    payload = json.dumps(
+        [
+            {
+                "name": "P8 API Import Material",
+                "role": "solvent",
+                "cas_no": "64-17-5",
+                "availability": "in_stock",
+            }
+        ]
+    ).encode("utf-8")
+    files = {"file": ("mats.json", io.BytesIO(payload), "application/json")}
+    r = client.post("/api/materials/import?dry_run=true", files=files)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dry_run"] is True
+    assert body["total"] == 1
+
+    files = {"file": ("mats.json", io.BytesIO(payload), "application/json")}
+    r2 = client.post("/api/materials/import?dry_run=false", files=files)
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["creates"] + r2.json()["updates"] >= 1
+
+
+def test_export_api_csv():
+    r = client.get("/api/materials/export?format=csv")
+    assert r.status_code == 200
+    assert "name" in r.text.splitlines()[0]
+    assert "text/csv" in r.headers.get("content-type", "")
+
+
+def test_propose_high_confidence_upserts_low_goes_pending():
+    high = propose_material(
+        "P8 High Conf Chem",
+        {"role": "additive", "cas_no": "123-45-6"},
+        source="kb_promoted",
+    )
+    assert high["action"] in {"upsert", "exists"}
+    # Digit-bearing multi-token trade name still may queue under KB gate.
+    low = propose_material(
+        "P8 Mystery Trade Name XYZ",
+        {"role": "additive"},
+        source="kb_promoted",
+    )
+    assert low["action"] in {"pending", "exists", "skipped"}
+    if low["action"] == "pending":
+        cand = client.get("/api/materials/candidates")
+        assert cand.status_code == 200
+        names = [c["name"] for c in cand.json()["candidates"]]
+        assert "P8 Mystery Trade Name XYZ" in names
+
+
+def test_kb_noise_names_are_skipped_not_pending():
+    from app.services.material_promote import is_plausible_material_name, should_enqueue_low_confidence
+
+    for junk in ("Australia", "Industries", "In", "Beijing", "ImageJ", "University", "Industries Inc"):
+        assert not is_plausible_material_name(junk), junk
+        assert not should_enqueue_low_confidence("kb_promoted", junk), junk
+        result = propose_material(junk, {"role": "additive"}, source="kb_promoted")
+        assert result["action"] == "skipped", result
+
+    # Chem-like / grade-like names remain enqueueable from KB.
+    assert should_enqueue_low_confidence("kb_promoted", "Waterborne acrylic emulsion")
+    assert should_enqueue_low_confidence("kb_promoted", "Zinc phosphate")
+    assert should_enqueue_low_confidence("kb_promoted", "DGEBA")
+    chem = propose_material(
+        "NoiseGate Acrylic Emulsion Z9",
+        {"role": "resin"},
+        source="kb_promoted",
+    )
+    assert chem["action"] in {"pending", "exists"}
+
+    # Non-KB paths still accept plausible bare names (requirement save / workbench).
+    req = propose_material(
+        "NoiseGate Bare Workbench Resin",
+        {"role": "resin"},
+        source="workbench",
+    )
+    assert req["action"] in {"pending", "exists"}
+
+
+def test_dismiss_noisy_candidates_api_cleans_kb_junk():
+    # Seed junk via force_pending (bypass gate) to simulate legacy noise.
+    for junk in ("Australia", "Industries", "Beijing"):
+        propose_material(
+            junk,
+            {"role": ""},
+            source="kb_promoted",
+            force_pending=True,
+        )
+    # Also seed a keepable chem-like candidate.
+    propose_material(
+        "Epoxy resin hardener Z9noise",
+        {"role": "hardener"},
+        source="kb_promoted",
+        force_pending=True,
+    )
+
+    before = client.get("/api/materials/candidates?limit=500")
+    assert before.status_code == 200
+    before_names = {c["name"] for c in before.json()["candidates"]}
+    assert "Australia" in before_names
+
+    cleaned = client.post("/api/materials/candidates/dismiss-noise?source=kb_promoted&limit=2000")
+    assert cleaned.status_code == 200, cleaned.text
+    body = cleaned.json()
+    assert body["dismissed"] >= 1
+    assert "scanned" in body
+
+    after = client.get("/api/materials/candidates?limit=500")
+    after_names = {c["name"] for c in after.json()["candidates"]}
+    assert "Australia" not in after_names
+    assert "Industries" not in after_names
+    assert "Beijing" not in after_names
+    assert "Epoxy resin hardener Z9noise" in after_names
+
+
+def test_prefer_materials_catalog_soft_sort_keeps_out_of_catalog():
+    # prefer_materials_catalog 的软排序语义用 strict=False 验证（目录未命中本身
+    # 不剔除）；strict 默认开时，低可信度成分仍会被证据 grounding 剔除。
+    formulas = [
+        RecommendedFormula(
+            name="Outside Heavy",
+            domain=ProductDomain.anticorrosion_coating,
+            components=[
+                RecommendedFormulaComponent(name="TotallyUnknownium-42", weight_pct=50.0),
+            ],
+        ),
+        RecommendedFormula(
+            name="Catalog Heavy",
+            domain=ProductDomain.anticorrosion_coating,
+            components=[
+                RecommendedFormulaComponent(name="Bisphenol-A epoxy (DGEBA)", weight_pct=50.0),
+            ],
+        ),
+    ]
+    out, warnings = ground_recommended_formulas(
+        formulas, [], prefer_materials_catalog=True, strict=False
+    )
+    assert len(out) == 2
+    assert out[0].name == "Catalog Heavy"
+    assert any(c.name == "TotallyUnknownium-42" for c in out[1].components)
+    assert any("软排序" in w or "优先材料库" in w for w in warnings)
+    # A-5: strict 默认开 — 同一份输入，低可信度配方被剔除而非保留。
+    out_strict, warnings_strict = ground_recommended_formulas(
+        formulas, [], prefer_materials_catalog=True
+    )
+    assert [r.name for r in out_strict] == ["Catalog Heavy"]
+    assert any("整个配方已剔除" in w for w in warnings_strict)
+    # No materials_only semantics: outsider still present.
+    assert all(rec.name != "" for rec in out)
+
+
+def test_recommend_request_accepts_prefer_flag_rejects_nothing():
+    # Schema smoke: unknown materials_only must not be required; prefer is optional.
+    from app.api.formulations import RecommendFormulationsRequest
+    from app.domain.schemas import Requirement
+
+    body = RecommendFormulationsRequest(
+        requirement=Requirement(domain=ProductDomain.anticorrosion_coating),
+        prefer_materials_catalog=True,
+    )
+    assert body.prefer_materials_catalog is True
+    assert not hasattr(body, "materials_only")

@@ -1,0 +1,707 @@
+"""Tests for idempotent post-baseline Alembic migrations 0002-0006 (Task 0.2a).
+
+Covers three guarantees:
+
+1. A *legacy* database (pre-migration schema, missing the columns added by
+   migrations 0002-0005 and still containing ``experiment_records``) gains
+   every new column and loses the legacy table after ``alembic upgrade head``.
+2. A *fresh* database (baseline 0001 already contains all columns) runs the
+   same upgrade chain silently — every post-baseline migration is a no-op.
+3. The revision chain is linear and ends at head ``0009``.
+
+The Alembic-invocation helper lives in ``tests/alembic_helpers.py`` (Task
+0.2b-2) and is shared with the other migration-oriented suites.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import pytest
+from sqlalchemy import create_engine, inspect, text
+
+from tests.alembic_helpers import ALEMBIC_INI, run_upgrade
+
+
+def _column_names(db_url: str, table: str) -> set[str]:
+    """Return the set of column names for ``table`` in the target database."""
+    engine = create_engine(db_url)
+    try:
+        return {c["name"] for c in inspect(engine).get_columns(table)}
+    finally:
+        engine.dispose()
+
+
+def _table_names(db_url: str) -> set[str]:
+    """Return the set of table names present in the target database."""
+    engine = create_engine(db_url)
+    try:
+        return set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def _index_names(db_url: str, table: str) -> set[str]:
+    """Return the set of index names for ``table`` in the target database."""
+    engine = create_engine(db_url)
+    try:
+        return {ix["name"] for ix in inspect(engine).get_indexes(table)}
+    finally:
+        engine.dispose()
+
+
+def _column_types(db_url: str, table: str) -> dict[str, str]:
+    """Return ``{column_name: type_string}`` for ``table`` in the target database."""
+    engine = create_engine(db_url)
+    try:
+        return {c["name"]: str(c["type"]).upper() for c in inspect(engine).get_columns(table)}
+    finally:
+        engine.dispose()
+
+
+def _fetch_all(db_url: str, sql: str) -> list[tuple]:
+    """Execute ``sql`` against the target database and return all rows."""
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            return [tuple(row) for row in conn.execute(text(sql))]
+    finally:
+        engine.dispose()
+
+
+def _exec(db_url: str, sql: str) -> None:
+    """Execute a write statement against the target database."""
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(sql))
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture()
+def tmp_db_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Point ``FORMUNEX_DB_URL`` at a fresh per-test SQLite database."""
+    url = f"sqlite:///{tmp_path}/alembic_migrations_test.db"
+    monkeypatch.setenv("FORMUNEX_DB_URL", url)
+    return url
+
+
+def _create_legacy_schema(db_url: str) -> None:
+    """Create the pre-migration table shapes directly with raw SQL.
+
+    Mirrors the schema as it existed before columns were added to the ORM
+    models, plus the legacy ``experiment_records`` table that migration 0006
+    is responsible for dropping.
+    """
+    engine = create_engine(db_url)
+    statements = [
+        """
+        CREATE TABLE experiments (
+            id INTEGER PRIMARY KEY,
+            domain VARCHAR(64),
+            factors JSON,
+            cure_temperature_c FLOAT,
+            measured JSON,
+            source VARCHAR(64),
+            label VARCHAR(255),
+            created_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE campaigns (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR(255),
+            strategy VARCHAR(64),
+            status VARCHAR(32),
+            created_at DATETIME,
+            updated_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE source_documents (
+            id VARCHAR(36) PRIMARY KEY,
+            filename VARCHAR(512),
+            title VARCHAR(512),
+            source_kind VARCHAR(32),
+            content_hash VARCHAR(64),
+            full_text TEXT,
+            raw_text_chars INTEGER,
+            source_guide JSON,
+            extraction_status VARCHAR(32),
+            extraction_error TEXT,
+            created_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE document_chunks (
+            id VARCHAR(36) PRIMARY KEY,
+            source_id VARCHAR(36),
+            ord INTEGER,
+            text TEXT,
+            heading_path VARCHAR(120),
+            embedding JSON,
+            embedding_model VARCHAR(80),
+            created_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE kb_entity_links (
+            id VARCHAR(36) PRIMARY KEY,
+            src_entity_id VARCHAR(64),
+            dst_entity_id VARCHAR(64),
+            link_type VARCHAR(32),
+            confidence FLOAT,
+            evidence_refs JSON,
+            created_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE experiment_records (
+            id INTEGER PRIMARY KEY
+        )
+        """,
+    ]
+    try:
+        with engine.begin() as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+    finally:
+        engine.dispose()
+
+
+def test_legacy_db_gets_columns_via_migration(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy DB stamped at 0001 gains all new columns; legacy table is dropped."""
+    _create_legacy_schema(tmp_db_url)
+    # Seed rows so the updated_at backfill (0005) has data to repair.
+    _exec(
+        tmp_db_url,
+        "INSERT INTO kb_entity_links (id, src_entity_id, dst_entity_id, link_type,"
+        " confidence, evidence_refs, created_at) VALUES"
+        " ('link-1', 'e1', 'e2', 'cites', 0.9, '[]', '2026-01-01 00:00:00')",
+    )
+
+    run_upgrade(tmp_db_url, monkeypatch)
+
+    assert {"item_id", "project_id"} <= _column_names(tmp_db_url, "experiments")
+    assert {
+        "project_id",
+        "primary_metric",
+        "objectives_snapshot",
+        "lever_snapshot",
+        "sample_refs",
+        "loop_history",
+    } <= _column_names(tmp_db_url, "campaigns")
+    assert {"origin_url", "project_id"} <= _column_names(tmp_db_url, "source_documents")
+    assert {"page_no", "meta"} <= _column_names(tmp_db_url, "document_chunks")
+    assert {
+        "metadata_json",
+        "is_valid",
+        "extraction_method",
+        "updated_at",
+    } <= _column_names(tmp_db_url, "kb_entity_links")
+
+    assert "experiment_records" not in _table_names(tmp_db_url)
+
+    # Migrations 0002-0004 must also backfill the ORM ``index=True`` indexes
+    # that the 0001 baseline only creates for fresh databases.
+    assert {"ix_experiments_item_id", "ix_experiments_project_id"} <= _index_names(
+        tmp_db_url, "experiments"
+    )
+    assert "ix_campaigns_project_id" in _index_names(tmp_db_url, "campaigns")
+    assert {
+        "ix_source_documents_origin_url",
+        "ix_source_documents_project_id",
+    } <= _index_names(tmp_db_url, "source_documents")
+
+    # The 0005 backfill must leave no NULL updated_at rows behind.
+    rows = _fetch_all(tmp_db_url, "SELECT updated_at FROM kb_entity_links")
+    assert rows and all(row[0] is not None for row in rows)
+
+    # Pin down the migrated column types so silent type drift fails loudly.
+    experiments_types = _column_types(tmp_db_url, "experiments")
+    assert "VARCHAR" in experiments_types["item_id"]
+    assert "VARCHAR" in experiments_types["project_id"]
+    campaigns_types = _column_types(tmp_db_url, "campaigns")
+    assert "JSON" in campaigns_types["objectives_snapshot"]
+    assert "JSON" in campaigns_types["lever_snapshot"]
+    chunks_types = _column_types(tmp_db_url, "document_chunks")
+    assert "INTEGER" in chunks_types["page_no"]
+    assert "JSON" in chunks_types["meta"]
+    links_types = _column_types(tmp_db_url, "kb_entity_links")
+    assert "JSON" in links_types["metadata_json"]
+    assert "BOOLEAN" in links_types["is_valid"]
+    assert "VARCHAR" in links_types["extraction_method"]
+    assert "DATETIME" in links_types["updated_at"]
+
+
+def test_migrations_idempotent_on_fresh_db(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`upgrade head` on an empty DB runs 0002-0006 as silent no-ops."""
+    run_upgrade(tmp_db_url, monkeypatch)
+
+    # Baseline 0001 already creates every column; the post-baseline
+    # migrations must not raise and the full column set must be present.
+    assert {"item_id", "project_id"} <= _column_names(tmp_db_url, "experiments")
+    assert {
+        "project_id",
+        "primary_metric",
+        "objectives_snapshot",
+        "lever_snapshot",
+        "sample_refs",
+        "loop_history",
+    } <= _column_names(tmp_db_url, "campaigns")
+    assert {"origin_url", "project_id"} <= _column_names(tmp_db_url, "source_documents")
+    assert {"page_no", "meta"} <= _column_names(tmp_db_url, "document_chunks")
+    assert {
+        "metadata_json",
+        "is_valid",
+        "extraction_method",
+        "updated_at",
+    } <= _column_names(tmp_db_url, "kb_entity_links")
+    assert "experiment_records" not in _table_names(tmp_db_url)
+
+
+def test_revision_chain_head_is_0050(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0050_acquisition_snapshots``)."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(ALEMBIC_INI))
+    script = ScriptDirectory.from_config(cfg)
+
+    heads = script.get_heads()
+    assert len(heads) == 1, f"expected a single head, got {heads}"
+    assert heads[0] == "0050"
+
+
+def test_migrations_partial_columns_branch(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy DB that already has *some* new columns upgrades cleanly.
+
+    Simulates a database where ``experiments.item_id`` was added by hand
+    before Alembic adoption: the guard must skip the existing column while
+    still adding every remaining column and index.
+    """
+    _create_legacy_schema(tmp_db_url)
+    _exec(tmp_db_url, "ALTER TABLE experiments ADD COLUMN item_id VARCHAR(128)")
+
+    run_upgrade(tmp_db_url, monkeypatch)  # must not raise on the pre-existing column
+
+    assert {"item_id", "project_id"} <= _column_names(tmp_db_url, "experiments")
+    assert {
+        "project_id",
+        "primary_metric",
+        "objectives_snapshot",
+        "lever_snapshot",
+        "sample_refs",
+        "loop_history",
+    } <= _column_names(tmp_db_url, "campaigns")
+    assert {"origin_url", "project_id"} <= _column_names(tmp_db_url, "source_documents")
+    assert {"page_no", "meta"} <= _column_names(tmp_db_url, "document_chunks")
+    assert {
+        "metadata_json",
+        "is_valid",
+        "extraction_method",
+        "updated_at",
+    } <= _column_names(tmp_db_url, "kb_entity_links")
+
+    assert {"ix_experiments_item_id", "ix_experiments_project_id"} <= _index_names(
+        tmp_db_url, "experiments"
+    )
+    assert "ix_campaigns_project_id" in _index_names(tmp_db_url, "campaigns")
+    assert {
+        "ix_source_documents_origin_url",
+        "ix_source_documents_project_id",
+    } <= _index_names(tmp_db_url, "source_documents")
+    assert "experiment_records" not in _table_names(tmp_db_url)
+
+
+def test_migration_0006_logs_row_count(
+    tmp_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Dropping ``experiment_records`` logs a warning including the row count."""
+    _create_legacy_schema(tmp_db_url)
+    _exec(tmp_db_url, "INSERT INTO experiment_records (id) VALUES (1)")
+    _exec(tmp_db_url, "INSERT INTO experiment_records (id) VALUES (2)")
+
+    with caplog.at_level(logging.WARNING):
+        run_upgrade(tmp_db_url, monkeypatch)
+
+    assert "experiment_records" not in _table_names(tmp_db_url)
+    drop_warnings = [
+        record
+        for record in caplog.records
+        if "experiment_records" in record.getMessage() and "2" in record.getMessage()
+    ]
+    assert drop_warnings, (
+        "expected a warning mentioning dropping experiment_records with 2 rows, "
+        f"got: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+def test_make_engine_emits_no_alter_after_upgrade(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After `alembic upgrade head`, make_engine must not emit any runtime ALTER.
+
+    Schema drift repair is owned by Alembic migrations; make_engine is a
+    read-only validator and must issue zero ALTER statements.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    run_upgrade(tmp_db_url, monkeypatch)
+
+    from app.db.database import make_engine
+
+    statements: list[str] = []
+
+    @event.listens_for(Engine, "before_cursor_execute")
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    try:
+        engine = make_engine(tmp_db_url)
+    finally:
+        event.remove(Engine, "before_cursor_execute", _capture)
+    try:
+        alter_count = sum(1 for s in statements if "ALTER" in s.upper())
+        assert alter_count == 0, (
+            f"make_engine emitted {alter_count} ALTER statement(s): "
+            f"{[s for s in statements if 'ALTER' in s.upper()]}"
+        )
+    finally:
+        engine.dispose()
+
+
+def test_validator_raises_actionable_on_legacy_db(tmp_db_url: str) -> None:
+    """A legacy DB (missing item_id/project_id) must fail loudly with a
+    pointer to `alembic upgrade head` instead of being silently ALTERed."""
+    from app.db.database import make_engine
+
+    engine = create_engine(tmp_db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE experiments (
+                        id INTEGER PRIMARY KEY,
+                        domain VARCHAR(64),
+                        factors JSON,
+                        cure_temperature_c FLOAT,
+                        measured JSON,
+                        source VARCHAR(64),
+                        label VARCHAR(255),
+                        created_at DATETIME
+                    )
+                    """
+                )
+            )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match="alembic upgrade head") as exc_info:
+        make_engine(tmp_db_url)
+    assert "experiments.item_id" in str(exc_info.value)
+
+
+# ── migration 0014: doe_plans reference types ────────────────────────────────
+
+
+def _create_legacy_doe_plans(db_url: str) -> None:
+    """Build ``doe_plans`` in its pre-0014 shape: String reference columns.
+
+    The 0001 baseline runs ``Base.metadata.create_all`` against the *current*
+    ORM, so a database built by the migration chain already has the corrected
+    integer columns and 0014 short-circuits. Only a hand-built legacy table
+    exercises the conversion, which is the shape every deployed database is in.
+    """
+    _exec(
+        db_url,
+        """
+        CREATE TABLE doe_plans (
+            id VARCHAR(36) PRIMARY KEY,
+            experiment_id VARCHAR(36),
+            campaign_id VARCHAR(36),
+            design_type VARCHAR(32) NOT NULL,
+            parameters JSON NOT NULL,
+            created_at DATETIME NOT NULL
+        )
+        """,
+    )
+
+
+def _foreign_keys(db_url: str, table: str) -> set[tuple[str, str]]:
+    """Return ``{(constrained_column, referred_table)}`` for ``table``."""
+    engine = create_engine(db_url)
+    try:
+        return {
+            (fk["constrained_columns"][0], fk["referred_table"])
+            for fk in inspect(engine).get_foreign_keys(table)
+        }
+    finally:
+        engine.dispose()
+
+
+def test_0014_converts_legacy_string_references_to_integers(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real deployed database converts, keeps valid ids, and drops garbage."""
+    _create_legacy_schema(tmp_db_url)
+    _create_legacy_doe_plans(tmp_db_url)
+    _exec(
+        tmp_db_url,
+        "INSERT INTO campaigns (id, name, strategy, status, created_at, updated_at)"
+        " VALUES (7, 'c', 's', 'IN_PROGRESS', '2026-01-01 00:00:00',"
+        " '2026-01-01 00:00:00')",
+    )
+    for plan_id, experiment_id, campaign_id in (
+        ("p-uuid", "'8b4f-1c2d-dead-beef'", "'8b4f-1c2d-dead-beef'"),
+        ("p-valid", "NULL", "'7'"),
+        # Integer-shaped but pointing at a row that does not exist.
+        ("p-dangling", "NULL", "'999'"),
+        # A UUID whose leading digits collide with a real campaign id. On
+        # SQLite the orphan sweep already rejects it (the column is still TEXT
+        # when the sweep runs, and TEXT never compares equal to an integer id),
+        # so this row does not discriminate between the two cleanup passes —
+        # it is here because it is the input most likely to produce a *wrong*
+        # link rather than a detectable orphan if either pass regresses.
+        ("p-prefix-collision", "NULL", "'7f3a-1c2d-dead-beef'"),
+    ):
+        _exec(
+            tmp_db_url,
+            "INSERT INTO doe_plans VALUES"
+            f" ('{plan_id}', {experiment_id}, {campaign_id}, 'lhs', '{{}}',"
+            " '2026-01-01 00:00:00')",
+        )
+
+    run_upgrade(tmp_db_url, monkeypatch)
+
+    types = _column_types(tmp_db_url, "doe_plans")
+    assert "INTEGER" in types["experiment_id"]
+    assert "INTEGER" in types["campaign_id"]
+    assert _foreign_keys(tmp_db_url, "doe_plans") == {
+        ("experiment_id", "experiments"),
+        ("campaign_id", "campaigns"),
+    }
+    # 0008's indexes must survive the table rebuild.
+    assert {"ix_doe_plans_experiment", "ix_doe_plans_campaign"} <= _index_names(
+        tmp_db_url, "doe_plans"
+    )
+
+    rows = dict(
+        _fetch_all(tmp_db_url, "SELECT id, campaign_id FROM doe_plans ORDER BY id")
+    )
+    assert rows == {
+        "p-uuid": None,
+        "p-valid": 7,
+        "p-dangling": None,
+        "p-prefix-collision": None,
+    }
+    # SQLite rebuilds a table without re-checking foreign keys, so the only
+    # proof the result is consistent is to ask it explicitly.
+    assert _fetch_all(tmp_db_url, "PRAGMA foreign_key_check(doe_plans)") == []
+
+
+def test_migration_0035_parser_column(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """P3-5: 0035 adds ``source_documents.parser``; downgrade drops it; re-upgrade idempotent."""
+    from tests.alembic_helpers import run_downgrade
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "parser" in _column_names(tmp_db_url, "source_documents")
+
+    run_downgrade(tmp_db_url, monkeypatch, "0034")
+    assert "parser" not in _column_names(tmp_db_url, "source_documents")
+
+    # Re-upgrade is idempotent (twice).
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "parser" in _column_names(tmp_db_url, "source_documents")
+
+
+def test_migration_0036_kb_coverage_counters(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """B-3: 0036 adds ``kb_coverage_counters``; downgrade drops it; re-upgrade idempotent."""
+    from tests.alembic_helpers import run_downgrade
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "kb_coverage_counters" in _table_names(tmp_db_url)
+
+    run_downgrade(tmp_db_url, monkeypatch, "0035")
+    assert "kb_coverage_counters" not in _table_names(tmp_db_url)
+
+    # Re-upgrade is idempotent (twice).
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "kb_coverage_counters" in _table_names(tmp_db_url)
+
+
+def test_migration_0043_adds_outbox_task_id(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0043 adds ``task_outbox.task_id`` (replay under the client's Celery id); downgrade
+    drops it; re-upgrade is idempotent.
+
+    (A fresh DB already has the column at every revision — ``0001_baseline`` runs
+    ``create_all`` from the current models — so the migration is exercised through a
+    downgrade first.)
+    """
+    from tests.alembic_helpers import run_downgrade
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "task_id" in _column_names(tmp_db_url, "task_outbox")
+
+    run_downgrade(tmp_db_url, monkeypatch, "0042")
+    assert "task_id" not in _column_names(tmp_db_url, "task_outbox")
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "task_id" in _column_names(tmp_db_url, "task_outbox")
+
+
+def test_make_engine_adds_task_id_to_a_database_that_was_not_upgraded(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every submission writes an outbox row; a model column the table lacks would make
+    each async endpoint 500 until someone runs ``alembic upgrade head``."""
+    import uuid
+
+    from sqlalchemy.orm import Session
+
+    from app.db.database import make_engine
+    from app.db.models import TaskOutbox
+    from tests.alembic_helpers import run_downgrade
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_downgrade(tmp_db_url, monkeypatch, "0042")  # the pre-0043 table shape
+    assert "task_id" not in _column_names(tmp_db_url, "task_outbox")
+
+    engine = make_engine(tmp_db_url)
+    try:
+        assert "task_id" in _column_names(tmp_db_url, "task_outbox")
+        with Session(engine) as session:
+            session.add(
+                TaskOutbox(
+                    id=str(uuid.uuid4()),
+                    operation="doe_cycle",
+                    idempotency_key="k",
+                    payload={},
+                    task_id="abc",
+                )
+            )
+            session.commit()
+            assert session.query(TaskOutbox).one().task_id == "abc"
+    finally:
+        engine.dispose()
+
+
+def test_migration_0044_drops_the_unused_kg_formulation_links_table(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing ever wrote or read ``kg_formulation_links``; a fresh database no longer has it,
+    and the downgrade restores the shape revision 0020 created."""
+    from tests.alembic_helpers import run_downgrade
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "kg_formulation_links" not in _table_names(tmp_db_url)
+
+    run_downgrade(tmp_db_url, monkeypatch, "0043")
+    assert {
+        "experiment_id",
+        "entity_id",
+        "role",
+        "weight_pct",
+        "link_type",
+        "project_id",
+        "created_at",
+    } <= _column_names(tmp_db_url, "kg_formulation_links")
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_upgrade(tmp_db_url, monkeypatch, "head")  # repeatable
+    assert "kg_formulation_links" not in _table_names(tmp_db_url)
+
+
+def test_an_upgrade_from_before_the_table_existed_ends_in_the_same_place(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0020 creates the table when the baseline did not (it no longer does); 0044 removes it."""
+    from tests.alembic_helpers import run_downgrade
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_downgrade(tmp_db_url, monkeypatch, "0019_add_task_id_to_experiments")
+    assert "kg_formulation_links" not in _table_names(tmp_db_url)
+
+    run_upgrade(tmp_db_url, monkeypatch, "0020")
+    assert "kg_formulation_links" in _table_names(tmp_db_url)
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "kg_formulation_links" not in _table_names(tmp_db_url)
+
+
+# ── the migrated schema and the models agree ─────────────────────────────────────────────────────────────────────────
+
+# Objects the migrations create that no model declares. alembic 0019 added experiments.task_id / attempt_count (and an
+# index on task_id) that nothing reads or writes; dropping columns from a live SQLite table means rebuilding it, which
+# is not worth the risk for three unused objects. Anything else showing up here is real drift.
+_KNOWN_MIGRATION_ONLY = {
+    ("remove_column", "experiments", "task_id"),
+    ("remove_column", "experiments", "attempt_count"),
+    ("remove_index", "experiments", "ix_experiments_task_id"),
+}
+
+
+def _drift(diff) -> set[tuple[str, str, str]]:
+    out = set()
+    for entry in diff:
+        for item in entry if isinstance(entry, list) else [entry]:
+            kind = item[0]
+            if kind == "remove_column":
+                out.add((kind, item[2], item[3].name))
+            elif kind in ("remove_index", "add_index"):
+                out.add((kind, item[1].table.name, item[1].name))
+            else:
+                out.add((kind, str(item[1:])[:80], ""))
+    return out
+
+
+def test_a_migrated_database_has_the_same_objects_as_the_models(tmp_path, monkeypatch):
+    """create_all (Docker, tests) and ``alembic upgrade head`` must leave the same tables, columns and indexes.
+
+    They had drifted: two indexes existed only for migrated databases, so a database built by create_all was slower.
+    """
+    from alembic.autogenerate import compare_metadata
+    from alembic.runtime.migration import MigrationContext
+
+    from app.db.database import Base
+    import app.db.models  # noqa: F401  (registers every table)
+
+    url = f"sqlite:///{tmp_path / 'm.db'}"
+    run_upgrade(url, monkeypatch)
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            diff = compare_metadata(MigrationContext.configure(conn, opts={"compare_type": False}), Base.metadata)
+    finally:
+        engine.dispose()
+    assert _drift(diff) - _KNOWN_MIGRATION_ONLY == set()
+
+
+def test_create_all_builds_the_indexes_the_migrations_add(tmp_path):
+    from sqlalchemy import create_engine
+
+    from app.db.database import Base
+    import app.db.models  # noqa: F401
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'c.db'}")
+    try:
+        Base.metadata.create_all(engine)
+        insp = inspect(engine)
+        assert "ix_document_chunks_source_offset" in {i["name"] for i in insp.get_indexes("document_chunks")}
+        assert "ix_structure_fingerprints_fp_hex" in {i["name"] for i in insp.get_indexes("structure_fingerprints")}
+    finally:
+        engine.dispose()

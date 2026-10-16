@@ -1,0 +1,558 @@
+"""KB stream P2 — product registry, chunk meta wiring, vision extraction."""
+from __future__ import annotations
+
+import threading
+import json
+import sys
+import types
+
+import pytest
+
+from app.config import get_settings
+from app.db.database import Base, make_engine, make_session_factory
+from app.domain.schemas import ProductMention, SourceGuideSchema
+
+
+@pytest.fixture(autouse=True)
+def _fresh(monkeypatch):
+    from app.services.runtime_secrets import get_runtime_secrets
+
+    monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "false")
+    # 其他测试文件（如 test_vision_settings_api）会通过 apply_persisted_ui_settings
+    # 把 LLM/vision 键写进 os.environ；不清掉会跨文件污染（vision_api_key 残留会让
+    # 继承分支失效，拿到别人的 key）。
+    for _key in (
+        "FORMUNEX_LLM_PROVIDER",
+        "FORMUNEX_LLM_MODEL",
+        "FORMUNEX_LLM_BASE_URL",
+        "FORMUNEX_VISION_PROVIDER",
+        "FORMUNEX_VISION_MODEL",
+        "FORMUNEX_VISION_BASE_URL",
+        "FORMUNEX_VISION_API_KEY",
+        "FORMUNEX_CUSTOM_API_KEY",
+        "FORMUNEX_CUSTOM_BASE_URL",
+    ):
+        monkeypatch.delenv(_key, raising=False)
+    get_settings.cache_clear()
+    get_runtime_secrets().clear()
+    yield
+    get_runtime_secrets().clear()
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
+def stores(tmp_path, monkeypatch):
+    import app.db.chunk_store as chunk_store_mod
+    import app.db.product_store as product_store_mod
+    import app.db.source_store as source_store_mod
+    from app.db.chunk_store import ChunkStore
+    from app.db.product_store import ProductStore
+    from app.db.source_store import SourceStore
+
+    engine = make_engine(f"sqlite:///{tmp_path}/kb.db")
+    Base.metadata.create_all(engine)
+    factory = make_session_factory(engine)
+    monkeypatch.setattr(source_store_mod, "_store", SourceStore(factory))
+    monkeypatch.setattr(chunk_store_mod, "_store", ChunkStore(factory))
+    monkeypatch.setattr(product_store_mod, "_store", ProductStore(factory))
+    return (
+        source_store_mod._store,
+        chunk_store_mod._store,
+        product_store_mod._store,
+    )
+
+
+# ── product store ────────────────────────────────────────────────────────────
+
+
+def test_upsert_merges_and_fills_blanks(stores):
+    _, _, products = stores
+    products.upsert_mentions("s1", [{"trade_name": "Epon", "grade": "828"}], link_structures=False)
+    products.upsert_mentions(
+        "s2",
+        [{"trade_name": "EPON", "grade": "828", "supplier": "Hexion",
+          "generic_name": "双酚A环氧树脂", "role": "树脂"}],
+        link_structures=False,
+    )
+    rows = products.search("epon")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.mention_count == 2
+    assert row.supplier == "Hexion"
+    assert row.generic_name == "双酚A环氧树脂"
+    assert sorted(row.source_ids) == ["s1", "s2"]
+
+
+def test_upsert_never_overwrites_existing(stores):
+    _, _, products = stores
+    products.upsert_mentions("s1", [{"trade_name": "BYK", "grade": "333", "supplier": "BYK"}], link_structures=False)
+    products.upsert_mentions("s2", [{"trade_name": "BYK", "grade": "333", "supplier": "别人家"}], link_structures=False)
+    assert products.search("byk")[0].supplier == "BYK"
+
+
+def test_structure_link_uses_chemtools(stores, monkeypatch):
+    _, _, products = stores
+    from app.services import chemtools
+
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: True)
+    monkeypatch.setattr(chemtools, "name_to_cas", lambda q: "25068-38-6")
+    monkeypatch.setattr(chemtools, "name_to_smiles", lambda q: None)
+    products.upsert_mentions("s1", [{"trade_name": "Epon", "grade": "828"}])
+    assert products.search("epon")[0].cas == "25068-38-6"
+
+
+def test_find_for_material_matches_generic_and_cas(stores):
+    _, _, products = stores
+    products.upsert_mentions(
+        "s1",
+        [{"trade_name": "Epon", "grade": "828", "generic_name": "双酚A环氧树脂", "cas": "25068-38-6"}],
+        link_structures=False,
+    )
+    assert products.find_for_material("双酚A环氧树脂")
+    assert products.find_for_material("", cas="25068-38-6")
+    assert not products.find_for_material("聚氨酯")
+
+
+# ── kb_index meta wiring ─────────────────────────────────────────────────────
+
+
+def test_index_source_attaches_meta_and_registers_products(stores):
+    _, chunks, products = stores
+    from app.services import kb_index
+
+    md = (
+        "# 配方专利\n\n## 实施例 1\n\n"
+        "环氧树脂 Epon 828 一百份，磷酸锌（CAS 7779-90-0）十五份，"
+        "化学式 Zn3(PO4)2，固化后耐盐雾。" + "补充描述。" * 20
+    )
+    n = kb_index.index_source("src-meta", md, embed=False)
+    assert n >= 1
+    rows = chunks.get_by_source("src-meta")
+    metas = [r.meta for r in rows if r.meta]
+    assert metas, "chunk meta must carry extracted entities"
+    chem_types = {e["type"] for m in metas for e in m.get("chem", [])}
+    assert {"cas", "formula"} <= chem_types
+    assert products.search("epon"), "products flow into the registry"
+
+
+def test_chem_extract_flag_disables_meta(stores, monkeypatch):
+    _, chunks, products = stores
+    monkeypatch.setenv("FORMUNEX_CHEM_EXTRACT_ENABLED", "false")
+    get_settings.cache_clear()
+    from app.services import kb_index
+
+    kb_index.index_source("src-off", "Epon 828 与 CAS 7779-90-0。" + "x" * 100, embed=False)
+    rows = chunks.get_by_source("src-off")
+    assert all(r.meta is None for r in rows)
+    assert not products.search("epon")
+
+
+# ── guide products registration ──────────────────────────────────────────────
+
+
+def test_guide_products_flow_to_registry(stores, monkeypatch):
+    _, _, products = stores
+    from app.services import ingestion
+
+    guide = SourceGuideSchema(
+        summary="s", key_entities=["环氧树脂"], faqs=["q1"],
+        products=[ProductMention(trade_name="Desmodur", grade="N75",
+                                 supplier="Covestro", generic_name="HDI缩二脲", role="固化剂")],
+    )
+    monkeypatch.setattr(ingestion, "extract_source_guide", lambda text, title="": (guide, None))
+    monkeypatch.setenv("FORMUNEX_SOURCE_GUIDE_ENABLED", "true")
+    get_settings.cache_clear()
+    # No API key in tests → guide path skipped; call the registration directly.
+    ingestion._register_guide_products("src-g", guide)
+    row = products.search("desmodur")[0]
+    assert row.supplier == "Covestro"
+    assert row.role == "固化剂"
+
+
+def test_old_guides_without_products_still_validate():
+    guide = SourceGuideSchema.model_validate(
+        {"summary": "s", "key_entities": ["a"], "parameter_space": {}, "faqs": ["q"]}
+    )
+    assert guide.products == []
+
+
+# ── products API ─────────────────────────────────────────────────────────────
+
+
+def test_products_endpoint(stores):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    _, _, products = stores
+    products.upsert_mentions("s1", [{"trade_name": "Aerosil", "grade": "200", "supplier": "Evonik"}], link_structures=False)
+    client = TestClient(app)
+    resp = client.get("/api/kb/products", params={"q": "aerosil"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] >= 1
+    assert data["products"][0]["trade_name"] == "Aerosil"
+
+
+# ── vision extraction ────────────────────────────────────────────────────────
+
+
+def _fake_openai(monkeypatch, payload: dict):
+    mod = types.ModuleType("openai")
+
+    class _Msg:
+        def __init__(self, content):
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content):
+            self.message = _Msg(content)
+
+    class _Resp:
+        def __init__(self, content):
+            self.choices = [_Choice(content)]
+
+    class OpenAI:
+        last_kwargs: dict = {}
+
+        def __init__(self, **kwargs):
+            type(self).last_kwargs = kwargs
+            self.chat = types.SimpleNamespace(
+                completions=types.SimpleNamespace(
+                    create=lambda **kw: _Resp(json.dumps(payload, ensure_ascii=False))
+                )
+            )
+
+    mod.OpenAI = OpenAI
+    monkeypatch.setitem(sys.modules, "openai", mod)
+    return OpenAI
+
+
+def test_vision_unavailable_without_key(monkeypatch):
+    from app.services import vision_extract
+
+    monkeypatch.delenv("FORMUNEX_DEEPSEEK_API_KEY", raising=False)
+    get_settings.cache_clear()
+    extraction, err = vision_extract.extract_image(b"fake", "table.png")
+    assert extraction is None
+    assert err
+
+
+def test_vision_extracts_and_verifies_molecules(monkeypatch):
+    from app.services import runtime_secrets, vision_extract
+
+    rs = runtime_secrets.get_runtime_secrets()
+    # Any OpenAI-compatible provider would do here, but it has to be one that
+    # actually accepts images. DeepSeek — the original stand-in — rejects an
+    # image_url content part outright ("unknown variant 'image_url'"), so
+    # vision_available now declines it and this scenario cannot occur.
+    rs.set("llm_provider", "openai")
+    rs.set("openai_api_key", "sk-test")
+    _fake_openai(
+        monkeypatch,
+        {
+            "kind": "structure",
+            "markdown": "| 组分 | 份数 |\n|---|---|\n| 环氧丙烷 | 10 |",
+            "molecules": [
+                {"smiles": "C1CO1", "name": "环氧丙烷", "confidence": 0.9},
+                {"smiles": "not-a-smiles((", "name": "未知物", "confidence": 0.8},
+            ],
+            "notes": "",
+        },
+    )
+    try:
+        extraction, err = vision_extract.extract_image(b"\x89PNG fake", "structure.png")
+        assert err is None and extraction is not None
+        assert extraction.kind == "structure"
+        mols = {m.name: m for m in extraction.molecules}
+        try:
+            import rdkit  # noqa: F401
+
+            assert mols["环氧丙烷"].verified is True
+            assert mols["未知物"].verified is False
+            assert mols["未知物"].confidence <= 0.3
+        except ImportError:
+            assert mols["环氧丙烷"].verified is False  # no RDKit → honest flag
+        md = vision_extract.image_markdown(extraction, "structure.png")
+        assert "环氧丙烷" in md and "|" in md
+    finally:
+        rs.clear()
+
+
+def test_vision_role_uses_its_own_key_and_base_url(monkeypatch):
+    """Text on DeepSeek, vision on a custom endpoint — the call must carry the
+    *vision* credentials.
+
+    This is the defect the roles exist to fix, and the one most likely to
+    reappear silently: if the vision call kept resolving the text provider's key
+    it would still look configured in the UI and fail at the vendor. The fake
+    OpenAI client records the kwargs it was constructed with, so the assertion
+    is on what actually reached the transport.
+    """
+    from app.services import runtime_secrets, vision_extract
+
+    rs = runtime_secrets.get_runtime_secrets()
+    rs.set("llm_provider", "deepseek")
+    rs.set("llm_model", "deepseek-v4-pro")
+    rs.set("deepseek_api_key", "sk-text-only")
+    rs.set("vision_provider", "custom")
+    rs.set("vision_model", "tgi")
+    rs.set("vision_api_key", "hf_vision_token")
+    rs.set("vision_base_url", "https://vlm.endpoints.huggingface.cloud/v1")
+    fake = _fake_openai(monkeypatch, {"kind": "table", "markdown": "| a |", "molecules": []})
+    try:
+        extraction, err = vision_extract.extract_image(b"\x89PNG fake", "table.png")
+        assert err is None and extraction is not None
+        assert fake.last_kwargs["api_key"] == "hf_vision_token"
+        assert fake.last_kwargs["api_key"] != "sk-text-only"
+        assert fake.last_kwargs["base_url"] == "https://vlm.endpoints.huggingface.cloud/v1"
+        # Cold-start hold, and only for the custom endpoint.
+        assert "X-Scale-Up-Timeout" in fake.last_kwargs["default_headers"]
+    finally:
+        rs.clear()
+
+
+def test_inherited_vision_role_sends_no_scale_up_header(monkeypatch):
+    """A role merely riding the chat provider must look exactly like before —
+    no extra headers aimed at an endpoint that isn't there."""
+    from app.services import runtime_secrets, vision_extract
+
+    rs = runtime_secrets.get_runtime_secrets()
+    rs.set("llm_provider", "openai")
+    rs.set("llm_model", "gpt-4o")
+    rs.set("openai_api_key", "sk-text")
+    fake = _fake_openai(monkeypatch, {"kind": "table", "markdown": "| a |", "molecules": []})
+    try:
+        _, err = vision_extract.extract_image(b"\x89PNG fake", "table.png")
+        assert err is None
+        assert fake.last_kwargs["api_key"] == "sk-text"
+        assert "default_headers" not in fake.last_kwargs
+    finally:
+        rs.clear()
+
+
+def test_image_upload_routes_to_vision(monkeypatch, stores):
+    from app.services import ingestion, vision_extract
+
+    fake = vision_extract.VisionExtraction(
+        kind="table", markdown="| a | b |\n|---|---|\n| 1 | 2 |", molecules=[]
+    )
+    monkeypatch.setattr(vision_extract, "extract_image", lambda c, f: (fake, None))
+    outcome = ingestion.ingest_file("formula.png", b"\x89PNG fake")
+    assert outcome.evidence
+    assert outcome.source_id  # persisted as a SourceDocument
+    src, _, _ = stores
+    doc = src.get(outcome.source_id)
+    assert doc.source_kind == "image"
+    assert "| a | b |" in doc.full_text
+
+
+def test_image_upload_placeholder_when_vision_off(monkeypatch, stores):
+    from app.services import ingestion, vision_extract
+
+    monkeypatch.setattr(
+        vision_extract, "extract_image", lambda c, f: (None, "未配置视觉模型")
+    )
+    outcome = ingestion.ingest_file("photo.jpg", b"\xff\xd8 fake")
+    assert outcome.source_id is None
+    assert outcome.extraction_status == "skipped"
+    assert "未配置视觉模型" in outcome.evidence[0].snippet
+
+
+# ── structure linking: concurrent lookups, serial writes ─────────────────────
+
+
+def test_structure_lookups_run_concurrently(stores, monkeypatch):
+    """Name resolution is a network round trip per product, and they overlap.
+
+    Measured before this change: 7 mentions on one coating patent cost 6537 ms
+    of serial lookups — the single largest cost in the whole KB build. The
+    lookups are independent, so the only reason it was slow was that they ran
+    one after another.
+    """
+    import time as _time
+
+    from app.services import chemtools
+
+    _, _, products = stores
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: True)
+    in_flight, peak = [], [0]
+    lock = threading.Lock()
+
+    def slow_lookup(name):
+        with lock:
+            in_flight.append(name)
+            peak[0] = max(peak[0], len(in_flight))
+        _time.sleep(0.2)
+        with lock:
+            in_flight.remove(name)
+        return None
+
+    monkeypatch.setattr(chemtools, "name_to_cas", slow_lookup)
+    monkeypatch.setattr(chemtools, "name_to_smiles", slow_lookup)
+
+    mentions = [{"trade_name": f"Product{i}", "grade": "A"} for i in range(4)]
+    started = _time.perf_counter()
+    products.upsert_mentions("s1", mentions)
+    elapsed = _time.perf_counter() - started
+
+    assert peak[0] > 1, "lookups ran one at a time"
+    # Serial floor ≈ 4 products × 2 lookups × 0.2s = 1.6s. Concurrent path is ~0.4s
+    # ideally; keep headroom for CI jitter without accepting fully serial runs.
+    assert elapsed < 1.2, f"lookups did not overlap enough: {elapsed:.2f}s"
+
+
+def test_structure_results_are_written_back(stores, monkeypatch):
+    """Concurrency must not lose the results it was gathering."""
+    from app.services import chemtools
+
+    _, _, products = stores
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: True)
+    monkeypatch.setattr(chemtools, "name_to_cas", lambda n: "64-17-5")
+    monkeypatch.setattr(chemtools, "name_to_smiles", lambda n: "CCO")
+
+    products.upsert_mentions("s1", [{"trade_name": "Solvent X", "grade": "1"}])
+    row = products.search("solvent x")[0]
+    assert row.cas == "64-17-5"
+    assert row.smiles == "CCO"
+
+
+def test_structure_linking_is_skipped_when_the_gateway_is_off(stores, monkeypatch):
+    from app.services import chemtools
+
+    _, _, products = stores
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: False)
+    calls: list[str] = []
+    monkeypatch.setattr(chemtools, "name_to_cas", lambda n: calls.append(n) or None)
+    monkeypatch.setattr(chemtools, "name_to_smiles", lambda n: calls.append(n) or None)
+
+    products.upsert_mentions("s1", [{"trade_name": "Epon", "grade": "828"}])
+    assert calls == []
+
+
+def test_a_failing_lookup_does_not_lose_the_other_products(stores, monkeypatch):
+    from app.services import chemtools
+
+    _, _, products = stores
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: True)
+
+    def flaky(name):
+        if "Bad" in name:
+            raise RuntimeError("upstream exploded")
+        return "CCO"
+
+    monkeypatch.setattr(chemtools, "name_to_cas", lambda n: None)
+    monkeypatch.setattr(chemtools, "name_to_smiles", flaky)
+
+    products.upsert_mentions(
+        "s1", [{"trade_name": "Bad", "grade": "1"}, {"trade_name": "Good", "grade": "2"}]
+    )
+    assert products.search("good")[0].smiles == "CCO"
+    assert products.search("bad")[0].smiles in (None, "")
+
+
+# ── structure linking is deferred out of the per-document path ───────────────
+#
+# Measured: one coating patent indexed in 3.57s with inline linking and 0.19s
+# without, while a non-chemistry patent 2.6x longer was unaffected either way.
+# The cost tracks chemistry density, sits in the serial index phase, and is
+# entirely network.
+
+
+def test_indexing_does_not_resolve_structures(stores, monkeypatch):
+    """The whole point: no network lookup may happen while indexing."""
+    from app.services import chemtools, kb_index
+
+    _, _, products = stores
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: True)
+    calls: list[str] = []
+    monkeypatch.setattr(chemtools, "name_to_cas", lambda n: calls.append(n) or None)
+    monkeypatch.setattr(chemtools, "name_to_smiles", lambda n: calls.append(n) or None)
+
+    text = "\n\n".join(
+        "使用 Epikote 828 环氧树脂与磷酸锌防锈颜料复配，固化剂为胺加成物。" * 3
+        for _ in range(3)
+    )
+    kb_index.index_source("src-defer", text)
+
+    assert calls == [], f"index_source performed {len(calls)} network lookups"
+
+
+def test_backfill_resolves_and_reports_dedup(stores, monkeypatch):
+    """One lookup per product, not one per document that mentions it."""
+    from app.services import chemtools
+
+    _, _, products = stores
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: True)
+    looked_up: list[str] = []
+    monkeypatch.setattr(chemtools, "name_to_cas", lambda n: looked_up.append(n) or "64-17-5")
+    monkeypatch.setattr(chemtools, "name_to_smiles", lambda n: None)
+
+    # The same product mentioned by three different documents.
+    for src in ("s1", "s2", "s3"):
+        products.upsert_mentions(src, [{"trade_name": "Epikote", "grade": "828"}],
+                                 link_structures=False)
+    assert products.count_needing_structure() == 1, "registry must dedupe by norm_key"
+
+    stats = products.backfill_structures()
+    assert stats["attempted"] == 1
+    assert stats["resolved"] == 1
+    assert stats["mentions_covered"] == 3, "three mention events, one lookup"
+    assert products.search("epikote")[0].cas == "64-17-5"
+    assert products.count_needing_structure() == 0
+
+
+def test_backfill_is_idempotent(stores, monkeypatch):
+    from app.services import chemtools
+
+    _, _, products = stores
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: True)
+    monkeypatch.setattr(chemtools, "name_to_cas", lambda n: "64-17-5")
+    monkeypatch.setattr(chemtools, "name_to_smiles", lambda n: None)
+
+    products.upsert_mentions("s1", [{"trade_name": "X", "grade": "1"}], link_structures=False)
+    products.backfill_structures()
+    second = products.backfill_structures()
+    assert second["attempted"] == 0, "a resolved product must not be looked up again"
+
+
+def test_unresolvable_products_do_not_block_the_batch(stores, monkeypatch):
+    """A product with no CAS anywhere must not fail the backfill for the rest."""
+    from app.services import chemtools
+
+    _, _, products = stores
+    monkeypatch.setattr(chemtools, "gateway_enabled", lambda: True)
+    monkeypatch.setattr(chemtools, "name_to_cas",
+                        lambda n: None if "Mystery" in n else "64-17-5")
+    monkeypatch.setattr(chemtools, "name_to_smiles", lambda n: None)
+
+    products.upsert_mentions("s1", [
+        {"trade_name": "Mystery", "grade": "9"},
+        {"trade_name": "Known", "grade": "1"},
+    ], link_structures=False)
+
+    stats = products.backfill_structures()
+    assert stats["attempted"] == 2
+    assert stats["resolved"] == 1
+    assert products.search("known")[0].cas == "64-17-5"
+    # The unresolved one stays pending, and is therefore visible in kb_stats.
+    assert products.count_needing_structure() == 1
+
+
+# ── v2 P3-14 POC: 公式图 → vision(equation) → LaTeX 入库 ──────────────────────
+
+
+def test_equation_image_renders_latex(monkeypatch):
+    """POC：内嵌公式图经 vision 识别为 equation → LaTeX 进入 markdown。"""
+    from app.services import parsing as parsing_mod
+    from app.services.vision_extract import VisionExtraction, image_markdown
+
+    ext = VisionExtraction(
+        kind="equation",
+        markdown="$$k = A e^{-E_a / (RT)}$$",
+        molecules=[],
+        notes="",
+    )
+    rendered = image_markdown(ext, "p1-fig0.png")
+    assert "$$k = A e^{-E_a / (RT)}$$" in rendered
+    assert "反应方程式" in rendered

@@ -1,0 +1,216 @@
+"""Tests for post-generation Claim Checker."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from app.config import Settings
+from app.domain.schemas import Evidence
+from app.pipeline.claim_checker import (
+    ClaimVerdict,
+    append_verification_footer,
+    check_claims,
+    extract_claims,
+    verify_claim_offline,
+)
+
+
+if TYPE_CHECKING:  # only for the "Formulation" return annotation below
+    from app.domain.schemas import Formulation
+
+
+def _evidence(snippet: str, source: str = "USPTO") -> Evidence:
+    return Evidence(
+        source=source,
+        identifier="id1",
+        title="Zinc phosphate epoxy primer",
+        snippet=snippet,
+        relevance=0.9,
+    )
+
+
+def test_extract_claims_from_bullets():
+    md = "# Report\n\n## 关键发现\n\n- Waterborne epoxy with zinc phosphate inhibitor improves corrosion resistance.\n- Short line.\n"
+    claims = extract_claims(md)
+    assert len(claims) == 1
+    assert "zinc phosphate" in claims[0].lower()
+
+
+def test_verify_claim_offline_supported():
+    ev = [_evidence("Waterborne epoxy with zinc phosphate inhibitor for steel substrates.")]
+    claim = "Waterborne epoxy with zinc phosphate inhibitor improves corrosion resistance on steel."
+    result = verify_claim_offline(claim, ev)
+    assert result.verdict == ClaimVerdict.supported
+    assert result.evidence_indices == [0]
+
+
+def test_verify_claim_offline_unsupported():
+    ev = [_evidence("Basic degreaser formulation for aluminum cleaning.")]
+    claim = "Polyurethane topcoat delivers 5000 hours neutral salt spray on magnesium alloy substrates."
+    result = verify_claim_offline(claim, ev)
+    assert result.verdict == ClaimVerdict.unsupported
+
+
+def test_check_claims_offline_pass_rate():
+    report = (
+        "## 关键发现\n\n"
+        "- Waterborne epoxy with zinc phosphate inhibitor improves corrosion resistance.\n"
+        "- Random fabricated metric with no basis in literature at all whatsoever.\n"
+    )
+    evidence = [_evidence("Waterborne epoxy with zinc phosphate inhibitor for corrosion protection.")]
+    result = check_claims("epoxy primer", report, evidence, Settings())
+    assert result.engine == "offline"
+    assert len(result.claims) == 2
+    assert 0.0 < result.pass_rate <= 1.0
+
+
+def test_check_claims_fails_when_every_claim_is_insufficient():
+    """A report where nothing rises above weak evidence overlap must not be
+    marked passed: needs_regenerate used to only look at unsupported/
+    conflicting, so an all-insufficient report (pass_rate=0.0) slipped
+    through as claim_check_passed=True with no verification footer."""
+    report = (
+        "## 关键发现\n\n"
+        "- aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj achieves results.\n"
+    )
+    evidence = [_evidence("aaaa bbbb zzzz yyyy xxxx wwww vvvv uuuu")]
+    result = check_claims("unrelated topic", report, evidence, Settings())
+    assert all(c.verdict == ClaimVerdict.insufficient for c in result.claims)
+    assert result.pass_rate == 0.0
+    assert result.needs_regenerate is True
+    assert result.claim_check_passed is False
+
+
+def test_append_verification_footer_adds_section():
+    from app.pipeline.claim_checker import ClaimCheckResult, VerifiedClaim
+
+    result = ClaimCheckResult(
+        claims=[
+            VerifiedClaim(text="unsupported claim text here long enough", verdict=ClaimVerdict.unsupported),
+        ],
+        pass_rate=0.0,
+        needs_regenerate=True,
+        claim_check_passed=False,
+    )
+    out = append_verification_footer("# Report\n\nbody", result)
+    assert "论断核验" in out
+    assert "unsupported" in out
+
+
+def test_check_formulation_predictions_flags_missing_evidence():
+    from app.domain.schemas import Formulation, Ingredient, ProductDomain
+    from app.pipeline.claim_checker import check_formulation_predictions
+
+    form = Formulation(
+        name="rec A",
+        domain=ProductDomain.anticorrosion_coating,
+        ingredients=[Ingredient(name="Zinc phosphate", role="inhibitor", weight_pct=100)],
+        predicted={"salt_spray_hours": 9999.0},
+    )
+    evidence = [_evidence("Degreaser pH adjustment for aluminum cleaning only.")]
+    warnings = check_formulation_predictions(form, evidence)
+    assert any("salt_spray_hours" in w for w in warnings)
+
+
+def test_claim_check_llm_failure_marks_degraded(monkeypatch):
+    """When the LLM claim-check call raises, the result must be distinguishable
+    from the no-key offline path via engine='degraded' (A1 transparency)."""
+    import app.pipeline.claim_checker as cc
+    from app.config import Settings as _S
+
+    monkeypatch.setattr(cc, "verify_claims_llm", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("llm down")))
+    monkeypatch.setattr(_S, "get_active_api_key", lambda self: "fake-key")
+    settings = _S()
+
+    report = "## 关键发现\n\n- Waterborne epoxy with zinc phosphate inhibitor improves corrosion resistance.\n"
+    evidence = [_evidence("Waterborne epoxy with zinc phosphate inhibitor for corrosion protection.")]
+    result = cc.check_claims("epoxy primer", report, evidence, settings)
+    assert result.engine == "degraded"
+    # offline fallback still produced verified claims, not an empty result
+    assert len(result.claims) >= 1
+
+
+def _b4_form(predicted: dict) -> "Formulation":
+    from app.domain.schemas import Formulation, Ingredient, ProductDomain
+
+    return Formulation(
+        name="rec B4",
+        domain=ProductDomain.anticorrosion_coating,
+        ingredients=[Ingredient(name="Epoxy", role="resin", weight_pct=100)],
+        predicted=predicted,
+    )
+
+
+def test_b4_unit_aware_evidence_match_no_false_flag():
+    """B-4: 证据 '2 kPa' 与预测 adhesion_mpa=0.002 经单位换算应命中，
+    旧裸数字比较会误报（2 vs 0.002）。"""
+    from app.pipeline.claim_checker import check_formulation_predictions
+
+    form = _b4_form({"adhesion_mpa": 0.002})
+    evidence = [_evidence("Adhesion strength 2 kPa measured on steel panels.")]
+    warnings = check_formulation_predictions(form, evidence)
+    assert not any("lacks supporting evidence" in w for w in warnings)
+    assert not any("【数值降级】" in w for w in form.warnings)
+
+
+def test_b4_same_unit_mismatch_still_flags():
+    """B-4: 同单位但数值差一个数量级仍应标记（含新 'hours' 别名）。"""
+    from app.pipeline.claim_checker import check_formulation_predictions
+
+    form = _b4_form({"salt_spray_hours": 9999.0})
+    evidence = [_evidence("Salt spray resistance 1000 hours in neutral salt spray test.")]
+    warnings = check_formulation_predictions(form, evidence)
+    assert any("salt_spray_hours" in w for w in warnings)
+
+
+def test_b4_unsupported_prediction_downgrades_form():
+    """B-4: 无证据支撑的预测值 → bundle warning + form.warnings 降级标记（去重）。"""
+    from app.pipeline.claim_checker import check_formulation_predictions
+
+    form = _b4_form({"salt_spray_hours": 9999.0})
+    evidence = [_evidence("Degreaser pH adjustment for aluminum cleaning only.")]
+    warnings = check_formulation_predictions(form, evidence)
+    assert any("salt_spray_hours" in w for w in warnings)
+    markers = [w for w in form.warnings if "【数值降级】" in w and "salt_spray_hours" in w]
+    assert len(markers) == 1
+    # 重复调用不重复追加
+    check_formulation_predictions(form, evidence)
+    markers = [w for w in form.warnings if "【数值降级】" in w and "salt_spray_hours" in w]
+    assert len(markers) == 1
+
+
+def test_unsupported_metrics_collapse_into_one_warning_and_one_marker_per_formulation():
+    """The predictor emits ~15 metrics and evidence rarely quotes each: a recipe used to
+    carry one "lacks supporting evidence" warning *per metric* (and one marker per metric
+    on the card) — ~15 near-identical lines per candidate."""
+    from app.pipeline.claim_checker import check_formulation_predictions
+
+    metrics = {f"metric_{i}": 10.0 + i for i in range(15)}
+    form = _b4_form(dict(metrics))
+    warnings = check_formulation_predictions(form, [_evidence("Unrelated text about degreasing.")])
+
+    evidence_warnings = [w for w in warnings if "lack supporting evidence" in w]
+    assert len(evidence_warnings) == 1
+    assert all(name in evidence_warnings[0] for name in metrics)
+    markers = [w for w in form.warnings if "【数值降级】" in w]
+    assert len(markers) == 1
+    assert "15 项" in markers[0]
+
+
+def test_recheck_replaces_the_downgrade_marker_instead_of_stacking_a_second_one():
+    from app.pipeline.claim_checker import check_formulation_predictions
+
+    form = _b4_form({"salt_spray_hours": 9999.0, "adhesion_mpa": 7.0})
+    evidence = [_evidence("Degreaser pH adjustment for aluminum cleaning only.")]
+    check_formulation_predictions(form, evidence)
+    assert len([w for w in form.warnings if "【数值降级】" in w]) == 1
+
+    form.predicted = {"salt_spray_hours": 9999.0}  # e.g. after a re-score
+    check_formulation_predictions(form, evidence)
+    markers = [w for w in form.warnings if "【数值降级】" in w]
+    assert len(markers) == 1
+    assert "adhesion_mpa" not in markers[0]
+
+    # Evidence now supports the value → the marker goes away entirely.
+    supportive = [_evidence("Salt spray resistance 9999 hours in neutral salt spray test.")]
+    check_formulation_predictions(form, supportive)
+    assert not any("【数值降级】" in w for w in form.warnings)

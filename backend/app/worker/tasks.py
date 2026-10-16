@@ -1,0 +1,2098 @@
+"""Celery-backed async task orchestration with Redis Pub/Sub progress (CQRS).
+
+Commands enqueue via ``task.delay()``; clients subscribe to
+``GET /api/tasks/{id}/stream`` for SSE progress. ``TaskManager`` keeps a
+read-only snapshot compatible with ``GET /api/tasks/{id}``.
+"""
+from __future__ import annotations
+
+# G P2-3: SoftTimeLimitExceeded 需显式引入（非 TimeoutError 子类）。
+try:
+    from celery.exceptions import SoftTimeLimitExceeded as _SoftTimeLimitExceeded
+except ImportError:
+    _SoftTimeLimitExceeded = None
+
+from ..services._fsutil import atomic_write_text, read_text_with_retry
+from ..services.errors import degrade_return, log_handled_exception
+import json
+import logging
+import re
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+from celery.exceptions import SoftTimeLimitExceeded
+
+from ..config import task_dir as _task_persist_dir
+from ..domain.schemas import DOEPlan, OptimizationResult, Requirement, TaskState, TaskStatus
+from ..pipeline import workflow
+from .celery_app import celery_app
+from .task_progress import (
+    ThinkingTracker,
+    TaskProgressStatus,
+    persist_result,
+    publish_progress,
+    register_pending,
+)
+
+logger = logging.getLogger(__name__)
+
+# Task ids are uuids or ``<prefix>-<hex>``; anything else must never become part of a file name (``../x`` wrote outside
+# the task directory).
+_TASK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _task_file(task_id: str) -> Path:
+    if not _TASK_ID_RE.fullmatch(task_id or ""):
+        raise ValueError(f"invalid task id: {task_id!r}")
+    return _task_persist_dir() / f"{task_id}.json"
+
+
+def _persist_task(task_id: str, status: TaskStatus) -> None:
+    try:
+        path = _task_file(task_id)
+        persist_dir = path.parent
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        data = status.model_dump()
+        data["state"] = data["state"].value if hasattr(data["state"], "value") else data["state"]
+        # 原子写：先写 .tmp 再 rename，避免进程崩溃时留下半截 JSON（W5）。临时文件名按进程+线程区分——
+        # 固定的 ``.<task_id>.tmp`` 让同一任务的两个并发写方互相覆盖对方写到一半的文件。
+        atomic_write_text(path, json.dumps(data, ensure_ascii=False))
+    except Exception as exc:
+        log_handled_exception(logger, exc, "handled exception")
+
+
+def load_persisted_task(task_id: str) -> TaskStatus | None:
+    try:
+        path = _task_file(task_id)
+    except ValueError:
+        return None
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(read_text_with_retry(path))
+        return TaskStatus(**data)
+    except Exception as exc:
+        return degrade_return(logger, exc, "operation failed", None)
+
+
+class _OutboxTask(celery_app.Task):
+    """Base for tasks submitted through a durable outbox row.
+
+    ``api/*`` writes the row (``outbox_operation`` × content-hash of the
+    payload) before dispatching. When the task reaches a *final* state — Celery
+    calls ``on_success`` / ``on_failure`` only after retries are exhausted —
+    the row is flipped to ``DONE`` so ``dispatcher.recover_stalled`` replays
+    only jobs interrupted by a crash, never ones that finished. The failure
+    itself is recorded in the task snapshot, not in the outbox. Never raises:
+    a lost completion mark must not turn a finished task into a failed one.
+    """
+
+    outbox_operation: str = ""
+
+    @staticmethod
+    def _payload_of(args, kwargs):
+        return args[0] if args else (kwargs or {}).get("payload")
+
+    def __call__(self, *args, **kwargs):
+        # Celery (worker and eager apply alike) enters the task body through __call__.
+        # While it runs, keep the outbox row's ``updated_at`` fresh: startup recovery
+        # replays only rows nothing has touched for the cutoff, so a job that simply takes
+        # longer than the cutoff (loop, whole-library KB ingest) is not run a second time.
+        if not self.outbox_operation:
+            return super().__call__(*args, **kwargs)
+        from ..db.outbox_store import heartbeat
+
+        with heartbeat(self.outbox_operation, self._payload_of(args, kwargs)):
+            return super().__call__(*args, **kwargs)
+
+    def _mark_outbox_done(self, args, kwargs) -> None:
+        if not self.outbox_operation:
+            return
+        payload = self._payload_of(args, kwargs)
+        if not isinstance(payload, dict):
+            return
+        from ..db.outbox_store import record_done
+
+        record_done(self.outbox_operation, payload)
+
+    def on_success(self, retval, task_id, args, kwargs):
+        self._mark_outbox_done(args, kwargs)
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        self._mark_outbox_done(args, kwargs)
+
+
+def _persist_terminal(
+    task_id: str,
+    kind: str,
+    result: dict[str, Any] | None,
+    *,
+    failed: bool = False,
+    message: str = "",
+) -> None:
+    """Write terminal task snapshot to disk (works when Redis is unavailable)."""
+    status = TaskStatus(
+        task_id=task_id,
+        kind=kind,
+        state=TaskState.failed if failed else TaskState.completed,
+        progress=0.0 if failed else 1.0,
+        message=message or ("failed" if failed else "done"),
+        result=result,
+        stream_url=f"/api/tasks/{task_id}/stream",
+    )
+    _persist_task(task_id, status)
+    publish_progress(
+        task_id,
+        TaskProgressStatus.FAILED if failed else TaskProgressStatus.COMPLETED,
+        message=message or ("failed" if failed else "done"),
+        progress=0.0 if failed else 1.0,
+        data=result,
+        kind=kind,
+    )
+
+
+def _result_from_event(meta: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        data = json.loads(meta.get("last_event") or "{}").get("data")
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _status_from_progress(task_id: str, kind: str) -> TaskStatus:
+    from .task_progress import get_task_meta, get_task_result
+
+    meta = get_task_meta(task_id) or {}
+    result = get_task_result(task_id)
+    raw_status = meta.get("status", "PENDING")
+    if result is None and raw_status in ("COMPLETED", "FAILED"):
+        # The terminal event carries the result, and the separate result store is written just *after* it. A snapshot
+        # taken in that gap — or one whose disk copy could not be read at that instant (Windows, mid-replace) — was
+        # "completed" with no result and, persisted back, replaced the good terminal snapshot: the task finished and
+        # its result was gone.
+        result = _result_from_event(meta)
+    state_map = {
+        "PENDING": TaskState.pending,
+        "RUNNING": TaskState.running,
+        "COMPLETED": TaskState.completed,
+        "FAILED": TaskState.failed,
+        "CANCELLED": TaskState.cancelled,
+    }
+    progress = float(meta.get("progress", 0.0) or 0.0)
+    # elapsed_ms
+    elapsed_ms = None
+    try:
+        st = meta.get("started_at")
+        if st:
+            elapsed_ms = int((time.time() - float(st)) * 1000)
+    except Exception:
+        elapsed_ms = None
+    owner_id = (meta.get("owner_id") or "").strip() or None
+    # 回退：内存表或持久化
+    if not owner_id:
+        try:
+            owner_id = task_manager._owners.get(task_id)  # type: ignore[name-defined]
+        except Exception:
+            owner_id = None
+    return TaskStatus(
+        task_id=task_id,
+        kind=kind or meta.get("kind", "unknown"),
+        state=state_map.get(raw_status, TaskState.pending),
+        progress=progress,
+        message=meta.get("message", ""),
+        result=result,
+        stream_url=f"/api/tasks/{task_id}/stream",
+        stage=meta.get("stage", "") or "",
+        elapsed_ms=elapsed_ms,
+        owner_id=owner_id,
+    )
+
+
+class TaskManager:
+    """Registry of Celery task metadata for read-only status snapshots."""
+
+    # 进程级单例，长生命周期下任务数无界增长 → 用有界 LRU 避免内存泄漏（W4）。
+    _KINDS_MAX = 1024
+
+    def __init__(self) -> None:
+        from collections import OrderedDict
+
+        self._kinds: "OrderedDict[str, str]" = OrderedDict()
+        self._owners: "OrderedDict[str, str | None]" = OrderedDict()
+
+    def _remember(self, task_id: str, kind: str, owner_id: str | None = None) -> None:
+        self._kinds[task_id] = kind
+        self._kinds.move_to_end(task_id)
+        self._owners[task_id] = owner_id
+        self._owners.move_to_end(task_id)
+        while len(self._kinds) > self._KINDS_MAX:
+            self._kinds.popitem(last=False)
+        while len(self._owners) > self._KINDS_MAX:
+            self._owners.popitem(last=False)
+
+    def register_celery_task(self, task_id: str, kind: str, owner_id: str | None = None) -> None:
+        """Announce a task as ``queued`` - once.
+
+        Registration is idempotent and never moves a task backwards: the first call writes ``queued``; a later call (the
+        upload route registers after ``dispatch_file_ingest`` already did, and a worker that ends in milliseconds - a
+        duplicate upload, a missing parser - has long finished by then) only records the owner. It used to rewrite
+        ``queued`` over the finished task's progress meta and snapshot, so the upload sat at "queued" for good although
+        its result was stored (seen once on a Windows runner as a 30 s poll that never saw the task end).
+        """
+        # owner 优先来自显式参数，否则沿用已有记录
+        if owner_id is None:
+            owner_id = self._owners.get(task_id)
+        self._remember(task_id, kind, owner_id)
+        existing = load_persisted_task(task_id)
+        if existing and existing.state in (TaskState.completed, TaskState.failed, TaskState.cancelled):
+            return
+        from .task_progress import get_task_meta
+
+        if (get_task_meta(task_id) or {}).get("status"):
+            self._sync_owner_meta(task_id, owner_id)
+            return
+        register_pending(task_id, kind)
+        status = TaskStatus(
+            task_id=task_id,
+            kind=kind,
+            state=TaskState.pending,
+            message="queued",
+            stream_url=f"/api/tasks/{task_id}/stream",
+            owner_id=owner_id,
+        )
+        _persist_task(task_id, status)
+        self._sync_owner_meta(task_id, owner_id)
+
+    @staticmethod
+    def _sync_owner_meta(task_id: str, owner_id: str | None) -> None:
+        # 同步写入 owner 到 meta，便于 _status_from_progress 回读
+        try:
+            from .task_progress import _redis_client, _meta_key
+
+            c = _redis_client()
+            c.hset(_meta_key(task_id), mapping={"owner_id": owner_id or ""})
+        except Exception as exc:
+            logger.debug("owner_id redis sync failed for %s: %s", task_id, exc)
+
+    def get(self, task_id: str) -> TaskStatus | None:
+        from .task_progress import get_task_meta
+
+        meta = get_task_meta(task_id)
+        kind = self._kinds.get(task_id) or (meta or {}).get("kind", "")
+        persisted = load_persisted_task(task_id)
+        # Prefer disk terminal over stale non-terminal Redis/file meta.
+        # SSE already reads disk terminals when Redis is down; status must match
+        # or clients see COMPLETED on the stream while GET still returns pending.
+        if persisted and persisted.state in (
+            TaskState.completed,
+            TaskState.failed,
+            TaskState.cancelled,
+        ):
+            return persisted
+        if meta:
+            status = _status_from_progress(task_id, kind)
+            _persist_task(task_id, status)
+            return status
+        if persisted:
+            return persisted
+        if task_id in self._kinds:
+            return TaskStatus(
+                task_id=task_id,
+                kind=kind,
+                state=TaskState.pending,
+                message="queued",
+                stream_url=f"/api/tasks/{task_id}/stream",
+                owner_id=self._owners.get(task_id),
+            )
+        return None
+
+    def cancel(self, task_id: str) -> bool:
+        """Best-effort revoke + persist CANCELLED. Returns True if task was pending/running."""
+        meta_status = None
+        try:
+            from .task_progress import get_task_meta
+
+            meta = get_task_meta(task_id)
+            meta_status = (meta or {}).get("status")
+        except Exception:
+            meta_status = None
+        if meta_status in ("COMPLETED", "FAILED", "CANCELLED"):
+            return False
+        try:
+            celery_app.control.revoke(task_id, terminate=True)
+        except Exception as exc:
+            logger.warning("revoke failed for %s: %s", task_id, exc)
+        kind = self._kinds.get(task_id) or ""
+        owner_id = self._owners.get(task_id)
+        try:
+            from .task_progress import TaskProgressStatus, publish_progress
+
+            publish_progress(task_id, TaskProgressStatus.CANCELLED, stage="cancelled", message="已取消", kind=kind or "unknown")
+            # 保留 owner
+            if owner_id:
+                try:
+                    from .task_progress import _redis_client, _meta_key
+
+                    _redis_client().hset(_meta_key(task_id), mapping={"owner_id": owner_id})
+                except Exception as exc:
+                    logger.debug("cancelled owner redis sync failed for %s: %s", task_id, exc)
+        except Exception as exc:
+            logger.warning("cancel progress publish failed for %s: %s", task_id, exc)
+        # 持久化 cancelled 快照
+        try:
+            status = TaskStatus(task_id=task_id, kind=kind or "unknown", state=TaskState.cancelled, message="已取消", stream_url=f"/api/tasks/{task_id}/stream", stage="cancelled", owner_id=owner_id)
+            _persist_task(task_id, status)
+        except Exception as exc:
+            logger.warning("cancelled snapshot persist failed for %s: %s", task_id, exc)
+        return True
+
+
+task_manager = TaskManager()
+
+
+def cancel_task(task_id: str) -> bool:
+    return task_manager.cancel(task_id)
+
+
+def _thinking_title(stage: str, message: str) -> str:
+    labels = {
+        "retrieve": "正在检索知识库与证据…",
+        "grade": "正在评估证据相关性…",
+        "fallback": "检索不足，正在补充召回…",
+        "generate": "正在生成研究报告…",
+        "claim_check": "正在校验关键声明…",
+        "regenerate": "声明未过，正在再生成…",
+        "recommend": "正在生成推荐配方…",
+        "cancelled": "任务已取消",
+    }
+    return labels.get(stage) or message or stage or "处理中…"
+
+
+@celery_app.task(
+    bind=True,
+    base=_OutboxTask,
+    outbox_operation="research_deep",
+    name="formunex.deep_research",
+)
+def run_deep_research_task(self, payload: dict) -> dict:
+    from ..domain.schemas import ComprehensiveReport, Evidence, Requirement
+    from ..pipeline.research_graph import run_research_graph
+
+    task_id = self.request.id
+    tracker = ThinkingTracker(task_id, kind="deep_research")
+    tracker.emit(
+        "retrieve",
+        "正在检索",
+        progress=0.05,
+        step_id="retrieve",
+        title="正在检索知识库与证据…",
+    )
+    try:
+        req = Requirement(**payload["requirement"]) if payload.get("requirement") else None
+        topic = payload.get("topic") or (req.headline() if req else "")
+        query = payload.get("query") or topic
+        sources = [Evidence.model_validate(s) for s in payload.get("sources") or []]
+
+        def graph_progress(stage: str, message: str, partial: dict | None = None) -> None:
+            tracker.emit(
+                stage,
+                message,
+                progress=_stage_progress(stage),
+                step_id=stage or None,
+                title=_thinking_title(stage, message),
+                kind="stage",
+                detail=message,
+                data=partial,
+            )
+
+        state = run_research_graph(
+            topic=topic,
+            req=req,
+            query=query,
+            pre_index=sources or None,
+            progress_cb=graph_progress,
+            mode="deep",
+            # v17-2: 从 payload 透传 per-project notebook ID
+            notebooklm_notebook_id=payload.get("notebooklm_notebook_id"),
+        )
+        grounded = state.get("grounded_evidence") or []
+        report = ComprehensiveReport(
+            topic=topic,
+            report_markdown=state.get("report_markdown") or state.get("answer") or "",
+            citations=state.get("citations") or grounded,
+            candidates=state.get("recommended") or [],
+            web_count=0,
+            kb_count=len(grounded),
+            engine=state.get("recommend_engine") or "offline",
+            verified_claims=state.get("verified_claims") or [],
+            claim_check_engine=state.get("claim_check_engine") or "offline",
+            claim_check_pass_rate=float(state.get("claim_check_pass_rate") or 1.0),
+        )
+        result = {
+            "report": report.model_dump(),
+            "grounded_evidence": [e.model_dump() for e in grounded],
+            # P1-1: deep 模式 generate_node 已 register_round 并写
+            # state["recommend_id"]，透传出来否则前端采不到。
+            "recommend_id": state.get("recommend_id"),
+        }
+        kb_task_id = dispatch_kb_ingest(
+            result["grounded_evidence"],
+            project_id=(req.project_id if req else None),
+            query=query,
+            domain=getattr(req, "domain", None) if req else None,
+        )
+        if kb_task_id:
+            result["kb_ingest_task_id"] = kb_task_id
+        tracker.finish()
+        persist_result(task_id, result, failed=False)
+        _persist_terminal(task_id, "deep_research", result)
+        return result
+    except Exception as exc:
+        logger.exception("deep_research task failed")
+        tracker.finish(error=True)
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "deep_research", err, failed=True, message=str(exc))
+        raise
+
+
+def _stage_progress(stage: str) -> float:
+    return {
+        "retrieve": 0.2,
+        "grade": 0.45,
+        "fallback": 0.55,
+        "generate": 0.7,
+        "claim_check": 0.82,
+        "regenerate": 0.86,
+        "recommend": 0.9,
+    }.get(stage, 0.5)
+
+
+def _convert_formulas(formulas: list, scored: list) -> list[dict]:
+    """Convert RecommendedFormula (components) → Formulation (ingredients)."""
+    from ..domain.schemas import Formulation as _F, Ingredient, ProductDomain
+
+    result = []
+    for raw in formulas:
+        domain = raw.get("domain", "anticorrosion_coating")
+        if isinstance(domain, str):
+            try:
+                domain = ProductDomain(domain)
+            except ValueError:
+                domain = ProductDomain.anticorrosion_coating
+        result.append(_F(
+            name=raw.get("name", ""),
+            domain=domain,
+            ingredients=[
+                Ingredient(
+                    name=c.get("name") or "",
+                    zh_name=c.get("zh_name"),
+                    role=c.get("component_type") or "",
+                    weight_pct=c.get("weight_pct") or 0,
+                    cas_no=c.get("cas_no"),
+                    formula=c.get("mf"),
+                    smiles=c.get("smiles"),
+                    molar_mass=c.get("molar_mass"),
+                    equivalents=c.get("equivalents"),
+                    mmol=c.get("mmol"),
+                    notes=c.get("notes"),
+                    evidence_refs=c.get("evidence_refs") or [],
+                    grounding_confidence=c.get("grounding_confidence"),
+                )
+                for c in raw.get("components") or []
+            ],
+            rationale=raw.get("rationale", ""),
+            source="recommend",
+            predicted=raw.get("predicted") or {},
+            predicted_std=raw.get("predicted_std") or {},
+            score=raw.get("score"),
+            warnings=raw.get("warnings") or [],
+        ).model_dump())
+    return result
+
+
+@celery_app.task(
+    bind=True,
+    base=_OutboxTask,
+    outbox_operation="research_recommend",
+    name="formunex.recommend",
+)
+def run_recommend_task(self, payload: dict) -> dict:
+    from ..api.formulations import recommend_formulations as _sync_recommend
+    from ..api.formulations import RecommendFormulationsRequest as SyncRequest
+
+    task_id = self.request.id
+    tracker = ThinkingTracker(task_id, kind="recommend")
+    tracker.emit(
+        "retrieve",
+        "正在检索配方证据…",
+        progress=0.15,
+        step_id="retrieve",
+        title="正在检索表面活性剂库与知识库…",
+        detail="BM25 / 向量混合召回候选片段",
+    )
+    try:
+        req_data = payload.get("requirement") or {}
+        if not req_data:
+            raise ValueError("requirement is required")
+        n = payload.get("n") or 3
+        sources = payload.get("sources") or []
+
+        tracker.emit(
+            "grade",
+            "正在评估证据相关性…",
+            progress=0.45,
+            step_id="grade",
+            title="正在评估证据相关性（CRAG）…",
+            detail="过滤低相关片段后再进入推荐",
+        )
+
+        body = SyncRequest(
+            requirement=req_data,
+            n=n,
+            sources=sources,
+            prefer_materials_catalog=bool(payload.get("prefer_materials_catalog")),
+        )
+        tracker.emit(
+            "recommend",
+            "正在生成推荐配方…",
+            progress=0.75,
+            step_id="recommend",
+            title="正在生成推荐配方…",
+            detail="LLM / 规则引擎产出 Top-N 配方",
+        )
+        resp = _sync_recommend(body)
+        result_raw = resp.model_dump()
+
+        # Convert RecommendedFormula → Formulation for frontend compat
+        recommended = _convert_formulas(result_raw.get("formulas") or [],
+                                         result_raw.get("scored") or [])
+
+        # Build ResearchResult-format response expected by frontend.
+        # The headline is derived from the requirement, not produced by the
+        # engine, so the lightweight path has no reason to return it empty —
+        # doing so left the UI showing a blank title for a completed run.
+        research = {
+            "requirement_headline": body.requirement.headline(),
+            "evidence": result_raw.get("grounded_evidence") or [],
+            "mechanism": "",
+            "recommended": recommended,
+            "chat_markdown": "",
+            "recommend_engine": result_raw.get("engine", "llm"),
+            "tradeoff": result_raw.get("tradeoff"),
+            "recommend_meta": {"warnings": result_raw.get("warnings") or []},
+            # P1-1: 异步路径透传 recommend_id —— 否则前端 lastRecommendId
+            # 恒为 null，采纳按钮静默禁用，C-8 分子永远采不到。
+            "recommend_id": result_raw.get("recommend_id"),
+        }
+        result = {"research": research}
+
+        # KB ingest
+        grounded = result_raw.get("grounded_evidence") or []
+        if grounded:
+            dispatch_kb_ingest(grounded)
+
+        tracker.thought(
+            f"已生成 {len(recommended)} 条推荐配方",
+            stage="recommend",
+            message="推荐完成",
+            progress=0.95,
+            detail=f"engine={result_raw.get('engine', 'llm')}",
+        )
+        tracker.finish()
+        persist_result(task_id, result, failed=False)
+        _persist_terminal(task_id, "recommend", result)
+        return result
+    except Exception as exc:
+        logger.exception("recommend task failed")
+        tracker.finish(error=True)
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "recommend", err, failed=True, message=str(exc))
+        raise
+
+
+@celery_app.task(
+    bind=True,
+    name="formunex.optimize",
+    soft_time_limit=2400,
+    time_limit=3000,
+    max_retries=2,
+    # G P2-3: SoftTimeLimitExceeded 不是 TimeoutError 子类，soft 超时后需重试。
+    autoretry_for=(TimeoutError, ConnectionError, OSError, _SoftTimeLimitExceeded)
+    if _SoftTimeLimitExceeded
+    else (TimeoutError, ConnectionError, OSError),
+    retry_backoff=True,
+)
+def run_optimize_task(self, payload: dict) -> dict:
+    task_id = self.request.id
+    tracker = ThinkingTracker(task_id, kind="optimize")
+    tracker.emit(
+        "init",
+        "starting optimizer",
+        progress=0.05,
+        step_id="init",
+        title="正在初始化寻优器…",
+    )
+
+    try:
+        # req 构造在 try 内：payload 校验失败也要走失败持久化，
+        # 否则任务快照永远停留 queued、SSE 无终止事件。
+        req = Requirement(**payload["requirement"])
+
+        def progress(p: float, msg: str) -> None:
+            stage, title = _optimize_stage(p, msg)
+            tracker.emit(
+                stage,
+                msg,
+                progress=round(p, 3),
+                step_id=stage,
+                title=title,
+                kind="stage",
+                detail=msg,
+            )
+
+        result = workflow.run_optimization(
+            req,
+            iterations=payload.get("iterations"),
+            progress_cb=progress,
+            engine=payload.get("engine", "auto"),
+            campaign_state=payload.get("campaign_state"),
+            workbench_campaign_id=payload.get("workbench_campaign_id"),
+            seed=payload.get("seed"),
+        )
+        data = result.model_dump()
+        tracker.emit(
+            "converge",
+            "optimization complete",
+            progress=0.98,
+            step_id="converge",
+            title="寻优收敛完成",
+        )
+        tracker.finish()
+        persist_result(task_id, data, failed=False)
+        _persist_terminal(task_id, "optimize", data)
+        # P1-34: output receipt (fail-open, never breaks the run).
+        try:
+            from ..services.tech_report import write_output_receipt
+
+            write_output_receipt("optimize", task_id, inputs=payload, outputs=data)
+        except Exception:
+            pass
+        # P4.2: optional dossier S6/S7 patch when optimize completes (default OFF).
+        _notify_dossier_optimize_completed(payload)
+        return data
+    except Exception as exc:
+        tracker.finish(error=True)
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "optimize", err, failed=True, message=str(exc))
+        raise
+
+
+def _optimize_stage(progress: float, message: str) -> tuple[str, str]:
+    """Map optimizer progress float + message → stage id / timeline title."""
+    msg = (message or "").lower()
+    if progress < 0.2 or "init" in msg or "start" in msg:
+        return "init", "正在初始化寻优器…"
+    if progress < 0.55 or "propos" in msg or "sample" in msg or "suggest" in msg:
+        return "propose", "正在提出候选实验点…"
+    if progress < 0.85 or "evaluat" in msg or "score" in msg or "object" in msg:
+        return "evaluate", "正在评估目标与约束…"
+    return "converge", "正在收敛最优配方…"
+
+
+def _notify_dossier_optimize_completed(payload: dict) -> None:
+    """Best-effort: map optimize success → dossier ``optimize_completed`` event."""
+    try:
+        from ..services.wiki.dossier import notify_dossier_event, notify_dossier_event_for_campaign
+
+        cid = payload.get("workbench_campaign_id")
+        if cid is not None and cid != "":
+            notify_dossier_event_for_campaign(cid, "optimize_completed")
+            return
+        req = payload.get("requirement") or {}
+        pid = ""
+        if isinstance(req, dict):
+            pid = str(req.get("project_id") or "").strip()
+        if pid:
+            notify_dossier_event(pid, "optimize_completed")
+    except Exception:
+        pass
+
+
+# ── async KB ingest (search → fulltext → knowledge base, in background) ──────
+
+
+def _kb_ingest_project_id(payload: dict) -> str | None:
+    pid = (payload.get("project_id") or "").strip()
+    if pid:
+        return pid
+    req = payload.get("requirement")
+    if isinstance(req, dict):
+        return (req.get("project_id") or "").strip() or None
+    return None
+
+
+def _kb_ingest_impl(task_id: str, payload: dict) -> dict:
+    """Shared body for the Celery task and the eager-mode background thread."""
+    from ..domain.schemas import Evidence
+    from ..services import kb_ingest
+
+    evidence = [Evidence.model_validate(e) for e in payload.get("evidence") or []]
+    docs_state: dict[str, dict] = {}
+    order: list[str] = []
+    # Fetching runs on a thread pool, so this callback is now re-entrant. Without
+    # the lock, `order.append` landing before `docs_state[ident]` is set lets
+    # another thread's comprehension below raise KeyError on the id it just saw
+    # appended — which would surface as random documents "failing" for no reason.
+    state_lock = threading.Lock()
+
+    def status_cb(meta: dict) -> None:
+        ident = meta["identifier"]
+        with state_lock:
+            docs_state[ident] = dict(meta)   # visible before it is announced
+            if ident not in order:
+                order.append(ident)
+            docs = [docs_state[i] for i in order]
+        done = sum(1 for d in docs if d["status"] in kb_ingest.TERMINAL_STATES)
+        total = len(docs)
+        active = next((d for d in docs if d["status"] in ("fetching", "indexing")), None)
+        if active:
+            verb = "获取全文" if active["status"] == "fetching" else "解析入库"
+            msg = f"知识库构建 {done}/{total} · 正在{verb}：{active['title'][:60]}"
+        else:
+            msg = f"知识库构建 {done}/{total}"
+        publish_progress(
+            task_id,
+            TaskProgressStatus.RUNNING,
+            stage="kb_ingest",
+            message=msg,
+            progress=(done / total) if total else 0.0,
+            data={
+                "docs": docs,
+                "done": done,
+                "total": total,
+                "indexed": sum(1 for d in docs if d["status"] == "indexed"),
+                "failed": sum(1 for d in docs if d["status"] == "failed"),
+            },
+        )
+
+    try:
+        result = kb_ingest.ingest_evidence_docs(
+            evidence,
+            status_cb=status_cb,
+            project_id=_kb_ingest_project_id(payload),
+            query=payload.get("query"),
+        )
+        summary = (
+            f"知识库构建完成：入库 {result['indexed']} 篇"
+            + (f"，已在库 {result['skipped']} 篇" if result["skipped"] else "")
+            + (f"，失败 {result['failed']} 篇" if result["failed"] else "")
+        )
+        persist_result(task_id, result, failed=False)
+        _persist_terminal(task_id, "kb_ingest", result, message=summary)
+        return result
+    except SoftTimeLimitExceeded:
+        # The soft limit exists so the task can say what happened instead of
+        # being killed mid-sentence. Without this it surfaced as a bare
+        # exception name, which tells the operator nothing about which knob to
+        # turn — and the knob is the point, since a large corpus legitimately
+        # takes longer than any default.
+        from ..config import get_settings
+
+        limit = get_settings().celery_soft_time_limit_s
+        msg = (
+            f"知识库构建超过单任务时限（{limit // 60} 分钟）已被中止。"
+            "已入库的部分保留，可再次运行继续；"
+            "若语料确实很大，请调高 FORMUNEX_CELERY_SOFT_TIME_LIMIT_S "
+            "（同时调高 FORMUNEX_CELERY_HARD_TIME_LIMIT_S）。"
+        )
+        logger.error("kb_ingest hit the %ds soft time limit", limit)
+        err = {"error": msg, "soft_time_limit_s": limit}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "kb_ingest", err, failed=True, message=msg)
+        raise
+    except Exception as exc:
+        logger.exception("kb_ingest task failed")
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "kb_ingest", err, failed=True, message=str(exc))
+        raise
+
+
+@celery_app.task(bind=True, name="formunex.kb_ingest")
+def run_kb_ingest_task(self, payload: dict) -> dict:
+    return _kb_ingest_impl(self.request.id, payload)
+
+
+# ── Async file ingest (upload → 202 → SSE) ───────────────────────────────────
+# Parsing a scanned PDF is minutes of OCR; holding the HTTP request open while
+# that runs is what let an intermediary in front of uvicorn cut the connection
+# (the client saw a 502 even though the backend finished the work). The route
+# now writes the upload to a temp dir, returns 202, and this task does the
+# parse + persist + index off the request path.
+
+@celery_app.task(bind=True, name="formunex.file_ingest")
+def run_file_ingest_task(self, payload: dict) -> dict:
+    return _file_ingest_impl(self.request.id, payload)
+
+
+def _file_ingest_impl(task_id: str, payload: dict) -> dict:
+    """Shared body for the Celery task and the eager-mode background thread.
+
+    Everything that can fail sits inside one ``try``: the per-file parse loop used to run before it, so a parser that
+    raised (``ParserUnavailable`` - no PDF parser installed) left the task at ``running`` for ever and the uploaded
+    files in their temp directory; only a failure while indexing was recorded.
+    """
+    try:
+        return _file_ingest_body(task_id, payload)
+    except Exception as exc:
+        logger.exception("file ingest task failed")
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "file_ingest", err, failed=True, message=str(exc))
+        raise
+    finally:
+        upload_dir = payload.get("dir")
+        if upload_dir:
+            try:
+                import shutil
+
+                shutil.rmtree(upload_dir, ignore_errors=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("file ingest: temp cleanup skipped: %s", exc)
+
+
+def _file_ingest_body(task_id: str, payload: dict) -> dict:
+    """The work of a file-ingest job; ``_file_ingest_impl`` owns its failure and cleanup."""
+    from ..services import colbert_store
+    from ..services.ingestion import ingest_files_batch
+
+    import hashlib
+
+    # v3 P1 H-6 full: streaming pipeline — read → hash → dedup → ingest →
+    # release, one file at a time. Peak memory = single file, not the batch.
+    #
+    # Root cause of the old 800MB peak: the `files` list held ALL bytes until
+    # return; ingestion.py's `del content` only dropped the loop-local name
+    # while the list kept every reference alive (M-15 was a no-op).
+    # Now each file goes through ingest_files_batch as a single-item batch
+    # (reusing all its merge/error handling), then `del content` truly frees.
+    file_items = list(payload.get("files") or [])
+    total_files = len(file_items)
+
+    duplicates: list[str] = []
+    duplicate_source_ids: dict[str, str] = {}
+    all_evidence: list = []
+    all_warnings: list[str] = []
+    files_processed = 0
+    last_source_id = None
+    last_extraction_status = "skipped"
+
+    # Dedup store: fetched once; a failure skips dedup, never blocks ingest.
+    try:
+        from ..db.source_store import get_source_store
+
+        _store = get_source_store()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("file ingest: dedup store unavailable, dedup skipped (%s)", exc)
+        _store = None
+
+    for idx, item in enumerate(file_items, 1):
+        name = item["name"]
+        path = Path(item["path"])
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            logger.warning("file ingest: cannot read %s (%s)", path, exc)
+            continue
+
+        # Content-hash dedup (per-file). Key semantics unchanged:
+        # `upload:sha256:<bytes>`; a row whose last ingest failed stays a
+        # retry candidate (include_failed=False), otherwise a file could
+        # never be re-ingested.
+        digest = hashlib.sha256(content).hexdigest()
+        key = f"upload:sha256:{digest}"
+        try:
+            existing = (
+                _store.find_by_origin_url(key, include_failed=False)
+                if _store is not None
+                else None
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("file ingest: dedup check failed for %s (%s)", name, exc)
+            existing = None
+        if existing:
+            logger.info("file ingest: duplicate upload skipped: %s (%s)", name, key)
+            duplicates.append(name)
+            duplicate_source_ids[name] = existing.id
+            del content
+            continue
+
+        publish_progress(
+            task_id,
+            TaskProgressStatus.RUNNING,
+            stage="ingest",
+            message=f"解析 [{idx}/{total_files}] {name}…",
+            progress=(idx - 1) / max(total_files, 1),
+        )
+        try:
+            outcome = ingest_files_batch(
+                [(name, content)], origin_url_by_name={name: key}
+            )
+        finally:
+            # Truly release this file's bytes (the single-item list dies
+            # with the call frame).
+            del content
+
+        all_evidence.extend(outcome.evidence)
+        all_warnings.extend(f"{name}：{w}" for w in (outcome.warnings or []))
+        files_processed += 1
+        if outcome.source_id:
+            last_source_id = outcome.source_id
+            # PageIndex 借鉴 P6: 源文件落盘 —— 持久化原文件供"新页面打开"下载。
+            # Fail-open: 落盘失败不影响入库。
+            try:
+                from ..services.source_files import persist_source_file
+                persist_source_file(outcome.source_id, path, name)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("source file persist skipped for %s: %s", name, exc)
+        last_extraction_status = outcome.extraction_status
+
+    if files_processed == 0:
+        # Every file was a duplicate (or unreadable): finishing cleanly with
+        # zero evidence is the honest answer, and the UI reports it as a skip
+        # instead of the old "入库失败" that a retry used to produce.
+        result = {
+            "evidence": [],
+            "total": 0,
+            "files_processed": 0,
+            "source_id": None,
+            "extraction_status": "skipped",
+            "duplicates": duplicates,
+            "duplicate_source_ids": duplicate_source_ids,
+        }
+        message = f"跳过 {len(duplicates)} 个重复文件（内容与库中已有资料一致）"
+        # Terminal snapshot first, result store second: the reverse order left a
+        # window where a concurrent GET saw a result in the progress meta while
+        # the disk snapshot was still `pending`, and it persisted that pending
+        # snapshot over the terminal one — after which SSE waited on pub/sub
+        # instead of replaying COMPLETED.
+        _persist_terminal(task_id, "file_ingest", result, message=message)
+        persist_result(task_id, result, failed=False)
+        return result
+
+    publish_progress(
+        task_id,
+        TaskProgressStatus.RUNNING,
+        stage="index",
+        message="建立检索索引…",
+        progress=0.95,
+    )
+    # P0-1: "skipped" 仅=无真实文本（see api/ingest.py）。
+    if last_extraction_status != "skipped":
+        colbert_store.index_evidence(all_evidence)
+    result = {
+        "evidence": [e.model_dump() for e in all_evidence],
+        "total": len(all_evidence),
+        "files_processed": files_processed,
+        "source_id": last_source_id,
+        "extraction_status": last_extraction_status,
+        "duplicates": duplicates,
+        "duplicate_source_ids": duplicate_source_ids,
+        # P2: 解析截断等提示 —— 前端上传完成态展示。
+        "warnings": all_warnings,
+    }
+    message = (
+        f"文件入库完成：{len(all_evidence)} 条"
+        if all_evidence
+        else "文件入库完成（未提取到文本）"
+    )
+    if duplicates:
+        message += f"，跳过 {len(duplicates)} 个重复文件"
+    _persist_terminal(task_id, "file_ingest", result, message=message)
+    persist_result(task_id, result, failed=False)
+    return result
+
+
+def dispatch_file_ingest(files: list[dict], *, upload_dir: str | None = None) -> str | None:
+    """Enqueue an upload ingest job; return the task id for SSE/status polling.
+
+    ``files`` is ``[{"name": ..., "path": ...}]`` — payloads stay on disk so a
+    multi-megabyte PDF is never serialised into the broker.
+    """
+    from ..config import get_settings
+
+    if not files:
+        return None
+    payload = {"files": files, "dir": upload_dir}
+    try:
+        if get_settings().celery_eager:
+            task_id = f"fileingest-{uuid.uuid4().hex[:16]}"
+            task_manager.register_celery_task(task_id, "file_ingest")
+            threading.Thread(
+                target=lambda: _safe_file_ingest(task_id, payload),
+                name="file-ingest",
+                daemon=True,
+            ).start()
+            return task_id
+        async_result = run_file_ingest_task.delay(payload)
+        task_manager.register_celery_task(async_result.id, "file_ingest")
+        return async_result.id
+    except Exception as exc:
+        return degrade_return(logger, exc, "file ingest dispatch failed", None)
+
+
+def _safe_file_ingest(task_id: str, payload: dict) -> None:
+    try:
+        _file_ingest_impl(task_id, payload)
+    except Exception as exc:  # already persisted as failed inside the impl
+        log_handled_exception(logger, exc, "file ingest background thread")
+
+
+def dispatch_kb_ingest(
+    evidence_dicts: list[dict], *,
+    project_id: str | None = None, query: str | None = None,
+    domain=None,
+) -> str | None:
+    """Fire-and-forget background KB build for freshly searched evidence.
+
+    Returns the ingest task id (for the frontend to stream), or None when the
+    feature is off / nothing in the list is fetchable.  With a real broker the
+    job goes through Celery; in eager mode ``.delay()`` would run inline and
+    stall the parent task, so a daemon thread provides the same non-blocking
+    behaviour for single-process deployments.
+    """
+    from ..config import get_settings
+    from ..domain.schemas import Evidence
+    from ..services import kb_ingest
+
+    if not kb_ingest.ingest_enabled() or not evidence_dicts:
+        return None
+    try:
+        rows = [Evidence.model_validate(e) for e in evidence_dicts]
+        targets = kb_ingest.select_ingest_targets(
+            rows, project_id=project_id, query=query, domain=domain
+        )
+    except Exception as exc:
+        return degrade_return(logger, exc, "kb_ingest target selection failed", None)
+    if not targets:
+        return None
+
+    payload = {
+        "evidence": [ev.model_dump() for ev, _ in targets],
+        "project_id": project_id,
+        "query": query,
+        "domain": str(domain) if domain is not None else None,
+    }
+    if get_settings().celery_eager:
+        task_id = f"kbingest-{uuid.uuid4().hex[:16]}"
+        task_manager.register_celery_task(task_id, "kb_ingest")
+        threading.Thread(
+            target=lambda: _safe_kb_ingest(task_id, payload),
+            name="kb-ingest",
+            daemon=True,
+        ).start()
+        return task_id
+    async_result = run_kb_ingest_task.delay(payload)
+    task_manager.register_celery_task(async_result.id, "kb_ingest")
+    return async_result.id
+
+
+def _safe_kb_ingest(task_id: str, payload: dict) -> None:
+    try:
+        _kb_ingest_impl(task_id, payload)
+    except Exception as exc:  # already persisted as failed inside the impl
+        log_handled_exception(logger, exc, "kb_ingest background thread")
+
+
+@celery_app.task(bind=True, name="formunex.search")
+def run_search_task(self, payload: dict) -> dict:
+    from ..services import literature
+
+    task_id = self.request.id
+    publish_progress(task_id, TaskProgressStatus.RUNNING, message="检索中…")
+    query = payload["query"]
+    source_types = payload.get("source_types") or []
+    req = Requirement(**payload["requirement"]) if payload.get("requirement") else None
+
+    try:
+        def progress(partial, meta=None) -> None:
+            meta = meta or {}
+            source = meta.get("source")
+            new_count = int(meta.get("new_count") or 0)
+            done = meta.get("sources_done") or []
+            pending = meta.get("sources_pending") or []
+            if source:
+                msg = f"[{source}] +{new_count} 条（累计 {len(partial)}）"
+            elif meta.get("final"):
+                msg = f"检索完成，共 {len(partial)} 条"
+            else:
+                msg = f"已找到 {len(partial)} 条，继续搜索…"
+            # Only ship summary metadata for intermediate updates.
+            # Serialising the full evidence list to Redis on every source
+            # page (30+ pages from arXiv alone) is the primary reason search
+            # tasks exceed the Vite proxy timeout.
+            if meta.get("final"):
+                data = {
+                    "evidence": [e.model_dump() for e in partial],
+                    "total": len(partial),
+                }
+            else:
+                data = {
+                    "total": len(partial),
+                    "source": source,
+                    "new_count": new_count,
+                    "sources_done": done,
+                    "sources_pending": pending,
+                }
+            filter_report = meta.get("filter_report") or meta.get("filter")
+            if filter_report:
+                data["filter_report"] = filter_report
+            publish_progress(
+                task_id,
+                TaskProgressStatus.RUNNING,
+                stage=f"search:{source}" if source else "search",
+                message=msg,
+                data=data,
+            )
+
+        iter_result = literature.iter_search(
+            query,
+            source_types,
+            req=req,
+            total_limit=payload.get("total_limit", 300),
+            per_source_cap=payload.get("per_source_cap", 50),
+            progress_cb=progress,
+            notebooklm_notebook_id=payload.get("notebooklm_notebook_id"),
+        )
+        # iter_search returns (evidence_list, filter_report); accept a bare
+        # list too for backward compatibility with mocks / older callers.
+        if isinstance(iter_result, tuple):
+            final, filter_report = iter_result
+        else:
+            final, filter_report = list(iter_result), {}
+        status = {k: v for k, v in literature.get_source_availability().items()}
+        data = {
+            "evidence": [e.model_dump() for e in final],
+            "total": len(final),
+            "source_status": status,
+            "used_seed_fallback": any(e.is_seed_corpus for e in final),
+            "filter_report": filter_report,
+        }
+        # Feed the registry deep research reads, so a search's hits are
+        # retrievable by resolve_grounded_evidence / retrieve_node. This is the
+        # one thing the old /research/kb/refresh did that a search did not; the
+        # registry is keyed by doc id, so re-indexing is idempotent.
+        from ..services import colbert_store
+
+        colbert_store.index_evidence(final)
+
+        # Background KB build: enqueue is non-blocking, so the search stream
+        # terminates immediately below and the frontend keeps its results.
+        kb_task_id = dispatch_kb_ingest(
+            data["evidence"],
+            project_id=(req.project_id if req else None),
+            query=query,
+            domain=getattr(req, "domain", None) if req else None,
+        )
+        if kb_task_id:
+            data["kb_ingest_task_id"] = kb_task_id
+        persist_result(task_id, data, failed=False)
+        _persist_terminal(task_id, "search", data)
+        return data
+    except Exception as exc:
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "search", err, failed=True, message=str(exc))
+        raise
+
+
+@celery_app.task(bind=True, name="formunex.topic_sweep")
+def run_topic_sweep(self, payload: dict) -> dict:
+    """主题雷达单次触发: 检索 → topic 筛选 → 后台 KB 回填.
+
+    两个入口: ``POST /api/search/topic-sweep``（手动一次）和 Celery Beat（设置
+    ``FORMUNEX_TOPIC_RADAR_*`` 生成的计划，见 ``worker/topic_radar.py``）。结果写入
+    任务状态，``GET /api/tasks/{id}`` 可查（``found`` / ``ingest_task_id`` / ``error``）。
+    """
+    from ..config import get_settings
+    from ..domain.schemas import Requirement
+    from ..services import literature
+
+    task_id = self.request.id
+    query = payload["query"]
+    project_id = payload.get("project_id")
+    try:
+        req = Requirement(**payload["requirement"]) if payload.get("requirement") else None
+        iter_result = literature.iter_search(
+            query,
+            payload.get("source_types") or list(get_settings().federated_sources),
+            req=req,
+            total_limit=int(payload.get("total_limit", 100)),
+            per_source_cap=int(payload.get("per_source_cap", 30)),
+            notebooklm_notebook_id=payload.get("notebooklm_notebook_id"),
+        )
+        final, _filter_report = (
+            iter_result if isinstance(iter_result, tuple) else (list(iter_result), {})
+        )
+        kb_task_id = None
+        if final:
+            kb_task_id = dispatch_kb_ingest(
+                [e.model_dump() for e in final],
+                project_id=project_id,
+                query=query,
+                domain=getattr(req, "domain", None) if req else None,
+            )
+        data = {
+            "task_id": task_id,
+            "query": query,
+            "found": len(final),
+            "ingest_task_id": kb_task_id,
+        }
+        if task_id:  # a direct ``.run()`` call (tests, scripts) has no Celery id to record under
+            persist_result(task_id, data, failed=False)
+            _persist_terminal(task_id, "topic_sweep", data)
+        return data
+    except Exception as exc:
+        logger.exception("topic_sweep failed")
+        err = {"task_id": task_id, "query": query, "error": str(exc)}
+        if task_id:
+            persist_result(task_id, err, failed=True)
+            _persist_terminal(task_id, "topic_sweep", err, failed=True, message=str(exc))
+        return err
+
+
+@celery_app.task(bind=True, name="formunex.loop")
+def run_loop_task(self, payload: dict) -> dict:
+    return run_loop_iterate_impl(self.request.id, payload)
+
+
+def _parse_optional_model(raw: Any, model_cls: type):
+    if not raw:
+        return None
+    try:
+        return model_cls.model_validate(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _persist_loop_history(campaign_id: int | None, report) -> None:
+    if not campaign_id:
+        return
+    from datetime import UTC, datetime
+
+    import uuid
+
+    from ..db.campaign_store import get_campaign_store
+
+    # 持久化 next_doe 到 doe_plans（带 campaign_id + round），并把 plan_id 记入 loop_history
+    doe_plan_id = None
+    next_doe = getattr(report, "next_doe", None)
+    if next_doe is not None:
+        store = get_campaign_store()
+        campaign = (
+            store.get_campaign_sync(campaign_id)
+            if hasattr(store, "get_campaign_sync")
+            else None
+        )
+        # round_no 由 _append_loop_history 内部以 len(history)+1 单一真相源计算，
+        # 不在两个独立读改写点各算一次（避免 TOCTOU 与 JSON 列丢失更新）。
+        # 若最后一个 entry 是 running 占位（任务开始时写入），本轮就是它的 round。
+        _hist = list(campaign.loop_history or []) if campaign is not None else []
+        round_no = (
+            len(_hist) if (_hist and _hist[-1].get("running")) else len(_hist) + 1
+        ) if campaign is not None else None
+        if not getattr(next_doe, "plan_id", None):
+            next_doe.plan_id = uuid.uuid4().hex
+        doe_plan_id = next_doe.plan_id
+        try:
+            from ..db import doe_plan_store
+            from ..db.database import default_session_factory
+            from ..db.session_utils import commit_session
+
+            with commit_session(default_session_factory()) as session:
+                doe_plan_store.save(
+                    session,
+                    next_doe,
+                    campaign_id=campaign_id,
+                    round_no=round_no,
+                    project_id=getattr(campaign, "project_id", None) or None,
+                )
+        except Exception as exc:
+            log_handled_exception(logger, exc, "persist loop next_doe")
+            doe_plan_id = None
+
+    entry = {
+        # round 由 _append_loop_history 内部以 len(history)+1 兜底重写，此处仅占位
+        "round": 0,
+        "at": datetime.now(UTC).isoformat(),
+        "converged": report.converged,
+        "rmse_by_metric": report.rmse_by_metric,
+        "engine": report.engine,
+        "loop_message": report.loop_message,
+        "doe_plan_id": doe_plan_id,
+    }
+    try:
+        store = get_campaign_store()
+        if hasattr(store, "append_loop_history_sync"):
+            # 任务开始时写过 running entry（run_loop_iterate_impl）：原地更新，
+            # 不新增 round，避免 rounds 计数膨胀。
+            last_running = False
+            try:
+                camp = store.get_campaign_sync(campaign_id)
+                hist = list(getattr(camp, "loop_history", None) or [])
+                last_running = bool(hist and hist[-1].get("running"))
+            except Exception:  # noqa: BLE001
+                last_running = False
+            if last_running and hasattr(store, "update_last_loop_entry_sync"):
+                store.update_last_loop_entry_sync(campaign_id, entry)
+            else:
+                store.append_loop_history_sync(campaign_id, entry)
+    except Exception as exc:
+        log_handled_exception(logger, exc, "persist loop_history")
+
+
+def run_loop_iterate_impl(task_id: str, payload: dict) -> dict:
+    from ..services import auto_loop
+    from ..services.workbench_loop import is_doecycle_paused
+
+    publish_progress(task_id, TaskProgressStatus.RUNNING, message="starting loop")
+
+    try:
+        campaign_id = payload.get("workbench_campaign_id")
+        if campaign_id is not None and is_doecycle_paused(int(campaign_id)):
+            err = {
+                "error": "DOE cycle paused for this campaign",
+                "paused": True,
+                "campaign_id": int(campaign_id),
+            }
+            publish_progress(task_id, TaskProgressStatus.FAILED, message=err["error"])
+            persist_result(task_id, err, failed=True)
+            _persist_terminal(task_id, "loop", err, failed=True, message=err["error"])
+            return err
+
+        # req 构造在 try 内：payload 校验失败也要走失败持久化。
+        # 任务开始先写 running 占位 entry，让 campaign_loop_status 能报"进行中"；
+        # 结束时 _persist_loop_history 会原地更新它（不膨胀 rounds）。
+        if campaign_id is not None:
+            try:
+                from datetime import UTC, datetime
+
+                from ..db.campaign_store import get_campaign_store
+
+                _store = get_campaign_store()
+                if hasattr(_store, "append_loop_history_sync"):
+                    _store.append_loop_history_sync(
+                        int(campaign_id),
+                        {"running": True, "at": datetime.now(UTC).isoformat()},
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+        req = Requirement(**payload["requirement"])
+
+        def progress(p: float, msg: str) -> None:
+            publish_progress(
+                task_id,
+                TaskProgressStatus.RUNNING,
+                message=msg,
+                progress=round(p, 3),
+            )
+
+        result = auto_loop.loop_iterate(
+            req,
+            optimize_iterations=payload.get("iterations") or 24,
+            n_suggest=payload.get("n_suggest", 4),
+            progress_cb=progress,
+            optimize_engine=payload.get("optimize_engine", "auto"),
+            doe_engine=payload.get("doe_engine", "auto"),
+            workbench_campaign_id=payload.get("workbench_campaign_id"),
+            campaign_state=payload.get("campaign_state"),
+            prior_rmse_history=payload.get("prior_rmse_history") or [],
+            prior_optimization=_parse_optional_model(
+                payload.get("prior_optimization"), OptimizationResult
+            ),
+            prior_next_doe=_parse_optional_model(payload.get("prior_next_doe"), DOEPlan),
+            budget_remaining=payload.get("budget_remaining"),
+            seed=payload.get("seed"),
+        )
+        # 先持久化（内部会给 next_doe.plan_id 赋新 UUID），再 dump，
+        # 否则任务结果里的 plan_id 是旧值，前端无法关联该 DOE 计划。
+        _persist_loop_history(payload.get("workbench_campaign_id"), result)
+        data = result.model_dump()
+        persist_result(task_id, data, failed=False)
+        _persist_terminal(task_id, "loop", data)
+        # P4.2: refresh S6/S7 after loop round persists (in addition to start-of-loop notify).
+        try:
+            from ..services.wiki.dossier import notify_dossier_event_for_campaign
+
+            notify_dossier_event_for_campaign(
+                payload.get("workbench_campaign_id"), "loop_updated"
+            )
+        except Exception:
+            pass
+        return data
+    except Exception as exc:
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "loop", err, failed=True, message=str(exc))
+        # 失败时也把 running 占位 entry 转为终态，避免 status 永远卡在"进行中"。
+        try:
+            _cid = payload.get("workbench_campaign_id")
+            if _cid is not None:
+                from datetime import UTC, datetime
+
+                from ..db.campaign_store import get_campaign_store
+
+                _store = get_campaign_store()
+                _camp = _store.get_campaign_sync(int(_cid))
+                _hist = list(getattr(_camp, "loop_history", None) or [])
+                if _hist and _hist[-1].get("running"):
+                    _store.update_last_loop_entry_sync(
+                        int(_cid),
+                        {
+                            "at": datetime.now(UTC).isoformat(),
+                            "converged": False,
+                            "error": str(exc)[:500],
+                            "loop_message": f"闭环任务失败：{str(exc)[:200]}",
+                        },
+                    )
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+
+
+@celery_app.task(
+    bind=True,
+    base=_OutboxTask,
+    outbox_operation="inverse_design",
+    name="formunex.inverse_design",
+)
+def run_inverse_design_task(self, payload: dict) -> dict:
+    return run_inverse_design_impl(self.request.id, payload)
+
+
+def _register_inverse_design_round(payload: dict) -> str | None:
+    """v9: 逆向设计注册推荐轮次（C-8 分母），fail-open。
+
+    返回 recommend_id 字符串（可 JSON 序列化），失败返回 None。
+    抽成独立函数以便单测直接断言调用签名 —— v8 曾因签名错误导致
+    整个修复是 no-op（TypeError 被静默吞掉）。
+    """
+    # v8 曾用错签名：register_round(session, *, recommend_id, project_id=None)
+    try:
+        from ..db import recommend_outcome_store
+        from ..db.database import default_session_factory
+        from ..db.session_utils import commit_session
+
+        rec_id = f"inv-{uuid.uuid4().hex[:12]}"
+        req = payload.get("requirement") or {}
+        pid = (req.get("project_id") or "").strip() or None
+        with commit_session(default_session_factory()) as session:
+            recommend_outcome_store.register_round(
+                session,
+                recommend_id=rec_id,
+                project_id=pid,
+            )
+        return rec_id
+    except Exception as exc:  # noqa: BLE001 - fail-open，不阻断主流程
+        logger.warning("inverse design round registration failed (fail-open): %s", exc)
+        return None
+
+
+def run_inverse_design_impl(task_id: str, payload: dict) -> dict:
+    from ..domain.schemas import TargetSpec
+    from ..services import inverse_design
+
+    publish_progress(task_id, TaskProgressStatus.RUNNING, message="starting inverse design")
+
+    try:
+        # req/targets 构造在 try 内：payload 校验失败也要走失败持久化。
+        req = Requirement(**payload["requirement"])
+        targets = TargetSpec.model_validate(payload.get("targets") or {})
+
+        def progress(p: float, msg: str) -> None:
+            publish_progress(
+                task_id,
+                TaskProgressStatus.RUNNING,
+                message=msg,
+                progress=round(p, 3),
+            )
+
+        result = inverse_design.design(
+            req,
+            targets,
+            population=payload.get("population") or 48,
+            generations=payload.get("generations") or 30,
+            seed_with_llm=payload.get("seed_with_llm", True),
+            seed=payload.get("seed", 42),
+            progress_cb=progress,
+        )
+        data = result.model_dump()
+        # v9: 逆向设计同样注册推荐轮次，否则采纳遥测漏掉整条路径。
+        _rec_id = _register_inverse_design_round(payload)
+        if _rec_id:
+            data["recommend_id"] = _rec_id  # 字符串，json 可序列化
+        persist_result(task_id, data, failed=False)
+        _persist_terminal(task_id, "inverse_design", data)
+        return data
+    except Exception as exc:
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "inverse_design", err, failed=True, message=str(exc))
+        raise
+
+
+@celery_app.task(
+    bind=True,
+    base=_OutboxTask,
+    outbox_operation="doe_cycle",
+    name="formunex.doe_cycle",
+    soft_time_limit=1500,
+    time_limit=1800,
+    max_retries=3,
+    autoretry_for=(TimeoutError, ConnectionError, OSError),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+)
+def run_doe_cycle_task(self, payload: dict) -> dict:
+    """Execute one DOE cycle: generate experiments using Bayesian optimization.
+    
+    This task implements the closed-loop DOE automation:
+    1. Load requirement from payload
+    2. Call recommendation service to get candidate formulations (Top-20)
+    3. Use Baybe engine to generate next batch of experiment points
+    4. Write experiment points to experiments table with status=pending
+    5. Return experiment ID list
+    """
+    from ..services import doe_cycle_service
+    from ..services.workbench_loop import is_doecycle_paused
+    
+    task_id = self.request.id
+    tracker = ThinkingTracker(task_id, kind="doe_cycle")
+    tracker.emit(
+        "load",
+        "Starting DOE cycle",
+        progress=0.1,
+        step_id="load",
+        title="正在加载技术需求…",
+    )
+    
+    try:
+        campaign_id = payload.get("workbench_campaign_id")
+        if campaign_id is not None and is_doecycle_paused(int(campaign_id)):
+            err = {
+                "error": "DOE cycle paused for this campaign",
+                "paused": True,
+                "campaign_id": int(campaign_id),
+            }
+            tracker.finish(error=True)
+            publish_progress(task_id, TaskProgressStatus.FAILED, message=err["error"])
+            persist_result(task_id, err, failed=True)
+            _persist_terminal(task_id, "doe_cycle", err, failed=True, message=err["error"])
+            return err
+
+        # Extract payload
+        requirement_dict = payload.get("requirement", {})
+        if not requirement_dict:
+            raise ValueError("Missing requirement in payload")
+        
+        from ..domain.schemas import Requirement
+        requirement = Requirement(**requirement_dict)
+
+        tracker.emit(
+            "candidates",
+            "Generating candidate formulations",
+            progress=0.35,
+            step_id="candidates",
+            title="正在生成候选配方…",
+            detail="Top-N 候选供贝叶斯采样",
+        )
+        tracker.emit(
+            "design",
+            "Building DOE matrix",
+            progress=0.65,
+            step_id="design",
+            title="正在生成 DOE 矩阵…",
+            detail="Bayesian / 实验设计引擎",
+        )
+        
+        # Execute DOE cycle
+        result = doe_cycle_service.run_doe_cycle(
+            requirement,
+            budget_remaining=payload.get("budget_remaining"),
+            seed=payload.get("seed"),
+            # P1-1: 透传 campaign_id，生成的实验可关联到 workbench campaign
+            workbench_campaign_id=campaign_id,
+        )
+
+        tracker.emit(
+            "write",
+            "Writing pending experiments",
+            progress=0.9,
+            step_id="write",
+            title="正在写入待做实验点…",
+        )
+        tracker.finish()
+        persist_result(task_id, result, failed=False)
+        _persist_terminal(task_id, "doe_cycle", result, failed=False)
+        # P1-34: output receipt (fail-open, never breaks the run).
+        try:
+            from ..services.tech_report import write_output_receipt
+
+            write_output_receipt("doe_cycle", task_id, inputs=payload, outputs=result)
+        except Exception:
+            pass
+
+        return result
+        
+    except Exception as exc:
+        err = {"error": str(exc)}
+        tracker.finish(error=True)
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "doe_cycle", err, failed=True, message=str(exc))
+        # Contract errors: fail once. Transient/other: real retry (P1 #28).
+        if isinstance(exc, (ValueError, TypeError)):
+            raise
+        raise self.retry(
+            exc=exc,
+            countdown=min(60, 5 * (2 ** int(self.request.retries or 0))),
+        )
+
+@celery_app.task(bind=True, name="formunex.deps_install")
+def run_deps_install_task(self, payload: dict) -> dict:
+    from ..services import dependencies as deps
+
+    task_id = self.request.id
+    names = payload["names"]
+    upgrade = payload.get("upgrade", False)
+    verb = "upgrading" if upgrade else "installing"
+    publish_progress(task_id, TaskProgressStatus.RUNNING, message=f"{verb} {', '.join(names)}")
+
+    try:
+        result = deps.install(names, upgrade=upgrade)
+        failed = not result.get("ok", False)
+        persist_result(task_id, result, failed=failed)
+        _persist_terminal(
+            task_id,
+            "deps",
+            result,
+            failed=failed,
+            message=result.get("summary", ""),
+        )
+        return result
+    except Exception as exc:
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "deps", err, failed=True, message=str(exc))
+        raise
+
+
+@celery_app.task(bind=True, name="formunex.molscribe_recognize")
+def run_molscribe_recognize_task(self, payload: dict) -> dict:
+    """离线识别单张结构图 → SMILES（MolScribe 后端）。只在 molscribe 队列 worker 上执行。
+
+    由主 backend 通过 ``send_task(..., queue=molscribe_queue)`` 投递，返回
+    ``{"ok": True, "smiles": ...}`` 或 ``{"ok": False, "reason": ...}``。
+    不写 SSE 进度（内部同步 RPC 语义）。
+
+    P1 起：结果附带 MolJSON/RDKit 结构校验（``valid`` / ``atom_count`` /
+    ``ring_count`` / ``roundtrip_ok``），识别误差在进入下游推理前暴露。
+    """
+    from ..services.ocsr import validate_recognized_smiles
+
+    image_path = payload.get("image_path", "")
+    if not image_path:
+        return {"ok": False, "smiles": None, "reason": "missing image_path"}
+    return validate_recognized_smiles(image_path)
+
+
+@celery_app.task(
+    bind=True,
+    name="formunex.wiki_storm_report",
+    soft_time_limit=1500,
+    time_limit=1800,
+)
+def run_wiki_storm_report_task(self, payload: dict) -> dict:
+    """STORM longform report: outline → sequential draft → polish → persist."""
+    from ..services.wiki.storm_orchestrator import run_storm_report
+
+    task_id = self.request.id
+    tracker = ThinkingTracker(task_id, kind="wiki_storm_report")
+    tracker.emit(
+        "generating_outline",
+        "正在生成 STORM 大纲…",
+        progress=0.08,
+        step_id="generating_outline",
+        title="正在生成报告大纲…",
+    )
+
+    def progress_cb(
+        stage: str,
+        message: str,
+        progress: float = 0.0,
+        data: dict | None = None,
+    ) -> None:
+        tracker.emit(
+            stage,
+            message,
+            progress=float(progress or 0.0),
+            step_id=stage or None,
+            title=message or stage or "STORM",
+            kind="stage",
+            detail=message,
+            data=data,
+        )
+
+    try:
+        result = run_storm_report(
+            str(payload.get("project_id") or ""),
+            topic=str(payload.get("topic") or ""),
+            max_sections=payload.get("max_sections"),
+            perspectives=payload.get("perspectives"),
+            use_llm=bool(payload.get("use_llm", False)),
+            parallel=payload.get("parallel"),
+            max_workers=payload.get("max_workers"),
+            ensure_dossier=bool(payload.get("ensure_dossier", True)),
+            persist=bool(payload.get("persist", True)),
+            campaign_id=payload.get("campaign_id"),
+            task_id=task_id,
+            progress_cb=progress_cb,
+        )
+        # Drop heavy markdown from terminal snapshot if enormous; keep path.
+        slim = {
+            k: v
+            for k, v in result.items()
+            if k != "markdown" or len(str(v or "")) < 50_000
+        }
+        tracker.finish()
+        persist_result(task_id, slim, failed=False)
+        _persist_terminal(task_id, "wiki_storm_report", slim)
+        return result
+    except Exception as exc:
+        logger.exception("wiki_storm_report task failed")
+        tracker.finish(error=True)
+        err = {"error": str(exc), "disclaimer": "draft_not_claims"}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(
+            task_id, "wiki_storm_report", err, failed=True, message=str(exc)
+        )
+        raise
+
+
+# Legacy names kept for imports
+optimize_task = run_optimize_task
+loop_task = run_loop_task
+deep_research_task = run_deep_research_task
+recommend_task = run_recommend_task
+ingest_patents_task = run_deep_research_task  # unused alias
+wiki_storm_report_task = run_wiki_storm_report_task
+
+
+@celery_app.task(name="formunex.noop")
+def noop_task(*args: object, **kwargs: object) -> str:
+    """Producer warm-up probe (2026-09-05): 无副作用, 只验证 broker 通道."""
+    return "ok"
+
+
+@celery_app.task(bind=True, name="formunex.kg_relations_rebuild", soft_time_limit=5400, time_limit=7200)
+def run_kg_relations_rebuild(self, payload: dict) -> dict:
+    """补语义关系提取: 实体/提及已在库, 只重跑关系(LLM 慢).
+
+    Top-5′ #4: ``force=True`` 默认，不要求 kg_relation_extract_enabled。
+    ``limit`` 限制源数量（默认 50）。
+    """
+    task_id = self.request.id
+    try:
+        from ..services.kg.entity_linker import rebuild_relations
+
+        source_id = payload.get("source_id")
+        limit = payload.get("limit")
+        force = bool(payload.get("force", True))
+        result = rebuild_relations(
+            [source_id] if source_id else None,
+            limit=int(limit) if limit is not None else None,
+            force=force,
+        )
+        return {
+            "task_id": task_id,
+            "source_id": source_id,
+            **result,
+        }
+    except Exception as exc:
+        logger.exception("kg relations rebuild failed")
+        return {"task_id": task_id, "error": str(exc)}
+
+
+def _wiki_compile_impl(task_id: str, payload: dict) -> dict:
+    from ..services.wiki.compile import compile_source
+
+    source_id = str(payload.get("source_id") or "").strip()
+    result = compile_source(source_id)
+    return {"task_id": task_id, **result}
+
+
+@celery_app.task(bind=True, name="formunex.wiki_compile")
+def run_wiki_compile_task(self, payload: dict) -> dict:
+    return _wiki_compile_impl(self.request.id, payload)
+
+
+def dispatch_wiki_compile(source_id: str) -> str | None:
+    """Fire-and-forget Wiki compile after KB index. Never raises.
+
+    Eager mode uses a daemon thread (same pattern as ``dispatch_kb_ingest``)
+    so parent ingest/index paths stay non-blocking.
+    """
+    from ..config import get_settings
+
+    settings = get_settings()
+    if not settings.wiki_enabled or not settings.wiki_compile_on_ingest:
+        return None
+    sid = (source_id or "").strip()
+    if not sid:
+        return None
+    payload = {"source_id": sid}
+    try:
+        if settings.celery_eager:
+            task_id = f"wikicompile-{uuid.uuid4().hex[:16]}"
+            task_manager.register_celery_task(task_id, "wiki_compile")
+            threading.Thread(
+                target=lambda: _safe_wiki_compile(task_id, payload),
+                name="wiki-compile",
+                daemon=True,
+            ).start()
+            return task_id
+        async_result = run_wiki_compile_task.delay(payload)
+        task_manager.register_celery_task(async_result.id, "wiki_compile")
+        return async_result.id
+    except Exception as exc:
+        return degrade_return(logger, exc, "wiki compile dispatch failed", None)
+
+
+def _safe_wiki_compile(task_id: str, payload: dict) -> None:
+    try:
+        _wiki_compile_impl(task_id, payload)
+    except Exception as exc:
+        log_handled_exception(logger, exc, "wiki compile background thread")
+
+
+def warm_celery_producer(timeout: float = 60.0) -> None:
+    """发布一次 noop —— uvicorn 进程内首次 producer 初始化极慢/卡请求线程。
+
+    在 FastAPI lifespan 后台线程预热, 把 producer 首建移到启动期;
+    失败仅日志(首个 submit 请求会再付一次冷启动)。
+    """
+    try:
+        noop_task.delay()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "celery producer warmup failed (non-fatal)"
+        )
+
+
+
+# ── Async literature screening (W6-2) ─────────────────────────────────────────
+# Manifest > screening_async_threshold() 条目时走后台 job，进度经 task 进度
+# 管线（/api/tasks/{id}/stream）可查；小 manifest 保持同步直跑。
+
+
+def _screening_impl(task_id: str, payload: dict) -> dict:
+    """Shared body for the Celery task and the eager-mode background thread."""
+    from ..config import get_settings
+    from ..services import literature_screening as ls
+
+    project_id = str(payload.get("project_id") or "")
+    last = {"n": 0}
+
+    def _cb(done: int, total: int) -> None:
+        # 节流：每 25 条或收尾才 publish，避免 redis 风暴
+        if done >= total or done - last["n"] >= 25:
+            last["n"] = done
+            publish_progress(
+                task_id,
+                TaskProgressStatus.RUNNING,
+                stage="screening",
+                message=f"文献筛选 {done}/{total}",
+                progress=(done / total) if total else 0.0,
+                kind="screening",
+            )
+
+    try:
+        result = ls.screen_project(
+            project_id,
+            payload.get("criteria") or {},
+            apply=True,
+            settings=get_settings(),
+            preset=payload.get("preset"),
+            rule_name=payload.get("rule_name"),
+            progress_cb=_cb,
+        )
+        out = {
+            "project_id": project_id,
+            "summary": result.get("summary"),
+            "decisions": len(result.get("decisions") or []),
+            "preset": payload.get("preset"),
+            "rule_name": payload.get("rule_name"),
+        }
+        persist_result(task_id, out, failed=False)
+        _persist_terminal(task_id, "screening", out)
+        return out
+    except Exception as exc:
+        err = {"error": str(exc), "project_id": project_id}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "screening", err, failed=True)
+        log_handled_exception(logger, exc, "screening background job")
+        raise
+
+
+@celery_app.task(bind=True, name="formunex.screening")
+def run_screening_task(self, payload: dict) -> dict:
+    return _screening_impl(self.request.id, payload)
+
+
+def _safe_screening(task_id: str, payload: dict) -> None:
+    try:
+        _screening_impl(task_id, payload)
+    except Exception as exc:  # already persisted as failed inside the impl
+        log_handled_exception(logger, exc, "screening background thread")
+
+
+def dispatch_screening_job(
+    project_id: str,
+    criteria: dict,
+    *,
+    preset: str | None = None,
+    rule_name: str | None = None,
+    actor: str = "user",
+) -> str | None:
+    """Enqueue a background screening job; return task id for SSE/status polling.
+
+    Returns None when screening is disabled or dispatch itself fails (fail-open:
+    the caller can fall back to synchronous screening).
+    """
+    from ..config import get_settings
+    from ..services import literature_screening as ls
+
+    if not ls.screening_enabled(get_settings()):
+        return None
+    payload = {
+        "project_id": project_id,
+        "criteria": criteria or {},
+        "preset": preset,
+        "rule_name": rule_name,
+        "actor": actor,
+    }
+    try:
+        if get_settings().celery_eager:
+            task_id = f"screening-{uuid.uuid4().hex[:16]}"
+            task_manager.register_celery_task(task_id, "screening")
+            threading.Thread(
+                target=lambda: _safe_screening(task_id, payload),
+                name="screening",
+                daemon=True,
+            ).start()
+            return task_id
+        async_result = run_screening_task.delay(payload)
+        task_manager.register_celery_task(async_result.id, "screening")
+        return async_result.id
+    except Exception as exc:
+        return degrade_return(logger, exc, "screening dispatch failed", None)
+
+
+# ── P0-1: 全文下载失败重试队列（2026-10-11）─────────────────────────────
+# 指数退避：60s → 300s → 900s，最多 3 次。成功后走正常 persist 流程。
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    name="formunex.fulltext_retry",
+)
+def retry_fulltext_fetch(self, payload: dict) -> dict:
+    """重试一次失败的全文下载。
+
+    payload: {"identifier": str, "source": str, "kind": str,
+              "project_id": str|None, "title": str|None, "url": str|None}
+    """
+    from ..domain.schemas import Evidence
+    from ..services import fulltext_fetcher as ff
+
+    identifier = payload.get("identifier", "")
+    kind = payload.get("kind", "")
+    logger.info(
+        "fulltext_retry attempt %d/%d for %s",
+        self.request.retries + 1, 3, identifier,
+    )
+    try:
+        ev = Evidence(
+            source=payload.get("source", ""),
+            identifier=identifier,
+            title=payload.get("title") or identifier,
+            snippet="",
+            relevance=0.9,
+            url=payload.get("url"),
+        )
+        hit = ff._dispatch_fetch(kind, ev, timeout=30.0)
+        if not hit or not (hit.text or "").strip():
+            raise RuntimeError("retry fetch returned empty")
+        source_id = ff._persist_fulltext(
+            hit.text, ev, kind,
+            project_id=payload.get("project_id"),
+            acquisition=ff._last_acquisition(),
+            pdf_bytes=hit.pdf_bytes,
+            tables=hit.tables,
+        )
+        return {"ok": True, "source_id": source_id, "identifier": identifier}
+    except Exception as exc:
+        # 指数退避：60s, 300s, 900s
+        countdown = [60, 300, 900][min(self.request.retries, 2)]
+        logger.warning(
+            "fulltext_retry failed for %s (attempt %d): %s — retry in %ds",
+            identifier, self.request.retries + 1, exc, countdown,
+        )
+        # Bug 修复：self.retry() 抛 Retry 异常表示"将重试"，不能被 except 吞掉。
+        # max_retries=3 耗尽时 self.retry 会抛原异常，此时才返回失败。
+        if self.request.retries >= 3:
+            logger.error("fulltext_retry exhausted for %s: %s", identifier, exc)
+            return {"ok": False, "identifier": identifier, "error": str(exc)[:200]}
+        raise self.retry(exc=exc, countdown=countdown)
+
+
+def enqueue_fulltext_retry(
+    identifier: str, source: str, kind: str,
+    project_id: str | None = None, title: str | None = None,
+    url: str | None = None,
+) -> str | None:
+    """下载失败时入重试队列。返回 task id，失败时返回 None（fail-open）。"""
+    try:
+        from ..config import get_settings
+        if get_settings().celery_eager:
+            # eager 模式下直接同步重试一次（避免测试/单机环境堆积）
+            return None
+        payload = {
+            "identifier": identifier, "source": source, "kind": kind,
+            "project_id": project_id, "title": title, "url": url,
+        }
+        result = retry_fulltext_fetch.delay(payload)
+        logger.info("fulltext_retry enqueued for %s: %s", identifier, result.id)
+        return result.id
+    except Exception as exc:
+        logger.warning("enqueue_fulltext_retry failed (fail-open): %s", exc)
+        return None
+
+
+# ── P2-8: chunk 质量抽检（每天 1 次，由 beat 调度或手动触发）──────────────
+@celery_app.task(bind=True, name="formunex.chunk_quality_sample")
+def run_chunk_quality_sample(self, n: int = 20) -> dict:
+    """定期 chunk 质量抽检。fail-open，不阻塞。"""
+    from ..services import chunk_quality as cq
+    try:
+        return cq.run_quality_sample(n=n)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200]}

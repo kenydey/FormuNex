@@ -1,0 +1,137 @@
+"""Chat P0 — multi-turn, structured, and clarification schemas."""
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from .kg_schemas import EntityResolutionSummary, KGRetrieveStats
+from .schemas import Evidence
+
+ChatResponseFormat = Literal["markdown", "structured"]
+ClaimStatus = Literal["supported", "weak", "unsupported"]
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=8000)
+    citations: list[Evidence] = Field(default_factory=list)
+
+
+class ClarifiedEntity(BaseModel):
+    term: str = Field(max_length=128)
+    resolved: str = Field(max_length=256)
+    entity_id: str | None = None
+
+
+class FormulationHint(BaseModel):
+    ingredient: str
+    role: str = ""
+    typical_range: str = ""
+    evidence_ref: str
+
+
+class StructuredAnswer(BaseModel):
+    summary: str
+    key_findings: list[str] = Field(default_factory=list)
+    formulation_hints: list[FormulationHint] = Field(default_factory=list)
+    data_conflicts: list[str] = Field(default_factory=list)
+    uncertainty_notes: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class StructuredAnswerResponse(BaseModel):
+    """Wrapper for LLM structured output."""
+
+    answer: StructuredAnswer
+
+
+class ClarificationOption(BaseModel):
+    ambiguous_term: str
+    possible_meanings: list[str] = Field(default_factory=list)
+    question: str
+    candidate_entity_ids: list[str] = Field(default_factory=list)
+
+
+class SourcedClaim(BaseModel):
+    text: str
+    chunk_ids: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    status: ClaimStatus = "unsupported"
+    # P2-3: 原始核验判词（supported/unsupported/conflicting/insufficient），
+    # status 保持 back-compat 映射不变，前端用此字段渲染冲突态。
+    raw_verdict: str | None = None
+
+
+ChatMode = Literal["chat", "evidence"]
+
+
+class ChatRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    sources: list[Evidence] = Field(default_factory=list, max_length=50)
+    domain: str | None = None
+    project_id: str | None = None
+    include_entity_resolution: bool = False
+    history: list[ChatTurn] = Field(default_factory=list, max_length=12)
+    clarified_entities: list[ClarifiedEntity] = Field(default_factory=list, max_length=8)
+    response_format: ChatResponseFormat = "markdown"
+    attachment_source_ids: list[str] = Field(default_factory=list)
+    # 结构图识别结果（POST /api/chemical/structure 的返回）——相似材料名
+    # 注入检索 query；smiles/moljson 仅作上下文提示，可缺省。
+    structure: dict | None = None
+    # Skills / Evidence / Connectors (composer + picker)
+    mode: ChatMode = "chat"
+    selected_skills: list[str] = Field(default_factory=list, max_length=12)
+    selected_connectors: list[str] = Field(default_factory=list, max_length=8)
+    selected_mcp_servers: list[str] = Field(default_factory=list, max_length=4)
+    ref_doc_ids: list[str] = Field(default_factory=list, max_length=20)
+    # Opaque chat/session id for MCP writeish session grants (optional).
+    chat_session_id: str | None = Field(default=None, max_length=80)
+
+
+def structure_retrieval_context(structure: dict | None) -> str:
+    """Collapse a /api/chemical/structure payload into query-context terms.
+
+    Similar-material names are the retrieval lever (BM25/vector match the
+    names in documents); SMILES/MolJSON are hints for the LLM, not retrieval
+    tokens.
+    """
+    if not structure:
+        return ""
+    hits = structure.get("hits") or []
+    names: list[str] = []
+    for h in hits:
+        name = (h.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    # MolJSON contains no searchable chemical names — skip it here.
+    return " ".join(names[:5])
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    citations: list[Evidence]
+    rag_backend: str = "tfidf"
+    kb_chunks_used: int = 0
+    entity_resolution: EntityResolutionSummary | None = None
+    kg_retrieval_stats: KGRetrieveStats | None = None
+    structured: StructuredAnswer | None = None
+    clarification: ClarificationOption | None = None
+    rewritten_query: str | None = None
+    sourced_claims: list[SourcedClaim] | None = None
+    # Wave D — claim→passage audit table (supported/partial/unsupported/contradicted).
+    sources_audit: dict | None = None
+    mode: ChatMode | None = None
+    doi_results: list[dict] | None = None
+    citation_expand: list[dict] | None = None
+    evidence_provenance: dict | None = None
+    evidence_reviewer: dict | None = None
+    reviewer_fix: dict | None = None
+    mcp_permission_required: dict | None = None
+    mcp_tool_results: list[dict] | None = None
+    # Phase 4 — which data sources contributed to the answer, for the
+    # frontend/eval to distinguish: "structured_sql" vs "kb_evidence".
+    data_sources: list[str] | None = None
+    # B-1 — fail-open 降级显式提示位：numeric check 跳过、BM25-only 退化时
+    # 携带可见提示。每个元素 {"code": str, "message": str}，message 为中文。
+    notices: list[dict] | None = None

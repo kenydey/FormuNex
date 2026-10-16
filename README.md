@@ -1,1 +1,279 @@
-# FormuNex
+# FormuNex（方枢）
+
+**AI 驱动的产品研发与生命周期管理平台（R&D + PLM）** —— 由 FormuMind（AI 研发寻优）与
+MSDS-Generator（化学品安全合规与文档生成）融合而来，打通「文献专利洞察 → 需求契约 → 配方设计 →
+DOE 与贝叶斯寻优 → GB 30000 合规计算 → SDS / TDS / COA / 标签编制 → 定型发布」的完整研发数据链。
+
+- 开发方案：[docs/FormuNex_开发方案.md](docs/FormuNex_开发方案.md)
+- 环境变量已由 `FORMUMIND_*` 更名为 `FORMUNEX_*`；旧前缀在兼容期内仍会被读取并打印弃用警告
+  （见 `backend/app/env_compat.py`）。
+- FormuMind 时期的设计与评审文档归档于 [docs/archive/formumind/](docs/archive/formumind/)。
+
+---
+
+**AI-assisted formulation R&D platform for chemistry.**
+
+FormuNex takes an R&D requirement and runs a closed loop:
+
+```
+requirement → patent/literature retrieval → RAG-grounded research
+            → recommended formulations → DOE plan → cure/interface simulation
+            → Bayesian closed-loop optimization → Top-N formula leaderboard
+                          ↑                                  │
+                          └──── DOE experimental results ◄───┘
+                                (train data-driven models)
+```
+
+The goal is to raise formulation success rate and shorten the development cycle.
+Measured DOE/lab results are fed back to **train data-driven prediction models**
+that progressively supersede the empirical surrogate, so recommendations and
+optimization improve as real data accumulates.
+
+## Documentation
+
+New here? Start with the **5-minute quick-start** (with screenshots), then dive
+into the full guide for the API, configuration, and current product features:
+
+- 🚀 Quick start — [English](docs/QUICKSTART.md) · [中文](docs/快速入门.md)
+- 📗 User Guide (English) — [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
+- 📘 使用指南（中文）— [docs/使用指南.md](docs/使用指南.md)
+
+### Recent capabilities (2026-09)
+
+| Area | What landed |
+|------|-------------|
+| **Knowledge Hub** | Materials archive / retention, retrieval probe, **quality-ops** (scan pressure, topicality, hybrid p50/p95), Wiki pages + page graph, project dossier / STORM report |
+| **Recommend transparency** | `Formulation.explain`（为何推荐）: objectives hit, constraint miss, KG signals, **supply flags**, uncertainty, bias-corrected badge; **约束追踪** for which brief fields wire into scoring / DOE |
+| **Supply** | Manual supplier quotes on materials (`price` / lead time / MOQ / `stale_price`); badges on substitution candidates |
+| **Workbench flywheel** | Project-level **auto_loop_on_sync** and **prediction_bias_soft_correct** (OR global; both default **off**); campaign loop status + BiasTrend |
+| **Retrieval** | Persistent KB `hybrid_search` (BM25 + cosine, scan-gated BM25 prefilter) — **not** the same path as session `rag.BM25FAISSStore` |
+| **Main path** | Right-rail **PathWizard** (formula / substitute / knowledge) + env-flag maturity badges |
+
+Product defaults stay conservative: no auto TTL purge, dual-write of `suppliers_json` remains on, global auto_loop / auto_adopt / soft-correct stay **off** unless you opt in per project or env.
+
+## Architecture
+
+A lightweight "glue" monorepo: FormuNex owns the orchestration, domain
+knowledge, and UI; heavy AI/physics engines are pulled in as **optional**
+dependencies or Docker images and can auto-upgrade with the ecosystem.
+
+| Layer | Tech | In this repo |
+|-------|------|--------------|
+| Frontend | Vite + React + TypeScript + Tailwind + Zustand | 3-pane dark industrial UI (`frontend/`) |
+| Gateway | FastAPI | research / DOE / optimize / tasks routers (`backend/app/api`) |
+| Async | Celery + Redis | optimization & ingestion tasks, in-process fallback (`backend/app/worker`) |
+| Domain | Pure Python | schemas, knowledge base, **real DOE engine**, stoichiometry (`backend/app/domain`) |
+| Services | Adapter + fallback | LLM, literature, RAG, predictor, optimizer, simulator (`backend/app/services`) |
+
+### Adapter + fallback design
+
+Every external engine sits behind an adapter with a **deterministic offline
+fallback**, so the platform runs end-to-end today — no GPU, API key, or C++
+toolchain required — and "lights up" the real engine when it is installed:
+
+| Capability | Real engine (optional) | Built-in fallback |
+|------------|------------------------|-------------------|
+| Research / chat | 9 LLM providers — Claude, OpenAI, Gemini, Grok, Meta (Groq), DeepSeek, Qwen, Kimi, MiniMax | rule-based synthesis over the knowledge base |
+| Patent search | Google Patents landing pages (US/CN/EP/WO/JP full text, no OCR) | curated seed corpus per domain |
+| Literature search | `arxiv`, `semanticscholar` | (offline returns no extra hits) |
+| Internet search | `duckduckgo-search` | (offline returns no extra hits) |
+| File ingestion | pymupdf4llm (layout-aware) → docling → marker → MinerU → RapidOCR → `markitdown` → `pypdf` | plain-text decoder |
+| RAG (session chat) | ColBERT/PyLate (GPU) · **BM25+FAISS** (CPU) · sentence-transformers | in-memory TF-IDF |
+| RAG (persistent KB) | **hybrid BM25 + embedding cosine** over `document_chunks` (`/api/kb/hybrid-search`); scan-capped, optional BM25 prefilter when near cap / hot p95 | keyword-only when no embeddings |
+| Grounded Q&A | ChemCrow agent (chemistry questions) · paper-qa (semantic synthesis) | TF-IDF re-rank → configured LLM → snippet |
+| Property prediction | RDKit + DeepChem/ChemBERTa · MoLFormer (reserved) | transparent empirical surrogate |
+| VOC / density | `thermo` mass-weighted density | nominal 1.3 kg/L assumption |
+| Compound data | PubChemPy (SMILES / molar mass) | hand-curated raw-material library |
+| Optimization | BayBE → BoTorch (GP-EI) → Optuna (NSGA-II/TPE, CPU) | numpy UCB Bayesian optimizer |
+| Stoichiometry | ChemFormula / RDKit | self-contained formula parser |
+| Cure/MD simulation | HTPolyNet · LUNAR · LAMMPS (Docker) | analytic cure/interface approximation |
+
+The genuinely lightweight, high-value parts — **the DOE engine** (full /
+fractional factorial, Plackett-Burman, central composite, Latin hypercube) and
+the **Bayesian optimizer** — are implemented for real in pure numpy.
+
+## Quick start
+
+> **Python 3.11 or newer.** 3.11 is what the Docker image and the blocking CI job run; the full suite also passes on 3.12 and 3.13 (a non-blocking CI job, `backend-newer-python`). 3.10 cannot work: the pinned `numpy==2.4.6` requires 3.11. The Windows installer picks 3.12, then 3.11 (ColBERT's Windows wheels stop at 3.12), then 3.13 / 3.14, and refuses 3.10 and below; both installers warn on 3.14 or newer, where compiled dependencies (rdkit, torch) often have no wheels yet.
+
+### One-click install (Linux/macOS)
+
+```bash
+./scripts/install.sh                 # backend venv + [dev,llm] + frontend npm
+cp .env.example .env                 # optional keys; see API auth below
+```
+
+### One-click install (Windows, native PowerShell)
+
+```powershell
+.\install.bat                        # venv + requirements + engine extras + npm + alembic
+scripts\windows\start-dev.ps1 start  # Redis/Neo4j via Docker, then API + worker + Vite
+scripts\windows\start-dev.ps1 status # what is up (ports + /health + containers)
+```
+
+> **Windows 说明**：推荐 **Python 3.12**——ColBERT 依赖链
+> (`ragatouille` → `voyager`) 只有到 CPython 3.12 的 Windows wheel，3.13/3.14 上
+> 安装脚本会自动跳过该档并给出提示（RAG 会退回 BM25/TF-IDF/向量检索）。可选引擎
+> 分档安装（`-Minimal` 只装核心，`-Full` 追加 torch 的 bo/heavy/colbert），因为
+> pip 把 extras 放在同一个解析事务里，一个装不上的依赖会让整条命令白跑。脚本直接
+> 调用 `backend\.venv\Scripts\python.exe`，不需要 `activate`，因此不受
+> `Set-ExecutionPolicy` 限制；Celery 用 `--pool=solo`（Windows 不支持默认 prefork
+> 池），uvicorn 用 `--reload-dir app` 而不是 `--reload-exclude .venv\*`
+> （PowerShell 会把后者展开成真实文件列表）。详见
+> [`scripts/windows/README.md`](scripts/windows/README.md)。
+
+### Local (no Docker, fully offline)
+
+```bash
+# Backend
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+bash scripts/apply_patches.sh      # 第三方库补丁(幂等,pymupdf4llm RapidOCR 属性修复)
+pytest -q                          # 430+ tests, all offline
+uvicorn app.main:app --reload --reload-exclude .venv  # http://localhost:8000/docs
+
+# Frontend (separate shell)
+cd frontend
+npm install
+npm run dev                        # http://localhost:5173
+```
+
+> **第三方库补丁**:`pymupdf4llm==1.28.0` 的 RapidOCR 检测器属性名有 bug
+> (`text_detector` vs 实际 `text_det`),导致扫描版 PDF 的本地 OCR 每次都报
+> `No text_detector available`。`scripts/apply_patches.py` 在 pip 安装后从
+> `backend/patchspec/` 应用补丁修复,幂等可重复执行。版本已 pin 在
+> `backend/pyproject.toml` 的 `parse_pro` extra(`pymupdf4llm==1.28.0`、
+> `PyMuPDF==1.28.0`、`rapidocr==3.9.2`)。详见
+> `backend/scripts/reference/rapidocr-attribute-fix.md`。
+
+### Docker
+
+```bash
+cp .env.example .env               # optional: LLM keys, FORMUNEX_API_TOKEN, Tavily/SerpAPI
+docker compose up                  # redis + backend + worker + frontend
+docker compose --profile heavy up  # also start LAMMPS / HTPolyNet engines
+```
+
+**Intranet / lab LAN:** set `FORMUNEX_API_AUTH_ENABLED=false` in `.env` so the
+Settings dialog (LLM / API keys / dependency manager) works without a platform
+bearer token. **Public deployment:** keep auth on (default), set
+`FORMUNEX_API_TOKEN`, and mirror it in the UI (Settings → API 访问令牌) or via
+the same value in Settings → API 访问令牌 (runtime; do not bake into the image).
+
+Host-network overlay (restricted Docker bridge): `docker compose -f docker-compose.yml -f docker-compose.host.yml up -d`
+
+Enterprise ELN (Postgres + Datalab): `docker compose -f docker-compose.yml -f docker-compose.eln.yml up` — see `deploy/eln/README.md`.
+
+## API
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/auth/status` | whether platform bearer auth is required (public, no token) |
+| POST | `/api/search` | multi-source retrieval (patents / literature / internet) → merged, de-duped evidence |
+| POST | `/api/ingest` | upload a local file (PDF/DOCX/XLSX/PPTX/HTML/image…) → extracted evidence chunks |
+| POST | `/api/chat` | Q&A grounded in the loaded sources (RAG re-rank → LLM answer with citations) |
+| GET/POST | `/api/settings` | read / update the active LLM provider, model, key, base URL; `POST /api/settings/test` checks the connection |
+| GET/POST | `/api/settings/secrets` | grouped API keys (LLM, SerpAPI, Tavily, EPO, …) for Settings → API 配置 |
+| GET | `/api/dependencies` | optional-package install status (Settings → 依赖管理) |
+| POST | `/api/dependencies/install` | async pip install of catalogued extras → `task_id` + SSE |
+| GET | `/api/chemical/lookup?q=` | resolve ingredient name → CAS / SMILES / MW |
+| POST | `/api/intent/parse` | natural-language brief → structured `Requirement` (incl. `constraint_values`) |
+| POST | `/api/research` | CRAG-grounded retrieve + recommend formulations |
+| POST | `/api/research/deep` | async deep research → `task_id` + SSE |
+| POST | `/api/research/modify` | async AI formula modification from a prompt → `task_id` + SSE |
+| POST | `/api/formulations/recommend` | LLM structured formulation JSON (offline fallback when no key) |
+| POST | `/api/formulations/manual` | validate / enrich / score a hand-entered formulation |
+| POST | `/api/formulations/validate` | CAS / structure enrichment for formulation lists |
+| POST | `/api/doe?design=…` | generate a DOE plan (`full_factorial`, `fractional_factorial`, `plackett_burman`, `ccd`, `lhs`) |
+| GET | `/api/doe/{plan_id}/export?format=csv\|xlsx` | export a generated plan as a fill-in worksheet (blank `measured_*` columns) |
+| POST | `/api/optimize` | start the async **multi-objective** closed-loop optimizer → returns `task_id` |
+| GET | `/api/tasks/{id}` | poll task progress + result (Top-N leaderboard) |
+| GET | `/api/tasks/{id}/stream` | SSE progress (use `?token=` when bearer auth is on) |
+| POST | `/api/experiments` | feed back measured DOE/lab results → persist + (re)train models |
+| POST | `/api/experiments/import-csv` | upload a filled-in worksheet → bulk-ingest results + (re)train |
+| POST | `/api/train` | force a retrain over all stored experiments |
+| GET | `/api/models` | list trained models with `n_samples`, `R²`, `cv_R²`, `RMSE` |
+| GET | `/api/meta`, `/api/templates/{domain}` | metadata & baseline templates |
+| GET | `/api/kb/stats`, `/api/kb/quality-ops` | KB scan pressure / quality aggregate (Hub) |
+| POST | `/api/kb/hybrid-search`, `/api/kb/query-test` | persistent-KB hybrid retrieval + scored probe |
+| POST | `/api/kb/retention/purge` | dry-run / confirm purge of soft-archived sources (never auto) |
+| GET/POST | `/api/wiki/…` | Wiki pages, graph, dossier, STORM report (flag-gated) |
+| PUT | `/api/experiments/workbench/sync` | AG Grid ledger sync; optional project auto-loop |
+| GET | `/api/experiments/workbench/{id}/bias-trend` | prediction_bias trend for soft-correct decisions |
+| GET | `/health` | service + active-engine status |
+
+## DOE feedback & model training (回灌)
+
+The empirical predictor is only a prior. As you run the DOE plans the platform
+proposes and measure real performance, post the results back:
+
+```bash
+curl -X POST localhost:8000/api/experiments -H 'content-type: application/json' -d '{
+  "records": [
+    {"domain": "anticorrosion_coating",
+     "factors": {"Zinc phosphate": 12, "Bisphenol-A epoxy (DGEBA)": 38, "Polyamide hardener": 14},
+     "cure_temperature_c": 80,
+     "measured": {"salt_spray_hours": 980}}
+  ]
+}'
+```
+
+Each record is featurized (`backend/app/domain/features.py`) into a role-based
+composition + process vector. Once a metric has at least
+`FORMUNEX_MIN_TRAIN_SAMPLES` (default 4) samples, a model is trained per
+`(domain, metric)` — scikit-learn `RandomForestRegressor` when installed,
+otherwise a self-contained numpy ridge regressor. `predictor.predict` then
+**blends** the trained model with the empirical prior, weighting the model more
+as samples accumulate (`w = n / (n + 8)`), so optimization and recommendations
+shift toward measured reality. The dataset is the source of truth: models are
+rebuilt from the persisted experiments on startup (no model binaries stored).
+
+## Enabling the real engines
+
+Core **recommend**, **native DOE**, and the **built-in numpy optimizer** work
+out of the box — no BayBE / Optuna / BoTorch required. Install optional extras
+on a capable machine when you want those engines; the adapters switch over
+automatically — no code change:
+
+```bash
+pip install -e ".[llm]"          # Claude + OpenAI + Gemini SDKs (covers all 9 providers)
+pip install -e ".[science]"      # scipy, scikit-learn, RDKit, ChemFormula, thermo
+pip install -e ".[optimize]"     # optuna (optional CPU multi-objective; native optimizer is default)
+pip install -e ".[bo]"           # BoTorch GP optimizer (optional; requires torch CPU)
+pip install -e ".[baybe]"        # BayBE constrained Bayesian active learning (optional DOE)
+pip install -e ".[pydoe]"        # pyDOE classic designs (LHS/CCD/Box-Behnken/…)
+pip install -e ".[intel]"        # paper-qa, molbloom, pubchempy, ddgs (no chemcrow — de-ChemCrow 2026-09); arXiv is a core dependency and Semantic Scholar is queried over HTTP, so neither needs an extra
+pip install -e ".[patents]"      # patent-client, for online USPTO/EPO search — ⚠️ replaces the pinned httpx and pypdf; read the warning below first
+pip install -e ".[file_ingest]"  # markitdown, pypdf, python-docx (local file upload)
+pip install -e ".[embedding]"    # sentence-transformers semantic RAG
+pip install -e ".[colbert,crag]" # ColBERT index + LangGraph CRAG research pipeline
+pip install -e ".[color]"        # colour-science CIELAB / CIEDE2000
+pip install -e ".[notebooklm]"   # notebooklm-py + Playwright (NotebookLM source)
+pip install -e ".[heavy]"        # torch, deepchem, transformers (MoLFormer), ase
+pip install -e ".[export]"       # openpyxl (XLSX DOE worksheet export; CSV needs nothing)
+```
+
+> ⚠️ **`.[patents]` replaces two pinned dependencies — which is why it is not part of `.[intel]` and nothing installs it for you.** `patent-client` (online USPTO/EPO patent search through its SDK) requires `httpx<0.28` and `pypdf<5.0`. pip resolves that conflict by *replacing* the pins instead of failing: `httpx 0.28.1→0.27.2` and `pypdf 6.19.0→4.3.1` — and pypdf is the parser that reads every uploaded and downloaded PDF; 4.3.1 has 49 published advisories (crafted-PDF denial of service). pip does not error and `pip check` reports nothing wrong. Install it only into an environment that does not parse untrusted PDFs, and only if you need the SDK: patent *full text* comes from Google Patents landing pages, and Google Patents / SerpAPI / the built-in seed corpus keep answering without it. The Docker image does not include it, Settings → 依赖管理 refuses it, and CI checks both (`.github/workflows/ci-deps.yml`: per-extra drift, and the Dockerfile's whole extras list resolved against `requirements.txt`).
+
+
+Or use **Settings → 依赖管理** in the UI to install catalogued packages asynchronously
+(`POST /api/dependencies/install`). The `heavy` extra (multi-GB torch stack) is intentionally
+omitted from the one-click catalog — install it manually when needed.
+
+The optimizer auto-selects the best engine installed (**BoTorch** → **Optuna** →
+the built-in numpy optimizer; **BayBE** when its extra is installed); grounded Q&A routes chemistry questions to
+**ChemCrow** and otherwise uses **paper-qa** semantic synthesis, both falling
+back to the TF-IDF + LLM path. Set `FORMUNEX_ENRICH_COMPOUNDS=true` to let
+**PubChemPy** backfill missing SMILES/molar-mass on startup. None of these are
+required — each lights up automatically when its library is present.
+
+The seven OpenAI-compatible providers (Grok, Meta via Groq, DeepSeek, Qwen,
+Kimi, MiniMax — plus OpenAI itself) all run through the single `openai` SDK
+with a per-provider `base_url`; Claude uses `anthropic` and Gemini uses
+`google-genai`. Pick the active provider/model in the in-app **Settings** dialog
+or via the `FORMUNEX_LLM_PROVIDER` / `FORMUNEX_*_API_KEY` environment variables
+(see `.env.example`).
+
+> The performance numbers produced offline are engineering-reasonable estimates
+> for screening, not laboratory-validated specifications.

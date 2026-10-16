@@ -1,0 +1,385 @@
+"""Raw-material registry (materials table).
+
+Backs ``knowledge.RAW_MATERIALS``. Seeded from the curated literal, then grown
+at runtime by manual entries and by promoting trade products harvested out of
+ingested literature (``kb_products``).
+
+Mirrors ``product_store``: per-item commits so one bad row can't abort a batch,
+an ``IntegrityError`` retry for the concurrent-insert race, and blank-only field
+merging so a harvested row can never overwrite curated chemistry.
+"""
+from __future__ import annotations
+
+import re
+import uuid
+from datetime import datetime, timezone
+
+from loguru import logger
+from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
+
+from ..services.errors import degrade_return
+from ..services.supplier_normalize import (
+    fetch_suppliers_for_materials,
+    sync_material_suppliers_from_json,
+)
+from .models import MaterialRow
+from .session_utils import commit_session
+from .db_common import escape_like
+
+# Spec keys that map 1:1 onto columns. Order is irrelevant; membership is not.
+_SPEC_FIELDS = (
+    "role", "formula", "smiles", "cas_no", "zh_name", "molar_mass",
+    "price_cny_per_kg", "voc_contrib", "density_gcm3", "oil_absorption",
+    "tg_k", "lab", "svhc", "carrier", "water_compatible",
+    "functional_class", "equivalent_weight", "hansen_d", "hansen_p",
+    "hansen_h", "hlb", "supplier", "lead_time_days", "availability",
+    "regulatory", "substitute_group", "archived",
+    # Transitional JSON projection; canonical store is suppliers +
+    # material_suppliers (alembic 0028). Dual-written on upsert.
+    "suppliers_json",
+)
+_TEXT_WIDTHS = {
+    "role": 60, "formula": 120, "cas_no": 32, "zh_name": 200, "carrier": 16,
+    "functional_class": 60, "supplier": 120, "availability": 16,
+    "substitute_group": 60,
+}
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+
+def norm_key(name: str) -> str:
+    """Normalized material key: strip separators and case."""
+    return re.sub(r"[\s\-–—_®™()]+", "", (name or "").lower())[:200]
+
+
+def _coerce(field: str, value):
+    width = _TEXT_WIDTHS.get(field)
+    if width is not None and value is not None:
+        return str(value)[:width]
+    return value
+
+
+def _supplier_payload(spec: dict) -> list | None:
+    """Return raw supplier list from ``suppliers_json`` or legacy ``suppliers``."""
+    if "suppliers_json" in spec:
+        return spec.get("suppliers_json")
+    if "suppliers" in spec:
+        return spec.get("suppliers")
+    return None
+
+
+def _apply_spec(row: MaterialRow, spec: dict, *, overwrite: bool) -> None:
+    """Merge a spec dict onto a row.
+
+    ``overwrite=False`` (the default for harvested/enrichment writes) only fills
+    columns that are currently blank, so curated values always win.
+    """
+    for field in _SPEC_FIELDS:
+        if field not in spec:
+            continue
+        if field == "suppliers_json":
+            # Handled by ``_sync_suppliers`` after sanitize (dual-write).
+            continue
+        value = spec[field]
+        if value is None:
+            continue
+        if not overwrite and getattr(row, field, None) not in (None, "", []):
+            continue
+        setattr(row, field, _coerce(field, value))
+    row.updated_at = _utcnow()
+
+
+def _sync_suppliers(session: Session, row: MaterialRow, spec: dict, *, overwrite: bool) -> None:
+    """Sanitize supplier payload, write link tables, dual-write JSON projection."""
+    raw = _supplier_payload(spec)
+    if raw is None:
+        return
+    existing_json = getattr(row, "suppliers_json", None) or []
+    if not overwrite and existing_json:
+        return
+    from ..config import get_settings
+
+    dual_write = get_settings().materials_suppliers_json_dual_write
+    cleaned = sync_material_suppliers_from_json(
+        session,
+        row.id,
+        raw,
+        source="upsert",
+        clear_json_projection=not dual_write,
+    )
+    row.suppliers_json = (cleaned or None) if dual_write else None
+
+
+def _hydrate_supplier_json(session: Session, rows: list[MaterialRow]) -> None:
+    """Prefer normalized link tables when present; keep JSON as fallback."""
+    if not rows:
+        return
+    by_id = fetch_suppliers_for_materials(session, [r.id for r in rows if r.id])
+    for row in rows:
+        linked = by_id.get(row.id) or []
+        if linked:
+            row.suppliers_json = linked
+
+
+class MaterialStore:
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self._session_factory = session_factory
+        # Bumped on every write; MaterialCatalog uses it to invalidate its
+        # in-process snapshot without querying on the read path.
+        self.generation = 0
+
+    # ── writes ─────────────────────────────────────────────────────────────
+
+    def upsert(
+        self,
+        name: str,
+        spec: dict,
+        *,
+        origin: str = "seed",
+        overwrite: bool = True,
+    ) -> bool:
+        """Insert or merge one material. Returns True when the row was touched."""
+        display = (name or "").strip()
+        if not display:
+            return False
+        key = norm_key(display)
+        try:
+            with commit_session(self._session_factory) as session:
+                row = session.query(MaterialRow).filter(MaterialRow.norm_key == key).first()
+                if row is None:
+                    row = MaterialRow(
+                        id=str(uuid.uuid4()),
+                        norm_key=key,
+                        name=display[:200],
+                        origin=origin,
+                        created_at=_utcnow(),
+                    )
+                    session.add(row)
+                    session.flush()
+                _apply_spec(row, spec, overwrite=overwrite)
+                _sync_suppliers(session, row, spec, overwrite=overwrite)
+        except IntegrityError:
+            with commit_session(self._session_factory) as session:
+                row = session.query(MaterialRow).filter(MaterialRow.norm_key == key).first()
+                if row is not None:
+                    _apply_spec(row, spec, overwrite=overwrite)
+                    _sync_suppliers(session, row, spec, overwrite=overwrite)
+        except Exception as exc:
+            return degrade_return(logger, exc, f"material upsert failed: {display}", False)
+        self.generation += 1
+        return True
+
+    def seed_missing(self, materials: dict[str, dict]) -> int:
+        """Insert curated materials that aren't in the table yet.
+
+        Idempotent and non-destructive: an existing row (possibly carrying
+        user edits or PubChem-backfilled SMILES) is left untouched.
+        """
+        written = 0
+        try:
+            with self._session_factory() as session:
+                existing = {r.norm_key for r in session.query(MaterialRow.norm_key).all()}
+        except Exception as exc:
+            return degrade_return(logger, exc, "material seed: read failed", 0)
+        for name, spec in materials.items():
+            if norm_key(name) in existing:
+                continue
+            if self.upsert(name, spec, origin="seed"):
+                written += 1
+        if written:
+            logger.info("Seeded material catalog: {} material(s)", written)
+        return written
+
+    def set_availability(self, name: str, availability: str) -> bool:
+        """Flag a material in_stock / restricted / discontinued."""
+        return self.upsert(name, {"availability": availability}, overwrite=True)
+
+    # ── reads ──────────────────────────────────────────────────────────────
+
+    def list_all(self, limit: int | None = None) -> list[MaterialRow]:
+        with self._session_factory() as session:
+            query = session.query(MaterialRow).order_by(MaterialRow.created_at, MaterialRow.name)
+            if limit is not None:
+                query = query.limit(limit)
+            rows = query.all()
+            _hydrate_supplier_json(session, rows)
+            session.expunge_all()
+            return rows
+
+    def get(self, name: str) -> MaterialRow | None:
+        with self._session_factory() as session:
+            row = (
+                session.query(MaterialRow)
+                .filter(MaterialRow.norm_key == norm_key(name))
+                .first()
+            )
+            if row is not None:
+                _hydrate_supplier_json(session, [row])
+                session.expunge(row)
+            return row
+
+    def find_by_cas(self, cas_no: str) -> MaterialRow | None:
+        cas = (cas_no or "").strip()
+        if not cas:
+            return None
+        with self._session_factory() as session:
+            return (
+                session.query(MaterialRow)
+                .filter(MaterialRow.cas_no == cas)
+                .order_by(MaterialRow.updated_at.desc())
+                .first()
+            )
+
+    def find_by_smiles(self, smiles: str) -> MaterialRow | None:
+        smi = (smiles or "").strip()
+        if not smi:
+            return None
+        with self._session_factory() as session:
+            return (
+                session.query(MaterialRow)
+                .filter(MaterialRow.smiles == smi)
+                .order_by(MaterialRow.updated_at.desc())
+                .first()
+            )
+
+    def set_archived(self, name: str, archived: bool = True) -> bool:
+        display = (name or "").strip()
+        if not display:
+            return False
+        # Seed-only rows get materialized on first archive so the flag persists.
+        return self.upsert(display, {"archived": bool(archived)}, overwrite=True)
+
+    def search(
+        self,
+        q: str = "",
+        *,
+        role: str = "",
+        availability: str = "",
+        functional_class: str = "",
+        substitute_group: str = "",
+        include_archived: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[MaterialRow]:
+        with self._session_factory() as session:
+            query = session.query(MaterialRow)
+            term = (q or "").strip()
+            if term:
+                like = f"%{escape_like(term)}%"
+                query = query.filter(
+                    or_(
+                        MaterialRow.name.ilike(like, escape="\\"),
+                        MaterialRow.zh_name.ilike(like, escape="\\"),
+                        MaterialRow.cas_no.ilike(like, escape="\\"),
+                        MaterialRow.supplier.ilike(like, escape="\\"),
+                    )
+                )
+            if role:
+                query = query.filter(MaterialRow.role == role)
+            if availability:
+                query = query.filter(MaterialRow.availability == availability)
+            if functional_class:
+                query = query.filter(MaterialRow.functional_class == functional_class)
+            if substitute_group:
+                query = query.filter(MaterialRow.substitute_group == substitute_group)
+            if not include_archived:
+                query = query.filter(
+                    or_(MaterialRow.archived.is_(False), MaterialRow.archived.is_(None))
+                )
+            rows = query.order_by(MaterialRow.name).offset(offset).limit(limit).all()
+            _hydrate_supplier_json(session, rows)
+            session.expunge_all()
+            return rows
+
+    def count(self) -> int:
+        with self._session_factory() as session:
+            return int(session.query(func.count(MaterialRow.id)).scalar() or 0)
+
+    def backfill_suppliers(
+        self,
+        *,
+        clear_json: bool = False,
+        limit: int | None = None,
+    ) -> dict[str, int]:
+        """Migrate ``suppliers_json`` blobs into normalized tables.
+
+        Returns counters: ``scanned``, ``with_json``, ``links_written``,
+        ``json_cleared``. Safe to re-run (replace links per material).
+        """
+        scanned = with_json = links = cleared = 0
+        try:
+            with commit_session(self._session_factory) as session:
+                query = session.query(MaterialRow).order_by(MaterialRow.name)
+                if limit is not None:
+                    query = query.limit(limit)
+                rows = query.all()
+                for row in rows:
+                    scanned += 1
+                    raw = getattr(row, "suppliers_json", None)
+                    if not raw:
+                        continue
+                    with_json += 1
+                    cleaned = sync_material_suppliers_from_json(
+                        session,
+                        row.id,
+                        raw,
+                        source="backfill",
+                        clear_json_projection=clear_json,
+                    )
+                    links += len(cleaned)
+                    if clear_json:
+                        row.suppliers_json = None
+                        cleared += 1
+                    else:
+                        row.suppliers_json = cleaned or None
+        except Exception as exc:
+            return degrade_return(
+                logger,
+                exc,
+                "material supplier backfill failed",
+                {"scanned": 0, "with_json": 0, "links_written": 0, "json_cleared": 0},
+            )
+        self.generation += 1
+        return {
+            "scanned": scanned,
+            "with_json": with_json,
+            "links_written": links,
+            "json_cleared": cleared,
+        }
+
+    @staticmethod
+    def row_to_spec(row: MaterialRow) -> dict:
+        """ORM row → a ``RAW_MATERIALS``-shaped spec dict.
+
+        NULL columns are **omitted**, not emitted as None: consumers read with
+        ``.get(key, default)`` and a stored None would defeat the default
+        (``carrier`` → "both", most visibly).
+        """
+        spec: dict = {"origin": row.origin or "seed"}
+        if getattr(row, "archived", False):
+            spec["archived"] = True
+        for field in _SPEC_FIELDS:
+            if field == "archived":
+                continue
+            value = getattr(row, field, None)
+            if value is None:
+                continue
+            spec[field] = value
+        return spec
+
+
+_store: MaterialStore | None = None
+
+
+def get_material_store() -> MaterialStore:
+    global _store
+    if _store is None:
+        from .database import default_session_factory
+
+        _store = MaterialStore(default_session_factory())
+    return _store

@@ -1,0 +1,368 @@
+import { useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { useStore } from "../store";
+import { api, type SearchSourceType } from "../api";
+import { SOURCE_LIMIT } from "../projectWorkspace";
+import Modal from "./Modal";
+
+const MODAL_SOURCE_TYPES: { id: SearchSourceType; label: string; icon: string }[] = [
+  { id: "patents", label: "专利", icon: "📄" },
+  { id: "surechembl", label: "专利化学", icon: "🧪" },
+  { id: "literature", label: "文献", icon: "📚" },
+  { id: "internet", label: "互联网", icon: "🌐" },
+];
+
+const ACCEPT = ".pdf,.docx,.doc,.xlsx,.pptx,.html,.htm,.txt,.md,.csv,.png,.jpg,.jpeg";
+
+export default function AddSourceModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const {
+    searchQuery,
+    sourceTypes,
+    sources,
+    selectedSources,
+    searchBusy,
+    setSourceTypes,
+    searchSources,
+    uploadFiles,
+    addSources,
+    uploadWarnings,
+  } = useStore(
+    useShallow((s) => ({
+      searchQuery: s.searchQuery,
+      sourceTypes: s.sourceTypes,
+      sources: s.sources,
+      selectedSources: s.selectedSources,
+      searchBusy: s.searchBusy,
+      setSourceTypes: s.setSourceTypes,
+      searchSources: s.searchSources,
+      uploadFiles: s.uploadFiles,
+      addSources: s.addSources,
+      uploadWarnings: s.uploadWarnings,
+    }))
+  );
+
+  const [keyword, setKeyword] = useState(searchQuery);
+  const [modalTypes, setModalTypes] = useState<SearchSourceType[]>(
+    sourceTypes.filter((t) => t !== "local" && t !== "notebooklm").length
+      ? sourceTypes.filter((t) => t !== "local" && t !== "notebooklm")
+      : (["patents", "surechembl", "literature", "internet"] as SearchSourceType[])
+  );
+  const [urlOpen, setUrlOpen] = useState(false);
+  const [urlValue, setUrlValue] = useState("");
+  const [textOpen, setTextOpen] = useState(false);
+  const [textTitle, setTextTitle] = useState("");
+  const [textBody, setTextBody] = useState("");
+  const [idOpen, setIdOpen] = useState(false);
+  const [idDocType, setIdDocType] = useState<"paper" | "patent" | "web">("paper");
+  const [idValue, setIdValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  function toggleType(t: SearchSourceType) {
+    setModalTypes((prev) =>
+      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+    );
+  }
+
+  async function runSearch() {
+    setError(null);
+    setSourceTypes(modalTypes);
+    // 累加模式：在现有数据源基础上追加新关键词的结果，而非清空重搜。
+    await searchSources(keyword, { append: true });
+  }
+
+  async function addUrl() {
+    if (!urlValue.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.ingestUrl(urlValue.trim());
+      addSources(res.evidence);
+      // P2: URL 抓取的解析提示同样可见。
+      if (res.warnings?.length) {
+        useStore.setState({ uploadWarnings: res.warnings });
+      }
+      setUrlOpen(false);
+      setUrlValue("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addText() {
+    if (!textBody.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.ingestText(textBody.trim(), textTitle.trim() || "Pasted text");
+      addSources(res.evidence);
+      setTextOpen(false);
+      setTextBody("");
+      setTextTitle("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addByIdentifier() {
+    if (!idValue.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.ingestTask(idDocType, idValue.trim());
+      addSources(res.evidence);
+      setIdOpen(false);
+      setIdValue("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ID_PLACEHOLDERS: Record<string, string> = {
+    paper: "DOI 或 arXiv id（如 10.1000/xyz123 / 2301.00001）",
+    patent: "专利号（如 US10435532B2 / CN110467878A）",
+    web: "网页 URL",
+  };
+
+  return (
+    <>
+      <Modal title="添加数据源 · Add sources" open={open} onClose={onClose} size="lg" testId="modal-add-source">
+        <div className="space-y-4">
+          <label className="block">
+            <span className="text-xs text-slate-400">关键词 · Search the web for new sources</span>
+            <div className="mt-1 flex gap-2">
+              <input
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder="输入检索关键词…"
+                className="flex-1 bg-ink border border-accent/40 rounded-lg px-3 py-2 text-sm outline-none"
+              />
+              <button
+                type="button"
+                disabled={searchBusy || modalTypes.length === 0}
+                onClick={() => void runSearch()}
+                className="shrink-0 bg-accent/90 hover:bg-accent text-ink font-semibold rounded-lg px-4 text-sm disabled:opacity-40"
+              >
+                {searchBusy ? "检索中…" : "检索"}
+              </button>
+            </div>
+          </label>
+
+          <div className="flex flex-wrap gap-2">
+            {MODAL_SOURCE_TYPES.map((t) => {
+              const on = modalTypes.includes(t.id);
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => toggleType(t.id)}
+                  className={`text-xs rounded-full px-3 py-1 border transition-colors ${
+                    on ? "border-accent/50 bg-accent/10 text-accent" : "border-edge text-slate-400"
+                  }`}
+                >
+                  {t.icon} {t.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div
+            className="border border-dashed border-edge rounded-xl p-6 text-center bg-ink/40"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              const files = Array.from(e.dataTransfer.files);
+              if (files.length) void uploadFiles(files);
+            }}
+          >
+            <p className="text-sm text-slate-300 mb-1">或拖拽文件到此处</p>
+            <p className="text-[11px] text-slate-500 mb-4">pdf, images, docs, audio, and more</p>
+            <div className="flex flex-wrap justify-center gap-2">
+              <input
+                ref={fileInput}
+                type="file"
+                accept={ACCEPT}
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  if (files.length) void uploadFiles(files);
+                  e.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileInput.current?.click()}
+                className="text-xs border border-edge rounded-full px-3 py-1.5 text-slate-300 hover:border-accent/40 hover:text-accent"
+              >
+                ⬆ 上传文件
+              </button>
+              <button
+                type="button"
+                onClick={() => setUrlOpen(true)}
+                className="text-xs border border-edge rounded-full px-3 py-1.5 text-slate-300 hover:border-accent/40 hover:text-accent"
+              >
+                🔗 添加网页
+              </button>
+              <button
+                type="button"
+                onClick={() => setIdOpen(true)}
+                className="text-xs border border-edge rounded-full px-3 py-1.5 text-slate-300 hover:border-accent/40 hover:text-accent"
+                title="按 DOI / arXiv / 专利号 / URL 导入（自动抓取全文入库）"
+              >
+                📇 按标识符
+              </button>
+              <button
+                type="button"
+                onClick={() => setTextOpen(true)}
+                className="text-xs border border-edge rounded-full px-3 py-1.5 text-slate-300 hover:border-accent/40 hover:text-accent"
+              >
+                📋 复制文本
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded p-2">
+              {error}
+            </div>
+          )}
+
+          {/* P2: 解析截断等提示 —— 不再只躺在日志里。 */}
+          {uploadWarnings.length > 0 && (
+            <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded p-2 space-y-1">
+              <div className="font-medium">解析提示</div>
+              {uploadWarnings.slice(0, 5).map((w, i) => (
+                <div key={i}>• {w}</div>
+              ))}
+              {uploadWarnings.length > 5 && (
+                <div className="text-amber-400/70">等 {uploadWarnings.length} 条</div>
+              )}
+            </div>
+          )}
+
+          <div className="text-[10px] text-slate-500 space-y-1">
+            <div className="flex justify-between">
+              <span>已加载资料</span>
+              <span className="font-mono">
+                {sources.length} / {SOURCE_LIMIT} · 已选 {selectedSources.length}
+              </span>
+            </div>
+            <div className="h-1.5 bg-edge rounded overflow-hidden">
+              <div
+                className="h-full bg-accent transition-all"
+                style={{ width: `${Math.min(100, (sources.length / SOURCE_LIMIT) * 100)}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal title="添加网页 URL" open={urlOpen} onClose={() => setUrlOpen(false)} nested size="md" testId="modal-add-url">
+        <div className="space-y-3">
+          <input
+            value={urlValue}
+            onChange={(e) => setUrlValue(e.target.value)}
+            placeholder="https://..."
+            className="w-full bg-ink border border-edge rounded px-3 py-2 text-sm font-mono"
+          />
+          <button
+            type="button"
+            disabled={busy || !urlValue.trim()}
+            onClick={() => void addUrl()}
+            className="w-full bg-accent/90 hover:bg-accent text-ink font-semibold rounded py-2 text-sm disabled:opacity-40"
+          >
+            {busy ? "抓取中…" : "确定添加"}
+          </button>
+        </div>
+      </Modal>
+
+      <Modal title="粘贴文本" open={textOpen} onClose={() => setTextOpen(false)} nested size="md" testId="modal-add-text">
+        <div className="space-y-3">
+          <input
+            value={textTitle}
+            onChange={(e) => setTextTitle(e.target.value)}
+            placeholder="标题（可选）"
+            className="w-full bg-ink border border-edge rounded px-3 py-2 text-sm"
+          />
+          <textarea
+            value={textBody}
+            onChange={(e) => setTextBody(e.target.value)}
+            rows={8}
+            placeholder="粘贴文本内容…"
+            className="w-full bg-ink border border-edge rounded px-3 py-2 text-sm resize-none"
+          />
+          <button
+            type="button"
+            disabled={busy || !textBody.trim()}
+            onClick={() => void addText()}
+            className="w-full bg-accent/90 hover:bg-accent text-ink font-semibold rounded py-2 text-sm disabled:opacity-40"
+          >
+            {busy ? "添加中…" : "确定添加"}
+          </button>
+        </div>
+      </Modal>
+
+      <Modal
+        title="按标识符导入"
+        open={idOpen}
+        onClose={() => setIdOpen(false)}
+        nested
+        size="md"
+        testId="modal-add-identifier"
+      >
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            {(
+              [
+                { id: "paper", label: "📄 文献 DOI/arXiv" },
+                { id: "patent", label: "📃 专利号" },
+                { id: "web", label: "🌐 网页" },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setIdDocType(t.id)}
+                className={`text-xs rounded-full px-3 py-1.5 border transition-colors ${
+                  idDocType === t.id
+                    ? "border-accent/50 bg-accent/10 text-accent"
+                    : "border-edge text-slate-400"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <input
+            value={idValue}
+            onChange={(e) => setIdValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && idValue.trim() && !busy) void addByIdentifier();
+            }}
+            placeholder={ID_PLACEHOLDERS[idDocType]}
+            className="w-full bg-ink border border-edge rounded px-3 py-2 text-sm font-mono"
+          />
+          <p className="text-[10px] text-slate-500">
+            自动获取全文并入库（OA 优先, 多源兜底）; 成功后出现在左侧「已加载资料」并可立即用于推荐/问答检索。
+          </p>
+          <button
+            type="button"
+            disabled={busy || !idValue.trim()}
+            onClick={() => void addByIdentifier()}
+            className="w-full bg-accent/90 hover:bg-accent text-ink font-semibold rounded py-2 text-sm disabled:opacity-40"
+          >
+            {busy ? "抓取入库中…" : "确定导入"}
+          </button>
+        </div>
+      </Modal>
+    </>
+  );
+}

@@ -1,0 +1,1620 @@
+"""LLM Wiki read APIs (W1)."""
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
+
+from ..config import get_settings
+from ._downloads import ascii_header_value, attachment_headers
+from ..db.wiki_store import get_wiki_store
+
+router = APIRouter(prefix="/wiki", tags=["wiki"])
+
+
+class WikiPageItem(BaseModel):
+    id: str
+    path: str
+    kind: str
+    title: str
+    norm_key: str = ""
+    entity_id: str | None = None
+    source_ids: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+    revision: int = 1
+    updated_at: str | None = None
+    project_id: str | None = None
+
+
+class WikiPageDetail(WikiPageItem):
+    markdown: str = ""
+
+
+class WikiPagesResponse(BaseModel):
+    pages: list[WikiPageItem]
+    total: int
+
+
+def _require_wiki() -> None:
+    if not get_settings().wiki_enabled:
+        raise HTTPException(status_code=409, detail="LLM Wiki 未启用（FORMUNEX_WIKI_ENABLED）")
+
+
+def _item(row) -> WikiPageItem:
+    return WikiPageItem(
+        id=row.id,
+        path=row.path,
+        kind=row.kind,
+        title=row.title or "",
+        norm_key=row.norm_key or "",
+        entity_id=row.entity_id,
+        source_ids=list(row.source_ids or []),
+        flags=list(row.flags or []),
+        revision=int(row.revision or 1),
+        updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        project_id=getattr(row, "project_id", None),
+    )
+
+
+@router.get("/pages", response_model=WikiPagesResponse)
+def list_pages(
+    kind: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    project_id: str | None = Query(
+        default=None,
+        description="When set, only dossier/reports for this project and wiki pages "
+        "whose source_ids belong to the project (strict; no global leak). "
+        "Attribution uses path conventions + source_ids (project_scope); the "
+        "wiki_pages.project_id column (0033) speeds up chat retrieval.",
+    ),
+) -> WikiPagesResponse:
+    _require_wiki()
+    store = get_wiki_store()
+    if project_id:
+        from ..services.wiki.project_scope import filter_wiki_rows
+
+        # Over-fetch then filter — attribution needs path conventions +
+        # source_ids, which a plain column filter cannot express.
+        scan = store.list_pages(kind=kind, limit=min(500, max(limit + offset, limit * 5)), offset=0)
+        scoped = filter_wiki_rows(scan, project_id)
+        rows = scoped[offset : offset + limit]
+        return WikiPagesResponse(pages=[_item(r) for r in rows], total=len(scoped))
+    rows = store.list_pages(kind=kind, limit=limit, offset=offset)
+    return WikiPagesResponse(pages=[_item(r) for r in rows], total=len(rows))
+
+
+@router.get("/pages/{page_id}", response_model=WikiPageDetail)
+def get_page(page_id: str) -> WikiPageDetail:
+    _require_wiki()
+    store = get_wiki_store()
+    row = store.get(page_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="wiki page not found")
+    md = store.read_markdown(row.path) or ""
+    base = _item(row)
+    return WikiPageDetail(**base.model_dump(), markdown=md)
+
+
+@router.get("/by-path", response_model=WikiPageDetail)
+def get_by_path(path: str = Query(min_length=1)) -> WikiPageDetail:
+    _require_wiki()
+    store = get_wiki_store()
+    row = store.get_by_path(path)
+    if row is None:
+        raise HTTPException(status_code=404, detail="wiki page not found")
+    md = store.read_markdown(row.path) or ""
+    base = _item(row)
+    return WikiPageDetail(**base.model_dump(), markdown=md)
+
+
+class WikiFlagAction(BaseModel):
+    id: str
+    label: str
+    hint: str = ""
+    target: str = ""
+    # S5: explicit apply-broken payload (only set on apply_broken_fix_* chips)
+    broken: str = ""
+    replacement_path: str = ""
+    mode: str = ""
+
+
+class WikiFlagItem(BaseModel):
+    id: str
+    path: str
+    kind: str
+    title: str = ""
+    norm_key: str = ""
+    flags: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    actions: list[WikiFlagAction] = Field(default_factory=list)
+
+
+class WikiFlagsResponse(BaseModel):
+    pages: list[WikiFlagItem]
+
+
+class WikiLintRunRequest(BaseModel):
+    limit: int = Field(default=200, ge=1, le=500)
+    detect_orphan: bool = True
+
+
+class WikiLintSweepRequest(BaseModel):
+    limit: int = Field(default=200, ge=1, le=500)
+    detect_orphan: bool = True
+
+
+class WikiApplyBrokenRequest(BaseModel):
+    path: str = Field(min_length=1)
+    broken: str = Field(min_length=1)
+    replacement_path: str = Field(min_length=1)
+    mode: str = Field(default="rewrite", description="rewrite | append_related")
+
+@router.get("/flags", response_model=WikiFlagsResponse)
+def list_flagged(
+    limit: int = Query(default=50, ge=1, le=200),
+    project_id: str | None = Query(default=None),
+) -> WikiFlagsResponse:
+    _require_wiki()
+    from ..services.wiki.lint import list_flagged_pages
+    from ..services.wiki.project_scope import wiki_page_in_project, project_source_id_set
+
+    rows = list_flagged_pages(limit=limit if not project_id else min(500, max(limit * 5, limit)))
+    if project_id:
+        allowed = project_source_id_set(project_id)
+        rows = [
+            r
+            for r in rows
+            if wiki_page_in_project(
+                path=r.get("path") or "",
+                page_source_ids=r.get("source_ids"),
+                project_id=project_id,
+                allowed_source_ids=allowed,
+            )
+        ][:limit]
+    return WikiFlagsResponse(pages=[WikiFlagItem(**r) for r in rows])
+
+
+@router.post("/lint/run")
+def run_lint_endpoint(body: WikiLintRunRequest | None = None) -> dict:
+    """W4 ops: scan pages for stale/conflict/orphan/broken and persist flags."""
+    _require_wiki()
+    from ..services.wiki.lint import run_lint_pass
+
+    req = body or WikiLintRunRequest()
+    return run_lint_pass(limit=req.limit, detect_orphan=req.detect_orphan)
+
+
+@router.post("/lint/sweep")
+def sweep_lint_endpoint(body: WikiLintSweepRequest | None = None) -> dict:
+    """S1: re-lint currently flagged pages so obsolete lint flags are cleared."""
+    _require_wiki()
+    from ..services.wiki.lint import sweep_flagged_pages
+
+    req = body or WikiLintSweepRequest()
+    return sweep_flagged_pages(limit=req.limit, detect_orphan=req.detect_orphan)
+
+
+@router.post("/lint/apply-broken")
+def apply_broken_endpoint(body: WikiApplyBrokenRequest) -> dict:
+    """S5: explicit Hub click — rewrite broken [[wikilink]] or append ## Related."""
+    _require_wiki()
+    from ..services.wiki.lint import apply_broken_fix
+
+    try:
+        return apply_broken_fix(
+            path=body.path,
+            broken=body.broken,
+            replacement_path=body.replacement_path,
+            mode=body.mode,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/graph")
+def wiki_page_graph(
+    limit: int = Query(default=500, ge=1, le=2000),
+    kinds: str | None = Query(
+        default=None,
+        description="Comma-separated page kinds (e.g. material,concept,theme)",
+    ),
+    include_orphan: bool = Query(default=True),
+    project_id: str | None = Query(default=None),
+) -> dict:
+    """Wiki page [[wikilink]] graph for Hub canvas (not materials/formulation KG)."""
+    _require_wiki()
+    from ..services.wiki.page_graph import build_page_graph, page_graph_enabled
+
+    if not page_graph_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail="wiki_page_graph_enabled is false（FORMUNEX_WIKI_PAGE_GRAPH_ENABLED）",
+        )
+    kind_list = [k.strip() for k in (kinds or "").split(",") if k.strip()] or None
+    try:
+        return build_page_graph(
+            limit=limit,
+            kinds=kind_list,
+            include_orphan=include_orphan,
+            project_id=project_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class WikiSearchHit(BaseModel):
+    id: str = ""
+    path: str
+    kind: str = ""
+    title: str = ""
+    norm_key: str = ""
+    snippet: str = ""
+    flags: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    rank: float = 0.0
+
+
+class WikiSearchResponse(BaseModel):
+    hits: list[WikiSearchHit]
+    total: int
+    mode: str = "fts"  # fts | fallback
+
+
+@router.get("/search", response_model=WikiSearchResponse)
+def search_pages(
+    q: str = Query(min_length=1),
+    kind: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    project_id: str | None = Query(default=None),
+) -> WikiSearchResponse:
+    """Phase 2: metadata + body search (FTS5 when enabled, else keyword fallback)."""
+    _require_wiki()
+    settings = get_settings()
+    store = get_wiki_store()
+    hits: list[WikiSearchHit] = []
+    mode = "fallback"
+    fetch_limit = min(200, max(limit * 5, limit)) if project_id else limit
+
+    if settings.wiki_fts_enabled:
+        from ..services.wiki.fts import search_fts
+
+        raw = search_fts(store._session_factory, q, kind=kind, limit=fetch_limit)
+        if raw:
+            mode = "fts"
+            for r in raw:
+                row = store.get_by_path(r["path"])
+                hits.append(
+                    WikiSearchHit(
+                        id=row.id if row else "",
+                        path=r["path"],
+                        kind=r.get("kind") or (row.kind if row else ""),
+                        title=r.get("title") or (row.title if row else ""),
+                        norm_key=r.get("norm_key") or (row.norm_key if row else ""),
+                        snippet=r.get("snippet") or "",
+                        flags=list(row.flags or []) if row else [],
+                        source_ids=list(row.source_ids or []) if row else [],
+                        rank=float(r.get("rank") or 0),
+                    )
+                )
+
+    if not hits:
+        # Keyword fallback over listed pages (title/path/norm_key/body)
+        from ..services.wiki.schema import parse_front_matter
+
+        q_lower = q.lower()
+        tokens = [t for t in q_lower.replace("/", " ").split() if t]
+        if not tokens:
+            tokens = [q_lower]
+        scored: list[tuple[int, WikiSearchHit]] = []
+        for row in store.list_pages(kind=kind, limit=min(500, max(50, fetch_limit * 10))):
+            md = store.read_markdown(row.path) or ""
+            _, body = parse_front_matter(md)
+            blob = f"{row.title}\n{row.path}\n{row.norm_key}\n{body}".lower()
+            score = sum(1 for t in tokens if t in blob)
+            if score <= 0:
+                continue
+            snip = ""
+            for t in tokens:
+                idx = body.lower().find(t)
+                if idx >= 0:
+                    lo = max(0, idx - 40)
+                    snip = body[lo : idx + 80].replace("\n", " ")
+                    break
+            scored.append(
+                (
+                    score,
+                    WikiSearchHit(
+                        id=row.id,
+                        path=row.path,
+                        kind=row.kind,
+                        title=row.title or "",
+                        norm_key=row.norm_key or "",
+                        snippet=snip,
+                        flags=list(row.flags or []),
+                        source_ids=list(row.source_ids or []),
+                        rank=-float(score),
+                    ),
+                )
+            )
+        scored.sort(key=lambda x: x[0], reverse=True)
+        hits = [h for _, h in scored[:fetch_limit]]
+        mode = "fallback"
+
+    if project_id:
+        from ..services.wiki.project_scope import project_source_id_set, wiki_page_in_project
+
+        allowed = project_source_id_set(project_id)
+        hits = [
+            h
+            for h in hits
+            if wiki_page_in_project(
+                path=h.path,
+                page_source_ids=h.source_ids,
+                project_id=project_id,
+                allowed_source_ids=allowed,
+            )
+        ][:limit]
+
+    return WikiSearchResponse(hits=hits, total=len(hits), mode=mode)
+
+
+class ThemeCompileRequest(BaseModel):
+    system_key: str | None = None
+    topic: str | None = None
+    use_llm: bool = True
+
+
+class DossierEnsureRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    campaign_id: str | None = None
+    vertical: str | None = None
+    use_llm: bool = False
+
+
+class DossierPatchRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    sections: list[str] | None = None
+    campaign_id: str | None = None
+    vertical: str | None = None
+    use_llm: bool = False
+
+
+class DossierRefreshRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    sections: list[str] | None = None
+    campaign_id: str | None = None
+    vertical: str | None = None
+    use_llm: bool = False
+
+
+class DossierReportRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    template: str = Field(min_length=1, description="briefing|feasibility|formula-compare|patent-memo|deck")
+    campaign_id: str | None = None
+    prompt: str = ""
+    use_llm: bool = False
+    ensure_dossier: bool = True
+    persist: bool = True
+
+
+class DossierReportExportRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    template: str = Field(min_length=1)
+    format: str = Field(default="docx", description="md|docx|pdf|pptx")
+    campaign_id: str | None = None
+    prompt: str = ""
+    use_llm: bool = False
+    ensure_dossier: bool = True
+
+
+@router.post("/themes/compile")
+def compile_theme_endpoint(body: ThemeCompileRequest) -> dict:
+    """Phase 2: compile L2 system-overview theme (flag-gated, default off)."""
+    _require_wiki()
+    from ..services.wiki.theme import compile_theme
+
+    try:
+        return compile_theme(
+            system_key=body.system_key,
+            topic=body.topic,
+            use_llm=body.use_llm,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/dossier/ensure")
+def ensure_dossier_endpoint(body: DossierEnsureRequest) -> dict:
+    """P4: create/refresh project dossier skeleton + data.json (flag-gated)."""
+    _require_wiki()
+    from ..services.wiki.dossier import ensure_project_dossier
+
+    try:
+        return ensure_project_dossier(
+            body.project_id,
+            campaign_id=body.campaign_id,
+            vertical=body.vertical,
+            use_llm=body.use_llm,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/dossier/patch")
+def patch_dossier_endpoint(body: DossierPatchRequest) -> dict:
+    """P4.2: rebuild selected dossier sections from live pack (deterministic)."""
+    _require_wiki()
+    from ..services.wiki.dossier import patch_dossier_sections
+
+    try:
+        return patch_dossier_sections(
+            body.project_id,
+            body.sections,
+            campaign_id=body.campaign_id,
+            vertical=body.vertical,
+            use_llm=body.use_llm,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/dossier/refresh")
+def refresh_dossier_endpoint(body: DossierRefreshRequest) -> dict:
+    """P4.2: ensure dossier exists then patch sections (default: all)."""
+    _require_wiki()
+    from ..services.wiki.dossier import refresh_dossier
+
+    try:
+        return refresh_dossier(
+            body.project_id,
+            campaign_id=body.campaign_id,
+            sections=body.sections,
+            vertical=body.vertical,
+            use_llm=body.use_llm,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/reports/templates")
+def list_report_templates_endpoint() -> dict:
+    """P5: list available DossierPack-backed report templates."""
+    _require_wiki()
+    from ..services.wiki.report import list_report_templates
+    from ..services.wiki.report_export import export_capabilities
+
+    return {"templates": list_report_templates(), "export": export_capabilities()}
+
+
+@router.post("/dossier/report")
+def generate_dossier_report_endpoint(body: DossierReportRequest) -> dict:
+    """P5: generate a draft report from DossierPack (flag-gated)."""
+    _require_wiki()
+    from ..services.wiki.report import generate_report
+
+    try:
+        return generate_report(
+            body.project_id,
+            body.template,
+            campaign_id=body.campaign_id,
+            prompt=body.prompt or "",
+            use_llm=body.use_llm,
+            ensure_dossier=body.ensure_dossier,
+            persist=body.persist,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class StormReportRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    topic: str = ""
+    max_sections: int | None = Field(default=None, ge=3, le=12)
+    perspectives: list[str] = Field(default_factory=list)
+    use_llm: bool = False
+    parallel: bool | None = Field(
+        default=None,
+        description="Override wiki_storm_parallel; None = use server flag",
+    )
+    max_workers: int | None = Field(default=None, ge=1, le=8)
+    ensure_dossier: bool = True
+    persist: bool = True
+    campaign_id: str | None = None
+
+
+@router.post("/storm/report", status_code=202)
+def start_storm_report_endpoint(body: StormReportRequest, request: Request):
+    """STORM longform report (async). Flag-gated; does not mutate sync /dossier/report."""
+    import json as _json
+
+    from fastapi.responses import JSONResponse
+
+    from ..middleware.api_auth import get_current_owner
+    from ..worker.tasks import run_wiki_storm_report_task
+    from ._dispatch import submit
+
+    _require_wiki()
+    settings = get_settings()
+    if not settings.wiki_project_dossier_enabled:
+        raise HTTPException(status_code=409, detail="wiki_project_dossier_enabled is false")
+    if not settings.wiki_dossier_report_enabled:
+        raise HTTPException(status_code=409, detail="wiki_dossier_report_enabled is false")
+    if not settings.wiki_storm_report_enabled:
+        raise HTTPException(status_code=409, detail="wiki_storm_report_enabled is false")
+
+    payload = {
+        "project_id": body.project_id,
+        "topic": body.topic or "",
+        "max_sections": body.max_sections,
+        "perspectives": list(body.perspectives or []) or None,
+        "use_llm": bool(body.use_llm),
+        "parallel": body.parallel,
+        "max_workers": body.max_workers,
+        "ensure_dossier": bool(body.ensure_dossier),
+        "persist": bool(body.persist),
+        "campaign_id": body.campaign_id,
+    }
+    resp = submit(
+        run_wiki_storm_report_task,
+        payload,
+        "wiki_storm_report",
+        owner_id=get_current_owner(request),
+    )
+    content = _json.loads(resp.body)
+    content["disclaimer"] = "draft_not_claims"
+    return JSONResponse(status_code=202, content=content)
+
+
+@router.get("/storm/report/{project_id}")
+def get_storm_report_endpoint(project_id: str) -> dict:
+    """Read persisted STORM longform page for a project (if any)."""
+    _require_wiki()
+    from ..services.wiki.schema import project_report_path
+
+    store = get_wiki_store()
+    path = project_report_path(project_id, "storm")
+    row = store.get_by_path(path)
+    if row is None:
+        raise HTTPException(status_code=404, detail="storm report not found")
+    md = store.read_markdown(row.path) or ""
+    return {
+        "path": row.path,
+        "title": row.title or "",
+        "markdown": md,
+        "flags": list(row.flags or []),
+        "source_ids": list(row.source_ids or []),
+        "disclaimer": "draft_not_claims",
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+class StormReportExportRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    format: str = Field(default="md", description="md|docx|pdf|pptx")
+    regenerate: bool = False
+    topic: str = ""
+    use_llm: bool = False
+    parallel: bool | None = None
+    max_workers: int | None = Field(default=None, ge=1, le=8)
+    ensure_dossier: bool = True
+    campaign_id: str | None = None
+
+
+@router.post("/storm/report/export")
+def export_storm_report_endpoint(body: StormReportExportRequest):
+    """Export persisted STORM longform (or regenerate) as md/docx/pdf/pptx."""
+    _require_wiki()
+    from fastapi.responses import Response
+
+    from ..services.wiki.storm_orchestrator import export_storm_report
+
+    settings = get_settings()
+    if not settings.wiki_project_dossier_enabled:
+        raise HTTPException(status_code=409, detail="wiki_project_dossier_enabled is false")
+    if not settings.wiki_dossier_report_enabled:
+        raise HTTPException(status_code=409, detail="wiki_dossier_report_enabled is false")
+    if not settings.wiki_storm_report_enabled:
+        raise HTTPException(status_code=409, detail="wiki_storm_report_enabled is false")
+
+    try:
+        out = export_storm_report(
+            body.project_id,
+            body.format,
+            regenerate=body.regenerate,
+            topic=body.topic or "",
+            use_llm=body.use_llm,
+            parallel=body.parallel,
+            max_workers=body.max_workers,
+            ensure_dossier=body.ensure_dossier,
+            campaign_id=body.campaign_id,
+        )
+    except PermissionError as exc:
+        detail: dict | str = str(exc)
+        preflight = getattr(exc, "preflight", None)
+        if preflight is not None:
+            detail = {
+                "error": "publication_preflight_blocked",
+                "message": str(exc),
+                "preflight": preflight,
+            }
+        raise HTTPException(status_code=409, detail=detail) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+    headers = {
+        **attachment_headers(str(out["filename"])),
+        "X-FormuNex-Report-Path": ascii_header_value(str(out.get("path") or "")),
+        "X-FormuNex-Disclaimer": str(out.get("disclaimer") or "draft_not_claims"),
+    }
+    return Response(content=out["bytes"], media_type=out["media_type"], headers=headers)
+
+
+@router.post("/dossier/report/export")
+def export_dossier_report_endpoint(body: DossierReportExportRequest):
+    """P5.1: generate + export report as md/docx/pdf/pptx."""
+    _require_wiki()
+    from fastapi.responses import Response
+
+    from ..services.wiki.report import export_report
+
+    try:
+        out = export_report(
+            body.project_id,
+            body.template,
+            body.format,
+            campaign_id=body.campaign_id,
+            prompt=body.prompt or "",
+            use_llm=body.use_llm,
+            ensure_dossier=body.ensure_dossier,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+    headers = {
+        **attachment_headers(str(out["filename"])),
+        "X-FormuNex-Report-Path": ascii_header_value(str(out.get("path") or "")),
+        "X-FormuNex-Disclaimer": str(out.get("disclaimer") or "draft_not_claims"),
+    }
+    return Response(content=out["bytes"], media_type=out["media_type"], headers=headers)
+
+
+@router.get("/dossier/{project_id}")
+def get_dossier_endpoint(project_id: str) -> dict:
+    """Return dossier markdown + sidecar JSON if present."""
+    _require_wiki()
+    from ..services.wiki.dossier import get_dossier_page
+
+    try:
+        page = get_dossier_page(project_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if page is None:
+        raise HTTPException(status_code=404, detail="project dossier not found")
+    return page
+
+
+@router.get("/dossier/{project_id}/pack")
+def get_dossier_pack_endpoint(project_id: str, campaign_id: str | None = None) -> dict:
+    """Report foundation: structured DossierPack for the project."""
+    _require_wiki()
+    from ..services.wiki.dossier import get_dossier_pack
+
+    try:
+        return get_dossier_pack(project_id, campaign_id=campaign_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class WikiDraftSaveRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    question: str = ""
+    answer_markdown: str = Field(min_length=1)
+    title: str | None = None
+    source_ids: list[str] = Field(default_factory=list)
+    citations: list[dict] = Field(default_factory=list)
+    origin: str = Field(default="chat", description="chat | deep_research")
+
+
+@router.post("/drafts/save")
+def save_wiki_draft(body: WikiDraftSaveRequest) -> dict:
+    """S4: persist Chat/Deep Research answer as L2 ``queries/`` draft (flag-gated)."""
+    _require_wiki()
+    from ..services.wiki.draft_save import save_chat_draft
+
+    try:
+        return save_chat_draft(
+            project_id=body.project_id,
+            question=body.question or "",
+            answer_markdown=body.answer_markdown,
+            title=body.title,
+            source_ids=list(body.source_ids or []),
+            citations=list(body.citations or []),
+            origin=body.origin or "chat",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class WikiCatalogRebuildRequest(BaseModel):
+    persist: bool = True
+    limit: int = Field(default=500, ge=1, le=500)
+    kinds: str | None = Field(
+        default=None,
+        description="Comma-separated kinds filter (e.g. material,system,theme)",
+    )
+    project_id: str | None = None
+
+
+@router.get("/catalog")
+def get_wiki_catalog(
+    format: str = Query(default="json", description="json | md"),
+    limit: int = Query(default=500, ge=1, le=500),
+    kinds: str | None = Query(default=None, description="Comma-separated kinds"),
+    project_id: str | None = Query(default=None),
+):
+    """S2: deterministic wiki catalog (App-maintained; not a second SSOT)."""
+    _require_wiki()
+    from fastapi.responses import Response
+
+    from ..services.wiki.catalog import build_catalog
+
+    kind_list = [k.strip() for k in (kinds or "").split(",") if k.strip()] or None
+    try:
+        out = build_catalog(limit=limit, kinds=kind_list, project_id=project_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    fmt = (format or "json").strip().lower()
+    if fmt in {"md", "markdown", "text"}:
+        return Response(
+            content=out["markdown"],
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": 'attachment; filename="catalog.md"',
+                "X-FormuNex-Catalog-Entries": str(out["entry_count"]),
+            },
+        )
+    return out
+
+
+@router.post("/catalog/rebuild")
+def rebuild_wiki_catalog(body: WikiCatalogRebuildRequest | None = None) -> dict:
+    """S2: rebuild catalog.md from wiki_pages (disk write optional; never upserts wiki_pages)."""
+    _require_wiki()
+    from ..services.wiki.catalog import rebuild_catalog
+
+    req = body or WikiCatalogRebuildRequest()
+    kind_list = [k.strip() for k in (req.kinds or "").split(",") if k.strip()] or None
+    try:
+        return rebuild_catalog(
+            persist=req.persist,
+            limit=req.limit,
+            kinds=kind_list,
+            project_id=req.project_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/fts/rebuild")
+def rebuild_fts_endpoint() -> dict:
+    """Rebuild Wiki FTS index from all pages (admin / ops)."""
+    _require_wiki()
+    if not get_settings().wiki_fts_enabled:
+        raise HTTPException(status_code=409, detail="wiki_fts_enabled is false")
+    from ..services.wiki.fts import rebuild_all
+
+    store = get_wiki_store()
+    n = rebuild_all(store._session_factory, store)
+    return {"ok": True, "indexed": n}
+
+
+@router.post("/embed/rebuild")
+def rebuild_embed_endpoint() -> dict:
+    """Phase 3: re-embed all wiki page summaries into document_chunks."""
+    _require_wiki()
+    if not get_settings().wiki_embed_enabled:
+        raise HTTPException(status_code=409, detail="wiki_embed_enabled is false")
+    from ..services.wiki.embed import rebuild_all_wiki_embeds
+
+    return rebuild_all_wiki_embeds()
+
+
+class WikiReviewUpdate(BaseModel):
+    path: str
+    reviewed: bool | None = None
+    human_override: str | None = None
+
+
+@router.post("/pages/review")
+def review_page_endpoint(body: WikiReviewUpdate) -> dict:
+    """Q4 reserved contract: toggle reviewed / human_override (not a full editor)."""
+    _require_wiki()
+    if body.reviewed is None and body.human_override is None:
+        raise HTTPException(status_code=400, detail="reviewed or human_override required")
+    from ..services.wiki.review import apply_page_review
+
+    try:
+        return apply_page_review(
+            body.path,
+            reviewed=body.reviewed,
+            human_override=body.human_override,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"wiki page not found: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── Publication preflight (Wave A steel-stamp) ─────────────────────────────
+
+
+class PreflightReviewRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    kind: str = Field(default="storm", description="storm|dossier")
+    markdown: str | None = None
+    total_anchors: int | None = Field(default=None, ge=0)
+
+
+class PreflightOverrideRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    kind: str = Field(default="storm")
+    finding_id: str = Field(min_length=1)
+    actor: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class PreflightResolveRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    kind: str = Field(default="storm")
+    finding_id: str = Field(min_length=1)
+    actor: str = Field(min_length=1, max_length=120)
+    note: str = Field(default="", max_length=2000)
+
+
+class PreflightFinalizeRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    kind: str = Field(default="storm")
+    markdown: str | None = None
+    actor: str = Field(default="user", max_length=120)
+
+
+def _preflight_markdown(project_id: str, kind: str, markdown: str | None) -> str:
+    if markdown is not None and markdown.strip():
+        return markdown
+    from ..services.wiki.schema import project_report_path
+
+    store = get_wiki_store()
+    path = project_report_path(project_id, "storm" if kind == "storm" else kind)
+    row = store.get_by_path(path)
+    if row is None:
+        raise HTTPException(status_code=404, detail="report not found for preflight")
+    return store.read_markdown(row.path) or ""
+
+
+@router.post("/preflight/review")
+def preflight_review_endpoint(body: PreflightReviewRequest) -> dict:
+    """Run citation/placeholder/numeric checks and persist findings."""
+    _require_wiki()
+    from ..services.publication_preflight import review_markdown
+
+    md = _preflight_markdown(body.project_id, body.kind, body.markdown)
+    return review_markdown(
+        body.project_id,
+        body.kind,
+        md,
+        total_anchors=body.total_anchors,
+    )
+
+
+@router.post("/preflight/override")
+def preflight_override_endpoint(body: PreflightOverrideRequest) -> dict:
+    """Override a finding with required actor + reason audit trail."""
+    _require_wiki()
+    from ..services.publication_preflight import override_finding
+
+    try:
+        return override_finding(
+            body.project_id,
+            body.kind,
+            body.finding_id,
+            actor=body.actor,
+            reason=body.reason,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/preflight/resolve")
+def preflight_resolve_endpoint(body: PreflightResolveRequest) -> dict:
+    """Mark an open finding as handled (the person fixed it); blocking ones need a note.
+
+    Unlike ``override`` (accept the risk and ship anyway) this records that the
+    underlying problem was dealt with. The service function existed with seven
+    test callers and no route, so the UI could only ever offer ``override``.
+    """
+    _require_wiki()
+    from ..services.publication_preflight import resolve_finding
+
+    try:
+        return resolve_finding(
+            body.project_id,
+            body.kind,
+            body.finding_id,
+            actor=body.actor,
+            note=body.note,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/preflight/finalize")
+def preflight_finalize_endpoint(body: PreflightFinalizeRequest) -> dict:
+    """assertReady: hash match + no open blocking → finalize."""
+    _require_wiki()
+    from ..services.publication_preflight import assert_ready
+
+    md = _preflight_markdown(body.project_id, body.kind, body.markdown)
+    result = assert_ready(body.project_id, body.kind, md, actor=body.actor)
+    if not result.get("ready"):
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+@router.get("/preflight/{project_id}")
+def preflight_get_endpoint(
+    project_id: str,
+    kind: str = Query(default="storm"),
+) -> dict:
+    """Return last persisted preflight state for a project."""
+    _require_wiki()
+    from ..services.publication_preflight import get_state
+
+    return get_state(project_id, kind)
+
+
+# ── Literature manifest / screening (Wave B) ───────────────────────────────
+
+
+class LiteratureCaptureRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    query: str = ""
+
+
+class LiteratureFreezeRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    item_ids: list[str] | None = None
+    actor: str = Field(default="user", max_length=120)
+
+
+class LiteratureUnfreezeRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    actor: str = Field(default="user", max_length=120)
+
+
+class LiteratureScreenRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    criteria: dict = Field(default_factory=dict)
+    apply: bool = True
+    preset: str | None = None
+    rule_name: str | None = None
+
+
+class ScreeningRuleVersionRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=120)
+    criteria: dict = Field(default_factory=dict)
+    changelog: str = Field(default="", max_length=500)
+    created_by: str = Field(default="user", max_length=120)
+
+
+class ScreeningRollbackRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    version: str | None = None
+    name: str | None = None
+    actor: str = Field(default="user", max_length=120)
+
+
+class ScreeningEvaluateRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    criteria: dict | None = None
+
+
+class LiteratureItemPatch(BaseModel):
+    project_id: str = Field(min_length=1)
+    screening: str | None = Field(default=None, max_length=32)
+    title: str | None = Field(default=None, max_length=240)
+    doi: str | None = None
+    authors: list[str] | None = None
+    year: int | None = None
+    url: str | None = Field(default=None, max_length=500)
+    oa_pdf_url: str | None = Field(default=None, max_length=500)
+    tags: list[str] | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    collection_ids: list[str] | None = None
+    chemrxiv_id: str | None = Field(default=None, max_length=120)
+    openalex_id: str | None = Field(default=None, max_length=120)
+    snippet: str | None = Field(default=None, max_length=800)
+
+
+class LiteratureEnrichOaRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    scope: str = Field(default="missing_fulltext", max_length=32)
+    limit: int = Field(default=20, ge=1, le=40)
+    actor: str = Field(default="user", max_length=120)
+
+
+class LiteratureCollectionCreate(BaseModel):
+    project_id: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=120)
+
+
+class LiteratureLocatorBody(BaseModel):
+    """Citation locator for one manifest item; all-empty clears it."""
+
+    project_id: str = Field(min_length=1)
+    page: int | None = Field(default=None, ge=1)
+    figure: str | None = Field(default=None, max_length=60)
+    table: str | None = Field(default=None, max_length=60)
+    actor: str = Field(default="user", max_length=120)
+
+
+class LiteratureCollectionPatch(BaseModel):
+    project_id: str = Field(min_length=1)
+    name: str | None = Field(default=None, max_length=120)
+    item_ids: list[str] | None = None
+
+
+class LiteratureCollectionDelete(BaseModel):
+    project_id: str = Field(min_length=1)
+
+
+class LiteratureImportIdsRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=100_000)
+    actor: str = Field(default="user", max_length=120)
+
+
+class LiteratureMergeRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    item_ids: list[str] = Field(min_length=2, max_length=20)
+    strategy: str = Field(default="most-complete", max_length=32)
+
+
+class LiteratureCitationImportRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    format: str = Field(min_length=3, max_length=16)
+    text: str = Field(min_length=1, max_length=2_000_000)
+
+
+@router.get("/literature/{project_id}")
+def literature_get_endpoint(project_id: str) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import load_manifest, manifest_enabled
+
+    if not manifest_enabled(get_settings()):
+        raise HTTPException(status_code=409, detail="literature_manifest_enabled is false")
+    return load_manifest(project_id)
+
+
+@router.get("/literature/{project_id}/library")
+def literature_library_endpoint(
+    project_id: str,
+    q: str = "",
+    tag: str = "",
+    collection_id: str = "",
+    screening: str = "",
+) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import list_library
+
+    try:
+        return list_library(
+            project_id,
+            q=q,
+            tag=tag,
+            collection_id=collection_id,
+            screening=screening,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/literature/capture")
+def literature_capture_endpoint(body: LiteratureCaptureRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import capture_from_project
+
+    try:
+        return capture_from_project(
+            body.project_id, query=body.query or "", settings=get_settings()
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/literature/freeze")
+def literature_freeze_endpoint(body: LiteratureFreezeRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import freeze
+
+    try:
+        return freeze(
+            body.project_id,
+            item_ids=body.item_ids,
+            actor=body.actor,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/literature/unfreeze")
+def literature_unfreeze_endpoint(body: LiteratureUnfreezeRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import unfreeze
+
+    try:
+        return unfreeze(body.project_id, actor=body.actor, settings=get_settings())
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/literature/screen")
+def literature_screen_endpoint(body: LiteratureScreenRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_screening import (
+        screen_project,
+        screening_async_threshold,
+    )
+
+    try:
+        # W6-2：大 manifest 走后台 job，进度经 /api/tasks/{id} 可查
+        if body.apply:
+            from ..services.literature_manifest import load_manifest
+
+            settings = get_settings()
+            item_count = len(load_manifest(body.project_id).get("items") or [])
+            if item_count > screening_async_threshold(settings):
+                from ..worker.tasks import dispatch_screening_job
+
+                task_id = dispatch_screening_job(
+                    body.project_id,
+                    body.criteria or {},
+                    preset=body.preset,
+                    rule_name=body.rule_name,
+                )
+                if task_id:
+                    return {
+                        "async": True,
+                        "task_id": task_id,
+                        "stream_url": f"/api/tasks/{task_id}/stream",
+                        "item_count": item_count,
+                        "project_id": body.project_id,
+                    }
+                # dispatch 失败（fail-open）→ 回落同步
+        return screen_project(
+            body.project_id,
+            body.criteria or {},
+            apply=body.apply,
+            settings=get_settings(),
+            preset=body.preset,
+            rule_name=body.rule_name,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── Screening rule suite (W6-2) ────────────────────────────────────────────
+
+
+@router.get("/literature/screening/presets")
+def screening_presets_endpoint() -> dict:
+    _require_wiki()
+    from ..services.screening_presets import list_presets
+
+    return {"presets": list_presets()}
+
+
+@router.get("/literature/screening/rule-versions")
+def screening_rule_versions_endpoint(project_id: str) -> dict:
+    _require_wiki()
+    from ..services.literature_screening import list_rule_versions
+
+    try:
+        return list_rule_versions(project_id, settings=get_settings())
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/literature/screening/rule-versions")
+def screening_rule_version_save_endpoint(body: ScreeningRuleVersionRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_screening import save_rule_version
+
+    try:
+        return save_rule_version(
+            body.project_id,
+            name=body.name,
+            criteria=body.criteria or {},
+            created_by=body.created_by,
+            changelog=body.changelog,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/literature/screening/rule-versions/rollback")
+def screening_rule_version_rollback_endpoint(body: ScreeningRollbackRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_screening import rollback_rule_version
+
+    try:
+        return rollback_rule_version(
+            body.project_id,
+            version=body.version,
+            name=body.name,
+            actor=body.actor,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/literature/screening/evaluate")
+def screening_evaluate_endpoint(body: ScreeningEvaluateRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_screening import evaluate_screening
+
+    try:
+        return evaluate_screening(
+            body.project_id, body.criteria, settings=get_settings()
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/literature/items/{item_id}")
+def literature_item_patch_endpoint(item_id: str, body: LiteratureItemPatch) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import patch_library_item
+
+    payload = body.model_dump(exclude_unset=True)
+    project_id = str(payload.pop("project_id"))
+    # screening-only patches do not require literature_library_enabled
+    library_keys = set(payload) - {"screening"}
+    require_library = bool(library_keys)
+    try:
+        return patch_library_item(
+            project_id,
+            item_id,
+            payload,
+            settings=get_settings(),
+            require_library=require_library,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/literature/items/{item_id}/locator")
+def literature_item_locator_endpoint(item_id: str, body: LiteratureLocatorBody) -> dict:
+    """W4-6: annotate a manifest item with ``{page, figure, table}``.
+
+    The locator is annotation metadata, not corpus membership: it never breaks a
+    freeze. An empty body (no page/figure/table) clears the locator.
+    """
+    _require_wiki()
+    from ..services.literature_manifest import manifest_enabled, set_item_locator
+
+    if not manifest_enabled(get_settings()):
+        raise HTTPException(status_code=409, detail="literature_manifest_enabled is false")
+    locator = {
+        k: v
+        for k, v in (("page", body.page), ("figure", body.figure), ("table", body.table))
+        if v is not None
+    }
+    try:
+        return set_item_locator(body.project_id, item_id, locator, actor=body.actor)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/literature/collections")
+def literature_collection_create_endpoint(body: LiteratureCollectionCreate) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import create_collection
+
+    try:
+        return create_collection(body.project_id, body.name, settings=get_settings())
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/literature/collections/{collection_id}")
+def literature_collection_patch_endpoint(
+    collection_id: str, body: LiteratureCollectionPatch
+) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import patch_collection
+
+    try:
+        return patch_collection(
+            body.project_id,
+            collection_id,
+            name=body.name,
+            item_ids=body.item_ids,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/literature/collections/{collection_id}")
+def literature_collection_delete_endpoint(
+    collection_id: str, body: LiteratureCollectionDelete
+) -> dict:
+    _require_wiki()
+    from ..services.literature_manifest import delete_collection
+
+    try:
+        return delete_collection(
+            body.project_id, collection_id, settings=get_settings()
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/literature/import-ids")
+def literature_import_ids_endpoint(body: LiteratureImportIdsRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_import_ids import import_ids
+
+    try:
+        return import_ids(
+            body.project_id,
+            body.text,
+            actor=body.actor,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/literature/{project_id}/duplicates")
+def literature_duplicates_endpoint(project_id: str) -> dict:
+    _require_wiki()
+    from ..services.literature_duplicates import list_duplicates
+
+    try:
+        return list_duplicates(project_id, settings=get_settings())
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/literature/merge")
+def literature_merge_endpoint(body: LiteratureMergeRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_duplicates import merge_items
+
+    try:
+        return merge_items(
+            body.project_id,
+            body.item_ids,
+            strategy=body.strategy or "most-complete",
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/literature/{project_id}/export.bib")
+def literature_export_bib_endpoint(
+    project_id: str,
+    scope: str = "library",
+    collection_id: str = "",
+):
+    _require_wiki()
+    from fastapi.responses import Response
+
+    from ..services.literature_citation_io import export_bibtex
+
+    if scope not in ("library", "frozen", "collection"):
+        raise HTTPException(status_code=400, detail="invalid scope")
+    try:
+        text = export_bibtex(
+            project_id,
+            scope=scope,  # type: ignore[arg-type]
+            collection_id=collection_id,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=text,
+        media_type="application/x-bibtex",
+        headers=attachment_headers(f"{project_id}-library.bib"),
+    )
+
+
+@router.get("/literature/{project_id}/export.ris")
+def literature_export_ris_endpoint(
+    project_id: str,
+    scope: str = "library",
+    collection_id: str = "",
+):
+    _require_wiki()
+    from fastapi.responses import Response
+
+    from ..services.literature_citation_io import export_ris
+
+    if scope not in ("library", "frozen", "collection"):
+        raise HTTPException(status_code=400, detail="invalid scope")
+    try:
+        text = export_ris(
+            project_id,
+            scope=scope,  # type: ignore[arg-type]
+            collection_id=collection_id,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=text,
+        media_type="application/x-research-info-systems",
+        headers=attachment_headers(f"{project_id}-library.ris"),
+    )
+
+
+@router.post("/literature/import")
+def literature_citation_import_endpoint(body: LiteratureCitationImportRequest) -> dict:
+    _require_wiki()
+    from ..services.literature_citation_io import import_citation
+
+    fmt = (body.format or "").strip().lower()
+    if fmt not in ("bibtex", "ris"):
+        raise HTTPException(status_code=400, detail="format must be bibtex|ris")
+    try:
+        return import_citation(
+            body.project_id,
+            format=fmt,  # type: ignore[arg-type]
+            text=body.text,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/literature/enrich-oa")
+def literature_enrich_oa_endpoint(body: LiteratureEnrichOaRequest) -> dict:
+    """Wave D — batch OA fulltext into literature manifest (fail-open)."""
+    _require_wiki()
+    from ..services.literature_oa_enrich import enrich_manifest_oa
+
+    scope = (body.scope or "missing_fulltext").strip()
+    if scope not in ("candidates", "frozen", "missing_fulltext"):
+        raise HTTPException(status_code=400, detail="invalid scope")
+    try:
+        return enrich_manifest_oa(
+            body.project_id,
+            scope=scope,  # type: ignore[arg-type]
+            limit=body.limit,
+            actor=body.actor,
+            settings=get_settings(),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class RoCrateExportRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    kind: str = Field(default="storm", max_length=32)
+    actor: str = Field(default="user", max_length=120)
+    include_fulltext_bytes: bool = False
+
+
+@router.post("/export/ro-crate")
+def export_ro_crate_endpoint(body: RoCrateExportRequest):
+    """Wave D2 — lightweight RO-Crate steel-stamp package (zip)."""
+    _require_wiki()
+    from fastapi.responses import Response
+
+    from ..services.ro_crate_export import build_lightweight_ro_crate
+
+    kind = (body.kind or "storm").strip()
+    if kind not in ("storm", "dossier"):
+        raise HTTPException(status_code=400, detail="kind must be storm|dossier")
+    try:
+        raw, filename = build_lightweight_ro_crate(
+            body.project_id,
+            kind=kind,  # type: ignore[arg-type]
+            actor=body.actor,
+            settings=get_settings(),
+            include_fulltext_bytes=bool(body.include_fulltext_bytes),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=raw,
+        media_type="application/zip",
+        headers=attachment_headers(filename),
+    )

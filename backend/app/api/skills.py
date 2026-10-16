@@ -1,0 +1,283 @@
+"""Unified Skills API — playbooks + chat skills + preferences + install."""
+from __future__ import annotations
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
+
+from ..resources.formulation_skills import get_formulation_skill, list_formulation_skills
+from ..services import chat_skills as chat_skills_svc
+from ..services import skill_install as install_svc
+from ..services.skills_store import is_enabled, load_prefs, save_prefs
+from ._uploads import read_upload_capped
+
+router = APIRouter(prefix="/api/skills", tags=["skills"])
+
+
+class SkillOut(BaseModel):
+    id: str
+    kind: str
+    title: str
+    summary: str = ""
+    when_to_use: str = ""
+    description: str = ""
+    action: str = "chat"
+    modal: str | None = None
+    icon: str = "✦"
+    tools: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+    checklist: list[dict] = Field(default_factory=list)
+    presets: dict = Field(default_factory=dict)
+    activation_policy: str = "user-controlled"
+    origin: str = "bundled"
+    category: str = ""
+    enabled: bool = True
+    pinned: bool = False
+    entry: bool = True
+
+
+class SkillsPrefsPatch(BaseModel):
+    disabled_ids: list[str] | None = None
+    pinned_ids: list[str] | None = None
+    evidence_mode_default: bool | None = None
+
+
+class SkillsCatalogResponse(BaseModel):
+    skills: list[SkillOut]
+    prefs: dict
+
+
+class PasteInstallBody(BaseModel):
+    markdown: str
+    name: str | None = None
+    dry_run: bool = True
+
+
+class GithubInstallBody(BaseModel):
+    url: str
+    ref: str | None = None
+    path: str | None = None
+    dry_run: bool = True
+
+
+class ConfirmInstallBody(BaseModel):
+    install_id: str
+
+
+def _playbook_rows() -> list[dict]:
+    rows = []
+    for s in list_formulation_skills():
+        row = dict(s)
+        row.setdefault("kind", "playbook")
+        row.setdefault("activation_policy", "user-controlled")
+        row.setdefault("origin", "bundled")
+        row.setdefault("description", row.get("summary") or "")
+        row.setdefault("allowed_tools", row.get("tools") or [])
+        row.setdefault("category", "formulation")
+        row.setdefault("entry", True)
+        rows.append(row)
+    return rows
+
+
+def _annotate(rows: list[dict]) -> list[SkillOut]:
+    prefs = load_prefs()
+    pinned = set(prefs.get("pinned_ids") or [])
+    out: list[SkillOut] = []
+    for r in rows:
+        policy = r.get("activation_policy") or "user-controlled"
+        enabled = is_enabled(r["id"], activation_policy=policy)
+        out.append(
+            SkillOut(
+                id=r["id"],
+                kind=r.get("kind") or "chat_skill",
+                title=r.get("title") or r["id"],
+                summary=r.get("summary") or "",
+                when_to_use=r.get("when_to_use") or "",
+                description=r.get("description") or r.get("summary") or "",
+                action=r.get("action") or "chat",
+                modal=r.get("modal"),
+                icon=r.get("icon") or "✦",
+                tools=list(r.get("tools") or []),
+                allowed_tools=list(r.get("allowed_tools") or r.get("tools") or []),
+                checklist=list(r.get("checklist") or []),
+                presets=dict(r.get("presets") or {}),
+                activation_policy=policy,
+                origin=r.get("origin") or "bundled",
+                category=r.get("category") or "",
+                enabled=enabled,
+                pinned=r["id"] in pinned,
+                entry=bool(r.get("entry", True)),
+            )
+        )
+    out.sort(key=lambda s: (not s.pinned, s.kind, s.id))
+    return out
+
+
+def _catalog_payload() -> SkillsCatalogResponse:
+    rows = _playbook_rows() + chat_skills_svc.list_chat_skills(include_body=False)
+    return SkillsCatalogResponse(skills=_annotate(rows), prefs=load_prefs())
+
+
+@router.get("", response_model=SkillsCatalogResponse)
+def catalog(kind: str | None = None) -> SkillsCatalogResponse:
+    rows = _playbook_rows() + chat_skills_svc.list_chat_skills(include_body=False)
+    if kind:
+        rows = [r for r in rows if r.get("kind") == kind]
+    return SkillsCatalogResponse(skills=_annotate(rows), prefs=load_prefs())
+
+
+@router.post("/prefs")
+def patch_prefs(body: SkillsPrefsPatch) -> dict:
+    prefs = save_prefs(body.model_dump(exclude_none=True))
+    return {"prefs": prefs, "skills": _annotate(_playbook_rows() + chat_skills_svc.list_chat_skills())}
+
+
+# ── Install (must be registered before /{skill_id}) ─────────────────────────
+
+
+@router.get("/installed")
+def list_installed() -> dict:
+    return {"skills": install_svc.list_installed()}
+
+
+def _install_error(payload: dict) -> HTTPException:
+    msg = str(payload.get("detail") or "安装失败")
+    return HTTPException(status_code=400, detail={"message": msg, **payload})
+
+
+@router.post("/install/paste")
+def install_paste(body: PasteInstallBody) -> dict:
+    result = install_svc.install_from_paste(
+        body.markdown, name=body.name, dry_run=body.dry_run
+    )
+    payload = install_svc.result_to_dict(result)
+    if not result.ok:
+        raise _install_error(payload)
+    if result.installed:
+        payload["catalog"] = _catalog_payload().model_dump()
+    return payload
+
+
+@router.post("/install/github")
+def install_github(body: GithubInstallBody) -> dict:
+    result = install_svc.install_from_github(
+        body.url, ref=body.ref, path=body.path, dry_run=body.dry_run
+    )
+    payload = install_svc.result_to_dict(result)
+    if not result.ok:
+        raise _install_error(payload)
+    if result.installed:
+        payload["catalog"] = _catalog_payload().model_dump()
+    return payload
+
+
+def _install_uploaded(filename: str, data: bytes, dry_run: bool) -> dict:
+    """Unpack, scan and (unless dry-run) install an uploaded skill — zip + disk work, off the loop."""
+    name = filename.lower()
+    if name.endswith(".md") or name.endswith(".markdown"):
+        try:
+            markdown = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"无法解码 markdown: {exc}") from exc
+        result = install_svc.install_from_paste(markdown, dry_run=dry_run)
+    else:
+        result = install_svc.install_from_zip(data, dry_run=dry_run)
+    payload = install_svc.result_to_dict(result)
+    if not result.ok:
+        raise _install_error(payload)
+    if result.installed:
+        payload["catalog"] = _catalog_payload().model_dump()
+    return payload
+
+
+@router.post("/install/upload")
+async def install_upload(
+    file: UploadFile = File(...),
+    dry_run: bool = True,
+) -> dict:
+    data = await read_upload_capped(file, file.filename or "skill")
+    return await run_in_threadpool(_install_uploaded, file.filename or "", data, dry_run)
+
+
+@router.post("/install/confirm")
+def install_confirm(body: ConfirmInstallBody) -> dict:
+    result = install_svc.confirm_install(body.install_id)
+    payload = install_svc.result_to_dict(result)
+    if not result.ok:
+        raise _install_error(payload)
+    payload["catalog"] = _catalog_payload().model_dump()
+    return payload
+
+
+@router.delete("/installed/{skill_id}")
+def uninstall(skill_id: str) -> dict:
+    try:
+        out = install_svc.uninstall_skill(skill_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    out["catalog"] = _catalog_payload().model_dump()
+    return out
+
+
+@router.get("/installed/{skill_id}/check-update")
+def check_update(skill_id: str) -> dict:
+    try:
+        return install_svc.check_skill_update(skill_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class UpdateSkillBody(BaseModel):
+    dry_run: bool = True
+
+
+@router.post("/installed/{skill_id}/update")
+def update_skill(skill_id: str, body: UpdateSkillBody | None = None) -> dict:
+    dry = True if body is None else body.dry_run
+    result = install_svc.update_skill_from_upstream(skill_id, dry_run=dry)
+    payload = install_svc.result_to_dict(result)
+    if not result.ok:
+        raise _install_error(payload)
+    if result.installed:
+        payload["catalog"] = _catalog_payload().model_dump()
+    return payload
+
+
+@router.get("/packs")
+def list_packs() -> dict:
+    return {"packs": install_svc.list_skill_packs()}
+
+
+class PackInstallBody(BaseModel):
+    dry_run: bool = True
+
+
+@router.post("/packs/{pack_id}/install")
+def install_pack(pack_id: str, body: PackInstallBody | None = None) -> dict:
+    dry = True if body is None else body.dry_run
+    result = install_svc.install_skill_pack(pack_id, dry_run=dry)
+    payload = install_svc.result_to_dict(result)
+    if not result.ok:
+        raise _install_error(payload)
+    if result.installed:
+        payload["catalog"] = _catalog_payload().model_dump()
+    return payload
+
+
+@router.get("/{skill_id}", response_model=SkillOut)
+def get_skill(skill_id: str) -> SkillOut:
+    pb = get_formulation_skill(skill_id)
+    if pb:
+        row = dict(pb)
+        row.setdefault("kind", "playbook")
+        row.setdefault("activation_policy", "user-controlled")
+        row.setdefault("origin", "bundled")
+        return _annotate([row])[0]
+    cs = chat_skills_svc.get_chat_skill(skill_id, include_body=False)
+    if cs:
+        return _annotate([cs])[0]
+    raise HTTPException(status_code=404, detail="skill not found")

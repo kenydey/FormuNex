@@ -1,0 +1,487 @@
+"""Engine + session factory.
+
+SQLite by default (zero-config, file-backed, ships with Python). ``check_same_thread``
+is disabled and a generous busy ``timeout`` is set so the thread-backed
+TaskManager / in-process workers can share one connection safely; point
+``FORMUNEX_DB_URL`` at Postgres for true multi-process concurrency.
+"""
+from __future__ import annotations
+
+import os
+import threading
+from pathlib import Path
+
+from sqlalchemy import create_engine, inspect
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from .models import Base
+
+# Serialize metadata DDL across threads. Eager Celery daemons and Alembic
+# ``0001_baseline`` can both call ``create_all`` on the same SQLite file when a
+# test flips ``FORMUNEX_DB_URL``; ``checkfirst`` alone has a TOCTOU gap that
+# surfaces as ``sqlite3.OperationalError: table … already exists`` in CI.
+_schema_ddl_lock = threading.Lock()
+
+
+def create_all_metadata(bind) -> None:
+    """Process-wide locked ``Base.metadata.create_all(..., checkfirst=True)``.
+
+    On a SQLite *engine* the whole schema is created in one transaction. pysqlite opens no transaction for DDL, so each of
+    the ~110 CREATE TABLE / CREATE INDEX statements otherwise commits - and fsyncs - on its own: 3 to 26 seconds per fresh
+    database in the setup of a test on a Windows runner (measured in CI), and a crash half-way leaves a half-built
+    schema. Inside one ``BEGIN IMMEDIATE`` it is a single commit, and all-or-nothing.
+
+    ``IMMEDIATE`` also settles the first boot: the API, the worker and the scheduler start against the same empty file and
+    each used to check for a missing table and then create it. Measured with four processes: 24 of 32 attempts failed -
+    "table experiments already exists" with a commit per statement, "database is locked" with a plain ``BEGIN`` (a WAL
+    reader whose snapshot went stale cannot upgrade to a writer). Taking the write lock first makes the others wait
+    (``busy_timeout``) and then find nothing left to create. A complete schema - every boot after the first - is looked at
+    read-only and returns, so it never queues behind a long writer.
+    """
+    with _schema_ddl_lock:
+        if isinstance(bind, Engine) and bind.dialect.name == "sqlite":
+            with bind.connect() as conn:
+                if set(Base.metadata.tables) <= set(inspect(conn).get_table_names()):
+                    return
+                conn.exec_driver_sql("BEGIN IMMEDIATE")  # the driver would not begin one for DDL: that is the whole point
+                try:
+                    Base.metadata.create_all(conn, checkfirst=True)
+                except BaseException:
+                    conn.rollback()
+                    raise
+                conn.commit()
+            return
+        Base.metadata.create_all(bind, checkfirst=True)
+
+
+def drop_all_metadata(bind) -> None:
+    """Process-wide locked ``Base.metadata.drop_all(..., checkfirst=True)``."""
+    with _schema_ddl_lock:
+        Base.metadata.drop_all(bind, checkfirst=True)
+
+
+def _ensure_sqlite_dir(db_url: str) -> None:
+    prefix = "sqlite:///"
+    if db_url.startswith(prefix):
+        path = db_url[len(prefix):]
+        if path and path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def _configure_sqlite(engine: Engine) -> None:
+    """Per-connection SQLite pragmas: foreign keys, and WAL journalling.
+
+    **foreign_keys.** SQLite ships with ``PRAGMA foreign_keys=OFF`` and applies
+    it per connection, so a declared ForeignKey is decorative until this runs —
+    dev and the whole test suite would happily accept orphan rows that
+    PostgreSQL rejects in production, which is the worst way to find out.
+
+    **journal_mode=WAL.** The default is ``delete`` (a rollback journal), under
+    which readers and writers are mutually exclusive: any write takes an
+    exclusive lock on the whole database and every reader blocks behind it.
+    This process is thread-backed by design — the TaskManager, the in-process
+    workers and the request threads all share one file — so a long ingest
+    transaction stalls unrelated reads until it commits, which is what "database
+    is locked" in production looks like. WAL lets any number of readers run
+    concurrently with one writer.
+
+    Set per connection rather than once, because the mode lives in the database
+    file and a caller may point at a file some other process created in
+    ``delete`` mode. Failure is not fatal: WAL is unavailable for ``:memory:``
+    databases and on network filesystems, and neither is a reason to refuse to
+    start — those deployments simply keep the old locking behaviour.
+    """
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _set_pragma(dbapi_connection, _record):  # pragma: no cover - driver hook
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+            # Wait up to 60 s before raising "database is locked" — Celery
+            # and Uvicorn share the same file; a write arriving during another
+            # write should block instead of failing immediately. A flush-level
+            # retry is NOT viable: SQLite's "database is locked" invalidates the
+            # SQLAlchemy connection, so re-flushing raises "transaction is
+            # inactive". 60s is a middle ground: long enough to ride out a
+            # concurrent 261 KB payload write, short enough that a genuinely
+            # stuck lock fails a test quickly instead of hanging it.
+            cursor.execute("PRAGMA busy_timeout=60000")
+            try:
+                cursor.execute("PRAGMA journal_mode=WAL")
+            except Exception:
+                # An in-memory or network-hosted database cannot do WAL. Losing
+                # the concurrency win is acceptable; failing to connect is not.
+                pass
+        finally:
+            cursor.close()
+
+
+def make_engine(db_url: str) -> Engine:
+    _ensure_sqlite_dir(db_url)
+    connect_args: dict = {}
+    if db_url.startswith("sqlite"):
+        connect_args = {"check_same_thread": False, "timeout": 30}
+    engine = create_engine(db_url, future=True, connect_args=connect_args)
+    if db_url.startswith("sqlite"):
+        _configure_sqlite(engine)
+    from ..config import get_settings
+
+    if get_settings().environment not in ("production", "prod"):
+        create_all_metadata(engine)
+    _ensure_experiment_columns(engine)
+    _ensure_campaign_columns(engine)
+    _ensure_owner_id_column(engine, "task_outbox")
+    _ensure_outbox_task_id_column(engine)
+    _ensure_source_document_columns(engine)
+    _ensure_kb_entity_link_columns(engine)
+    _ensure_material_columns(engine)
+    _ensure_doe_cycle_pause_table(engine)
+    return engine
+
+
+def _require_columns(engine: Engine, table: str, columns: tuple[str, ...]) -> None:
+    """只读守护：表存在但缺列时给出可操作错误（不再运行时 ALTER）。
+
+    一次性报出全部缺失列，避免用户多轮运行才发现完整 drift。
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns(table)}
+    missing = [f"{table}.{col}" for col in columns if col not in existing]
+    if missing:
+        raise RuntimeError(
+            f"schema drift: 缺失列 {', '.join(missing)}，请先运行: alembic upgrade head"
+        )
+
+
+def _ensure_experiment_columns(engine: Engine) -> None:
+    """只读守护：experiments 表必须具备 Phase 2 索引列。"""
+    _require_columns(engine, "experiments", ("item_id", "project_id"))
+    _ensure_owner_id_column(engine, "experiments")
+
+
+def _ensure_campaign_columns(engine: Engine) -> None:
+    """只读守护：campaigns 表必须具备 workbench / Datalab 列。"""
+    _require_columns(
+        engine,
+        "campaigns",
+        (
+            "project_id",
+            "primary_metric",
+            "objectives_snapshot",
+            "lever_snapshot",
+            "sample_refs",
+            "loop_history",
+        ),
+    )
+    _ensure_owner_id_column(engine, "campaigns")
+
+
+def _ensure_doe_cycle_pause_table(engine: Engine) -> None:
+    """The closed-loop pause flag's table (alembic 0045).
+
+    ``create_all`` covers fresh development databases; a production database that has not been migrated yet
+    needs it too - without it every loop dispatch, worker task and status poll would fail on a missing table
+    instead of merely lacking a new feature. Skipped while ``campaigns`` (its parent) does not exist.
+    """
+    from sqlalchemy import inspect
+
+    from .models import DOECyclePauseRow
+
+    if "campaigns" not in inspect(engine).get_table_names():
+        return
+    with _schema_ddl_lock:
+        DOECyclePauseRow.__table__.create(bind=engine, checkfirst=True)
+
+
+def _ensure_source_document_columns(engine: Engine) -> None:
+    """只读守护：source_documents 表必须具备 async-ingest 溯源列。"""
+    _require_columns(engine, "source_documents", ("origin_url", "project_id"))
+    _ensure_source_soft_columns(engine)
+    _ensure_document_chunk_columns(engine)
+
+
+# Soft-column registry (P2 convergence with Alembic).
+# Each entry MUST have a matching revision id in ``alembic/versions``.
+# Soft ALTER remains for legacy DBs without ``alembic_version``; Alembic is
+# the source of truth for fresh/prod upgrades. See
+# ``tests/test_soft_columns_alembic_convergence.py``.
+_SOURCE_SOFT_COLUMNS: dict[str, tuple[str, str | None]] = {
+    # acquisition — PDF 配额统计路径（pre-0029 soft; also in models / create_all）
+    "acquisition": ("acquisition VARCHAR(16)", None),
+    # alembic 0029 — KB soft-archive (W3)
+    "archived": (
+        "archived BOOLEAN DEFAULT 0 NOT NULL",
+        "CREATE INDEX ix_source_documents_archived ON source_documents (archived)",
+    ),
+    # alembic 0030 — retention clock (W4)
+    "archived_at": (
+        "archived_at DATETIME",
+        "CREATE INDEX ix_source_documents_archived_at ON source_documents (archived_at)",
+    ),
+    # alembic 0040 — ingest observability (P1-1): per-document failure record
+    "ingest_status": ("ingest_status VARCHAR(16)", None),
+    "ingest_error": ("ingest_error TEXT", None),
+}
+
+# table → {column → alembic revision that owns it (or "model/create_all")}
+SOFT_COLUMN_ALEMBIC_OWNERS: dict[str, dict[str, str]] = {
+    "source_documents": {
+        "acquisition": "model/create_all",
+        "archived": "0029_source_documents_archived",
+        "archived_at": "0030_source_documents_archived_at",
+        "ingest_status": "0040_ingest_observability",
+        "ingest_error": "0040_ingest_observability",
+    },
+    "materials": {
+        "archived": "0024_material_candidates",
+        "suppliers_json": "0027_materials_suppliers_json",
+    },
+    "suppliers": {
+        "country": "0031_supplier_manual_quote_fields",
+    },
+    "material_suppliers": {
+        "currency": "0031_supplier_manual_quote_fields",
+        "moq": "0031_supplier_manual_quote_fields",
+        "pack_size": "0031_supplier_manual_quote_fields",
+        "lead_time_days": "0031_supplier_manual_quote_fields",
+        "price_cny_per_kg": "0031_supplier_manual_quote_fields",
+        "price_source": "0031_supplier_manual_quote_fields",
+        "price_observed_at": "0031_supplier_manual_quote_fields",
+    },
+}
+
+
+def soft_column_inventory() -> dict[str, set[str]]:
+    """Return soft-ensured columns by table (for Alembic convergence tests)."""
+    return {
+        "source_documents": set(_SOURCE_SOFT_COLUMNS),
+        "materials": set(_MATERIAL_SOFT_COLUMNS),
+        "suppliers": set(_SUPPLIER_SOFT_COLUMNS),
+        "material_suppliers": set(_MATERIAL_SUPPLIER_SOFT_COLUMNS),
+    }
+
+
+def _ensure_source_soft_columns(engine: Engine) -> None:
+    """软扩列 acquisition / archived（兼容无 alembic_version 的旧库）。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "source_documents" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("source_documents")}
+    for col, (ddl, index_ddl) in _SOURCE_SOFT_COLUMNS.items():
+        if col in existing:
+            continue
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f'ALTER TABLE "source_documents" ADD COLUMN {ddl}'))
+                if index_ddl:
+                    try:
+                        conn.execute(text(index_ddl))
+                    except Exception:
+                        pass
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+
+def _ensure_document_chunk_columns(engine: Engine) -> None:
+    """只读守护：document_chunks 表必须具备溯源 / 实体元数据 / 版式列。"""
+    _require_columns(engine, "document_chunks", ("page_no", "meta", "bbox", "block_type"))
+
+
+def _ensure_kb_entity_link_columns(engine: Engine) -> None:
+    """只读守护：kb_entity_links 表必须具备语义关系列。"""
+    _require_columns(
+        engine,
+        "kb_entity_links",
+        ("metadata_json", "is_valid", "extraction_method", "updated_at"),
+    )
+
+
+# 软扩列定义: 列名 -> (ADD COLUMN DDL, 可选索引 DDL)。
+# 供非 alembic 管理的旧库使用（如仓库根 data/formunex.db 没有 alembic_version
+# 表，`alembic upgrade head` 会从 0001 重跑而失败）。缺失即就地 ALTER 补上；
+# 全部 nullable 或带默认值，无 backfill，不触碰既有数据。
+_MATERIAL_SOFT_COLUMNS: dict[str, tuple[str, str | None]] = {
+    # alembic 0026
+    "archived": (
+        "archived BOOLEAN DEFAULT 0 NOT NULL",
+        "CREATE INDEX ix_materials_archived ON materials (archived)",
+    ),
+    # alembic 0027 — 供应商清单（PubChem Chemical Vendors 采集，JSON 数组）
+    "suppliers_json": ("suppliers_json JSON", None),
+}
+
+
+def _ensure_material_columns(engine: Engine) -> None:
+    """材料表列守护 + 软扩列（archived / suppliers_json）；并确保 material_candidates 表存在。"""
+    from sqlalchemy import inspect, text
+
+    _require_columns(
+        engine,
+        "materials",
+        ("norm_key", "name", "origin", "availability", "functional_class"),
+    )
+    inspector = inspect(engine)
+    if "materials" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("materials")}
+        for col, (ddl, index_ddl) in _MATERIAL_SOFT_COLUMNS.items():
+            if col in existing:
+                continue
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE materials ADD COLUMN {ddl}"))
+                    if index_ddl:
+                        try:
+                            conn.execute(text(index_ddl))
+                        except Exception:
+                            pass
+            except Exception as exc:
+                # 竞态或已存在：静默（alembic 已加过）
+                if "duplicate column" not in str(exc).lower():
+                    raise
+    # New pending-queue table: create_all covers fresh DBs; existing DBs need it too.
+    from .models import MaterialCandidateRow, MaterialSupplierRow, SupplierRow
+
+    with _schema_ddl_lock:
+        MaterialCandidateRow.__table__.create(bind=engine, checkfirst=True)
+        SupplierRow.__table__.create(bind=engine, checkfirst=True)
+        MaterialSupplierRow.__table__.create(bind=engine, checkfirst=True)
+    _ensure_supplier_quote_columns(engine)
+
+
+_SUPPLIER_SOFT_COLUMNS: dict[str, str] = {
+    # alembic 0031 — A′ manual country
+    "country": "country VARCHAR(64)",
+}
+
+_MATERIAL_SUPPLIER_SOFT_COLUMNS: dict[str, str] = {
+    # alembic 0031 — A′ manual quote fields
+    "currency": "currency VARCHAR(8)",
+    "price_cny_per_kg": "price_cny_per_kg FLOAT",
+    "price_source": "price_source VARCHAR(32) DEFAULT 'manual' NOT NULL",
+    "price_observed_at": "price_observed_at DATETIME",
+    "moq": "moq VARCHAR(64)",
+    "pack_size": "pack_size VARCHAR(64)",
+    "lead_time_days": "lead_time_days INTEGER",
+}
+
+
+def _ensure_supplier_quote_columns(engine: Engine) -> None:
+    """Soft-add A′ manual commercial columns when alembic has not run."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "suppliers" in tables:
+        existing = {c["name"] for c in inspector.get_columns("suppliers")}
+        for col, ddl in _SUPPLIER_SOFT_COLUMNS.items():
+            if col in existing:
+                continue
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE suppliers ADD COLUMN {ddl}"))
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+    if "material_suppliers" in tables:
+        existing = {c["name"] for c in inspector.get_columns("material_suppliers")}
+        for col, ddl in _MATERIAL_SUPPLIER_SOFT_COLUMNS.items():
+            if col in existing:
+                continue
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE material_suppliers ADD COLUMN {ddl}"))
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
+
+def _ensure_owner_id_column(engine: Engine, table: str) -> None:
+    """P2 预埋：owner_id 缺失时自动 ALTER（nullable，无 backfill，兼容旧库）。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns(table)}
+    if "owner_id" in existing:
+        return
+    # SQLite/Postgres 均支持 ADD COLUMN nullable 快速完成
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN owner_id VARCHAR(64)'))
+            # 索引单独建，失败不阻断（已存在等）
+            try:
+                conn.execute(text(f'CREATE INDEX ix_{table}_owner_id ON "{table}" (owner_id)'))
+            except Exception:
+                pass
+    except Exception as exc:
+        # 竞态或已存在：静默（alembic 已加过）
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _ensure_outbox_task_id_column(engine: Engine) -> None:
+    """``task_outbox.task_id`` (alembic 0043): nullable, no backfill. Added in place for
+    databases that were not upgraded, because every submission writes an outbox row — a
+    missing column would turn each async endpoint into a 500 until someone migrates."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "task_outbox" not in inspector.get_table_names():
+        return
+    if "task_id" in {c["name"] for c in inspector.get_columns("task_outbox")}:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text('ALTER TABLE "task_outbox" ADD COLUMN task_id VARCHAR(64)'))
+    except Exception as exc:  # a concurrent starter may have added it first
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def make_session_factory(engine: Engine) -> sessionmaker[Session]:
+    return sessionmaker(bind=engine, expire_on_commit=False, future=True)
+
+
+# Lazily-built default engine/session factory (built on first use so importing
+# this module never touches the filesystem at import time).
+_default: dict[str, object] = {}
+_default_lock = threading.Lock()
+
+
+def _default_pair() -> tuple[Engine, sessionmaker[Session]]:
+    """The process-wide (engine, session factory), rebuilt when ``FORMUNEX_DB_URL`` changes."""
+    from ..config import get_settings
+
+    db_url = os.environ.get("FORMUNEX_DB_URL") or get_settings().db_url
+    with _default_lock:
+        if _default.get("url") != db_url:
+            if _default.get("engine"):
+                try:
+                    _default["engine"].dispose()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+            engine = make_engine(db_url)
+            _default["url"] = db_url
+            _default["engine"] = engine
+            _default["factory"] = make_session_factory(engine)
+        return _default["engine"], _default["factory"]  # type: ignore[return-value]
+
+
+def default_session_factory() -> sessionmaker[Session]:
+    """A *factory*: call it (``default_session_factory()()``) to get a ``Session``."""
+    return _default_pair()[1]
+
+
+def default_engine() -> Engine:
+    """The engine behind :func:`default_session_factory` (a ``sessionmaker`` has no ``.bind``)."""
+    return _default_pair()[0]

@@ -1,0 +1,52 @@
+# FormuNex backend — locked core runtime dependencies.
+#
+# These are the always-required packages for the API + worker to boot. They are
+# pinned to versions verified by the test suite (430+ passing) so Docker builds
+# are reproducible. The abstract dependency declaration lives in pyproject.toml;
+# this file is the concrete lock used by the Dockerfile and CI.
+#
+# Optional scientific / LLM / retrieval engines are NOT listed here — they ship
+# as pyproject extras (llm, science, intel, heavy, embedding, bo, color, …) and
+# every service degrades gracefully when they are absent. Install them on demand:
+#   pip install -e ".[intel,science]"
+#
+# Dev / test tooling lives in requirements-dev.txt.
+
+fastapi==0.137.1
+uvicorn[standard]==0.49.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-multipart==0.0.32
+sqlalchemy==2.0.51
+alembic==1.18.5
+celery==5.6.3
+redis==8.0.0
+numpy==2.4.6
+httpx==0.28.1
+tenacity>=8.2.0
+loguru>=0.7
+# Declared as core (non-extra) deps in pyproject.toml but were missing from this
+# lock file, so a Docker image built from `pip install -r requirements.txt` (per
+# the Dockerfile/CI) never had them installed. rank-bm25 is imported unguarded at
+# module scope in hybrid_search.py and unguarded inside rag.py's BM25FAISSStore —
+# both crash with ModuleNotFoundError on first use, not at boot, since the import
+# is lazy at the API-handler level. jieba degrades gracefully (try/except) but
+# silently loses Chinese tokenization quality without it.
+rank-bm25==0.2.2
+jieba==0.42.1
+# The last-resort PDF tier. Pure Python, no dependencies, a few hundred KB —
+# and without it the image ships with *no* PDF parser at all, so an upload
+# returns 200 having extracted nothing. The richer parsers stay optional
+# extras; this one is the floor.
+pypdf==6.19.0
+# Lightweight online retrieval (no API keys required for arXiv / DDG; S2 uses httpx).
+arxiv==4.0.0
+ddgs==9.14.4
+# LaTeX → text for arXiv source ingest. Zero dependencies (pure Python), which
+# is why it is a hard requirement rather than an optional extra. It does crash
+# on real papers — measured 1 in 4, an IndexError on a single-argument \href —
+# so `arxiv_source` converts section by section and falls back to a regex
+# stripper, keeping a crash to one section instead of the whole document.
+pylatexenc==2.11
+# Neo4j graph store adapter (optional; off by default)
+neo4j==6.1.0

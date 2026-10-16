@@ -1,0 +1,578 @@
+"""Validate and enrich Formulation / RecommendedFormula objects."""
+from __future__ import annotations
+
+import re
+
+from pydantic import BaseModel, Field, ValidationError
+
+from .closure import is_closure_warning, total_of as closure_total_of
+from .closure import warning_text as closure_warning_text
+from .knowledge import RAW_MATERIALS, resolve_material_name
+from .schemas import (
+    Formulation,
+    Ingredient,
+    RecommendedFormula,
+    RecommendedFormulaComponent,
+    RecommendedFormulaListResponse,
+    Requirement,
+)
+
+_CAS_RE = re.compile(r"^(\d{2,7})-(\d{2})-(\d)$")
+
+
+class FormulationListResponse(BaseModel):
+    """Legacy LLM structured output shape."""
+
+    formulations: list[Formulation] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+def _cas_checksum_ok(cas: str) -> bool:
+    m = _CAS_RE.fullmatch((cas or "").strip())
+    if not m:
+        return False
+    digits = f"{m.group(1)}{m.group(2)}"
+    total = sum(int(d) * w for d, w in zip(reversed(digits), range(1, len(digits) + 1)))
+    return total % 10 == int(m.group(3))
+
+
+def _catalog_spec(name: str) -> tuple[str, dict]:
+    """Return (canonical catalog key, spec dict) for *name*."""
+    canon = resolve_material_name(name)
+    spec = RAW_MATERIALS.get(canon)
+    if spec is not None:
+        return canon, spec
+    lowered = canon.lower()
+    for catalog_name, row in RAW_MATERIALS.items():
+        if catalog_name.lower() == lowered:
+            return catalog_name, row
+    return canon, {}
+
+
+def _chemtools_gap_fill(name: str, has_smiles: bool, has_cas: bool) -> dict:
+    """Resolve missing SMILES/CAS via the native chemistry gateway (cached)."""
+    if has_smiles and has_cas:
+        return {}
+    from ..services import chemtools
+
+    if not chemtools.gateway_enabled():
+        return {}
+    updates: dict = {}
+    if not has_smiles:
+        smiles = chemtools.name_to_smiles(name)
+        if smiles:
+            updates["smiles"] = smiles
+    if not has_cas:
+        cas = chemtools.name_to_cas(name)
+        if cas:
+            updates["cas_no"] = cas
+    return updates
+
+
+def _web_search_gap_fill(name: str, updates: dict) -> list[str]:
+    """P1: 网络检索兜底 — ChemCrow/PubChem 查不到的长尾材料名，用
+    Tavily/SerpAPI 检索「{name} chemical CAS SMILES」文本，从结果摘要里
+    提取 CAS 号回填。失败静默（返回警告，不阻断）。
+
+    返回 warning 列表（供调用方挂到配方的 warnings）。
+    """
+    warnings: list[str] = []
+    if updates.get("cas_no"):
+        return warnings  # CAS 已解析，无需网络兜底
+    from ..config import get_settings
+
+    # 测试环境不触网（DDG 反爬会在无 mock 时挂起 60s）。网络兜底仅 dev/prod。
+    if get_settings().environment.strip().lower() == "test":
+        return warnings
+    from ..services import literature
+
+    query = f"{name} chemical CAS number"
+    try:
+        hits = literature.search_web(query, limit=3)
+    except Exception:
+        return warnings
+    blob = " ".join((h.title or "") + " " + (h.snippet or "") for h in hits)
+    if not blob:
+        return warnings
+    import re
+
+    m = re.search(r"\b(\d{2,7}-\d{2}-\d)\b", blob)
+    if m:
+        cas = m.group(1)
+        # 校验和后回填（C18 纪律：伪造/错填 CAS 不越过闸门）
+        if _cas_checksum_ok(cas):
+            updates["cas_no"] = cas
+            warnings.append(f"{name}: 通过网络检索补全 CAS {cas}")
+        else:
+            warnings.append(f"{name}: 网络检索 CAS {cas} 校验失败，已忽略")
+    return warnings
+
+
+def _parse_declared_mass(raw: object) -> float | None:
+    """Catalog molar-mass values → float ('~382 g/mol' → 382.0; 失败 None)."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    import re
+
+    m = re.search(r"-?\d+(?:\.\d+)?", str(raw).replace(",", ""))
+    return float(m.group()) if m else None
+
+
+def _apply_lookup_hit(updates: dict, hit: dict, *, need_cas: bool, need_zh: bool, need_smiles: bool, need_formula: bool, need_mm: bool) -> None:
+    if need_cas and hit.get("cas"):
+        updates["cas_no"] = hit["cas"]
+    if need_zh and hit.get("zh_name"):
+        updates["zh_name"] = hit["zh_name"]
+    if need_smiles and hit.get("smiles"):
+        updates["smiles"] = hit["smiles"]
+    if need_formula and hit.get("formula"):
+        updates["formula"] = hit["formula"]
+        updates["mf_structure"] = hit["formula"]
+        updates["mf"] = hit["formula"]
+    if need_mm and hit.get("molar_mass") is not None:
+        raw = hit["molar_mass"]
+        # model_copy(update) 不过 pydantic 校验 —— 先归一, 防 str 逃逸到
+        # validate_formulation(2026-09-05 recommend 503 根因之一)
+        updates["molar_mass"] = float(raw) if isinstance(raw, (int, float)) else _parse_declared_mass(raw)
+
+
+def _resolve_fields(
+    name: str,
+    *,
+    cas_no: str | None = None,
+    zh_name: str | None = None,
+    smiles: str | None = None,
+    formula: str | None = None,
+    mf: str | None = None,
+    molar_mass: float | None = None,
+    role: str | None = None,
+    component_type: str | None = None,
+    network: bool = True,
+) -> tuple[dict, list[str]]:
+    """Unified ingredient/component enrich — catalog → lookup → chemtools."""
+    warnings: list[str] = []
+    updates: dict = {}
+    display_name = (name or "").strip()
+    canon_name, spec = _catalog_spec(display_name)
+
+    effective_formula = formula or mf or ""
+    effective_cas = cas_no or ""
+    effective_zh = zh_name or ""
+    effective_smiles = smiles
+    effective_mm = molar_mass
+
+    if spec:
+        if not effective_cas and spec.get("cas_no"):
+            updates["cas_no"] = spec["cas_no"]
+        if not effective_zh and spec.get("zh_name"):
+            updates["zh_name"] = spec["zh_name"]
+        if not effective_smiles and spec.get("smiles"):
+            updates["smiles"] = spec["smiles"]
+        if not effective_formula and spec.get("formula"):
+            updates["formula"] = spec["formula"]
+            updates["mf_structure"] = spec["formula"]
+            updates["mf"] = spec["formula"]
+        if effective_mm is None and spec.get("molar_mass") is not None:
+            updates["molar_mass"] = spec["molar_mass"]
+        if not role and spec.get("role"):
+            updates["role"] = spec["role"]
+        if not component_type and spec.get("role"):
+            updates["component_type"] = spec["role"]
+
+    merged_cas = str(updates.get("cas_no") or effective_cas or "").strip()
+    if merged_cas and not _cas_checksum_ok(merged_cas):
+        warnings.append(f"{display_name}: CAS {merged_cas!r} 校验失败，已忽略")
+        merged_cas = ""
+        updates.pop("cas_no", None)
+
+    merged_zh = updates.get("zh_name") or effective_zh
+    merged_smiles = updates.get("smiles") or effective_smiles
+    merged_formula = updates.get("formula") or effective_formula
+    merged_mm = updates.get("molar_mass", effective_mm)
+
+    need_cas = not (merged_cas or updates.get("cas_no"))
+    need_zh = not merged_zh
+    need_smiles = not merged_smiles
+    need_formula = not merged_formula
+    need_mm = merged_mm is None
+
+    if network and any((need_cas, need_zh, need_smiles, need_formula, need_mm)):
+        from ..services.chemical_lookup import lookup_chemical
+
+        lookup_name = canon_name if canon_name != display_name else display_name
+        _apply_lookup_hit(
+            updates,
+            lookup_chemical(lookup_name),
+            need_cas=need_cas,
+            need_zh=need_zh,
+            need_smiles=need_smiles,
+            need_formula=need_formula,
+            need_mm=need_mm,
+        )
+
+    # 反查必须建立在 CAS 校验和通过之上（C18：未通过校验和的 CAS 绝不用于
+    # 反查数据库/覆盖字段，否则伪造或错填的 CAS 可绕过闸门污染成分数据）。
+    # 128 行已把不过校验和的 merged_cas 清空，此处条件再次显式校验。
+    if network and merged_cas and _cas_checksum_ok(merged_cas):
+        from ..services.chemical_lookup import lookup_chemical
+
+        by_cas = lookup_chemical(merged_cas)
+        resolved_cas = str(by_cas.get("cas") or "").strip()
+        if resolved_cas and resolved_cas != merged_cas:
+            warnings.append(
+                f"{display_name}: CAS {merged_cas} 与检索结果 {resolved_cas} 不一致，已采用 {resolved_cas}"
+            )
+            updates["cas_no"] = resolved_cas
+        elif resolved_cas:
+            updates.setdefault("cas_no", resolved_cas)
+        if not (updates.get("zh_name") or merged_zh) and by_cas.get("zh_name"):
+            updates["zh_name"] = by_cas["zh_name"]
+        if not (updates.get("smiles") or merged_smiles) and by_cas.get("smiles"):
+            updates["smiles"] = by_cas["smiles"]
+        if not (updates.get("formula") or merged_formula) and by_cas.get("formula"):
+            updates["formula"] = by_cas["formula"]
+            updates["mf_structure"] = by_cas["formula"]
+            updates["mf"] = by_cas["formula"]
+        if updates.get("molar_mass") is None and merged_mm is None and by_cas.get("molar_mass") is not None:
+            updates["molar_mass"] = by_cas["molar_mass"]
+
+    gap_name = canon_name if spec else display_name
+    updates.update(
+        _chemtools_gap_fill(
+            gap_name,
+            has_smiles=bool(updates.get("smiles") or merged_smiles),
+            has_cas=bool(updates.get("cas_no") or merged_cas),
+        )
+    )
+
+    # P1: 网络检索兜底 — ChemCrow/PubChem 全 miss 的长尾材料名，Tavily 检索补 CAS。
+    # Material-substitution scoring passes network=False to avoid multi-second
+    # DuckDuckGo/primp latency on every candidate swap.
+    if network and (
+        not (updates.get("smiles") or merged_smiles) or not (updates.get("cas_no") or merged_cas)
+    ):
+        warnings.extend(_web_search_gap_fill(gap_name, updates))
+
+    if not component_type and not updates.get("component_type") and (role or updates.get("role")):
+        updates["component_type"] = role or updates.get("role")
+
+    return updates, warnings
+
+
+def enrich_ingredient(ing: Ingredient, *, network: bool = True) -> Ingredient:
+    updates, _ = _resolve_fields(
+        ing.name,
+        cas_no=ing.cas_no,
+        zh_name=ing.zh_name,
+        smiles=ing.smiles,
+        formula=ing.formula or ing.mf_structure,
+        molar_mass=ing.molar_mass,
+        role=ing.role,
+        component_type=ing.component_type,
+        network=network,
+    )
+    if not ing.component_type and (ing.role or updates.get("role")):
+        updates.setdefault("component_type", ing.role or updates.get("role", ""))
+    return ing.model_copy(update=updates) if updates else ing
+
+
+def enrich_component(comp: RecommendedFormulaComponent, *, network: bool = True) -> RecommendedFormulaComponent:
+    updates, _ = _resolve_fields(
+        comp.name,
+        cas_no=comp.cas_no or None,
+        zh_name=comp.zh_name or None,
+        smiles=comp.smiles,
+        mf=comp.mf,
+        molar_mass=comp.molar_mass,
+        component_type=comp.component_type,
+        network=network,
+    )
+    return comp.model_copy(update=updates) if updates else comp
+
+
+def enrich_formulation(form: Formulation, *, network: bool = True) -> Formulation:
+    ingredients = [enrich_ingredient(i, network=network) for i in form.ingredients]
+    return form.model_copy(update={"ingredients": ingredients})
+
+
+def component_to_ingredient(comp: RecommendedFormulaComponent) -> Ingredient:
+    enriched = enrich_component(comp)
+    weight = enriched.weight_pct
+    if weight is None:
+        weight = 0.0
+    role = enriched.component_type or "additive"
+    return Ingredient(
+        name=enriched.name,
+        zh_name=enriched.zh_name or "",
+        role=role,
+        component_type=enriched.component_type or role,
+        smiles=enriched.smiles,
+        formula=enriched.mf or None,
+        mf_structure=enriched.mf or None,
+        cas_no=enriched.cas_no or None,
+        molar_mass=enriched.molar_mass,
+        weight_pct=float(weight),
+        equivalents=enriched.equivalents,
+        mmol=enriched.mmol,
+        amount_display=enriched.amount_display or (f"{weight:.2f}%" if weight else ""),
+        notes=enriched.notes,
+        evidence_refs=list(enriched.evidence_refs or []),
+        grounding_confidence=enriched.grounding_confidence,
+    )
+
+
+def ingredient_to_component(ing: Ingredient) -> RecommendedFormulaComponent:
+    enriched = enrich_ingredient(ing)
+    return RecommendedFormulaComponent(
+        component_type=enriched.component_type or enriched.role,
+        name=enriched.name,
+        zh_name=enriched.zh_name or "",
+        cas_no=enriched.cas_no or "",
+        mf=enriched.formula or enriched.mf_structure or "",
+        smiles=enriched.smiles,
+        molar_mass=enriched.molar_mass,
+        equivalents=enriched.equivalents,
+        mmol=enriched.mmol,
+        amount_display=enriched.amount_display or f"{enriched.weight_pct:.2f}%",
+        weight_pct=enriched.weight_pct,
+        notes=enriched.notes,
+        evidence_refs=list(enriched.evidence_refs or []),
+        grounding_confidence=enriched.grounding_confidence,
+    )
+
+
+def recommended_to_formulation(rec: RecommendedFormula) -> Formulation:
+    ingredients = [component_to_ingredient(c) for c in rec.components]
+    if not ingredients:
+        raise ValueError(f"RecommendedFormula {rec.name!r} has no components")
+    total = sum(i.weight_pct for i in ingredients)
+    if total <= 0 and len(ingredients) > 0:
+        share = 100.0 / len(ingredients)
+        ingredients = [i.model_copy(update={"weight_pct": share}) for i in ingredients]
+    return Formulation(
+        name=rec.name,
+        domain=rec.domain,
+        ingredients=ingredients,
+        rationale=rec.rationale,
+        predicted=dict(rec.predicted),
+        score=rec.score,
+        warnings=list(rec.warnings),
+    )
+
+
+def formulation_to_recommended(
+    form: Formulation,
+    *,
+    engine: str = "offline",
+    objectives_summary: str = "",
+) -> RecommendedFormula:
+    enriched = enrich_formulation(form)
+    return RecommendedFormula(
+        name=enriched.name,
+        domain=enriched.domain,
+        rationale=enriched.rationale,
+        objectives_summary=objectives_summary,
+        components=[ingredient_to_component(i) for i in enriched.ingredients],
+        predicted=dict(enriched.predicted),
+        score=enriched.score,
+        warnings=list(enriched.warnings),
+        engine="llm" if engine == "llm" else "offline",
+    )
+
+
+def formulations_to_recommended(
+    forms: list[Formulation],
+    *,
+    engine: str = "offline",
+) -> list[RecommendedFormula]:
+    return [formulation_to_recommended(f, engine=engine) for f in forms]
+
+
+def _requirement_constraint_warnings(form: Formulation, req: Requirement) -> list[str]:
+    """Advisory warnings when predicted properties conflict with Requirement limits."""
+    from ..domain.chemistry import full_safety_check, validate_formulation
+
+    warnings: list[str] = []
+    voc_limit = req.voc_limit_gpl
+    voc_gpl = form.predicted.get("voc_gpl") if form.predicted else None
+    # The caller already reported the closure (with the formulation's name); these two
+    # re-run it, unnamed, on the same recipe.
+    warnings.extend(
+        w
+        for w in validate_formulation(form, voc_limit_gpl=voc_limit)
+        if not is_closure_warning(w)
+    )
+    warnings.extend(
+        w
+        for w in full_safety_check(form, voc_gpl=voc_gpl, voc_limit_gpl=voc_limit)
+        if not is_closure_warning(w)
+    )
+
+    if req.cure_temperature_c is not None:
+        cure = form.predicted.get("cure_temperature_c")
+        if cure is not None and cure > req.cure_temperature_c:
+            warnings.append(
+                f"{form.name}: predicted cure {cure:.0f}°C exceeds limit {req.cure_temperature_c:.0f}°C"
+            )
+
+    if req.ph_target is not None:
+        ph = form.predicted.get("ph")
+        if ph is not None and abs(ph - req.ph_target) > 1.0:
+            warnings.append(
+                f"{form.name}: predicted pH {ph:.1f} deviates from target {req.ph_target:.1f}"
+            )
+
+    if req.salt_spray_hours and req.salt_spray_hours > 0:
+        ss = form.predicted.get("salt_spray_hours")
+        if ss is not None and ss < req.salt_spray_hours * 0.85:
+            warnings.append(
+                f"{form.name}: predicted salt spray {ss:.0f}h below target {req.salt_spray_hours:.0f}h"
+            )
+
+    return warnings
+
+
+def validate_formulations(
+    forms: list[Formulation],
+    req: Requirement | None = None,
+) -> tuple[list[Formulation], list[str]]:
+    warnings: list[str] = []
+    out: list[Formulation] = []
+    for form in forms:
+        if not form.ingredients:
+            warnings.append(f"Formulation {form.name!r} has no ingredients; skipped")
+            continue
+        closure_msg = closure_warning_text(sum(i.weight_pct for i in form.ingredients), form.name)
+        if closure_msg:
+            warnings.append(closure_msg)
+        enriched_ings: list[Ingredient] = []
+        for ing in form.ingredients:
+            updates, ing_warnings = _resolve_fields(
+                ing.name,
+                cas_no=ing.cas_no,
+                zh_name=ing.zh_name,
+                smiles=ing.smiles,
+                formula=ing.formula or ing.mf_structure,
+                molar_mass=ing.molar_mass,
+                role=ing.role,
+                component_type=ing.component_type,
+            )
+            warnings.extend(ing_warnings)
+            if not ing.component_type and (ing.role or updates.get("role")):
+                updates.setdefault("component_type", ing.role or updates.get("role", ""))
+            # P1: LLM 输出的 smiles 结构校验（MolJSON/RDKit 回读）。
+            # 非法结构 → 告警 + 清空，让下游 catalog 重填（避免幻觉结构进入推理）。
+            raw_smiles = updates.get("smiles") or ing.smiles
+            if raw_smiles:
+                from ..services.moljson import validate_smiles
+
+                s_info = validate_smiles(raw_smiles)
+                if not s_info["valid"]:
+                    warnings.append(
+                        f"{ing.name}: SMILES '{raw_smiles}' 无法被 RDKit 解析（结构幻觉），已清空待重填"
+                    )
+                    updates["smiles"] = None
+            enriched_ings.append(ing.model_copy(update=updates) if updates else ing)
+        enriched = form.model_copy(update={"ingredients": enriched_ings})
+        missing_cas = [i.name for i in enriched.ingredients if not i.cas_no]
+        if missing_cas and len(missing_cas) == len(enriched.ingredients):
+            warnings.append(f"{form.name}: no CAS numbers resolved for ingredients")
+        # v11 physical-constraint advisory layer (soft path — warnings only).
+        # Hard blocking lives in the DOE gate (baybe_engine); here we surface
+        # acid-stability / compliance / stoichiometry issues without deleting
+        # the candidate so the user can judge.
+        from ..services.acid_stability import check_acid_stability
+        from ..services.compliance_rules import check_compliance
+        from .chemistry import dimension_closure, equivalent_ratio
+
+        acid = check_acid_stability(enriched, bath_ph=req.ph_target if req else None)
+        if acid.status != "pass":
+            warnings.extend(f"{enriched.name}: {r}" for r in acid.reasons)
+        comp = check_compliance(enriched)
+        if comp.status != "pass":
+            warnings.extend(f"{enriched.name}: {r}" for r in comp.reasons)
+        eq = equivalent_ratio(enriched)
+        if eq is not None and not (0.6 <= eq <= 1.8):
+            warnings.append(
+                f"{enriched.name}: 环氧/胺当量比 {eq:.2f} 偏离化学计量窗口 0.6-1.8（交联密度风险）"
+            )
+        warnings.extend(f"{enriched.name}: {r}" for r in dimension_closure(enriched))
+        if req is not None:
+            warnings.extend(_requirement_constraint_warnings(enriched, req))
+        out.append(enriched)
+    return out, warnings
+
+
+def validate_recommended_formulas(
+    formulas: list[RecommendedFormula],
+) -> tuple[list[RecommendedFormula], list[str]]:
+    warnings: list[str] = []
+    out: list[RecommendedFormula] = []
+    for rec in formulas:
+        if not rec.components:
+            warnings.append(f"{rec.name}: no components; skipped")
+            continue
+        enriched_comps: list[RecommendedFormulaComponent] = []
+        for comp in rec.components:
+            updates, comp_warnings = _resolve_fields(
+                comp.name,
+                cas_no=comp.cas_no or None,
+                zh_name=comp.zh_name or None,
+                smiles=comp.smiles,
+                mf=comp.mf,
+                molar_mass=comp.molar_mass,
+                component_type=comp.component_type,
+            )
+            warnings.extend(comp_warnings)
+            # P1: LLM 输出的 smiles 结构校验（MolJSON/RDKit 回读）。
+            raw_smiles = updates.get("smiles") or comp.smiles
+            if raw_smiles:
+                from ..services.moljson import validate_smiles
+
+                s_info = validate_smiles(raw_smiles)
+                if not s_info["valid"]:
+                    warnings.append(
+                        f"{comp.name}: SMILES '{raw_smiles}' 无法被 RDKit 解析（结构幻觉），已清空待重填"
+                    )
+                    updates["smiles"] = None
+            enriched_comps.append(comp.model_copy(update=updates) if updates else comp)
+        missing_cas = [c.name for c in enriched_comps if not c.cas_no]
+        if missing_cas:
+            warnings.append(f"{rec.name}: missing CAS for {', '.join(missing_cas[:3])}")
+        missing_mf = [c.name for c in enriched_comps if not c.mf]
+        if missing_mf:
+            warnings.append(f"{rec.name}: missing MF for {', '.join(missing_mf[:3])}")
+        weights = [c.weight_pct for c in enriched_comps if c.weight_pct is not None]
+        if weights:
+            closure_msg = closure_warning_text(closure_total_of(weights), rec.name)
+            if closure_msg:
+                warnings.append(closure_msg)
+        out.append(rec.model_copy(update={"components": enriched_comps}))
+    return out, warnings
+
+
+def parse_llm_formulations(payload: dict | list) -> tuple[list[Formulation], list[str]]:
+    try:
+        if isinstance(payload, list):
+            forms = [Formulation(**item) if isinstance(item, dict) else item for item in payload]
+            parsed = FormulationListResponse(formulations=forms)
+        else:
+            parsed = FormulationListResponse.model_validate(payload)
+        return validate_formulations(parsed.formulations)
+    except ValidationError as exc:
+        return [], [f"LLM formulation JSON invalid: {exc}"]
+
+
+def offline_recommend_response(
+    forms: list[Formulation],
+    *,
+    reason: str,
+) -> RecommendedFormulaListResponse:
+    recs = formulations_to_recommended(forms, engine="offline")
+    return RecommendedFormulaListResponse(
+        formulas=recs,
+        warnings=[reason],
+        engine="offline",
+    )

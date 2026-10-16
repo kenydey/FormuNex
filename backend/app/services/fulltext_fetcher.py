@@ -1,0 +1,1070 @@
+"""Full-text acquisition layer — upgrades abstract-level search hits to
+full-document chunks and persists the raw text into the source store.
+
+Fetcher registry by evidence kind (each fetcher returns plain text or None):
+
+* **patent**   — USPTO / EPO / Google Patents PDF (reuses ``pdf_downloader``);
+* **literature** — Open Access PDF located via OpenAlex (DOI) or arXiv id;
+* **web**      — page body via trafilatura (preferred, boilerplate-free
+  Markdown) with an HTML-strip fallback; SSRF-guarded.
+
+Gated by ``FORMUNEX_FULLTEXT_ENRICH`` (default off so tests stay offline).
+On success the original one-liner Evidence is replaced *in position* by
+chunk-level Evidence rows, and the full text is persisted as a
+``SourceDocument`` (dedup by content hash) so later phases can re-chunk or
+re-index without re-downloading.
+"""
+from __future__ import annotations
+
+import concurrent.futures
+import gzip
+import hashlib
+import logging
+import re
+import threading
+from dataclasses import dataclass, field
+
+import httpx
+
+from ..config import get_settings
+from ..domain.schemas import Evidence
+from . import ingest_timing as _timing
+from .errors import degrade_return
+from .http_safe import make_client, ssrf_safe_client
+from .pdf_downloader import FetchedFulltext
+
+logger = logging.getLogger(__name__)
+
+
+class FetchError(Exception):
+    """Full-text acquisition failed with a specific, user-facing reason.
+
+    Raised by the fetchers so the ingest state machine can record *why* a
+    document was unobtainable — "无 OA 版本" vs "下载超时" vs "解析为空" —
+    instead of collapsing all three into one opaque message.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+# Any patent office, not just US/EP. `fetch_patent_pdf` falls back to Google
+# Patents, which serves CN/JP/WO/KR/DE publications too — so restricting this to
+# US|EP did not reflect what could be fetched, it just declined to try. On a
+# Chinese-language corpus that silently dropped most patent hits from the ingest
+# queue entirely: searched, listed in the UI, never stored.
+#
+# Two letters plus at least four digits is the standard publication-number shape
+# (CN102345678A, WO2020123456A1, JP2001234567A). The trailing kind code is
+# optional and not matched, since it does not affect fetchability.
+#
+# The optional third letter is the Japanese era marker: pre-2000 JP numbers are
+# written JPH… (Heisei) or JPS… (Showa). Without it, JPH0925455A did not
+# classify as a patent at all — searched, shown in the UI, never queued for
+# ingest. Found by running a real mixed batch, which is also how the CN case
+# surfaced; a shape nobody happened to test simply disappears.
+_PATENT_RE = re.compile(r"^[A-Z]{2}[A-Z]?\d{4,}", re.IGNORECASE)
+_DOI_RE = re.compile(r"(?:doi:)?\s*(10\.\d{4,9}/[-._;()/:a-zA-Z0-9]+)", re.IGNORECASE)
+_ARXIV_RE = re.compile(r"(?:arxiv[:/]|abs/)(\d{4}\.\d{4,5})(v\d+)?", re.IGNORECASE)
+
+_HEADERS = {"User-Agent": "FormuNex/1.0 (research platform; full-text fetcher)"}
+
+
+@dataclass
+class FulltextReport:
+    attempted: int = 0
+    succeeded: int = 0
+    by_kind: dict[str, int] = field(default_factory=dict)
+
+    def record(self, kind: str, ok: bool) -> None:
+        self.attempted += 1
+        if ok:
+            self.succeeded += 1
+            self.by_kind[kind] = self.by_kind.get(kind, 0) + 1
+
+    def as_dict(self) -> dict:
+        return {
+            "attempted": self.attempted,
+            "succeeded": self.succeeded,
+            "by_kind": dict(self.by_kind),
+        }
+
+
+# ── kind classification ──────────────────────────────────────────────────────
+
+
+def classify(ev: Evidence) -> str | None:
+    """Return the fetcher kind for an Evidence row, or None when un-fetchable."""
+    from .patent_ids import normalize_patent_pub
+
+    ident = (ev.identifier or "").strip()
+    if not ident or ev.is_seed_corpus or re.search(r"#p?\d+$", ident):
+        return None  # already chunk-level or synthetic
+
+    # Normalize SCPN hyphens / Google Patents URLs before patent matching.
+    # Without this, SureChEMBL ids like ``CN-104789083-B`` never enter kb_ingest.
+    _office, compact = normalize_patent_pub(ident)
+    if not compact:
+        _office, compact = normalize_patent_pub(getattr(ev, "url", None) or "")
+    if compact and _PATENT_RE.match(compact):
+        return "patent"
+
+    src = (ev.source or "").lower()
+    url = (getattr(ev, "url", None) or "").strip().lower()
+    if src == "surechembl" and (
+        compact or "patents.google.com/patent/" in url
+    ):
+        return "patent"
+
+    if _DOI_RE.search(ident) or _ARXIV_RE.search(ident):
+        return "literature"
+    if ident.lower().startswith(("http://", "https://")):
+        if _ARXIV_RE.search(ident):
+            return "literature"
+        return "web"
+    return None
+
+
+# ── fetchers (text or None) ──────────────────────────────────────────────────
+
+
+def _fetch_patent_text(ev: Evidence, timeout: float) -> FetchedFulltext | None:
+    """Full text via the Google Patents landing page (HTML body or its PDF).
+
+    See ``pdf_downloader`` for why this is one lookup and not three direct-URL
+    guesses: all three of those endpoints are dead, so every patent used to
+    burn two timeouts and yield nothing.
+
+    v2 P0-6: returns ``FetchedFulltext`` (text + PDF bytes + tables).
+    """
+    from .patent_ids import normalize_patent_pub
+    from .pdf_downloader import fetch_patent_fulltext
+
+    _office, compact = normalize_patent_pub(ev.identifier)
+    if not compact:
+        _office, compact = normalize_patent_pub(getattr(ev, "url", None) or "")
+    pub = compact or (ev.identifier or "").strip().upper()
+    hit = fetch_patent_fulltext(pub, timeout=timeout)
+    if hit and len(hit.text.strip()) > 200:
+        return hit
+    return None
+
+
+def _unpaywall_locations(doi: str, timeout: float) -> tuple[list[str], list[str]]:
+    """Unpaywall real-time OA lookup → (pdf_urls, landing_urls).
+
+    OpenAlex best_oa_location is a single snapshot entry (mirrors/Green OA
+    often missing); Unpaywall answers per-DOI in real time with every
+    Gold/Green location incl. PMC/repository mirrors.
+    """
+    settings = get_settings()
+    from .runtime_secrets import effective_setting
+
+    mailto = (
+        effective_setting(settings, "unpaywall_mailto") or effective_setting(settings, "openalex_mailto") or ""
+    )
+    if not mailto:
+        return [], []
+    pdfs: list[str] = []
+    landings: list[str] = []
+    try:
+        with make_client(timeout=timeout, headers=_HEADERS) as client:
+            r = client.get(f"https://api.unpaywall.org/v2/{doi}", params={"email": mailto})
+        if r.status_code != 200:
+            return [], []
+        data = r.json()
+    except Exception as exc:
+        return degrade_return(logger, exc, "Unpaywall lookup failed", ([], []))
+    for loc in data.get("oa_locations") or []:
+        loc = loc or {}
+        if loc.get("pdf_url"):
+            pdfs.append(loc["pdf_url"])
+        if loc.get("landing_page_url"):
+            landings.append(loc["landing_page_url"])
+    return pdfs, landings
+
+
+def _europepmc_pmcid(doi: str, timeout: float) -> str | None:
+    """Europe PMC DOI → PMCID bridge (free, no key).
+
+    OpenAlex/Unpaywall 常只给 publisher 墙站链接(MDPI 403); 同一文章 PMC
+    有镜像副本时 Europe PMC 免费 API 返回 pmcid, 用于 HTML 全文兜底。
+    """
+    try:
+        url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=DOI:%22{doi}%22&format=json&pageSize=1"
+        with make_client(timeout=timeout, headers=_HEADERS) as client:
+            r = client.get(url)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        res = (data.get("resultList") or {}).get("result") or []
+        return (res[0] or {}).get("pmcid") or None
+    except Exception as exc:
+        return degrade_return(logger, exc, "Europe PMC lookup failed", None)
+
+
+def _resolve_oa_candidates(ev: Evidence, timeout: float) -> tuple[list[str], list[str]]:
+    """Ordered (pdf candidates, HTML-landing fallbacks) for a DOI/arXiv id.
+
+    2026-09-05 (实测缺口): OpenAlex best_oa_location 只给单个 pdf_url——指向
+    墙站(MDPI Cloudflare 403)即整体失败, 尽管 PMC/仓库有镜像副本。现返回
+    OpenAlex + Unpaywall 的全位置有序列表, 调用方逐个尝试, 403 自动换镜像。
+    """
+    ident = ev.identifier or ""
+    m = _ARXIV_RE.search(ident)
+    if m:
+        return [f"https://arxiv.org/pdf/{m.group(1)}"], []
+    if ev.oa_pdf_url:
+        return [ev.oa_pdf_url], []
+    if ev.is_oa is False and not ev.identifier:
+        return [], []
+    m = _DOI_RE.search(ident)
+    if not m:
+        return [], []
+    doi = m.group(1).rstrip(".,;)")
+    settings = get_settings()
+    # 2026-10-11：mailto 未配置时不带该参数（OpenAlex 仍可用，仅无 polite pool 优待）。
+    mailto = settings.openalex_mailto or ""
+    mailto_qs = f"?mailto={mailto}" if mailto else ""
+    pdfs: list[str] = []
+    landings: list[str] = []
+    try:
+        with make_client(timeout=timeout, headers=_HEADERS) as client:
+            r = client.get(f"https://api.openalex.org/works/doi:{doi}{mailto_qs}")
+        if r.status_code == 200:
+            data = r.json()
+            loc = data.get("best_oa_location") or {}
+            if loc.get("pdf_url"):
+                pdfs.append(loc["pdf_url"])
+            if loc.get("landing_page_url"):
+                landings.append(loc["landing_page_url"])
+    except Exception as exc:
+        degrade_return(logger, exc, "OpenAlex OA resolution failed", None)
+    up_pdfs, up_landings = _unpaywall_locations(doi, timeout)
+    seen = set(pdfs)
+    for p in up_pdfs:
+        if p not in seen:
+            seen.add(p)
+            pdfs.append(p)
+    seen = set(landings)
+    for lu in up_landings:
+        if lu not in seen:
+            seen.add(lu)
+            landings.append(lu)
+    # Europe PMC 桥: DOI→PMCID → PMC 全文页(无 Cloudflare 墙)置顶作 HTML 兜底
+    pmcid = _europepmc_pmcid(doi, timeout)
+    if pmcid and pmcid not in {l.split("/articles/")[-1].rstrip("/") for l in landings if "/articles/" in l}:
+        landings.insert(0, f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/")
+    return pdfs, landings
+
+
+def _resolve_oa_pdf_url(ev: Evidence, timeout: float) -> str | None:
+    """Back-compat shim: first OA pdf candidate (previous single-URL logic)."""
+    pdfs, _landings = _resolve_oa_candidates(ev, timeout)
+    return pdfs[0] if pdfs else None
+
+
+# ── OpenAlex Content Archive (2026-09-11) ─────────────────────────────────────
+# The OA chain's weak link is that it hands back *publisher* URLs: a pdf_url on a
+# Cloudflare-fronted host (MDPI and friends) answers 403 and the document is
+# lost even though copies exist elsewhere. OpenAlex caches ~50M PDFs and ~43M
+# GROBID-parsed TEI XML files and serves them from its own storage, so a DOI
+# that fails through Unpaywall often succeeds here — measured on this host,
+# 5 of the 7 DOIs that had failed with `chars=0` were recoverable.
+#
+# TEI XML is asked for first, not the PDF: it arrives already structured and as
+# plain text, which skips the PDF parse/OCR stage entirely — the most expensive
+# step in ingest. The PDF remains the fallback (and then goes through the normal
+# parse path, OCR included).
+
+_OPENALEX_WORK_RE = re.compile(r"\b(W\d{6,})\b")
+_TEI_NS = "{http://www.tei-c.org/ns/1.0}"
+
+
+def _maybe_gunzip(payload: bytes) -> bytes:
+    """Unwrap a gzipped response body.
+
+    The content API returns the TEI XML as *gzip* (``Content-Type:
+    application/gzip``, magic bytes ``1f 8b``). httpx only transparently decodes
+    a ``Content-Encoding: gzip`` header — not a body that happens to be gzip —
+    so without this the XML parser is handed binary and silently yields nothing.
+    Measured on the live endpoint 2026-09-11.
+    """
+    if payload[:2] == b"\x1f\x8b":
+        try:
+            return gzip.decompress(payload)
+        except Exception as exc:
+            return degrade_return(logger, exc, "OpenAlex content gunzip failed", payload)
+    return payload
+
+
+def _tei_to_text(xml: bytes) -> str:
+    """GROBID TEI XML → plain text with Markdown headings.
+
+    Only ``head`` and ``p`` carry prose worth indexing; the rest of a TEI body
+    is markup, figure captions and (already extracted) table scaffolding.
+    Returns "" when nothing usable is found, so the caller falls through to the
+    PDF rather than persisting an empty document.
+    """
+    try:
+        from lxml import etree
+
+        parser = etree.XMLParser(resolve_entities=False, no_network=True, recover=True)
+        root = etree.fromstring(xml, parser=parser)
+    except Exception as exc:
+        return degrade_return(logger, exc, "TEI XML parse failed", "")
+    if root is None:
+        return ""
+
+    body = root.find(f".//{_TEI_NS}body")
+    if body is None:
+        body = root
+
+    out: list[str] = []
+    for el in body.iter():
+        if not isinstance(el.tag, str):
+            continue
+        tag = el.tag.split("}")[-1]
+        if tag == "head":
+            txt = " ".join("".join(el.itertext()).split())
+            if txt:
+                out.append(f"## {txt}")
+        elif tag in ("p", "item", "quote"):
+            txt = " ".join("".join(el.itertext()).split())
+            if len(txt) > 1:
+                out.append(txt)
+    if out:
+        return "\n\n".join(out)
+    # Last resort: flat sweep so a text-bearing file never reads as empty.
+    return " ".join("".join(body.itertext()).split())
+
+
+def _openalex_work_id(ev: Evidence, doi: str | None, timeout: float) -> str | None:
+    """OpenAlex work id for this evidence (direct from identifier, else via DOI)."""
+    m = _OPENALEX_WORK_RE.search(ev.identifier or "")
+    if m:
+        return m.group(1)
+    if not doi:
+        return None
+    settings = get_settings()
+    params: dict[str, str] = {}
+    key = settings.openalex_api_key
+    if key:
+        params["api_key"] = key
+    elif settings.openalex_mailto:
+        params["mailto"] = settings.openalex_mailto
+    try:
+        with make_client(timeout=timeout, headers=_HEADERS) as client:
+            r = client.get(f"https://api.openalex.org/works/doi:{doi}", params=params)
+        if r.status_code != 200:
+            return None
+        wid = (r.json() or {}).get("id") or ""
+    except Exception as exc:
+        degrade_return(logger, exc, "OpenAlex work-id lookup failed", None)
+        return None
+    m = _OPENALEX_WORK_RE.search(str(wid))
+    return m.group(1) if m else None
+
+
+def _openalex_content_text(ev: Evidence, timeout: float) -> FetchedFulltext | None:
+    """Full text from the OpenAlex content archive. TEI XML first, then PDF.
+
+    Returns None (never raises) when the tier is off, unkeyed, or the work has
+    no cached content, so the caller continues down the existing chain.
+
+    v2 P0-6: returns ``FetchedFulltext`` — the PDF tier keeps raw bytes +
+    parsed tables for the ingest sidecar instead of dropping them.
+    """
+    settings = get_settings()
+    api_key = settings.openalex_api_key
+    if not api_key or not settings.openalex_content_enabled:
+        return None
+
+    ident = ev.identifier or ""
+    # arXiv serves its own PDFs for free; no reason to pay per file for them.
+    if _ARXIV_RE.search(ident):
+        return None
+
+    m = _DOI_RE.search(ident)
+    doi = m.group(1).rstrip(".,;)") if m else None
+    work_id = _openalex_work_id(ev, doi, timeout)
+    if not work_id:
+        return None
+
+    base = f"https://content.openalex.org/works/{work_id}"
+    tiers = [("grobid-xml", "TEI XML", "tei"), ("pdf", "PDF", _ACQ_PDF)]
+    # Prefer Authorization header over ?api_key= so a redirect cannot leak the
+    # key in the Location/query to a third party (OpenAlex accepts both).
+    auth_headers = {**_HEADERS, "Authorization": f"Bearer {api_key}"}
+    for ext, label, acq in tiers:
+        url = f"{base}.{ext}"
+        try:
+            with make_client(
+                timeout=timeout, headers=auth_headers, follow_redirects=False
+            ) as client:
+                r = None
+                current_url = url
+                for _hop in range(4):
+                    r = client.get(current_url)
+                    status = int(getattr(r, "status_code", 0))
+                    if 300 <= status < 400:
+                        location = r.headers.get("location")
+                        if not location:
+                            break
+                        current_url = str(httpx.URL(current_url).join(location))
+                        # Pin content archive host — never follow off-site.
+                        host = (httpx.URL(current_url).host or "").lower()
+                        if host != "content.openalex.org":
+                            logger.warning(
+                                "OpenAlex content redirect off-host blocked: %s",
+                                current_url[:200],
+                            )
+                            r = None
+                            break
+                        continue
+                    break
+                if r is None:
+                    continue
+        except Exception as exc:
+            degrade_return(logger, exc, f"OpenAlex content {label} fetch failed", None)
+            continue
+        if r.status_code != 200:
+            # 401/402 = key or budget problem, 404 = no cached file for this work.
+            logger.info("OpenAlex content %s miss (%s): %s", label, r.status_code, work_id)
+            continue
+        body = _maybe_gunzip(r.content)
+        if ext == "grobid-xml":
+            text = _tei_to_text(body)
+            pdf_bytes: bytes | None = None
+            tables: list | None = None
+        else:
+            # v2 P0-6: 完整解析一次，字节+表格保留给入库 sidecar。
+            from .pdf_downloader import _parse_pdf_bytes
+
+            parsed = _parse_pdf_bytes(body)
+            if parsed is not None:
+                text = parsed.markdown
+                pdf_bytes = body
+                tables = list(getattr(parsed, "tables", None) or []) or None
+            else:
+                try:
+                    from .pdf_downloader import _extract_text
+
+                    text = _extract_text(body)
+                except Exception as exc:
+                    degrade_return(logger, exc, f"OpenAlex content PDF extract failed: {work_id}", None)
+                    continue
+                pdf_bytes = body
+                tables = None
+        if text and len(text.strip()) > 200:
+            logger.info("OpenAlex content hit (%s): %s", label, work_id)
+            _set_acquisition(acq)
+            return FetchedFulltext(text=text, pdf_bytes=pdf_bytes, tables=tables)
+    return None
+
+
+# How the *current* fetch obtained its text. Thread-local because
+# `enrich_search_results` fetches targets in a thread pool and the decision is
+# made several frames down (TEI vs PDF vs HTML), so returning it through every
+# intermediate signature would be far more churn than it is worth.
+_ACQ = threading.local()
+
+
+def _set_acquisition(path: str) -> None:
+    _ACQ.path = path
+
+
+def _last_acquisition() -> str:
+    return getattr(_ACQ, "path", "text")
+
+
+_ACQ_PDF = "pdf"
+
+
+def _fetch_literature_text(ev: Evidence, timeout: float) -> FetchedFulltext | None:
+    """Full text for a DOI/arXiv row.
+
+    Order (2026-09-11): OpenAlex content archive (TEI XML → PDF, publisher-403
+    proof) → OA PDF candidates from OpenAlex/Unpaywall → landing/PMC HTML.
+    arXiv keeps its direct path; chemistry preprints arrive via ChemRxiv/OpenAlex.
+
+    v2 P0-6: returns ``FetchedFulltext`` (text + PDF bytes + tables).
+    """
+
+    # Tier 0: OpenAlex-hosted copy. Cheapest when available — TEI XML skips the
+    # parse/OCR stage outright, and it is the only tier immune to publisher 403s.
+    cached = _openalex_content_text(ev, timeout)
+    if cached:
+        return cached
+
+    pdf_cands, landing_cands = _resolve_oa_candidates(ev, timeout)
+    if not pdf_cands and not landing_cands:
+        raise FetchError("无 OA 版本")
+    from .pdf_downloader import _parse_pdf_bytes, _raw_pdf_stream_text, fetch_pdf_ex
+
+    last_reason = "no candidate"
+    for pdf_url in pdf_cands:
+        pdf, reason = fetch_pdf_ex(pdf_url, timeout=timeout)
+        last_reason = reason
+        if not pdf:
+            logger.info("OA pdf candidate failed (%s): %s", reason, pdf_url[:90])
+            continue
+        try:
+            # v2 P0-6: 完整解析一次，文本+字节+表格全保留。
+            parsed = _parse_pdf_bytes(pdf)
+            text = parsed.markdown if parsed is not None else _raw_pdf_stream_text(pdf)
+            tables = list(getattr(parsed, "tables", None) or []) or None
+        except Exception as exc:
+            return degrade_return(logger, exc, f"pdf extract failed: {pdf_url}", None)
+        if text and len(text.strip()) > 200:
+            _set_acquisition(_ACQ_PDF)
+            return FetchedFulltext(text=text, pdf_bytes=pdf, tables=tables)
+        last_reason = "extract-empty"
+    # PDF 候选全败 → HTML 兜底(landing/PMC 页, 2026-09-05 补足)
+    for landing in landing_cands:
+        html_text = _fetch_landing_text(landing, timeout)
+        if html_text and len(html_text.strip()) > 200:
+            logger.info("OA html fallback ok: %s", landing[:90])
+            _set_acquisition("html")
+            return FetchedFulltext(text=html_text)
+    # D-2: Semantic Scholar 回退（DOI → OA PDF）
+    ss_hit = _fetch_semanticscholar(ev, timeout)
+    if ss_hit:
+        return ss_hit
+    raise FetchError(f"OA 全文获取失败: {last_reason}")
+
+
+def _fetch_semanticscholar(ev: Evidence, timeout: float) -> FetchedFulltext | None:
+    """D-2: Semantic Scholar API 回退。DOI → openAccessPdf。fail-open。"""
+    try:
+        import re
+        doi_m = re.search(r"10\.\d{4,}/[^\s]+", ev.identifier or "")
+        if not doi_m:
+            return None
+        doi = doi_m.group(0).rstrip(".,;")
+        from .http_safe import ssrf_safe_client
+        from .scholar_helpers import SEMANTIC_SCHOLAR_API, semantic_scholar_headers
+        with ssrf_safe_client(timeout=timeout) as client:
+            r = client.get(
+                f"{SEMANTIC_SCHOLAR_API}/paper/DOI:{doi}",
+                params={"fields": "openAccessPdf,abstract"},
+                headers=semantic_scholar_headers(),
+            )
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            pdf_url = (data.get("openAccessPdf") or {}).get("url")
+            if pdf_url:
+                from .pdf_downloader import fetch_pdf_ex, _parse_pdf_bytes
+                pdf, _ = fetch_pdf_ex(pdf_url, timeout=timeout)
+                if pdf:
+                    parsed = _parse_pdf_bytes(pdf)
+                    if parsed and parsed.markdown:
+                        _set_acquisition("pdf")
+                        return FetchedFulltext(
+                            text=parsed.markdown, pdf_bytes=pdf,
+                            tables=list(getattr(parsed, "tables", None) or []) or None,
+                        )
+            # 无 PDF 时用 abstract 兜底
+            abstract = data.get("abstract")
+            if abstract and len(abstract.strip()) > 200:
+                _set_acquisition("text")
+                return FetchedFulltext(text=abstract)
+    except Exception:
+        pass
+    return None
+
+
+def _extract_web_text(html: str) -> str:
+    """Web body → Markdown via the unified parsing layer (trafilatura first)."""
+    from .parsing import html_to_markdown
+
+    return html_to_markdown(html)
+
+
+def _fetch_landing_text(landing_url: str, timeout: float) -> str | None:
+    """HTML fallback for literature: GET a landing/PMC page → body text.
+
+    SSRF-guarded via _is_safe_url (same manual-redirect loop as _fetch_web_text).
+    """
+    from .ingestion import _is_safe_url
+
+    if not _is_safe_url(landing_url):
+        return None
+    current_url = landing_url
+    try:
+        with ssrf_safe_client(timeout=timeout, follow_redirects=False, headers=_HEADERS) as client:
+            r = None
+            for _hop in range(4):
+                r = client.get(current_url)
+                if 300 <= int(getattr(r, "status_code", 0)) < 400:
+                    location = r.headers.get("location")
+                    if not location:
+                        break
+                    current_url = str(httpx.URL(current_url).join(location))
+                    if not _is_safe_url(current_url):
+                        return None
+                    continue
+                break
+            if r is None or int(getattr(r, "status_code", 0)) != 200:
+                return None
+            body = r.content
+            ct = (r.headers.get("content-type") or "").lower()
+    except Exception as exc:
+        return degrade_return(logger, exc, f"landing fetch failed: {landing_url}", None)
+    if "html" not in ct and not body.lstrip()[:200].lower().startswith(b"<"):
+        return None
+    # v23-fix: charset 检测（与 v19-5 同构），避免 GBK 站整页乱码。
+    try:
+        from charset_normalizer import from_bytes
+        _detected = from_bytes(body).best()
+        _html = str(_detected) if _detected else body.decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        _html = body.decode("utf-8", errors="replace")
+    text = _extract_web_text(_html)
+    return text or None
+
+
+def _fetch_web_text(ev: Evidence, timeout: float) -> str | None:
+    from .ingestion import _is_safe_url
+
+    url = (ev.identifier or "").strip()
+    if not _is_safe_url(url):
+        return None
+    # follow_redirects=False + manual loop: re-check _is_safe_url on every
+    # redirect target so an SSRF cannot pivot to an internal host via a 3xx.
+    current_url = url
+    try:
+        with ssrf_safe_client(timeout=timeout, follow_redirects=False, headers=_HEADERS) as client:
+            r = None
+            for _hop in range(4):  # initial + up to 3 redirects
+                r = client.get(current_url)
+                # Treat any 3xx as a redirect (works with real httpx.Response
+                # and simple fakes that only set status_code).
+                if 300 <= int(getattr(r, "status_code", 0)) < 400:
+                    location = r.headers.get("location")
+                    if not location:
+                        break
+                    current_url = str(httpx.URL(current_url).join(location))
+                    if not _is_safe_url(current_url):
+                        logger.warning("web fulltext redirect blocked (SSRF guard): %s", current_url)
+                        return None
+                    continue
+                break
+            status = int(getattr(r, "status_code", 0)) if r is not None else 0
+            # Recorded so the batch summary can tell "the server refused us"
+            # apart from "the page came back nearly empty". Collapsing them
+            # would let a wall of 403s argue for a JavaScript-rendering tier
+            # that cannot fix a 403.
+            _timing.note(http=status)
+            if r is None or status != 200:
+                return None
+            ctype = (r.headers.get("content-type") or "").lower()
+            if "pdf" in ctype:
+                from .pdf_downloader import _extract_text
+
+                text = _extract_text(r.content)
+            else:
+                text = _extract_web_text(r.text)
+    except Exception as exc:
+        return degrade_return(logger, exc, f"web fulltext fetch failed: {url}", None)
+    return text if text and len(text.strip()) > 200 else None
+
+
+def _dispatch_fetch(kind: str, ev: Evidence, timeout: float) -> FetchedFulltext | None:
+    """Resolve the fetcher at call time (keeps the registry monkeypatchable).
+
+    v2 P0-6: returns ``FetchedFulltext`` (text + PDF bytes + tables).
+    """
+    _ACQ.path = "text"  # reset per dispatch: the fetcher downgrades it if it used a PDF
+    if kind == "patent":
+        hit = _fetch_patent_text(ev, timeout)
+        if hit:
+            # Approximation, documented on purpose: `fetch_patent_text` picks
+            # HTML vs PDF internally and does not report which, so attribute by
+            # the configured preference. The default (`patent_prefer_html=True`)
+            # is the landing-page HTML, which needs no parse/OCR at all; a patent
+            # that falls back to PDF is therefore under-counted against the PDF
+            # quota. Acceptable for a resource guardrail, and the alternative
+            # (changing `fetch_patent_text`'s return type) ripples into callers
+            # and tests for no functional gain.
+            prefer_html = get_settings().patent_prefer_html
+            _set_acquisition("html" if prefer_html else _ACQ_PDF)
+        return hit
+    if kind == "literature":
+        return _fetch_literature_text(ev, timeout)
+    if kind == "web":
+        text = _fetch_web_text(ev, timeout)
+        if text:
+            _set_acquisition("html")
+            return FetchedFulltext(text=text)
+    return None
+
+
+# ── chunking + persistence ───────────────────────────────────────────────────
+
+
+def _text_to_chunks(text: str, ev: Evidence) -> list[Evidence]:
+    """Split fetched full text into chunk Evidence rows preserving provenance.
+
+    Structure-aware: fetched text is Markdown (trafilatura / PDF parsers), so
+    heading paths survive into chunk titles and tables stay atomic — the same
+    chunker every other ingest path uses.
+    """
+    from .chunking import chunk_markdown
+    from .kb_index import chunk_snippet
+
+    settings = get_settings()
+    chunks = chunk_markdown(
+        text,
+        max_chars=settings.ingest_chunk_max_chars,
+        overlap=settings.ingest_chunk_overlap,
+    )
+    chunks = [c for c in chunks if len(c.text.strip()) > 30][: settings.ingest_max_chunks]
+    out: list[Evidence] = []
+    for i, chunk in enumerate(chunks):
+        # v2 P0-5: 页码诚实化 —— 用 marker 解析的真实 page_no；无真实页码时
+        # 不写页码（此前 f"(p.{i+1})" 用 chunk 序号冒充页码，已删除）。
+        page = getattr(chunk, "page_no", None)
+        title = ev.title
+        if page is not None:
+            title = f"{title} (p.{page})"
+        if chunk.heading_path:
+            title = f"{title} · {chunk.heading_path}"
+        out.append(
+            Evidence(
+                source=ev.source,
+                identifier=f"{ev.identifier}#p{i}",
+                title=title,
+                snippet=chunk_snippet(chunk.text),
+                relevance=max(0.2, round(ev.relevance - i * 0.01, 3)),
+                page=int(page) if page is not None else None,
+            )
+        )
+    return out
+
+
+def _persist_pdf_sidecars(
+    source_id: str,
+    ev: Evidence,
+    pdf_bytes: bytes | None,
+    tables: list | None,
+) -> None:
+    """v2 P0-6: 全文下载 PDF 的字节 + 表格 sidecar 落盘（fail-open）。
+
+    - PDF 原始字节 → backend/data/source_files/{source_id}.pdf
+      （复用 PageIndex 借鉴已建的下载端点 GET /api/documents/{id}/file）。
+    - 解析出的表格 → table sidecar（与本地上传路径同键）。
+    任一失败只记日志，不影响文本入库。
+    """
+    if pdf_bytes:
+        try:
+            import tempfile
+            from pathlib import Path
+
+            from .source_files import persist_source_file
+
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(pdf_bytes)
+                tmp_path = Path(tmp.name)
+            try:
+                persist_source_file(source_id, tmp_path, f"{source_id}.pdf")
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            logger.warning("pdf source file persist failed (fail-open)")
+    if tables:
+        try:
+            from .parsing import persist_table_sidecar
+
+            persist_table_sidecar(source_id, tables)
+        except Exception:  # noqa: BLE001
+            logger.warning("table sidecar persist failed (fail-open)")
+
+
+def _is_db_locked(exc: Exception) -> bool:
+    """True when the exception chain carries a SQLite "database is locked".
+
+    SQLAlchemy wraps the original OperationalError in "This Session's
+    transaction has been rolled back due to a previous exception during flush",
+    so a naive str() check on the top-level exception misses the lock. Walk the
+    __cause__/__context__ chain to find it.
+    """
+    cur: BaseException | None = exc
+    while cur is not None:
+        if "database is locked" in str(cur).lower():
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _persist_fulltext(
+    text: str,
+    ev: Evidence,
+    kind: str,
+    *,
+    project_id: str | None = None,
+    acquisition: str | None = None,
+    pdf_bytes: bytes | None = None,
+    tables: list | None = None,
+) -> str | None:
+    """Store the raw full text as a SourceDocument (dedup by content hash).
+
+    Retries the whole persist on SQLite "database is locked": kb_ingest writes
+    into source_documents while uvicorn autosaves the project, and the two
+    processes can exhaust the 60s busy_timeout. A fresh session + content-hash
+    dedup make the retry idempotent — a create that already landed is found by
+    find_by_hash on the next attempt instead of being duplicated.
+
+    v2 P0-6: ``pdf_bytes``/``tables`` — PDF tier 的原始字节与解析表格。
+    落盘后：PDF 存 source_files/（下载端点可取），表格走 table sidecar，
+    与本地上传路径同级。全部 fail-open，失败不影响文本入库。
+
+    2026-10-11 Phase 1 P0-1a: 有 pdf_bytes 时走 parse_document 全管线
+    （7-tier），用解析后的 markdown 替换传入 text，表格合并。
+    解析失败时 fail-open 回退原 text。
+    """
+    import time
+
+    from ..db.source_store import get_source_store
+    from .patent_ids import canonical_origin_url, normalize_patent_pub
+
+    # Phase 1 P0-1a: PDF 全管线解析 —— v2 决策②"一律走 parse_document 全管线"
+    if pdf_bytes:
+        try:
+            from .parsing import parse_document
+            parsed = parse_document(pdf_bytes, "pdf")
+            if parsed and (parsed.markdown or "").strip():
+                text = parsed.markdown
+                # 合并解析出的表格（去重：按内容哈希）
+                parsed_tables = getattr(parsed, "tables", None) or []
+                if parsed_tables:
+                    seen = set()
+                    merged = []
+                    for t in (tables or []) + parsed_tables:
+                        h = str(t)[:200]
+                        if h not in seen:
+                            seen.add(h)
+                            merged.append(t)
+                    tables = merged
+                logger.info("fulltext parse_document: %d chars, %d tables",
+                            len(text), len(tables or []))
+        except Exception as exc:
+            logger.warning("parse_document on fetched PDF failed, using raw text: %s", exc)
+
+    content_hash = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+    origin = canonical_origin_url(
+        ev.identifier, url=getattr(ev, "url", None)
+    )
+    persist_kind = kind
+    _office, compact = normalize_patent_pub(ev.identifier)
+    if not compact:
+        _office, compact = normalize_patent_pub(getattr(ev, "url", None) or "")
+    if compact:
+        persist_kind = "patent"
+    delay = 0.5
+    for attempt in range(6):
+        try:
+            store = get_source_store()
+            existing = store.find_by_hash(content_hash)
+            if existing is not None:
+                return existing.id
+            # P1-1: a previous failed attempt for this origin left a failed
+            # row — revive it in place instead of inserting a duplicate row
+            # for the same origin URL. Duck-typed: minimal test fakes may
+            # not implement the observability methods.
+            _find_failed = getattr(store, "find_failed_by_origin", None)
+            failed_row = _find_failed(origin) if (_find_failed and origin) else None
+            if failed_row is not None:
+                store.revive_failed_row(
+                    failed_row.id,
+                    full_text=text,
+                    content_hash=content_hash,
+                    filename=ev.identifier[:500],
+                    title=ev.title[:500],
+                )
+                from .kb_index import index_source, kb_enabled
+
+                # P1-8: index_source fail_soft 返回 0 不是成功 —— 必须重新
+                # 标记 failed，否则永久僵尸行（已标 indexed、零 chunk）。
+                if not index_source(failed_row.id, text, tables=tables) and kb_enabled():
+                    try:
+                        store.update_fields(
+                            failed_row.id,
+                            ingest_status="failed",
+                            ingest_error="index_source produced 0 chunks (revive)",
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning("mark revive failed row failed (fail-open)")
+                # v2 P0-6: 复活行同样补 sidecar（fail-open）。
+                try:
+                    _persist_pdf_sidecars(failed_row.id, ev, pdf_bytes, tables)
+                except Exception:  # noqa: BLE001
+                    logger.warning("pdf sidecar persist failed on revive (fail-open)")
+                return failed_row.id
+            source_id = store.create(
+                filename=ev.identifier[:500],
+                title=ev.title[:500],
+                source_kind=persist_kind,
+                full_text=text,
+                content_hash=content_hash,
+                extraction_status="fulltext",
+                origin_url=origin,
+                project_id=(project_id or None),
+                acquisition=acquisition,
+                ingest_status="indexed",  # P1-1
+            )
+            from .kb_index import index_source, kb_enabled
+
+            # P1-8: 同上 —— 0 chunk 必须降级为 failed 供下次复活。
+            if not index_source(source_id, text, tables=tables) and kb_enabled():
+                try:
+                    store.update_fields(
+                        source_id,
+                        ingest_status="failed",
+                        ingest_error="index_source produced 0 chunks",
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("mark indexed-failed row failed (fail-open)")
+            # v2 P0-6: PDF 字节 + 表格 sidecar —— 与本地上传路径同级。
+            # 双层 fail-open：函数内部已 catch，这里再兜一层，sidecar 永不
+            # 影响文本入库。
+            try:
+                _persist_pdf_sidecars(source_id, ev, pdf_bytes, tables)
+            except Exception:  # noqa: BLE001
+                logger.warning("pdf sidecar persist failed (fail-open)")
+            return source_id
+        except Exception as exc:
+            if _is_db_locked(exc) and attempt < 5:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            # P2: fulltext 落盘失败同样记失败行（供复活/可观测），不只记日志。
+            try:
+                get_source_store().record_ingest_failure(
+                    origin_url=origin or f"fulltext://{ev.identifier[:200]}",
+                    filename=ev.identifier[:500],
+                    title=ev.title[:500],
+                    source_kind=persist_kind,
+                    project_id=(project_id or None),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("record fulltext ingest failure failed (fail-open)")
+            return degrade_return(logger, exc, "fulltext persistence failed", None)
+
+
+# ── public API ───────────────────────────────────────────────────────────────
+
+
+def enrich_search_results(
+    evidence: list[Evidence],
+    *,
+    max_docs: int | None = None,
+    persist: bool = True,
+    project_id: str | None = None,
+    force: bool = False,
+) -> tuple[list[Evidence], FulltextReport]:
+    """Replace the top fetchable Evidence rows with full-text chunks in place.
+
+    Order is preserved; rows that fail to fetch (or beyond ``max_docs``) pass
+    through unchanged.  Strict no-op when ``fulltext_enrich`` is disabled
+    (unless ``force=True``, used by Wave D literature OA enrich).
+
+    ``project_id`` scopes the per-project PDF quota: once a project has
+    ``kb_project_pdf_quota`` documents acquired via the download+parse path, the
+    PDF tiers are dropped for the rest of the run (see ``_fetch_literature_text``)
+    so the memory-bound path stays bounded. ``None`` = no project context, which
+    also means no quota (matching the legacy behaviour for ad-hoc ingest).
+    """
+    settings = get_settings()
+    report = FulltextReport()
+    if (not settings.fulltext_enrich and not force) or not evidence:
+        return evidence, report
+
+    limit = max_docs if max_docs is not None else settings.fulltext_max_docs
+    timeout = settings.fulltext_timeout_s
+    # v2 决策②：pdf_quota 不再作为降级门 —— 超限只记监控告警，不降级。
+    pdf_quota = int(settings.kb_project_pdf_quota or 0)
+    if project_id and pdf_quota > 0:
+        try:
+            from ..db.source_store import get_source_store
+
+            used = get_source_store().count_for_project(project_id, acquisition="pdf")
+        except Exception as exc:
+            degrade_return(logger, exc, "pdf quota lookup failed", 0)
+            used = 0
+        if used >= pdf_quota:
+            logger.warning(
+                "pdf quota exceeded for project %s (%s/%s) — continuing (v2: quota is monitor-only)",
+                project_id, used, pdf_quota,
+            )
+
+    # Pick the first `limit` fetchable rows in rank order.
+    targets: dict[int, str] = {}
+    for i, ev in enumerate(evidence):
+        if len(targets) >= limit:
+            break
+        kind = classify(ev)
+        if kind:
+            targets[i] = kind
+    if not targets:
+        return evidence, report
+
+    def fetch(idx: int) -> tuple[int, FetchedFulltext | None, str]:
+        ev, kind = evidence[idx], targets[idx]
+        try:
+            hit = _dispatch_fetch(kind, ev, timeout)
+            return idx, hit, _last_acquisition()
+        except Exception as exc:
+            return idx, degrade_return(logger, exc, f"fulltext fetch failed ({kind})", None), "text"
+
+    results: dict[int, FetchedFulltext | None] = {}
+    acquisitions: dict[int, str] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        for idx, hit, acq in ex.map(fetch, list(targets)):
+            results[idx] = hit
+            acquisitions[idx] = acq
+
+    out: list[Evidence] = []
+    for i, ev in enumerate(evidence):
+        kind = targets.get(i)
+        hit = results.get(i)
+        text = hit.text if hit else None
+        if kind and text:
+            chunks = _text_to_chunks(text, ev)
+            if chunks:
+                if persist:
+                    _persist_fulltext(
+                        text, ev, kind,
+                        project_id=project_id,
+                        acquisition=acquisitions.get(i),
+                        pdf_bytes=hit.pdf_bytes if hit else None,
+                        tables=hit.tables if hit else None,
+                    )
+                out.extend(chunks)
+                report.record(kind, True)
+                continue
+        if kind:
+            report.record(kind, False)
+            # 下载失败（无 OA / 403 / 超时 / 解析为空）→ 移除，不进结果/左栏。
+            # P0-1: 失败入重试队列（指数退避 ×3），fail-open。
+            try:
+                from ..worker.tasks import enqueue_fulltext_retry
+                enqueue_fulltext_retry(
+                    ev.identifier, ev.source, kind,
+                    project_id=project_id, title=ev.title,
+                    url=getattr(ev, "url", None),
+                )
+            except Exception:
+                pass
+            continue
+        out.append(ev)
+
+    logger.info(
+        "fulltext_fetcher: %d/%d succeeded %s",
+        report.succeeded,
+        report.attempted,
+        report.by_kind,
+    )
+    return out, report

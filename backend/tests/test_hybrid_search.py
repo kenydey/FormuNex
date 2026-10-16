@@ -1,0 +1,232 @@
+"""Task 2.5: hybrid BM25 + vector search tests."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import get_settings
+from app.db.chunk_store import ChunkStore
+from app.db.database import Base, make_engine, make_session_factory
+
+
+@pytest.fixture(autouse=True)
+def _fresh(monkeypatch):
+    monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
+def stores(tmp_path, monkeypatch):
+    """Isolated SourceStore + ChunkStore sharing one temp SQLite DB."""
+    import app.db.chunk_store as chunk_store_mod
+    import app.db.database as db_mod
+    import app.db.source_store as source_store_mod
+    from app.db.source_store import SourceStore
+
+    engine = make_engine(f"sqlite:///{tmp_path}/kb.db")
+    Base.metadata.create_all(engine)
+    factory = make_session_factory(engine)
+    src = SourceStore(factory)
+    chk = ChunkStore(factory)
+    monkeypatch.setattr(source_store_mod, "_store", src)
+    monkeypatch.setattr(chunk_store_mod, "_store", chk)
+    monkeypatch.setattr(db_mod, "default_session_factory", lambda: factory)
+    return src, chk
+
+
+def _client() -> TestClient:
+    from app.main import app
+
+    return TestClient(app)
+
+
+# ── test 1: empty corpus ─────────────────────────────────────────────────────
+
+
+def test_hybrid_empty(stores):
+    """Empty corpus → empty list."""
+    from app.services.hybrid_search import hybrid_search
+
+    results = hybrid_search("anything")
+    assert results == []
+
+
+# ── test 2: single chunk ─────────────────────────────────────────────────────
+
+
+def test_hybrid_single_chunk(stores):
+    """Ingest 1 doc → search returns results."""
+    client = _client()
+    resp = client.post(
+        "/api/kb/ingest",
+        json={"text": "环氧树脂是一种优异的防腐涂料成膜物质，具有高附着力和耐化学性。", "title": "Test Doc"},
+    )
+    assert resp.status_code == 200, f"ingest failed: {resp.status_code} {resp.json()}"
+
+    resp2 = client.post(
+        "/api/kb/hybrid-search",
+        json={"query": "环氧树脂防腐", "top_k": 5},
+    )
+    assert resp2.status_code == 200, f"hybrid-search failed: {resp2.status_code} {resp2.json()}"
+    data = resp2.json()
+    assert len(data) >= 1, f"expected at least 1 result, got {data}"
+    assert "环氧" in data[0]["text"]
+
+
+def test_hybrid_finds_a_term_the_dictionary_cuts_through(stores):
+    """jieba reads 耐盐雾性能 as 耐盐 / 雾 / 性能: before the character pairs were indexed, ``盐雾`` was in no token of the
+    document that answers it and the query found nothing at all (found by the retrieval evaluation, evals/)."""
+    client = _client()
+    documents = (
+        ("盐雾", "涂层耐盐雾性能达到 720 小时，划线处无红锈，起泡等级不低于 0 级，适用于重防腐环境下的钢结构底漆体系。"),
+        ("附着力", "划格法评定涂层附着力等级，切割间距取 2 mm，用胶带粘贴后撕起，按脱落面积评为 0 到 5 级，工业防腐涂料一般要求不低于 1 级。"),
+    )
+    for title, text in documents:  # long enough for the ingest quality gate, which refuses a one-line fragment
+        body = client.post("/api/kb/ingest", json={"text": text, "title": title}).json()
+        assert body["status"] != "failed" and body["chunk_count"] >= 1, body
+
+    data = client.post("/api/kb/hybrid-search", json={"query": "盐雾", "top_k": 3}).json()
+    assert data and "耐盐雾性能" in data[0]["text"], data
+
+
+# ── test 3: ranking by relevance ────────────────────────────────────────────
+
+
+def test_hybrid_ranks_by_relevance(stores, monkeypatch):
+    """Two docs (one highly matching, one not) → matching doc ranks first."""
+    src, chk = stores
+
+    # Doc 1: highly relevant — epoxy anticorrosion
+    sid1 = src.create(
+        filename="d1.md",
+        title="防腐涂料研究",
+        source_kind="local",
+        full_text="环氧树脂防腐底漆磷酸锌防锈颜料",
+        content_hash="h1",
+    )
+    # Doc 2: irrelevant — cake recipe
+    sid2 = src.create(
+        filename="d2.md",
+        title="烘焙食谱",
+        source_kind="local",
+        full_text="巧克力蛋糕配方 面粉 糖 鸡蛋 黄油",
+        content_hash="h2",
+    )
+
+    chk.replace_for_source(
+        sid1,
+        [
+            {
+                "text": "环氧树脂是一种优异的防腐涂料成膜物质，添加磷酸锌可提升盐雾耐受时间。",
+                "embedding": [1.0, 0.0],
+                "embedding_model": "m",
+            }
+        ],
+    )
+    chk.replace_for_source(
+        sid2,
+        [
+            {
+                "text": "巧克力蛋糕配方需要面粉糖和鸡蛋黄油混合烘烤。",
+                "embedding": [0.0, 1.0],
+                "embedding_model": "m",
+            }
+        ],
+    )
+
+    # Mock embeddings so the epoxy chunk aligns with a corrosion query
+    monkeypatch.setattr(
+        "app.services.kb_index._embed_texts",
+        lambda texts, model_name=None: [[0.9, 0.1]],
+    )
+
+    from app.services.hybrid_search import hybrid_search
+
+    results = hybrid_search("防腐涂料 环氧 磷酸锌", top_k=5)
+    assert len(results) >= 1, f"expected at least 1 result, got {len(results)}"
+    # The top result must contain epoxy/corrosion content, not cake
+    top_text = results[0].text
+    assert "环氧" in top_text or "防腐" in top_text, (
+        f"expected top result to be about epoxy/corrosion, got: {top_text[:80]}"
+    )
+
+
+def test_hybrid_alpha_defaults_to_settings(monkeypatch, stores):
+    """Omitted alpha reads settings.kb_hybrid_alpha (probe ↔ recommend shared)."""
+    monkeypatch.setenv("FORMUNEX_KB_HYBRID_ALPHA", "0.55")
+    get_settings.cache_clear()
+    assert get_settings().kb_hybrid_alpha == pytest.approx(0.55)
+
+    seen: dict = {}
+    import app.services.hybrid_search as hs_mod
+
+    real = hs_mod.hybrid_search_scored
+
+    def _wrapped(query, top_k=10, alpha=None, **kw):
+        seen["alpha"] = alpha
+        return real(query, top_k=top_k, alpha=alpha, **kw)
+
+    monkeypatch.setattr(hs_mod, "hybrid_search_scored", _wrapped)
+    from app.services.hybrid_search import hybrid_search
+
+    hybrid_search("anything", top_k=3)  # alpha omitted → settings
+    assert seen.get("alpha") == pytest.approx(0.55)
+
+
+def test_null_model_second_pass_scores_legacy_chunks(monkeypatch):
+    """v25: 非 gate 路径 NULL-model chunk 也要打分（v23 只修了 gate 路径）。
+
+    legacy 行（embedding_model IS NULL）在第一遍中永远不会被打分，
+    共享的第二遍必须给它们非零 cosine 分数。
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from app.services import hybrid_search, kb_index
+
+    dim = 8
+    legacy = SimpleNamespace(embedding_model=None, embedding=[0.5] * dim, text="legacy")
+    fresh = SimpleNamespace(embedding_model="m", embedding=[0.5] * dim, text="fresh")
+    chunks = [legacy, fresh]
+
+    def _fake_embed_texts(texts, model_name):
+        return [[1.0] + [0.0] * (dim - 1)]
+
+    monkeypatch.setattr(kb_index, "_embed_texts", _fake_embed_texts)
+    scores = np.zeros(2, dtype=float)
+    hybrid_search._null_model_second_pass(chunks, [0, 1], scores, {"m"}, "query")
+    assert scores[0] != 0.0  # legacy chunk 被第二遍打分
+    assert scores[1] == 0.0  # 非 NULL 行不动（第一遍的职责）
+
+
+def test_null_model_second_pass_all_legacy_falls_back_to_default_model(monkeypatch):
+    """v27 P1-7: 全 legacy 语料时 model_cols 为空 —— 必须回退默认模型。
+
+    否则 query 向量不生成，向量通道静默失效（scores 全 0）。
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from app.services import hybrid_search, kb_index
+
+    dim = 8
+    chunks = [
+        SimpleNamespace(embedding_model=None, embedding=[0.5] * dim, text="a"),
+        SimpleNamespace(embedding_model=None, embedding=[0.5] * dim, text="b"),
+    ]
+
+    def _fake_embed_texts(texts, model_name):
+        assert model_name == "default-model"
+        return [[1.0] + [0.0] * (dim - 1)]
+
+    monkeypatch.setattr(kb_index, "_embed_texts", _fake_embed_texts)
+    monkeypatch.setattr("app.services.rag.embed_model_name", lambda *a, **k: "default-model")
+    scores = np.zeros(2, dtype=float)
+    hybrid_search._null_model_second_pass(chunks, [0, 1], scores, set(), "query")
+    assert scores[0] != 0.0
+    assert scores[1] != 0.0
