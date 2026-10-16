@@ -16,6 +16,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Base
+from .models_lab import MEASUREMENT_LAB_COLUMNS
 
 # Serialize metadata DDL across threads. Eager Celery daemons and Alembic
 # ``0001_baseline`` can both call ``create_all`` on the same SQLite file when a
@@ -137,6 +138,8 @@ def make_engine(db_url: str) -> Engine:
     _ensure_source_document_columns(engine)
     _ensure_kb_entity_link_columns(engine)
     _ensure_material_columns(engine)
+    _ensure_measurement_lab_columns(engine)
+    _ensure_audit_log_guard(engine)
     _ensure_doe_cycle_pause_table(engine)
     return engine
 
@@ -241,7 +244,12 @@ SOFT_COLUMN_ALEMBIC_OWNERS: dict[str, dict[str, str]] = {
     "materials": {
         "archived": "0024_material_candidates",
         "suppliers_json": "0027_materials_suppliers_json",
+        "material_type": "0053_material_compositions",
+        "phys_state": "0053_material_compositions",
+        "regulatory_status": "0053_material_compositions",
+        "sds_document_id": "0053_material_compositions",
     },
+    "measurements": {col: "0059_lab_execution" for col in MEASUREMENT_LAB_COLUMNS},
     "suppliers": {
         "country": "0031_supplier_manual_quote_fields",
     },
@@ -264,7 +272,62 @@ def soft_column_inventory() -> dict[str, set[str]]:
         "materials": set(_MATERIAL_SOFT_COLUMNS),
         "suppliers": set(_SUPPLIER_SOFT_COLUMNS),
         "material_suppliers": set(_MATERIAL_SUPPLIER_SOFT_COLUMNS),
+        "measurements": set(MEASUREMENT_LAB_COLUMNS),
     }
+
+
+# Same statements as alembic 0057: audit_log rejects UPDATE / DELETE. Databases built by
+# ``create_all`` (development, tests) never run that migration, so the guard is installed here too.
+AUDIT_LOG_GUARD_SQL: dict[str, tuple[str, ...]] = {
+    "sqlite": (
+        "CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log "
+        "BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END",
+        "CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log "
+        "BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END",
+    ),
+    "postgresql": (
+        "CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger AS $$ "
+        "BEGIN RAISE EXCEPTION 'audit_log is append-only'; END; $$ LANGUAGE plpgsql",
+        "DROP TRIGGER IF EXISTS audit_log_append_only ON audit_log",
+        "CREATE TRIGGER audit_log_append_only BEFORE UPDATE OR DELETE ON audit_log "
+        "FOR EACH ROW EXECUTE FUNCTION audit_log_append_only()",
+    ),
+}
+
+
+def _ensure_audit_log_guard(engine: Engine) -> None:
+    from sqlalchemy import text
+
+    statements = AUDIT_LOG_GUARD_SQL.get(engine.dialect.name, ())
+    if not statements or "audit_log" not in inspect(engine).get_table_names():
+        return
+    if engine.dialect.name == "postgresql":
+        # Already installed (normally by the migration): do not take DDL locks on every boot.
+        with engine.connect() as conn:
+            if conn.execute(text("SELECT 1 FROM pg_trigger WHERE tgname = 'audit_log_append_only'")).first():
+                return
+    with _schema_ddl_lock, engine.begin() as conn:
+        for stmt in statements:
+            conn.execute(text(stmt))
+
+
+def _ensure_measurement_lab_columns(engine: Engine) -> None:
+    """软扩列：measurements 表的实验执行溯源 / 复核列（alembic 0059，兼容未迁移旧库）。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "measurements" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("measurements")}
+    for col, ddl in MEASUREMENT_LAB_COLUMNS.items():
+        if col in existing:
+            continue
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE measurements ADD COLUMN {ddl}"))
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
+                raise
 
 
 def _ensure_source_soft_columns(engine: Engine) -> None:
@@ -317,6 +380,11 @@ _MATERIAL_SOFT_COLUMNS: dict[str, tuple[str, str | None]] = {
     ),
     # alembic 0027 — 供应商清单（PubChem Chemical Vendors 采集，JSON 数组）
     "suppliers_json": ("suppliers_json JSON", None),
+    # alembic 0053 — FormuNex 法规层：原料类型 / 物态 / 复核状态 / 供应商 SDS
+    "material_type": ("material_type VARCHAR(16)", None),
+    "phys_state": ("phys_state VARCHAR(16)", None),
+    "regulatory_status": ("regulatory_status VARCHAR(16) DEFAULT 'unreviewed' NOT NULL", None),
+    "sds_document_id": ("sds_document_id VARCHAR(36)", None),
 }
 
 

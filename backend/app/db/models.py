@@ -102,6 +102,19 @@ class MeasurementRow(Base):
         ForeignKey("source_documents.id", ondelete="SET NULL"), nullable=True, index=True
     )
     note: Mapped[str] = mapped_column(Text, default="")
+    # Lab execution (alembic 0059): where the number came from and whether a
+    # second person has checked it. Only ``review_status == "reviewed"`` values
+    # may feed optimisation, SDS section 9 or a COA.
+    sample_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    lab_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    method_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    instrument_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    operator_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    raw_file_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    review_status: Mapped[str] = mapped_column(String(16), default="unreviewed", index=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    external_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
@@ -445,6 +458,12 @@ class MaterialRow(Base):
     suppliers_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # Hand-tagged interchangeable group; members are drop-in for one another.
     substitute_group: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    # Regulatory layer (alembic 0053): a material is often itself a mixture —
+    # its substance composition lives in ``material_compositions``.
+    material_type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # substance | mixture | trade_product
+    phys_state: Mapped[str | None] = mapped_column(String(16), nullable=True)  # solid | liquid | gas | paste
+    regulatory_status: Mapped[str] = mapped_column(String(16), default="unreviewed", index=True)  # unreviewed | reviewed | locked
+    sds_document_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # Soft archive — hidden from RAW_MATERIALS pools but retained for audit/export.
     archived: Mapped[bool] = mapped_column(default=False, index=True)
 
@@ -1024,3 +1043,8 @@ class AcquisitionSnapshot(Base):
     project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     stats_json: Mapped[str] = mapped_column(Text, default="{}")
     success_rate: Mapped[float] = mapped_column(Float, default=1.0)
+
+
+# FormuNex domain tables live in sibling modules; importing them here registers
+# them on ``Base.metadata`` so create_all / alembic baseline see every table.
+from . import models_identity, models_lab, models_plm, models_regulatory  # noqa: E402,F401

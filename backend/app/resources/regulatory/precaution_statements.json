@@ -1,0 +1,3453 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-02-07T13:35:10.799494",
+  "statements": [
+    {
+      "index": 1,
+      "precaution_category": "一般措施",
+      "code": "P101",
+      "statement": "如需求医：随手携带产品容器\n或标签。",
+      "hazard_type": "酌情",
+      "hazard_category": "",
+      "usage_condition": "消费产品"
+    },
+    {
+      "index": 2,
+      "precaution_category": "一般措施",
+      "code": "P102",
+      "statement": "儿童不得接触。",
+      "hazard_type": "酌情",
+      "hazard_category": "",
+      "usage_condition": "消费产品"
+    },
+    {
+      "index": 3,
+      "precaution_category": "一般措施",
+      "code": "P103",
+      "statement": "使用前请读标签。",
+      "hazard_type": "酌情",
+      "hazard_category": "",
+      "usage_condition": "消费产品"
+    },
+    {
+      "index": 4,
+      "precaution_category": "预防措施",
+      "code": "P201",
+      "statement": "使用前取得专用说明",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物",
+      "usage_condition": ""
+    },
+    {
+      "index": 5,
+      "precaution_category": "预防措施",
+      "code": "P201",
+      "statement": "使用前取得专用说明",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 6,
+      "precaution_category": "预防措施",
+      "code": "P201",
+      "statement": "使用前取得专用说明",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 7,
+      "precaution_category": "预防措施",
+      "code": "P201",
+      "statement": "使用前取得专用说明",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 8,
+      "precaution_category": "预防措施",
+      "code": "P201",
+      "statement": "使用前取得专用说明",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳\n产生影响",
+      "hazard_category": "附加类别",
+      "usage_condition": ""
+    },
+    {
+      "index": 9,
+      "precaution_category": "预防措施",
+      "code": "P202",
+      "statement": "在阅读并明了所有安全措施前切勿搬动",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物",
+      "usage_condition": ""
+    },
+    {
+      "index": 10,
+      "precaution_category": "预防措施",
+      "code": "P202",
+      "statement": "在阅读并明了所有安全措施前切勿搬动",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 11,
+      "precaution_category": "预防措施",
+      "code": "P202",
+      "statement": "在阅读并明了所有安全措施前切勿搬动",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 12,
+      "precaution_category": "预防措施",
+      "code": "P202",
+      "statement": "在阅读并明了所有安全措施前切勿搬动",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 13,
+      "precaution_category": "预防措施",
+      "code": "P202",
+      "statement": "在阅读并明了所有安全措施前切勿搬动",
+      "hazard_type": "易燃气体（包括化学性质不稳定的气体）",
+      "hazard_category": "A、B",
+      "usage_condition": ""
+    },
+    {
+      "index": 14,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 15,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "易燃气体",
+      "hazard_category": "1、2",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 16,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "气溶胶",
+      "hazard_category": "1、2、3",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 17,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 18,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "易燃固体",
+      "hazard_category": "1、2",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 19,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 20,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 21,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 22,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": "生产商/供应商或主管当局列明适用的点火源"
+    },
+    {
+      "index": 23,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "易燃液体",
+      "hazard_category": "4",
+      "usage_condition": "规定远离火焰和\n热表面"
+    },
+    {
+      "index": 24,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "规定远离火焰和\n热表面"
+    },
+    {
+      "index": 25,
+      "precaution_category": "预防措施",
+      "code": "P210",
+      "statement": "远离热源/ 火花/ 明火/ 热表面。禁止吸烟",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 26,
+      "precaution_category": "预防措施",
+      "code": "P2ll",
+      "statement": "切勿喷洒在明火或其他点火源上",
+      "hazard_type": "气溶胶",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 27,
+      "precaution_category": "预防措施",
+      "code": "P220",
+      "statement": "避开/贮存处远离服装/……/可燃材料",
+      "hazard_type": "氧化性气体",
+      "hazard_category": "1",
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料"
+    },
+    {
+      "index": 28,
+      "precaution_category": "预防措施",
+      "code": "P221",
+      "statement": "避开/贮存处远离服装/……/可燃材料",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料"
+    },
+    {
+      "index": 29,
+      "precaution_category": "预防措施",
+      "code": "P222",
+      "statement": "避开/贮存处远离服装/……/可燃材料",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "2、3",
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料"
+    },
+    {
+      "index": 30,
+      "precaution_category": "预防措施",
+      "code": "P223",
+      "statement": "避开/贮存处远离服装/……/可燃材料",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "2、3",
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料"
+    },
+    {
+      "index": 31,
+      "precaution_category": "预防措施",
+      "code": "P224",
+      "statement": "避开/贮存处远离服装/……/可燃材料",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料"
+    },
+    {
+      "index": 32,
+      "precaution_category": "预防措施",
+      "code": "P225",
+      "statement": "避开/贮存处远离服装/……/可燃材料",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1",
+      "usage_condition": "规定远离衣服和\n其他不相容材料"
+    },
+    {
+      "index": 33,
+      "precaution_category": "预防措施",
+      "code": "P226",
+      "statement": "避开/贮存处远离服装/……/可燃材料",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 34,
+      "precaution_category": "预防措施",
+      "code": "P221",
+      "statement": "采取一切防范措施，避免与可燃物/……混合",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容\n材料"
+    },
+    {
+      "index": 35,
+      "precaution_category": "预防措施",
+      "code": "P221",
+      "statement": "采取一切防范措施，避免与可燃物/……混合",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容\n材料"
+    },
+    {
+      "index": 36,
+      "precaution_category": "预防措施",
+      "code": "P222",
+      "statement": "不得与空气接触",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 37,
+      "precaution_category": "预防措施",
+      "code": "P223",
+      "statement": "不得与水接触。",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 38,
+      "precaution_category": "预防措施",
+      "code": "P230",
+      "statement": "用……保持湿润",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 、1.2 、1.3 、\n1.5 项",
+      "usage_condition": "生产商/供应商或主管当局列明其他适当材料。如果干燥会增加爆炸危险，制造或操作程序要求干燥者除外（例子：\n硝化纤维）。"
+    },
+    {
+      "index": 39,
+      "precaution_category": "预防措施",
+      "code": "P231",
+      "statement": "在惰性气体中操作",
+      "hazard_type": "遇水放出易燃气体的物质和混\n合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 40,
+      "precaution_category": "预防措施",
+      "code": "P232",
+      "statement": "防潮",
+      "hazard_type": "遇水放出易燃气体的物质和混\n合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 41,
+      "precaution_category": "预防措施",
+      "code": "P233",
+      "statement": "保持容器密闭",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 42,
+      "precaution_category": "预防措施",
+      "code": "P233",
+      "statement": "保持容器密闭",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2、3",
+      "usage_condition": "如果产品极易挥发，可造成周围空气危险"
+    },
+    {
+      "index": 43,
+      "precaution_category": "预防措施",
+      "code": "P233",
+      "statement": "保持容器密闭",
+      "hazard_type": "特异性靶器官毒性-一次接触：\n呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": "如果产品极易挥发，可造成周围空气危险"
+    },
+    {
+      "index": 44,
+      "precaution_category": "预防措施",
+      "code": "P233",
+      "statement": "保持容器密闭",
+      "hazard_type": "特异性靶器官毒性-一次接触:\n麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": "如果产品极易挥发，可造成周围空气危险"
+    },
+    {
+      "index": 45,
+      "precaution_category": "预防措施",
+      "code": "P234",
+      "statement": "只能在原容器中存放",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": ""
+    },
+    {
+      "index": 46,
+      "precaution_category": "预防措施",
+      "code": "P234",
+      "statement": "只能在原容器中存放",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": ""
+    },
+    {
+      "index": 47,
+      "precaution_category": "预防措施",
+      "code": "P234",
+      "statement": "只能在原容器中存放",
+      "hazard_type": "金属腐蚀物质和混合物",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 48,
+      "precaution_category": "预防措施",
+      "code": "P235",
+      "statement": "保持低温",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 49,
+      "precaution_category": "预防措施",
+      "code": "P235",
+      "statement": "保持低温",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": ""
+    },
+    {
+      "index": 50,
+      "precaution_category": "预防措施",
+      "code": "P235",
+      "statement": "保持低温",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 51,
+      "precaution_category": "预防措施",
+      "code": "P235",
+      "statement": "保持低温",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F型",
+      "usage_condition": ""
+    },
+    {
+      "index": 52,
+      "precaution_category": "预防措施",
+      "code": "P240",
+      "statement": "容器和装载设备接地/等势联接。",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": "如果爆炸物对静电敏感"
+    },
+    {
+      "index": 53,
+      "precaution_category": "预防措施",
+      "code": "P240",
+      "statement": "容器和装载设备接地/等势联接。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "如果静电敏感材料准备用于再填装\n如果产品极易挥\n发，可造成周围空"
+    },
+    {
+      "index": 54,
+      "precaution_category": "预防措施",
+      "code": "P240",
+      "statement": "容器和装载设备接地/等势联接。",
+      "hazard_type": "",
+      "hazard_category": "",
+      "usage_condition": "气危险"
+    },
+    {
+      "index": 55,
+      "precaution_category": "预防措施",
+      "code": "P240",
+      "statement": "容器和装载设备接地/等势联接。",
+      "hazard_type": "易燃固体",
+      "hazard_category": "1、2",
+      "usage_condition": "如果静电敏感材\n料准备用于再填装"
+    },
+    {
+      "index": 56,
+      "precaution_category": "预防措施",
+      "code": "P241",
+      "statement": "使用防爆的电气/通风/照明\n/……/设备。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "……生产商/供应\n商或主管当局列明其他设备"
+    },
+    {
+      "index": 57,
+      "precaution_category": "预防措施",
+      "code": "P241",
+      "statement": "使用防爆的电气/通风/照明\n/……/设备。",
+      "hazard_type": "易燃固体",
+      "hazard_category": "1、2",
+      "usage_condition": "……. 生产商/ 供应商或主管当局列明其他设备。\n如会产生粉尘"
+    },
+    {
+      "index": 58,
+      "precaution_category": "预防措施",
+      "code": "P242",
+      "statement": "只能使用不产生火花的工具",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 59,
+      "precaution_category": "预防措施",
+      "code": "P243",
+      "statement": "采取防止静电放电的措施。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 60,
+      "precaution_category": "预防措施",
+      "code": "P244",
+      "statement": "阀门及紧固装置不得带有油脂或油剂",
+      "hazard_type": "氧化气体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 61,
+      "precaution_category": "预防措施",
+      "code": "P250",
+      "statement": "不得研磨/冲击/ …… /摩擦。",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": "……生产商/供应商或主管当局列明不得采用的野\n蛮装卸行为"
+    },
+    {
+      "index": 62,
+      "precaution_category": "预防措施",
+      "code": "P251",
+      "statement": "切勿穿孔或焚烧，即使不再使用。",
+      "hazard_type": "气溶胶",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 63,
+      "precaution_category": "预防措施",
+      "code": "P260",
+      "statement": "不要吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "急性毒性 吸入",
+      "hazard_category": "1、2",
+      "usage_condition": "生产商/供应商或主管当局列明适用的条件。"
+    },
+    {
+      "index": 64,
+      "precaution_category": "预防措施",
+      "code": "P260",
+      "statement": "不要吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 65,
+      "precaution_category": "预防措施",
+      "code": "P260",
+      "statement": "不要吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 66,
+      "precaution_category": "预防措施",
+      "code": "P260",
+      "statement": "不要吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": "- 规定不要吸入粉尘或烟雾\n- 如果使用中会出\n现可吸入的粉尘或烟雾颗粒"
+    },
+    {
+      "index": 67,
+      "precaution_category": "预防措施",
+      "code": "P260",
+      "statement": "不要吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳产生影响",
+      "hazard_category": "附加类别",
+      "usage_condition": ""
+    },
+    {
+      "index": 68,
+      "precaution_category": "预防措施",
+      "code": "P261",
+      "statement": "避免吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "3、4",
+      "usage_condition": "生产商/供应商或主管当局列明适用的条件。\n-如标签上已显示 P260，可以省略。"
+    },
+    {
+      "index": 69,
+      "precaution_category": "预防措施",
+      "code": "P261",
+      "statement": "避免吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": "生产商/供应商或主管当局列明适用的条件。\n-如标签上已显示 P261，可以省略。"
+    },
+    {
+      "index": 70,
+      "precaution_category": "预防措施",
+      "code": "P261",
+      "statement": "避免吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": "生产商/供应商或主管当局列明适用的条件。\n-如标签上已显示 P262，可以省略。"
+    },
+    {
+      "index": 71,
+      "precaution_category": "预防措施",
+      "code": "P261",
+      "statement": "避免吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "特异性靶器官毒性-一次接触；呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": "生产商/供应商或主管当局列明适用的条件。\n-如标签上已显示 P263，可以省略。"
+    },
+    {
+      "index": 72,
+      "precaution_category": "预防措施",
+      "code": "P261",
+      "statement": "避免吸入粉尘/烟/气体/烟雾\n/蒸气/啧雾。",
+      "hazard_type": "特异性靶器官毒性-一次接触；麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": "生产商/供应商或主管当局列明适用的条件。\n-如标签上已显示 P264，可以省略。"
+    },
+    {
+      "index": 73,
+      "precaution_category": "预防措施",
+      "code": "P262",
+      "statement": "严防进入眼中、接触皮肤或衣\n服。",
+      "hazard_type": "急性毒性一经皮",
+      "hazard_category": "1、2",
+      "usage_condition": "生产商/供应商或主管当局列明适用的条件。\n-如标签上已显示 P265，可以省略。"
+    },
+    {
+      "index": 74,
+      "precaution_category": "预防措施",
+      "code": "P263",
+      "statement": "怀孕/哺乳期间避免接触。",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳产生影响",
+      "hazard_category": "附加类别",
+      "usage_condition": "生产商/供应商或主管当局列明适用的条件。\n-如标签上已显示 P266，可以省略。"
+    },
+    {
+      "index": 75,
+      "precaution_category": "预防措施",
+      "code": "P264",
+      "statement": "作业后彻底清洗。",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "生产商/ 供应商或主管当局列明作业后需清洗的身体部位"
+    },
+    {
+      "index": 76,
+      "precaution_category": "预防措施",
+      "code": "P264",
+      "statement": "作业后彻底清洗。",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2",
+      "usage_condition": "生产商/ 供应商或主管当局列明作业后需清洗的身体部位"
+    },
+    {
+      "index": 77,
+      "precaution_category": "预防措施",
+      "code": "P264",
+      "statement": "作业后彻底清洗。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": "生产商/ 供应商或主管当局列明作业后需清洗的身体部位"
+    },
+    {
+      "index": 78,
+      "precaution_category": "预防措施",
+      "code": "P264",
+      "statement": "作业后彻底清洗。",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": "生产商/ 供应商或主管当局列明作业后需清洗的身体部位"
+    },
+    {
+      "index": 79,
+      "precaution_category": "预防措施",
+      "code": "P264",
+      "statement": "作业后彻底清洗。",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A、2B",
+      "usage_condition": "生产商/ 供应商或主管当局列明作业后需清洗的身体部位"
+    },
+    {
+      "index": 80,
+      "precaution_category": "预防措施",
+      "code": "P264",
+      "statement": "作业后彻底清洗。",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳\n产生影响",
+      "hazard_category": "附加类别",
+      "usage_condition": "生产商/ 供应商或主管当局列明作业后需清洗的身体部位"
+    },
+    {
+      "index": 81,
+      "precaution_category": "预防措施",
+      "code": "P264",
+      "statement": "作业后彻底清洗。",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": "生产商/ 供应商或主管当局列明作业后需清洗的身体部位"
+    },
+    {
+      "index": 82,
+      "precaution_category": "预防措施",
+      "code": "P264",
+      "statement": "作业后彻底清洗。",
+      "hazard_type": "特异性靶器官毒性-反复接触",
+      "hazard_category": "1",
+      "usage_condition": "生产商/ 供应商或主管当局列明作业后需清洗的身体部位"
+    },
+    {
+      "index": 83,
+      "precaution_category": "预防措施",
+      "code": "P270",
+      "statement": "使用本产品时不要进食、饮水或吸烟。",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 84,
+      "precaution_category": "预防措施",
+      "code": "P270",
+      "statement": "使用本产品时不要进食、饮水或吸烟。",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 85,
+      "precaution_category": "预防措施",
+      "code": "P270",
+      "statement": "使用本产品时不要进食、饮水或吸烟。",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳产生影响",
+      "hazard_category": "附加类别",
+      "usage_condition": ""
+    },
+    {
+      "index": 86,
+      "precaution_category": "预防措施",
+      "code": "P270",
+      "statement": "使用本产品时不要进食、饮水或吸烟。",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 87,
+      "precaution_category": "预防措施",
+      "code": "P270",
+      "statement": "使用本产品时不要进食、饮水或吸烟。",
+      "hazard_type": "特异性靶器官毒性-反复接触",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 88,
+      "precaution_category": "预防措施",
+      "code": "P271",
+      "statement": "只能在室外或通风良好之处使用。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 89,
+      "precaution_category": "预防措施",
+      "code": "P271",
+      "statement": "只能在室外或通风良好之处使用。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 90,
+      "precaution_category": "预防措施",
+      "code": "P271",
+      "statement": "只能在室外或通风良好之处使用。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 91,
+      "precaution_category": "预防措施",
+      "code": "P271",
+      "statement": "只能在室外或通风良好之处使用。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 92,
+      "precaution_category": "预防措施",
+      "code": "P272",
+      "statement": "受沾染的工作服不得带出工\n作场地。",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 93,
+      "precaution_category": "预防措施",
+      "code": "P273",
+      "statement": "避免释放到环境中。",
+      "hazard_type": "危害水生环境-急性危险",
+      "hazard_category": "1、2、3",
+      "usage_condition": "如非其预定用途"
+    },
+    {
+      "index": 94,
+      "precaution_category": "预防措施",
+      "code": "P273",
+      "statement": "避免释放到环境中。",
+      "hazard_type": "危害水生环境-长期危险",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "如非其预定用途"
+    },
+    {
+      "index": 95,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": "- 规定使用的防护面具。\n生产商/供应商或\n主管当局列明设备类型。"
+    },
+    {
+      "index": 96,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 97,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "易燃固体",
+      "hazard_category": "1、2",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 98,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 99,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 100,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 101,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 102,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 103,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 104,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 105,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F型",
+      "usage_condition": "- 规定使用的防护手套和防护眼罩/防护面具。\n生产商/供应商或主管当局列明设备类型。"
+    },
+    {
+      "index": 106,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "- 规定使用的防护手套/防护服\n生产商/供应商或\n主管当局列明设备类型"
+    },
+    {
+      "index": 107,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": "- 规定使用的防护手套/防护服防护眼罩/防护面具 生产商/供应商或主管当局列明设\n备类型"
+    },
+    {
+      "index": 108,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": "- 规定使用的防护手套\n生产商/供应商或\n主管当局列明设备类型"
+    },
+    {
+      "index": 109,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 110,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "严重眼损伤",
+      "hazard_category": "1",
+      "usage_condition": "-规定使用的防护眼罩/防护面具 生产商/供应商或主管当局列明设\n备类型"
+    },
+    {
+      "index": 111,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A",
+      "usage_condition": "-规定使用的防护眼罩/防护面具 生产商/供应商或主管当局列明设\n备类型"
+    },
+    {
+      "index": 112,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": "-规定使用的防护眼罩/防护面具 生产商/供应商或主管当局列明设\n备类型"
+    },
+    {
+      "index": 113,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": "-规定使用的防护眼罩/防护面具 生产商/供应商或主管当局列明设\n备类型"
+    },
+    {
+      "index": 114,
+      "precaution_category": "预防措施",
+      "code": "P280",
+      "statement": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": "-规定使用的防护眼罩/防护面具 生产商/供应商或主管当局列明设\n备类型"
+    },
+    {
+      "index": 115,
+      "precaution_category": "预防措施",
+      "code": "P282",
+      "statement": "戴防寒手套/防护面具/防护眼罩。",
+      "hazard_type": "高压气体",
+      "hazard_category": "冷冻液化气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 116,
+      "precaution_category": "预防措施",
+      "code": "P283",
+      "statement": "穿防火/阻燃服装",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 117,
+      "precaution_category": "预防措施",
+      "code": "P283",
+      "statement": "穿防火/阻燃服装",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 118,
+      "precaution_category": "预防措施",
+      "code": "P284",
+      "statement": "[在通风不足的情况下]戴呼吸防护装置",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2",
+      "usage_condition": "生产商/供应商或主管当局列明设备\n-如果提供使用该化学品的补充信息，说明何种通风为安全使用之充分条件，可将有关\n文字放在方括号中。"
+    },
+    {
+      "index": 119,
+      "precaution_category": "预防措施",
+      "code": "P284",
+      "statement": "[在通风不足的情况下]戴呼吸防护装置",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 120,
+      "precaution_category": "预防措施",
+      "code": "P231+ P232",
+      "statement": "在惰性气体中操作。防潮。",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 121,
+      "precaution_category": "预防措施",
+      "code": "P235+ P410",
+      "statement": "保持低温。防日光照射。",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 122,
+      "precaution_category": "应急措施",
+      "code": "P301",
+      "statement": "如误吞咽；",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 123,
+      "precaution_category": "应急措施",
+      "code": "P301",
+      "statement": "如误吞咽；",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 124,
+      "precaution_category": "应急措施",
+      "code": "P301",
+      "statement": "如误吞咽；",
+      "hazard_type": "吸入危害",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 125,
+      "precaution_category": "应急措施",
+      "code": "P302",
+      "statement": "如皮肤沾染：",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 126,
+      "precaution_category": "应急措施",
+      "code": "P302",
+      "statement": "如皮肤沾染：",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 127,
+      "precaution_category": "应急措施",
+      "code": "P302",
+      "statement": "如皮肤沾染：",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": ""
+    },
+    {
+      "index": 128,
+      "precaution_category": "应急措施",
+      "code": "P302",
+      "statement": "如皮肤沾染：",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 129,
+      "precaution_category": "应急措施",
+      "code": "P303",
+      "statement": "如皮肤（或头发）沾染：",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 130,
+      "precaution_category": "应急措施",
+      "code": "P303",
+      "statement": "如皮肤（或头发）沾染：",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 131,
+      "precaution_category": "应急措施",
+      "code": "P304",
+      "statement": "如误吸入：",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2、3、4、5",
+      "usage_condition": ""
+    },
+    {
+      "index": 132,
+      "precaution_category": "应急措施",
+      "code": "P304",
+      "statement": "如误吸入：",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 133,
+      "precaution_category": "应急措施",
+      "code": "P304",
+      "statement": "如误吸入：",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 134,
+      "precaution_category": "应急措施",
+      "code": "P304",
+      "statement": "如误吸入：",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 135,
+      "precaution_category": "应急措施",
+      "code": "P304",
+      "statement": "如误吸入：",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 136,
+      "precaution_category": "应急措施",
+      "code": "P305",
+      "statement": "如进入眼睛：",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 137,
+      "precaution_category": "应急措施",
+      "code": "P305",
+      "statement": "如进入眼睛：",
+      "hazard_type": "严重眼损伤",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 138,
+      "precaution_category": "应急措施",
+      "code": "P305",
+      "statement": "如进入眼睛：",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A、2B",
+      "usage_condition": ""
+    },
+    {
+      "index": 139,
+      "precaution_category": "应急措施",
+      "code": "P306",
+      "statement": "如沾染衣服：",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 140,
+      "precaution_category": "应急措施",
+      "code": "P306",
+      "statement": "如沾染衣服：",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 141,
+      "precaution_category": "应急措施",
+      "code": "P308",
+      "statement": "如接触到或有疑虑",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 142,
+      "precaution_category": "应急措施",
+      "code": "P308",
+      "statement": "如接触到或有疑虑",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 143,
+      "precaution_category": "应急措施",
+      "code": "P308",
+      "statement": "如接触到或有疑虑",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 144,
+      "precaution_category": "应急措施",
+      "code": "P308",
+      "statement": "如接触到或有疑虑",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳\n产生影响",
+      "hazard_category": "附加类别",
+      "usage_condition": ""
+    },
+    {
+      "index": 145,
+      "precaution_category": "应急措施",
+      "code": "P308",
+      "statement": "如接触到或有疑虑",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 146,
+      "precaution_category": "应急措施",
+      "code": "P310",
+      "statement": "立即呼叫解毒中心/ 医生 \n/……",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 147,
+      "precaution_category": "应急措施",
+      "code": "P310",
+      "statement": "立即呼叫解毒中心/ 医生 \n/……",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 148,
+      "precaution_category": "应急措施",
+      "code": "P310",
+      "statement": "立即呼叫解毒中心/ 医生 \n/……",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 149,
+      "precaution_category": "应急措施",
+      "code": "P310",
+      "statement": "立即呼叫解毒中心/ 医生 \n/……",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 150,
+      "precaution_category": "应急措施",
+      "code": "P310",
+      "statement": "立即呼叫解毒中心/ 医生 \n/……",
+      "hazard_type": "严重眼损伤",
+      "hazard_category": "1",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 151,
+      "precaution_category": "应急措施",
+      "code": "P310",
+      "statement": "立即呼叫解毒中心/ 医生 \n/……",
+      "hazard_type": "吸入危害",
+      "hazard_category": "1、2",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 152,
+      "precaution_category": "应急措施",
+      "code": "P311",
+      "statement": "呼叫解毒中心或医生。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "3",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 153,
+      "precaution_category": "应急措施",
+      "code": "P311",
+      "statement": "呼叫解毒中心或医生。",
+      "hazard_type": "呼吸敏化",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 154,
+      "precaution_category": "应急措施",
+      "code": "P311",
+      "statement": "呼叫解毒中心或医生。",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 155,
+      "precaution_category": "应急措施",
+      "code": "P312",
+      "statement": "如感觉不适，呼叫解毒中心或医生。",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "4",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 156,
+      "precaution_category": "应急措施",
+      "code": "P312",
+      "statement": "如感觉不适，呼叫解毒中心或医生。",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "5",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 157,
+      "precaution_category": "应急措施",
+      "code": "P312",
+      "statement": "如感觉不适，呼叫解毒中心或医生。",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "3、4、5",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 158,
+      "precaution_category": "应急措施",
+      "code": "P312",
+      "statement": "如感觉不适，呼叫解毒中心或医生。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "4",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 159,
+      "precaution_category": "应急措施",
+      "code": "P312",
+      "statement": "如感觉不适，呼叫解毒中心或医生。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "5",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 160,
+      "precaution_category": "应急措施",
+      "code": "P312",
+      "statement": "如感觉不适，呼叫解毒中心或医生。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 161,
+      "precaution_category": "应急措施",
+      "code": "P312",
+      "statement": "如感觉不适，呼叫解毒中心或医生。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机构/人员"
+    },
+    {
+      "index": 162,
+      "precaution_category": "应急措施",
+      "code": "P313",
+      "statement": "求医/就诊。",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 163,
+      "precaution_category": "应急措施",
+      "code": "P313",
+      "statement": "求医/就诊。",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A、2B",
+      "usage_condition": ""
+    },
+    {
+      "index": 164,
+      "precaution_category": "应急措施",
+      "code": "P313",
+      "statement": "求医/就诊。",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 165,
+      "precaution_category": "应急措施",
+      "code": "P313",
+      "statement": "求医/就诊。",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 166,
+      "precaution_category": "应急措施",
+      "code": "P313",
+      "statement": "求医/就诊。",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 167,
+      "precaution_category": "应急措施",
+      "code": "P313",
+      "statement": "求医/就诊。",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 168,
+      "precaution_category": "应急措施",
+      "code": "P313",
+      "statement": "求医/就诊。",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳\n产生影响",
+      "hazard_category": "附加类别",
+      "usage_condition": ""
+    },
+    {
+      "index": 169,
+      "precaution_category": "应急措施",
+      "code": "P314",
+      "statement": "如感觉不适，须求医/就诊。",
+      "hazard_type": "特异性靶器官毒性-反复接触",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 170,
+      "precaution_category": "应急措施",
+      "code": "P315",
+      "statement": "立即求医/就诊。",
+      "hazard_type": "高压气体",
+      "hazard_category": "冷冻液化气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 171,
+      "precaution_category": "应急措施",
+      "code": "P320",
+      "statement": "紧急具体治疗（见本标签上的 … … ）。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2",
+      "usage_condition": "参看附加急救指示。\n-如需立即施用解\n毒药"
+    },
+    {
+      "index": 172,
+      "precaution_category": "应急措施",
+      "code": "P321",
+      "statement": "具体治疗（见本标 签上 的 … … ）",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3",
+      "usage_condition": "参看附加急救指示。\n-如需立即施用解\n毒药"
+    },
+    {
+      "index": 173,
+      "precaution_category": "应急措施",
+      "code": "P321",
+      "statement": "具体治疗（见本标 签上 的 … … ）",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "参看附加急救指示。\n-如需立即使用特\n殊的清洁剂等"
+    },
+    {
+      "index": 174,
+      "precaution_category": "应急措施",
+      "code": "P321",
+      "statement": "具体治疗（见本标 签上 的 … … ）",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "3",
+      "usage_condition": "参看附件急救指示。\n-如需立即采取特别措施"
+    },
+    {
+      "index": 175,
+      "precaution_category": "应急措施",
+      "code": "P321",
+      "statement": "具体治疗（见本标 签上 的 … … ）",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": "参看附加急救指示。\n- 生产商/ 供应商或主管当局可酌情列明一种清洗\n剂"
+    },
+    {
+      "index": 176,
+      "precaution_category": "应急措施",
+      "code": "P321",
+      "statement": "具体治疗（见本标 签上 的 … … ）",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": ""
+    },
+    {
+      "index": 177,
+      "precaution_category": "应急措施",
+      "code": "P321",
+      "statement": "具体治疗（见本标 签上 的 … … ）",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 178,
+      "precaution_category": "应急措施",
+      "code": "P321",
+      "statement": "具体治疗（见本标 签上 的 … … ）",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1",
+      "usage_condition": "参看附加急救指示。\n-如需立即采取特别措施"
+    },
+    {
+      "index": 179,
+      "precaution_category": "应急措施",
+      "code": "P330",
+      "statement": "漱口。",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 180,
+      "precaution_category": "应急措施",
+      "code": "P330",
+      "statement": "漱口。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 181,
+      "precaution_category": "应急措施",
+      "code": "P331",
+      "statement": "不得诱导呕吐",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 182,
+      "precaution_category": "应急措施",
+      "code": "P331",
+      "statement": "不得诱导呕吐",
+      "hazard_type": "吸入危害",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 183,
+      "precaution_category": "应急措施",
+      "code": "P332",
+      "statement": "如发生皮肤刺激",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 184,
+      "precaution_category": "应急措施",
+      "code": "P333",
+      "statement": "如发生皮肤刺激或皮疹：",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 185,
+      "precaution_category": "应急措施",
+      "code": "P334",
+      "statement": "浸入冷水中/用湿绷带包扎",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 186,
+      "precaution_category": "应急措施",
+      "code": "P334",
+      "statement": "浸入冷水中/用湿绷带包扎",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 187,
+      "precaution_category": "应急措施",
+      "code": "P334",
+      "statement": "浸入冷水中/用湿绷带包扎",
+      "hazard_type": "遇水放出易燃气体的物质和混\n合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 188,
+      "precaution_category": "应急措施",
+      "code": "P335",
+      "statement": "掸掉皮肤上的细小颗粒",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 189,
+      "precaution_category": "应急措施",
+      "code": "P335",
+      "statement": "掸掉皮肤上的细小颗粒",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 190,
+      "precaution_category": "应急措施",
+      "code": "P336",
+      "statement": "用微温水化解冻伤部位。不要\n搓擦患处",
+      "hazard_type": "高压气体",
+      "hazard_category": "冷冻液化气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 191,
+      "precaution_category": "应急措施",
+      "code": "P337",
+      "statement": "如长时间眼刺激：（如眼刺激\n持续 更佳）",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A、2B",
+      "usage_condition": ""
+    },
+    {
+      "index": 192,
+      "precaution_category": "应急措施",
+      "code": "P338",
+      "statement": "如戴隐形眼镜并可方便地取出，取出隐形眼镜。继续冲洗。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 193,
+      "precaution_category": "应急措施",
+      "code": "P338",
+      "statement": "如戴隐形眼镜并可方便地取出，取出隐形眼镜。继续冲洗。",
+      "hazard_type": "严重眼损伤",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 194,
+      "precaution_category": "应急措施",
+      "code": "P338",
+      "statement": "如戴隐形眼镜并可方便地取出，取出隐形眼镜。继续冲洗。",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A、2B",
+      "usage_condition": ""
+    },
+    {
+      "index": 195,
+      "precaution_category": "应急措施",
+      "code": "P340",
+      "statement": "将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 196,
+      "precaution_category": "应急措施",
+      "code": "P340",
+      "statement": "将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 197,
+      "precaution_category": "应急措施",
+      "code": "P340",
+      "statement": "将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 198,
+      "precaution_category": "应急措施",
+      "code": "P340",
+      "statement": "将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 199,
+      "precaution_category": "应急措施",
+      "code": "P340",
+      "statement": "将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 200,
+      "precaution_category": "应急措施",
+      "code": "P342",
+      "statement": "如有呼吸系统病症",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 201,
+      "precaution_category": "应急措施",
+      "code": "P351",
+      "statement": "用水小心冲洗几分钟。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 202,
+      "precaution_category": "应急措施",
+      "code": "P351",
+      "statement": "用水小心冲洗几分钟。",
+      "hazard_type": "严重眼损伤",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 203,
+      "precaution_category": "应急措施",
+      "code": "P351",
+      "statement": "用水小心冲洗几分钟。",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A、2B",
+      "usage_condition": ""
+    },
+    {
+      "index": 204,
+      "precaution_category": "应急措施",
+      "code": "P352",
+      "statement": "用水充分清洗。",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "在显然不适宜用水的情况下，制造商/供应商或主管当局可酌情列明一种清洗剂，或在特殊情况下建议使用一种替\n代清洗剂。"
+    },
+    {
+      "index": 205,
+      "precaution_category": "应急措施",
+      "code": "P352",
+      "statement": "用水充分清洗。",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": ""
+    },
+    {
+      "index": 206,
+      "precaution_category": "应急措施",
+      "code": "P352",
+      "statement": "用水充分清洗。",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 207,
+      "precaution_category": "应急措施",
+      "code": "P353",
+      "statement": "用水清洗皮肤/淋浴。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 208,
+      "precaution_category": "应急措施",
+      "code": "P353",
+      "statement": "用水清洗皮肤/淋浴。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 209,
+      "precaution_category": "应急措施",
+      "code": "P360",
+      "statement": "立即用水充分冲洗沾染的衣\n服和皮肤，然后脱掉衣服。",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 210,
+      "precaution_category": "应急措施",
+      "code": "P360",
+      "statement": "立即用水充分冲洗沾染的衣\n服和皮肤，然后脱掉衣服。",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 211,
+      "precaution_category": "应急措施",
+      "code": "P361",
+      "statement": "立即脱掉所有沾染的衣服。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 212,
+      "precaution_category": "应急措施",
+      "code": "P361",
+      "statement": "立即脱掉所有沾染的衣服。",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 213,
+      "precaution_category": "应急措施",
+      "code": "P361",
+      "statement": "立即脱掉所有沾染的衣服。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 214,
+      "precaution_category": "应急措施",
+      "code": "P362",
+      "statement": "脱掉沾染的衣服。",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "4",
+      "usage_condition": ""
+    },
+    {
+      "index": 215,
+      "precaution_category": "应急措施",
+      "code": "P362",
+      "statement": "脱掉沾染的衣服。",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": ""
+    },
+    {
+      "index": 216,
+      "precaution_category": "应急措施",
+      "code": "P362",
+      "statement": "脱掉沾染的衣服。",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 217,
+      "precaution_category": "应急措施",
+      "code": "P363",
+      "statement": "沾染的衣服清洗后方可重新使用。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 218,
+      "precaution_category": "应急措施",
+      "code": "P364",
+      "statement": "清洗后方可重新使用",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 219,
+      "precaution_category": "应急措施",
+      "code": "P364",
+      "statement": "清洗后方可重新使用",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": ""
+    },
+    {
+      "index": 220,
+      "precaution_category": "应急措施",
+      "code": "P364",
+      "statement": "清洗后方可重新使用",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 221,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": ""
+    },
+    {
+      "index": 222,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "氧化性气体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 223,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 224,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "易燃固体",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 225,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": ""
+    },
+    {
+      "index": 226,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 227,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 228,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "遇水放出易燃气体的物质和混合物。",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 229,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 230,
+      "precaution_category": "应急措施",
+      "code": "P370",
+      "statement": "火灾时：",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 231,
+      "precaution_category": "应急措施",
+      "code": "P371",
+      "statement": "在发生大火和大量泄漏的情\n况下：",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 232,
+      "precaution_category": "应急措施",
+      "code": "P371",
+      "statement": "在发生大火和大量泄漏的情\n况下：",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 233,
+      "precaution_category": "应急措施",
+      "code": "P372",
+      "statement": "火灾时可能爆炸。",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物和 1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": "如果爆炸物是 \n1.4S 弹药及其组              件时除外"
+    },
+    {
+      "index": 234,
+      "precaution_category": "应急措施",
+      "code": "P373",
+      "statement": "火烧到爆炸物时切勿救火。",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物和 1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": ""
+    },
+    {
+      "index": 235,
+      "precaution_category": "应急措施",
+      "code": "P374",
+      "statement": "采取正常防范措施从适当距离救火。",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.4 项",
+      "usage_condition": "如果爆炸物是 \n1.4S 弹药及其组              件"
+    },
+    {
+      "index": 236,
+      "precaution_category": "应急措施",
+      "code": "P375",
+      "statement": "因有爆炸危险，须远距离救火。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B 型",
+      "usage_condition": ""
+    },
+    {
+      "index": 237,
+      "precaution_category": "应急措施",
+      "code": "P376",
+      "statement": "如能保证安全，可设法堵塞泄漏。",
+      "hazard_type": "氧化性气体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 238,
+      "precaution_category": "应急措施",
+      "code": "P377",
+      "statement": "漏气着火：切勿灭火，除非漏\n气能够安全地制止",
+      "hazard_type": "易燃气体",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 239,
+      "precaution_category": "应急措施",
+      "code": "P378",
+      "statement": "使用 … … 灭火。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "生产商/供应商或主管当局列明适当的媒介。\n-如水可能增加危险。"
+    },
+    {
+      "index": 240,
+      "precaution_category": "应急措施",
+      "code": "P378",
+      "statement": "使用 … … 灭火。",
+      "hazard_type": "易燃固体",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 241,
+      "precaution_category": "应急措施",
+      "code": "P378",
+      "statement": "使用 … … 灭火。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": ""
+    },
+    {
+      "index": 242,
+      "precaution_category": "应急措施",
+      "code": "P378",
+      "statement": "使用 … … 灭火。",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 243,
+      "precaution_category": "应急措施",
+      "code": "P378",
+      "statement": "使用 … … 灭火。",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 244,
+      "precaution_category": "应急措施",
+      "code": "P378",
+      "statement": "使用 … … 灭火。",
+      "hazard_type": "遇水放出易燃气体的物质和混\n合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 245,
+      "precaution_category": "应急措施",
+      "code": "P378",
+      "statement": "使用 … … 灭火。",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 246,
+      "precaution_category": "应急措施",
+      "code": "P378",
+      "statement": "使用 … … 灭火。",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 247,
+      "precaution_category": "应急措施",
+      "code": "P380",
+      "statement": "撤离现场。",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物",
+      "usage_condition": ""
+    },
+    {
+      "index": 248,
+      "precaution_category": "应急措施",
+      "code": "P380",
+      "statement": "撤离现场。",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": ""
+    },
+    {
+      "index": 249,
+      "precaution_category": "应急措施",
+      "code": "P380",
+      "statement": "撤离现场。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B 型",
+      "usage_condition": ""
+    },
+    {
+      "index": 250,
+      "precaution_category": "应急措施",
+      "code": "P380",
+      "statement": "撤离现场。",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 251,
+      "precaution_category": "应急措施",
+      "code": "P380",
+      "statement": "撤离现场。",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 252,
+      "precaution_category": "应急措施",
+      "code": "P381",
+      "statement": "除去一切点火源，如果这么做没有危险。",
+      "hazard_type": "易燃气体",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 253,
+      "precaution_category": "应急措施",
+      "code": "P390",
+      "statement": "吸收溢出物，防止材料损坏。",
+      "hazard_type": "金属腐蚀物质和混合物",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 254,
+      "precaution_category": "应急措施",
+      "code": "P391",
+      "statement": "收集溢出物.",
+      "hazard_type": "危害水生环境-急性危险",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 255,
+      "precaution_category": "应急措施",
+      "code": "P391",
+      "statement": "收集溢出物.",
+      "hazard_type": "危害水生环境-长期危险",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 256,
+      "precaution_category": "应急措施",
+      "code": "P301+P310",
+      "statement": "如误吞咽：立即呼叫解毒中心\n/医生/……",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机\n构"
+    },
+    {
+      "index": 257,
+      "precaution_category": "应急措施",
+      "code": "P301+P310",
+      "statement": "如误吞咽：立即呼叫解毒中心\n/医生/……",
+      "hazard_type": "吸入危害",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 258,
+      "precaution_category": "应急措施",
+      "code": "P301+P312",
+      "statement": "如误吞咽：如感觉不适，呼叫解毒中心/医生/……",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "4",
+      "usage_condition": "制造商/供应商或主管当局列明适当的急诊机\n构"
+    },
+    {
+      "index": 259,
+      "precaution_category": "应急措施",
+      "code": "P301+P330\n+P331",
+      "statement": "如误吞咽：漱口。不要诱导呕\n吐",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 260,
+      "precaution_category": "应急措施",
+      "code": "P302+P334",
+      "statement": "如皮肤沾染：浸入冷水中／用\n湿绷带包扎。",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 261,
+      "precaution_category": "应急措施",
+      "code": "P302+P352",
+      "statement": "如皮肤沾染：用水充分清洗",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "……在显然不适宜用水的情况下，"
+    },
+    {
+      "index": 262,
+      "precaution_category": "应急措施",
+      "code": "P302+P352",
+      "statement": "如皮肤沾染：用水充分清洗",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": ""
+    },
+    {
+      "index": 263,
+      "precaution_category": "应急措施",
+      "code": "P302+P352",
+      "statement": "如皮肤沾染：用水充分清洗",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": "制造商/供应商或主管当局可酌情规定使用的一种清洗剂，或在特殊情况下建议使用\n一种替代清洗剂。"
+    },
+    {
+      "index": 264,
+      "precaution_category": "应急措施",
+      "code": "P303+P361\n+P353",
+      "statement": "如皮肤（或头发）沾染：立即脱掉所有沾染的衣服。用水清\n洗皮肤／淋浴。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 265,
+      "precaution_category": "应急措施",
+      "code": "P304+P312",
+      "statement": "如误吸入：如感觉不适，呼叫解毒中心/医生……",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "5",
+      "usage_condition": "……制造商/供应商或主管当局列\n明适当的急诊机构"
+    },
+    {
+      "index": 266,
+      "precaution_category": "应急措施",
+      "code": "P304+P340",
+      "statement": "如误吸入：将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 267,
+      "precaution_category": "应急措施",
+      "code": "P304+P340",
+      "statement": "如误吸入：将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 268,
+      "precaution_category": "应急措施",
+      "code": "P304+P340",
+      "statement": "如误吸入：将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 269,
+      "precaution_category": "应急措施",
+      "code": "P304+P340",
+      "statement": "如误吸入：将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "特异性靶器官毒性-一次接触；呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 270,
+      "precaution_category": "应急措施",
+      "code": "P304+P340",
+      "statement": "如误吸入：将人转移到空气新鲜处，保持呼吸舒适体位。",
+      "hazard_type": "特异性靶器官毒性-一次接触；麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 271,
+      "precaution_category": "应急措施",
+      "code": "P305+P351\n+P338",
+      "statement": "如进入眼睛：用水小心冲洗几分钟。如戴隐形眼镜并可方便地取出，取出隐形眼镜。继续\n冲洗。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 272,
+      "precaution_category": "应急措施",
+      "code": "P305+P351\n+P338",
+      "statement": "如进入眼睛：用水小心冲洗几分钟。如戴隐形眼镜并可方便地取出，取出隐形眼镜。继续\n冲洗。",
+      "hazard_type": "严重眼损伤",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 273,
+      "precaution_category": "应急措施",
+      "code": "P305+P351\n+P338",
+      "statement": "如进入眼睛：用水小心冲洗几分钟。如戴隐形眼镜并可方便地取出，取出隐形眼镜。继续\n冲洗。",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A、2B",
+      "usage_condition": ""
+    },
+    {
+      "index": 274,
+      "precaution_category": "应急措施",
+      "code": "P306+P360",
+      "statement": "如沾染衣服：立即用水充分冲\n洗沾染的衣服和皮肤，然后脱掉衣服。",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 275,
+      "precaution_category": "应急措施",
+      "code": "P306+P360",
+      "statement": "",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 276,
+      "precaution_category": "应急措施",
+      "code": "P308+P311",
+      "statement": "如接触到：呼叫解毒中心/医生……",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": "……制造商/供应商或主管当局列明适当的急诊机\n构"
+    },
+    {
+      "index": 277,
+      "precaution_category": "应急措施",
+      "code": "P308+P313",
+      "statement": "如接触到或有疑虑：求医/就诊。",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 278,
+      "precaution_category": "应急措施",
+      "code": "P308+P313",
+      "statement": "如接触到或有疑虑：求医/就诊。",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 279,
+      "precaution_category": "应急措施",
+      "code": "P308+P313",
+      "statement": "如接触到或有疑虑：求医/就诊。",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 280,
+      "precaution_category": "应急措施",
+      "code": "P308+P313",
+      "statement": "如接触到或有疑虑：求医/就诊。",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳\n产生影响",
+      "hazard_category": "附加类别",
+      "usage_condition": ""
+    },
+    {
+      "index": 281,
+      "precaution_category": "应急措施",
+      "code": "P332+P313",
+      "statement": "如发生皮肤刺激：求医/就诊。",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2、3",
+      "usage_condition": "-若标签上已显示 P333+P313 ，可以\n省略"
+    },
+    {
+      "index": 282,
+      "precaution_category": "应急措施",
+      "code": "P333+P313",
+      "statement": "如发生皮肤刺激或皮疹：求医\n/就诊。",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 283,
+      "precaution_category": "应急措施",
+      "code": "P335+P334",
+      "statement": "掸掉皮肤上的细小颗粒。浸入冷水中/用湿绷带包扎。",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 284,
+      "precaution_category": "应急措施",
+      "code": "P335+P334",
+      "statement": "掸掉皮肤上的细小颗粒。浸入冷水中/用湿绷带包扎。",
+      "hazard_type": "遇水放出易燃气体的物质和混\n合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 285,
+      "precaution_category": "应急措施",
+      "code": "P337+P313",
+      "statement": "如仍觉眼刺激：求医/就诊。",
+      "hazard_type": "眼刺激",
+      "hazard_category": "2A、2B",
+      "usage_condition": ""
+    },
+    {
+      "index": 286,
+      "precaution_category": "应急措施",
+      "code": "P342+P311",
+      "statement": "如有呼吸系统病症：呼叫解毒中心/医生。",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": "……制造商/供应商或主管当局列明适当的急诊机\n构"
+    },
+    {
+      "index": 287,
+      "precaution_category": "应急措施",
+      "code": "P361+P364",
+      "statement": "立即脱掉所有沾染的衣服，清\n洗后方可重新使用",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 288,
+      "precaution_category": "应急措施",
+      "code": "P362+P364",
+      "statement": "脱掉沾染的衣服，清洗后方可重新使用",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "4",
+      "usage_condition": ""
+    },
+    {
+      "index": 289,
+      "precaution_category": "应急措施",
+      "code": "P362+P364",
+      "statement": "脱掉沾染的衣服，清洗后方可重新使用",
+      "hazard_type": "皮肤刺激",
+      "hazard_category": "2",
+      "usage_condition": ""
+    },
+    {
+      "index": 290,
+      "precaution_category": "应急措施",
+      "code": "P362+P364",
+      "statement": "脱掉沾染的衣服，清洗后方可重新使用",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": ""
+    },
+    {
+      "index": 291,
+      "precaution_category": "应急措施",
+      "code": "P370+P376",
+      "statement": "火灾时：如能保证安全，可设法堵塞泄漏。",
+      "hazard_type": "氧化性气体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 292,
+      "precaution_category": "应急措施",
+      "code": "P370+P378",
+      "statement": "火灾时：使用 … … 灭火。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "… … 生产商/供应商或主管当局列明适当的媒介。\n- 如水可能增加危险。"
+    },
+    {
+      "index": 293,
+      "precaution_category": "应急措施",
+      "code": "P370+P378",
+      "statement": "火灾时：使用 … … 灭火。",
+      "hazard_type": "易燃固体",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 294,
+      "precaution_category": "应急措施",
+      "code": "P370+P378",
+      "statement": "火灾时：使用 … … 灭火。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F型",
+      "usage_condition": ""
+    },
+    {
+      "index": 295,
+      "precaution_category": "应急措施",
+      "code": "P370+P378",
+      "statement": "火灾时：使用 … … 灭火。",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 296,
+      "precaution_category": "应急措施",
+      "code": "P370+P378",
+      "statement": "火灾时：使用 … … 灭火。",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 297,
+      "precaution_category": "应急措施",
+      "code": "P370+P378",
+      "statement": "火灾时：使用 … … 灭火。",
+      "hazard_type": "遇水放出易燃气体的物质和混\n合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 298,
+      "precaution_category": "应急措施",
+      "code": "P370+P378",
+      "statement": "火灾时：使用 … … 灭火。",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 299,
+      "precaution_category": "应急措施",
+      "code": "P370+P378",
+      "statement": "火灾时：使用 … … 灭火。",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 300,
+      "precaution_category": "应急措施",
+      "code": "P370+P380",
+      "statement": "火灾时：撤离现场",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": ""
+    },
+    {
+      "index": 301,
+      "precaution_category": "应急措施",
+      "code": "P370+P380\n+P375",
+      "statement": "火灾时：撤离现场。因有爆炸\n危险，须远距离救火。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B 型",
+      "usage_condition": ""
+    },
+    {
+      "index": 302,
+      "precaution_category": "应急措施",
+      "code": "P371+P380\n+P375",
+      "statement": "在发生大火和大量泄漏：撤离\n现场。因有爆炸危险，须远距离救火。",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 303,
+      "precaution_category": "应急措施",
+      "code": "P371+P380\n+P375",
+      "statement": "在发生大火和大量泄漏：撤离\n现场。因有爆炸危险，须远距离救火。",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 304,
+      "precaution_category": "安全储存",
+      "code": "P401",
+      "statement": "贮存 … …",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物和 1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": "……. 按照地方/\n区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 305,
+      "precaution_category": "安全储存",
+      "code": "P402",
+      "statement": "存放于干燥处。",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 306,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "易燃气体",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 307,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "氧化性气体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 308,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "高压气体",
+      "hazard_category": "压缩气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 309,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "",
+      "hazard_category": "液化气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 310,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "",
+      "hazard_category": "冷冻液化气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 311,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "",
+      "hazard_category": "溶解气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 312,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 313,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": ""
+    },
+    {
+      "index": 314,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2、3",
+      "usage_condition": "- 如果产品极易挥发，可造成周围空气危险"
+    },
+    {
+      "index": 315,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 316,
+      "precaution_category": "安全储存",
+      "code": "P403",
+      "statement": "存放在通风良好的地方。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 317,
+      "precaution_category": "安全储存",
+      "code": "P404",
+      "statement": "存放于密闭的容器中。",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 318,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 319,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 320,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 321,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": ""
+    },
+    {
+      "index": 322,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 323,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 324,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 325,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 326,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 327,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "特异性靶器官毒性-一次接触；\n麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 328,
+      "precaution_category": "安全储存",
+      "code": "P405",
+      "statement": "存放处须加锁。",
+      "hazard_type": "吸入危害",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 329,
+      "precaution_category": "安全储存",
+      "code": "P406",
+      "statement": "贮存于抗腐蚀/……带抗腐蚀\n衬里的容器中。",
+      "hazard_type": "金属腐蚀物质和混合物",
+      "hazard_category": "1",
+      "usage_condition": "……. 生产商/ 供\n应商或主管当局列明其他相容材\n料。"
+    },
+    {
+      "index": 330,
+      "precaution_category": "安全储存",
+      "code": "P407",
+      "statement": "垛/托盘之间应留有空隙。",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 331,
+      "precaution_category": "安全储存",
+      "code": "P410",
+      "statement": "防日晒。",
+      "hazard_type": "气溶胶",
+      "hazard_category": "1、2、3",
+      "usage_condition": "-根据联合国《关于危险货物运输的建议书-规章范本》中的包装规范 P200，装在可运输的气瓶中的气体，可省略使用条件，除非气体将（缓慢）分解或聚合，\n或主管当局另有规定"
+    },
+    {
+      "index": 332,
+      "precaution_category": "安全储存",
+      "code": "P410",
+      "statement": "防日晒。",
+      "hazard_type": "高压气体",
+      "hazard_category": "压缩气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 333,
+      "precaution_category": "安全储存",
+      "code": "P410",
+      "statement": "防日晒。",
+      "hazard_type": "",
+      "hazard_category": "液化气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 334,
+      "precaution_category": "安全储存",
+      "code": "P410",
+      "statement": "防日晒。",
+      "hazard_type": "",
+      "hazard_category": "溶解气体",
+      "usage_condition": ""
+    },
+    {
+      "index": 335,
+      "precaution_category": "安全储存",
+      "code": "P410",
+      "statement": "防日晒。",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 336,
+      "precaution_category": "安全储存",
+      "code": "P410",
+      "statement": "防日晒。",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F型",
+      "usage_condition": ""
+    },
+    {
+      "index": 337,
+      "precaution_category": "安全储存",
+      "code": "P4ll",
+      "statement": "贮存温度不超过……。C\n/……。F。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": "生产商/供应商或主管当局列明温度"
+    },
+    {
+      "index": 338,
+      "precaution_category": "安全储存",
+      "code": "P4ll",
+      "statement": "贮存温度不超过……。C\n/……。F。",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": ""
+    },
+    {
+      "index": 339,
+      "precaution_category": "安全储存",
+      "code": "P412",
+      "statement": "不可暴露在超过 50。C / 122。 F 的温度下。",
+      "hazard_type": "气溶胶",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 340,
+      "precaution_category": "安全储存",
+      "code": "P413",
+      "statement": "贮存散货质量大于…….千克\n/ ……磅，温度不得超过……。 C /……。F。",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": "生产商/供应商或主管当局列明质量和温度。"
+    },
+    {
+      "index": 341,
+      "precaution_category": "安全储存",
+      "code": "P420",
+      "statement": "远离其他材料存放。",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F型",
+      "usage_condition": ""
+    },
+    {
+      "index": 342,
+      "precaution_category": "安全储存",
+      "code": "P420",
+      "statement": "远离其他材料存放。",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "1、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 343,
+      "precaution_category": "安全储存",
+      "code": "P420",
+      "statement": "远离其他材料存放。",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F\n型",
+      "usage_condition": ""
+    },
+    {
+      "index": 344,
+      "precaution_category": "安全储存",
+      "code": "P422",
+      "statement": "内装物存放于……",
+      "hazard_type": "发火液体",
+      "hazard_category": "1",
+      "usage_condition": "生产商/供应商或主管当局列明适当的液体或\n惰性气体"
+    },
+    {
+      "index": 345,
+      "precaution_category": "安全储存",
+      "code": "P422",
+      "statement": "内装物存放于……",
+      "hazard_type": "发火固体",
+      "hazard_category": "1",
+      "usage_condition": ""
+    },
+    {
+      "index": 346,
+      "precaution_category": "安全储存",
+      "code": "P402+P40 4",
+      "statement": "存放于干燥处。存放于密闭的容器中。",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 347,
+      "precaution_category": "安全储存",
+      "code": "P403+P23 3",
+      "statement": "存放在通风良好的地方。保持容器密闭。",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2、3",
+      "usage_condition": "- 如果产品易挥发，可造成周围空气危险。"
+    },
+    {
+      "index": 348,
+      "precaution_category": "安全储存",
+      "code": "P403+P23 3",
+      "statement": "存放在通风良好的地方。保持容器密闭。",
+      "hazard_type": "特异性靶器官毒性-一次接触；呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 349,
+      "precaution_category": "安全储存",
+      "code": "P403+P23 3",
+      "statement": "存放在通风良好的地方。保持容器密闭。",
+      "hazard_type": "特异性靶器官毒性-一次接触；麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": ""
+    },
+    {
+      "index": 350,
+      "precaution_category": "安全储存",
+      "code": "P403+P23 5",
+      "statement": "存放在通风良好的地方。保持低温。",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": ""
+    },
+    {
+      "index": 351,
+      "precaution_category": "安全储存",
+      "code": "P410+P40 3",
+      "statement": "防日晒。存放在通风良好的地方。",
+      "hazard_type": "高压气体",
+      "hazard_category": "压缩气体",
+      "usage_condition": "-根据联合国《关于危险货物运输的建议书-规章范本》中的包装规范 P200，装在可运输的气瓶中的气体，可省略使用条件，除非气体将（缓慢）分解或聚合，或主管当局另有\n规定"
+    },
+    {
+      "index": 352,
+      "precaution_category": "安全储存",
+      "code": "P410+P40 3",
+      "statement": "防日晒。存放在通风良好的地方。",
+      "hazard_type": "",
+      "hazard_category": "液化气体",
+      "usage_condition": "-根据联合国《关于危险货物运输的建议书-规章范本》中的包装规范 P201，装在可运输的气瓶中的气体，可省略使用条件，除非气体将（缓慢）分解或聚合，或主管当局另有\n规定"
+    },
+    {
+      "index": 353,
+      "precaution_category": "安全储存",
+      "code": "P410+P40 3",
+      "statement": "防日晒。存放在通风良好的地方。",
+      "hazard_type": "",
+      "hazard_category": "溶解气体",
+      "usage_condition": "-根据联合国《关于危险货物运输的建议书-规章范本》中的包装规范 P202，装在可运输的气瓶中的气体，可省略使用条件，除非气体将（缓慢）分解或聚合，或主管当局另有\n规定"
+    },
+    {
+      "index": 354,
+      "precaution_category": "安全储存",
+      "code": "P410+P41 2",
+      "statement": "防日晒。不可暴露在超过 50。 C / 122。F 的温度下.",
+      "hazard_type": "气溶胶",
+      "hazard_category": "1、2、3",
+      "usage_condition": ""
+    },
+    {
+      "index": 355,
+      "precaution_category": "安全储存",
+      "code": "P411+P23 5",
+      "statement": "贮存温度不得超过…… 。 C\n/……。F。保持低温",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F型",
+      "usage_condition": "生产商/供应商或主管当局列"
+    },
+    {
+      "index": 356,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物和 1.1 、1.2 、1.3 、\n1.4、1.5 项",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 357,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 358,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "自反应物质和混合物",
+      "hazard_category": "A、B、C、D、E、F型",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 359,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "遇水放出易燃气体的物质和混\n合物",
+      "hazard_category": "1、2、3",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 360,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "氧化性液体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 361,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "氧化性固体",
+      "hazard_category": "1、2、3",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 362,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "有机过氧化物",
+      "hazard_category": "A、B、C、D、E、F型",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 363,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 364,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 365,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 366,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "皮肤腐蚀",
+      "hazard_category": "1A、1B、1C",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 367,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 368,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 369,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 370,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 371,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 372,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1、2",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 373,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "特异性靶器官毒性-一次接触；呼吸道刺激",
+      "hazard_category": "3",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 374,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "特异性靶器官毒性-一次接触；麻醉效应",
+      "hazard_category": "3",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 375,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "特异性靶器官毒性-反复接触",
+      "hazard_category": "1、2",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 376,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "吸入危害",
+      "hazard_category": "1、2",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 377,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "危害水生环境-急性危险",
+      "hazard_category": "1、2、3",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 378,
+      "precaution_category": "废弃处置",
+      "code": "P501",
+      "statement": "处置内装物/容器…….",
+      "hazard_type": "危害水生环境-长期危险",
+      "hazard_category": "1、2、3、4",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 379,
+      "precaution_category": "废弃处置",
+      "code": "P502",
+      "statement": "回收和循环使用情况，请征询\n制造商/供应商",
+      "hazard_type": "危害臭氧层",
+      "hazard_category": "1",
+      "usage_condition": "按照地方/区域/ 国家/ 国际规章（待规定）。"
+    },
+    {
+      "index": 380,
+      "precaution_category": "预防措施",
+      "code": "P281",
+      "statement": "使用所需的个人防护设备",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物",
+      "usage_condition": ""
+    },
+    {
+      "index": 381,
+      "precaution_category": "预防措施",
+      "code": "P281",
+      "statement": "使用所需的个人防护设备",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 382,
+      "precaution_category": "预防措施",
+      "code": "P281",
+      "statement": "使用所需的个人防护设备",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    },
+    {
+      "index": 383,
+      "precaution_category": "预防措施",
+      "code": "P281",
+      "statement": "使用所需的个人防护设备",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B、2",
+      "usage_condition": ""
+    }
+  ]
+}

@@ -1,0 +1,678 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-02-07T14:21:38.252132",
+  "statements": [
+    {
+      "index": 1,
+      "code": "H200",
+      "statement": "不稳定爆炸物",
+      "hazard_type": "爆炸物",
+      "hazard_category": "不稳定爆炸物"
+    },
+    {
+      "index": 2,
+      "code": "H201",
+      "statement": "爆炸物：整体爆炸危险",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.1 项"
+    },
+    {
+      "index": 3,
+      "code": "H202",
+      "statement": "爆炸物：严重迸射危险",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.2 项"
+    },
+    {
+      "index": 4,
+      "code": "H203",
+      "statement": "爆炸物：起火、爆炸或迸射危险",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.3 项"
+    },
+    {
+      "index": 5,
+      "code": "H204",
+      "statement": "起火或迸射危险",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.4 项"
+    },
+    {
+      "index": 6,
+      "code": "H205",
+      "statement": "遇火可能整体爆炸",
+      "hazard_type": "爆炸物",
+      "hazard_category": "1.5 项"
+    },
+    {
+      "index": 7,
+      "code": "H220",
+      "statement": "极端易燃气体",
+      "hazard_type": "易燃气体",
+      "hazard_category": "1"
+    },
+    {
+      "index": 8,
+      "code": "H221",
+      "statement": "易燃气体",
+      "hazard_type": "易燃气体",
+      "hazard_category": "2"
+    },
+    {
+      "index": 9,
+      "code": "H222",
+      "statement": "极端易燃气溶胶",
+      "hazard_type": "气溶胶",
+      "hazard_category": "1"
+    },
+    {
+      "index": 10,
+      "code": "H223",
+      "statement": "易燃气溶胶",
+      "hazard_type": "气溶胶",
+      "hazard_category": "2"
+    },
+    {
+      "index": 11,
+      "code": "H224",
+      "statement": "极端易燃液体和蒸气",
+      "hazard_type": "易燃液体",
+      "hazard_category": "1"
+    },
+    {
+      "index": 12,
+      "code": "H225",
+      "statement": "高度易燃液体和蒸气",
+      "hazard_type": "易燃液体",
+      "hazard_category": "2"
+    },
+    {
+      "index": 13,
+      "code": "H226",
+      "statement": "易燃液体和蒸气",
+      "hazard_type": "易燃液体",
+      "hazard_category": "3"
+    },
+    {
+      "index": 14,
+      "code": "H227",
+      "statement": "可燃液体",
+      "hazard_type": "易燃液体",
+      "hazard_category": "4"
+    },
+    {
+      "index": 15,
+      "code": "H228",
+      "statement": "易燃固体",
+      "hazard_type": "易燃固体",
+      "hazard_category": "1、2"
+    },
+    {
+      "index": 16,
+      "code": "H229",
+      "statement": "压力容器：遇热可爆炸",
+      "hazard_type": "气溶胶",
+      "hazard_category": "1、2、3"
+    },
+    {
+      "index": 17,
+      "code": "H230",
+      "statement": "即使在没有空气的条件下也可能发生爆炸反应",
+      "hazard_type": "易燃气体（包括化学性质不稳定的气体）",
+      "hazard_category": "A"
+    },
+    {
+      "index": 18,
+      "code": "H231",
+      "statement": "在高压和/或高温下即使没有空气也可能发生爆炸反应",
+      "hazard_type": "易燃气体（包括化学性质不稳定的气体）",
+      "hazard_category": "B"
+    },
+    {
+      "index": 19,
+      "code": "H240",
+      "statement": "加热可能爆炸",
+      "hazard_type": "自反应物质和混合物；有机过氧化物",
+      "hazard_category": "A 型"
+    },
+    {
+      "index": 20,
+      "code": "H241",
+      "statement": "加热可能起火或爆炸",
+      "hazard_type": "自反应物质和混合物；有机\n过氧化物",
+      "hazard_category": "B 型"
+    },
+    {
+      "index": 21,
+      "code": "H242",
+      "statement": "加热可能起火",
+      "hazard_type": "自反应物质和混合物；有机过氧化物",
+      "hazard_category": "C、D、E、F 型"
+    },
+    {
+      "index": 22,
+      "code": "H250",
+      "statement": "暴露在空气中会自燃",
+      "hazard_type": "发火液体；发火固体",
+      "hazard_category": "1"
+    },
+    {
+      "index": 23,
+      "code": "H251",
+      "statement": "自热；可能燃烧",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "1"
+    },
+    {
+      "index": 24,
+      "code": "H252",
+      "statement": "数量大时自热；可能燃烧",
+      "hazard_type": "自热物质和混合物",
+      "hazard_category": "2"
+    },
+    {
+      "index": 25,
+      "code": "H260",
+      "statement": "遇水放出可自燃的易燃气体",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "1"
+    },
+    {
+      "index": 26,
+      "code": "H261",
+      "statement": "遇水放出易燃气体",
+      "hazard_type": "遇水放出易燃气体的物质和混合物",
+      "hazard_category": "2、3"
+    },
+    {
+      "index": 27,
+      "code": "H270",
+      "statement": "可能导致或加剧燃烧；氧化剂",
+      "hazard_type": "氧化性气体",
+      "hazard_category": "1"
+    },
+    {
+      "index": 28,
+      "code": "H271",
+      "statement": "可能引起燃烧或爆炸；强氧化剂",
+      "hazard_type": "氧化性液体；氧化性固体",
+      "hazard_category": "1"
+    },
+    {
+      "index": 29,
+      "code": "H272",
+      "statement": "可能加剧燃烧；氧化剂",
+      "hazard_type": "氧化性液体；氧化性固体",
+      "hazard_category": "2、3"
+    },
+    {
+      "index": 30,
+      "code": "H280",
+      "statement": "内装高压气体；遇热可能爆炸",
+      "hazard_type": "高压气体",
+      "hazard_category": "压缩气体、液化气体、溶解气体"
+    },
+    {
+      "index": 31,
+      "code": "H281",
+      "statement": "内装冷冻气体；可能造成低温灼伤或损伤",
+      "hazard_type": "高压气体",
+      "hazard_category": "冷冻液化气体"
+    },
+    {
+      "index": 32,
+      "code": "H290",
+      "statement": "可能腐蚀金属",
+      "hazard_type": "金属腐蚀剂",
+      "hazard_category": "1"
+    },
+    {
+      "index": 33,
+      "code": "H300",
+      "statement": "吞咽致命",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "1、2"
+    },
+    {
+      "index": 34,
+      "code": "H301",
+      "statement": "吞咽会中毒",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "3"
+    },
+    {
+      "index": 35,
+      "code": "H302",
+      "statement": "吞咽有害",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "4"
+    },
+    {
+      "index": 36,
+      "code": "H303",
+      "statement": "吞咽可能有害",
+      "hazard_type": "急性毒性-经口",
+      "hazard_category": "5"
+    },
+    {
+      "index": 37,
+      "code": "H304",
+      "statement": "吞咽并进入呼吸道可能致命",
+      "hazard_type": "吸入危害",
+      "hazard_category": "1"
+    },
+    {
+      "index": 38,
+      "code": "H305",
+      "statement": "吞咽并进入呼吸道可能有害",
+      "hazard_type": "吸入危害",
+      "hazard_category": "2"
+    },
+    {
+      "index": 39,
+      "code": "H310",
+      "statement": "皮肤接触致命",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "1、2"
+    },
+    {
+      "index": 40,
+      "code": "H311",
+      "statement": "皮肤接触会中毒",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "3"
+    },
+    {
+      "index": 41,
+      "code": "H312",
+      "statement": "皮肤接触有害",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "4"
+    },
+    {
+      "index": 42,
+      "code": "H313",
+      "statement": "皮肤接触可能有害",
+      "hazard_type": "急性毒性-经皮",
+      "hazard_category": "5"
+    },
+    {
+      "index": 43,
+      "code": "H314",
+      "statement": "造成严重皮肤灼伤和眼损伤",
+      "hazard_type": "皮肤腐蚀/刺激",
+      "hazard_category": "1A、1B、1C"
+    },
+    {
+      "index": 44,
+      "code": "H315",
+      "statement": "造成皮肤刺激",
+      "hazard_type": "皮肤腐蚀/刺激",
+      "hazard_category": "2"
+    },
+    {
+      "index": 45,
+      "code": "H316",
+      "statement": "造成轻微皮肤刺激",
+      "hazard_type": "皮肤腐蚀/刺激",
+      "hazard_category": "3"
+    },
+    {
+      "index": 46,
+      "code": "H317",
+      "statement": "可能导致皮肤过敏反应",
+      "hazard_type": "皮肤过敏",
+      "hazard_category": "1、1A、1B"
+    },
+    {
+      "index": 47,
+      "code": "H318",
+      "statement": "造成严重眼损伤",
+      "hazard_type": "严重眼损伤/眼刺激",
+      "hazard_category": "1"
+    },
+    {
+      "index": 48,
+      "code": "H319",
+      "statement": "造成严重眼刺激",
+      "hazard_type": "严重眼损伤/眼刺激",
+      "hazard_category": "2A"
+    },
+    {
+      "index": 49,
+      "code": "H320",
+      "statement": "造成眼刺激",
+      "hazard_type": "严重眼损伤/眼刺激",
+      "hazard_category": "2B"
+    },
+    {
+      "index": 50,
+      "code": "H330",
+      "statement": "吸入致命",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "1、2"
+    },
+    {
+      "index": 51,
+      "code": "H331",
+      "statement": "吸入会中毒",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "3"
+    },
+    {
+      "index": 52,
+      "code": "H332",
+      "statement": "吸入有害",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "4"
+    },
+    {
+      "index": 53,
+      "code": "H333",
+      "statement": "吸入可能有害",
+      "hazard_type": "急性毒性-吸入",
+      "hazard_category": "5"
+    },
+    {
+      "index": 54,
+      "code": "H334",
+      "statement": "吸入可能导致过敏或哮喘病症状\n或呼吸困难",
+      "hazard_type": "呼吸过敏",
+      "hazard_category": "1、1A、1B"
+    },
+    {
+      "index": 55,
+      "code": "H335",
+      "statement": "可引起呼吸道刺激",
+      "hazard_type": "特异性靶器官毒性-一次接\n触：呼吸道刺激",
+      "hazard_category": "3"
+    },
+    {
+      "index": 56,
+      "code": "H336",
+      "statement": "可引起昏睡或眩晕",
+      "hazard_type": "特异性靶器官毒性-一次接触：麻醉效应",
+      "hazard_category": "3"
+    },
+    {
+      "index": 57,
+      "code": "H340",
+      "statement": "可能导致遗传性缺陷（如已有确证，无其他接触途径造成这一危\n险，说明接触途径）",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "1A、1B"
+    },
+    {
+      "index": 58,
+      "code": "H341",
+      "statement": "怀疑会导致遗传性缺陷（如已有确\n证，无其他接触途径造成这一危险，说明接触途径）",
+      "hazard_type": "生殖细胞致突变性",
+      "hazard_category": "2"
+    },
+    {
+      "index": 59,
+      "code": "H350",
+      "statement": "可能致癌（如已有确证，无其他接触途径造成这一危险，说明接触途\n径，）",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B"
+    },
+    {
+      "index": 60,
+      "code": "H351",
+      "statement": "怀疑会致癌（如已有确证，无其他接触途径造成这一危险，说明接触\n途径）",
+      "hazard_type": "致癌性",
+      "hazard_category": "2"
+    },
+    {
+      "index": 61,
+      "code": "H360",
+      "statement": "可能对生育能力或胎儿造成伤害\n（说明已知的具体影响）（如已有确证，无其他接触途径造成这一危\n险，说明接触途径）",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "1A、1B"
+    },
+    {
+      "index": 62,
+      "code": "H361",
+      "statement": "怀疑对生育能力或胎儿造成伤害\n（说明已知的具体影响）（如已有\n确证，无其他接触途径造成这一危险，说明接触途径）",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "2"
+    },
+    {
+      "index": 63,
+      "code": "H362",
+      "statement": "可能对母乳喂养的儿童造成伤害",
+      "hazard_type": "生殖毒性-影响哺乳或通过哺乳产生影响",
+      "hazard_category": "附加类别"
+    },
+    {
+      "index": 64,
+      "code": "H370",
+      "statement": "对器官造成损害（或说明已知的所有受影响器官）（如已有确证，无其他接触途径造成这一危险，说明\n接触途径）",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "1"
+    },
+    {
+      "index": 65,
+      "code": "H371",
+      "statement": "可能对器官造成损害（或说明已知的所有受影响器官）（如已有确 证，无其他接触途径造成这一危\n险，说明接触途径）",
+      "hazard_type": "特异性靶器官毒性-一次接触",
+      "hazard_category": "2"
+    },
+    {
+      "index": 66,
+      "code": "H372",
+      "statement": "长期或反复接触（如已有确证，无其他接触途径造成这一危险，说明接触途径）会对器官造成伤害（说\n明已知的所有受影响器官）",
+      "hazard_type": "特异性靶器官毒性-反复接触",
+      "hazard_category": "1"
+    },
+    {
+      "index": 67,
+      "code": "H373",
+      "statement": "长期或反复接触（如已有确证，无其他接触途径造成这一危险，说明接触途径）可能对器官造成伤害\n（说明已知的所有受影响器官）",
+      "hazard_type": "特异性靶器官毒性-反复接触",
+      "hazard_category": "2"
+    },
+    {
+      "index": 68,
+      "code": "H300+H310",
+      "statement": "吞咽或皮肤接触致命",
+      "hazard_type": "急性毒性-经口和急性毒性\n-经皮",
+      "hazard_category": "1、2"
+    },
+    {
+      "index": 69,
+      "code": "H300+H330",
+      "statement": "吞咽或吸入致命",
+      "hazard_type": "急性毒性-经口和急性毒性\n-吸入",
+      "hazard_category": "1、2"
+    },
+    {
+      "index": 70,
+      "code": "H310+H330",
+      "statement": "皮肤接触或吸入致命",
+      "hazard_type": "急性毒性-经皮和急性毒性\n-吸入",
+      "hazard_category": "1、2"
+    },
+    {
+      "index": 71,
+      "code": "H300+H310+H3 30",
+      "statement": "吞咽、皮肤接触或吸入致命",
+      "hazard_type": "急性毒性-经口、急性毒性-经皮和急性毒性-吸入",
+      "hazard_category": "1、2"
+    },
+    {
+      "index": 72,
+      "code": "H301+H311",
+      "statement": "吞咽或皮肤接触可致中毒",
+      "hazard_type": "急性毒性-经口和急性毒性\n-经皮",
+      "hazard_category": "3"
+    },
+    {
+      "index": 73,
+      "code": "H301+H331",
+      "statement": "吞咽或吸入可致中毒",
+      "hazard_type": "急性毒性-经口和急性毒性\n-吸入",
+      "hazard_category": "3"
+    },
+    {
+      "index": 74,
+      "code": "H311+H331",
+      "statement": "皮肤接触或吸入可致中毒",
+      "hazard_type": "急性毒性-经皮和急性毒性\n-吸入",
+      "hazard_category": "3"
+    },
+    {
+      "index": 75,
+      "code": "H301+H311+H3 31",
+      "statement": "吞咽、皮肤接触或吸入中毒",
+      "hazard_type": "急性毒性-经口、急性毒性-经皮和急性毒性-吸入",
+      "hazard_category": "3"
+    },
+    {
+      "index": 76,
+      "code": "H302+H312",
+      "statement": "吞咽或皮肤接触有害",
+      "hazard_type": "急性毒性-经口和急性毒性\n-经皮",
+      "hazard_category": "4"
+    },
+    {
+      "index": 77,
+      "code": "H302+H332",
+      "statement": "吞咽或吸入有害",
+      "hazard_type": "急性毒性-经口和急性毒性\n-吸入",
+      "hazard_category": "4"
+    },
+    {
+      "index": 78,
+      "code": "H312+H332",
+      "statement": "皮肤接触或吸入有害",
+      "hazard_type": "急性毒性-经皮和急性毒性\n-吸入",
+      "hazard_category": "4"
+    },
+    {
+      "index": 79,
+      "code": "H302+H312+H3 32",
+      "statement": "吞咽、皮肤接触或吸入有害",
+      "hazard_type": "急性毒性-经口、急性毒性-经皮和急性毒性-吸入",
+      "hazard_category": "4"
+    },
+    {
+      "index": 80,
+      "code": "H303+H313",
+      "statement": "吞咽或皮肤接触可能有害",
+      "hazard_type": "急性毒性-经口和急性毒性\n-经皮",
+      "hazard_category": "5"
+    },
+    {
+      "index": 81,
+      "code": "H303+H333",
+      "statement": "吞咽或吸入可能有害",
+      "hazard_type": "急性毒性-经口和急性毒性\n-吸入",
+      "hazard_category": "5"
+    },
+    {
+      "index": 82,
+      "code": "H313+H333",
+      "statement": "皮肤接触或吸入可能有害",
+      "hazard_type": "急性毒性-经皮和急性毒性\n-吸入",
+      "hazard_category": "5"
+    },
+    {
+      "index": 83,
+      "code": "H303+H313+H3 33",
+      "statement": "吞咽、皮肤接触或吸入可能有害",
+      "hazard_type": "急性毒性-经口、急性毒性-经皮和急性毒性-吸入",
+      "hazard_category": "5"
+    },
+    {
+      "index": 84,
+      "code": "H315+H320",
+      "statement": "造成皮肤和眼刺激",
+      "hazard_type": "皮肤腐蚀/刺激和严重眼睛损伤/眼刺激",
+      "hazard_category": "2（皮肤）/2A（眼）"
+    },
+    {
+      "index": 85,
+      "code": "H400",
+      "statement": "对水生生物毒性极大",
+      "hazard_type": "危害水生环境-急性危险",
+      "hazard_category": "1"
+    },
+    {
+      "index": 86,
+      "code": "H401",
+      "statement": "对水生生物有毒",
+      "hazard_type": "危害水生环境-急性危险",
+      "hazard_category": "2"
+    },
+    {
+      "index": 87,
+      "code": "H402",
+      "statement": "对水生生物有害",
+      "hazard_type": "危害水生环境-急性危险",
+      "hazard_category": "3"
+    },
+    {
+      "index": 88,
+      "code": "H410",
+      "statement": "对水生生物毒性极大并具有长期持续影响",
+      "hazard_type": "危害水生环境-长期危险",
+      "hazard_category": "1"
+    },
+    {
+      "index": 89,
+      "code": "H411",
+      "statement": "对水生生物有毒并具有长期持续\n影响",
+      "hazard_type": "危害水生环境-长期危险",
+      "hazard_category": "2"
+    },
+    {
+      "index": 90,
+      "code": "H412",
+      "statement": "对水生生物有害并具有长期持续\n影响",
+      "hazard_type": "危害水生环境-长期危险",
+      "hazard_category": "3"
+    },
+    {
+      "index": 91,
+      "code": "H413",
+      "statement": "可能对水生生物造成长期持续有害影响",
+      "hazard_type": "危害水生环境-长期危险",
+      "hazard_category": "4"
+    },
+    {
+      "index": 92,
+      "code": "H420",
+      "statement": "破坏高层大气中的臭氧，危害公共健康和环境",
+      "hazard_type": "危害臭氧层",
+      "hazard_category": "1"
+    },
+    {
+      "index": 93,
+      "code": "H361D",
+      "statement": "怀疑对胎儿造成伤害",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "2"
+    },
+    {
+      "index": 94,
+      "code": "H361E",
+      "statement": "怀疑对胎儿造成伤害",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "2"
+    },
+    {
+      "index": 95,
+      "code": "H361F",
+      "statement": "怀疑损害生育能力",
+      "hazard_type": "生殖毒性",
+      "hazard_category": "2"
+    },
+    {
+      "index": 96,
+      "code": "H350I",
+      "statement": "吸入可能致癌",
+      "hazard_type": "致癌性",
+      "hazard_category": "1A、1B"
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "standard": "GB 12268-2025",
+    "note": "高频 UN 子集；全量表后续 PR 追加"
+  },
+  "entries": {
+    "1114": {
+      "name_cn": "苯",
+      "name_en": "Benzene",
+      "class": "3",
+      "pg": "II",
+      "marine_pollutant": false
+    },
+    "1170": {
+      "name_cn": "乙醇",
+      "name_en": "Ethanol",
+      "class": "3",
+      "pg": "II",
+      "marine_pollutant": false
+    },
+    "1760": {
+      "name_cn": "腐蚀性液体，未另作规定的",
+      "name_en": "Corrosive liquid, n.o.s.",
+      "class": "8",
+      "pg": "II",
+      "marine_pollutant": false
+    },
+    "1824": {
+      "name_cn": "氢氧化钠溶液",
+      "name_en": "Sodium hydroxide solution",
+      "class": "8",
+      "pg": "II",
+      "marine_pollutant": false
+    },
+    "1992": {
+      "name_cn": "易燃液体，毒性，未另作规定的",
+      "name_en": "Flammable liquid, toxic, n.o.s.",
+      "class": "3",
+      "pg": "III",
+      "marine_pollutant": false
+    },
+    "1993": {
+      "name_cn": "易燃液体，未另作规定的",
+      "name_en": "Flammable liquid, n.o.s.",
+      "class": "3",
+      "pg": "III",
+      "marine_pollutant": false
+    },
+    "2810": {
+      "name_cn": "毒性物质，液体，未另作规定的",
+      "name_en": "Toxic liquid, organic, n.o.s.",
+      "class": "6.1",
+      "pg": "III",
+      "marine_pollutant": false
+    },
+    "2920": {
+      "name_cn": "腐蚀性液体，易燃，未另作规定的",
+      "name_en": "Corrosive liquid, flammable, n.o.s.",
+      "class": "8",
+      "pg": "II",
+      "marine_pollutant": false
+    },
+    "2924": {
+      "name_cn": "易燃液体，腐蚀性，未另作规定的",
+      "name_en": "Flammable liquid, corrosive, n.o.s.",
+      "class": "3",
+      "pg": "II",
+      "marine_pollutant": false
+    },
+    "3082": {
+      "name_cn": "对环境有害的物质，液体，未另作规定的",
+      "name_en": "Environmentally hazardous substance, liquid, n.o.s.",
+      "class": "9",
+      "pg": "III",
+      "marine_pollutant": true
+    }
+  }
+}
