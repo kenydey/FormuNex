@@ -825,9 +825,13 @@ deploy/helm/formunex/**（新）
 |--------|------|----------|------|
 | **M0 迁仓与品牌** | ✅ 完成 | FormuMind 迁入并更名 FormuNex；`FORMUMIND_*` → `FORMUNEX_*`（`backend/app/env_compat.py` 兼容旧前缀并告警；Datalab 记录标识保持不变）；`docker-compose.yml` 新增 PostgreSQL 并作为主库；历史文档归档至 `docs/archive/formumind/` | 后端全量测试通过；前端 687 项 vitest 通过、tsc 无错误 |
 | **M1 数据底座** | ✅ 完成（服务层） | 迁移 0051~0059（冻结表结构、幂等，自 0050 旧库升级后与模型零漂移）；法规库导入 `backend/scripts/seed_regulatory_db.py`：131,516 种物质、7,986 条分类、373 条 GBZ 2.1 限值；CAS 校验与 Excel 损坏修复（日期 / 日期序列号，共 92 条）；《危险化学品目录》中文分类文本解析（94% 无需复核，其余进复核队列）；RBAC 权限矩阵、argon2id 密码、哈希链审计日志 + 数据库只追加触发器 | 迁移、导入、解析、RBAC、审计专项测试 |
+| **M2 GB 30000 分类引擎** | ✅ 完成（引擎 + API，规则集待 EHS 签核） | `services/plm/ghs/`：规则参数外置于版本化 YAML（`gb30000-2013.v1`，状态 draft）；急性毒性 ATE 加和（含未知组分 >10% 修正、按吸入形态换算）、皮肤 / 眼加和法（子类别、SCL、不适用加和组分、极端 pH）、致敏 / CMR / STOT 浓度限值、STOT SE3 按效应加和、吸入危害（需 40 ℃ 运动黏度）、水生急性 / 长期加和（M 因子）、臭氧层；易燃液体只认实测闪点 / 初沸点，金属腐蚀只认 UN C.1，其余物理危害一律提示试验；标签要素（象形图优先规则、信号词、H 去重、H→P 映射与 GB 15258 标签 6 条精选）；运输分类（UN 2.0.3.3 优先表、N.O.S. / 涂料条目、技术名称，始终标记需人工确认）；原料 → 组分展开（范围取上限、未申报部分计入未知）；结果持久化（`classification_results`，含 inputs_hash 与数据版本）；API：`POST /api/plm/ghs/classify`、`POST /api/plm/ghs/classify/formulation-versions/{id}`、`GET /api/plm/ghs/ruleset`、`GET /api/plm/substances` | 109 项规则边界测试 + 10 项 API/数据库测试；真实法规库冒烟测试 |
 | **M3 PageIndex** | ✅ 完成（服务层 + API） | `services/pageindex/`：入库即建目录树（标题层级、专利章节/实施例/表题标记、表格 sidecar、交叉引用边，不调用 LLM）；两阶段检索（hybrid_search → 目录树导航，LLM 模式 + 启发式回退，预算控制，可审计 `node_path` / `reasoning_trace`）；挂载深度研究（`pageindex_evidence`）与实施例草稿（配方表 ↔ 性能表关联）；API：`GET /api/kb/sources/{id}/toc-tree`、`POST …/toc-tree/rebuild`、`POST /api/kb/pageindex/search` | 合成长专利评估集（3 篇 / 4 问）：跨页关联覆盖率 第二阶段 4/4，仅第一阶段 3/4 |
 
 **尚未完成、留待后续里程碑的部分：**
+- GB 30000 规则集为 draft：所有阈值 / 换算值需 EHS 专员逐项核对签核后改为 approved；黄金案例（真实配方 + 专员确认结果）尚待建立。
+- 物质库只有《危险化学品目录》分类，目录外物质一律按“危害未知”计入（真实配方冒烟测试中未知占比可达 80%）；需通过供应商 SDS 导入或法规专员标记 `not_classified` 补齐。
+- 桥接原则（稀释、批次、浓缩等）、气体 / 气溶胶分类、有机过氧化物等需试验的物理危害未实现计算，只提示数据缺口。
 - 认证中间件仍为原 Bearer Token；账号登录 / JWT / 接口级 RBAC 鉴权随 M5（签批）与前端重写一并接入。
 - `ghs_statements` 目前只有中文文本，英文 H/P 语句待补；GB 12268 仅 10 条，全表待补；IECSC 名录未导入（`iecsc_listed` 保持未知）。
 - PageIndex 节点摘要（`summaries_status`）的延迟生成任务、Chat「深度模式」开关与知识中心目录树界面随前端重写（F2）交付。

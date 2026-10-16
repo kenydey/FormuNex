@@ -53,3 +53,5 @@ neo4j==6.1.0
 # FormuNex identity (alembic 0051): argon2id password hashing for user accounts
 # and electronic signatures (re-authentication on sign).
 argon2-cffi==25.1.0
+# FormuNex GB 30000 engine: rule sets are versioned YAML (app/services/plm/ghs/rulesets).
+PyYAML==6.0.3

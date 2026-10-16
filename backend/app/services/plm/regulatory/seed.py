@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 # Bump when parsing / mapping logic changes, so an unchanged data set is re-imported.
-IMPORTER_VERSION = "1"
+IMPORTER_VERSION = "2"  # 2: OCR-repaired statement codes (P211, P411)
 OEL_STANDARD = "GBZ 2.1-2019"
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
@@ -100,7 +100,16 @@ def _float(raw: Any) -> float | None:
 
 
 def _code(raw: str) -> str:
-    return re.sub(r"\s+", "", raw or "").upper()
+    """Normalise an H / P code; the source list has OCR slips like ``P2ll`` for P211
+    (letters inside the three-digit number only — ``H350i`` stays as it is)."""
+    code = re.sub(r"\s+", "", raw or "").upper()
+    parts = []
+    for seg in code.split("+"):
+        body = seg[1:]
+        if seg[:1] in ("H", "P") and len(body) == 3 and not body.isdigit() and set(body) <= set("0123456789LI"):
+            seg = seg[0] + body.replace("L", "1").replace("I", "1")
+        parts.append(seg)
+    return "+".join(parts)
 
 
 class _Review:

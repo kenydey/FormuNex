@@ -32,6 +32,11 @@ _PAGEINDEX = (
     "tree / reasoning-trace screen arrives with the Ant Design frontend rewrite (plan §3.4, F2)"
 )
 
+_PLM = (
+    "GB 30000 classification (FormuNex M2): the formulation editor's compliance panel and the PLM workspace "
+    "that call it arrive with the Ant Design frontend rewrite (plan §3.4, F3/F4)"
+)
+
 # Documented backend routes the frontend does not call, and why that is fine.
 API_ONLY_ROUTES: dict[str, str] = {
     "/api/artifacts/versions/{}": "version metadata; screens read versions through the lineage listing and the diff",
@@ -48,6 +53,10 @@ API_ONLY_ROUTES: dict[str, str] = {
     "/api/formulation-skills": "read server-side by the recommender; the skills screen uses the merged /api/skills catalog",
     "/api/formulation-skills/{}": "read server-side by the recommender; the skills screen uses the merged /api/skills catalog",
     "/api/kb/pageindex/search": _PAGEINDEX,
+    "/api/plm/ghs/classify": _PLM,
+    "/api/plm/ghs/classify/formulation-versions/{}": _PLM,
+    "/api/plm/ghs/ruleset": _PLM,
+    "/api/plm/substances": _PLM,
     "/api/kb/sources/{}/toc-tree": _PAGEINDEX,
     "/api/kb/sources/{}/toc-tree/rebuild": _PAGEINDEX,
     "/api/kb/golden-questions": "lists the curated golden retrieval set; the quality screen only runs it (/api/kb/golden-eval/run)",
