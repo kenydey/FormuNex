@@ -49,6 +49,12 @@ def verify_password(stored_hash: str | None, password: str) -> bool:
         return False
 
 
+def rehash(password: str) -> str:
+    """Re-hash an already-accepted password with current parameters (no strength check: the
+    user proved it is theirs; forcing a change at sign-in is a separate policy)."""
+    return _hasher.hash(password)
+
+
 def needs_rehash(stored_hash: str) -> bool:
     return _hasher.check_needs_rehash(stored_hash)
 

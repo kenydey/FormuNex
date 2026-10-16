@@ -109,6 +109,16 @@ def run_startup_checks(settings) -> list[str]:
                 "install must change it in the database first)."
             )
 
+    # 6. Account sign-in (M5) signs access tokens with FORMUNEX_AUTH_JWT_SECRET; production refuses the
+    #    generated development secret, so sign-in would be unavailable.
+    jwt_secret = (getattr(settings, "auth_jwt_secret", "") or "").strip()
+    if env in ("production", "prod") and len(jwt_secret) < 32:
+        warnings.append(
+            "FORMUNEX_AUTH_JWT_SECRET is unset or shorter than 32 characters with FORMUNEX_ENVIRONMENT=production: "
+            "account sign-in and e-signatures are unavailable. Set a long random value in .env "
+            "(e.g. `openssl rand -base64 48`)."
+        )
+
     if errors:
         raise RuntimeError("Startup configuration check failed:\n- " + "\n- ".join(errors))
     return warnings

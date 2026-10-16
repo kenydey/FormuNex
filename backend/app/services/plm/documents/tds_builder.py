@@ -93,4 +93,6 @@ def build_tds(ctx: TdsContext) -> dict:
     o.paragraphs.append(t(lang, "本资料基于实验室测试与实践经验，用户应根据具体条件进行试验确认。",
                           "Data are based on laboratory tests and experience; users should verify suitability under their own conditions."))
     doc.meta["measurement_ids"] = {x["key"]: x.get("measurement_id") for x in ctx.properties if x.get("key")}
+    doc.meta["facts"] = {"properties": {x["key"]: x.get("value") for x in ctx.properties
+                                        if x.get("key") and isinstance(x.get("value"), (int, float))}}
     return doc.to_dict()

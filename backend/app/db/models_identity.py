@@ -82,3 +82,22 @@ class ProjectMemberRow(Base):
     role_code: Mapped[str] = mapped_column(ForeignKey("roles.code"), index=True)
     added_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class UserSessionRow(Base):
+    """A refresh-token session (alembic 0060).
+
+    Access tokens are short-lived signed JWTs and are never stored; the refresh
+    token is an opaque random string of which only the SHA-256 is kept, so a
+    leaked database cannot be replayed. Logout / password change revoke rows.
+    """
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_agent: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

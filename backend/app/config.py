@@ -34,6 +34,7 @@ _INFRA_ENV_KEYS = frozenset({
     "FORMUNEX_TASK_PROGRESS_DIR",
     "FORMUNEX_TABLES_DIR",
     "FORMUNEX_BACKEND_BIND",  # docker-compose.yml only: which host address the API port is published on
+    "FORMUNEX_NEW_USER_PASSWORD",  # scripts/create_user.py only: non-interactive password for the new account
     # P1 owner Phase2 多用户开关
     "FORMUNEX_MULTI_USER",
     "FORMUNEX_API_TOKENS_JSON",
@@ -955,6 +956,16 @@ class Settings(BaseSettings):
     plm_company_phone: str = ""
     plm_company_email: str = ""
     plm_emergency_phone: str = ""
+    # Release gate (方案 §5.5.10): documents that must exist and be approved, as "type:lang" ("*" = any language).
+    plm_release_required_docs: str = "sds:zh-CN,sds:en-US,tds:zh-CN,tds:en-US,label:zh-CN,coa:*"
+    # Optional publish webhook (HMAC-SHA256 signed with the secret); empty = delivery ZIP only.
+    plm_publish_webhook_url: str = ""
+    plm_publish_webhook_secret: str = ""
+    # Account sessions (方案 §4.4): HS256 access tokens + revocable refresh sessions.
+    # Empty secret = generate one into data/.jwt_secret (refused in production).
+    auth_jwt_secret: str = ""
+    auth_access_ttl_minutes: int = 15
+    auth_refresh_ttl_days: int = 7
     # S-1: 跨语言查询扩展。中文查询自动翻译为英文并行检索，结果融合。
     # 成本约 ¥0.00031/中文查询，失败自动降级。默认开启（2026-10-11 Cheng 批准）。
     crosslingual_expand_enabled: bool = True

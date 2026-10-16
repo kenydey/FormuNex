@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
+
+from ._principal import CurrentUser, current_user, optional_user
 
 router = APIRouter(prefix="/plm", tags=["plm"])
 
@@ -294,7 +296,8 @@ def add_qc_results(batch_id: str, body: QcResultsIn) -> dict[str, Any]:
 
 
 @router.post("/revisions/{revision_id}/documents", status_code=201)
-def generate_document(revision_id: str, body: DocumentIn) -> dict[str, Any]:
+def generate_document(revision_id: str, body: DocumentIn,
+                      user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
     """Generate a new version of an SDS / TDS / COA / label (never edits an existing version)."""
     from ..services.plm.documents import service as docs
 
@@ -302,7 +305,8 @@ def generate_document(revision_id: str, body: DocumentIn) -> dict[str, Any]:
     payload["properties"] = body.properties.model_dump() if body.properties else None
     with _session() as session:
         try:
-            row = docs.generate_document(session, revision_id, body.doc_type, lang=body.lang, payload=payload)
+            row = docs.generate_document(session, revision_id, body.doc_type, lang=body.lang, payload=payload,
+                                         created_by=user.id if user else None)
         except (docs.DocumentError, KeyError) as exc:
             raise _doc_error(exc) from None
         session.commit()
@@ -402,3 +406,223 @@ async def upload_template(
             raise _doc_error(exc) from None
         session.commit()
         return {"id": row.id, "doc_type": row.doc_type, "lang": row.lang, "name": row.name, "version": row.version}
+
+
+# --------------------------------------------------------------------------- M5: release gate & sign-off
+
+
+class PasswordConfirm(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+    comment: str = Field(default="", max_length=2000)
+
+
+class WaiverIn(PasswordConfirm):
+    check: Literal["objectives", "data_gaps"]
+    item: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class SignIn(PasswordConfirm):
+    decision: Literal["approve", "reject"]
+
+
+class WithdrawIn(PasswordConfirm):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+def _release_call(session, fn, *args, **kwargs):
+    """Run a sign-off operation, mapping its errors to HTTP. A wrong password is committed first so the
+    failed attempt (and lock-out counter) is kept."""
+    from ..services.identity.accounts import AuthError
+    from ..services.plm.release import gate, signoff
+
+    try:
+        return fn(session, *args, **kwargs)
+    except AuthError as exc:
+        session.commit()
+        raise HTTPException(status_code=401, detail=f"电子签名身份验证失败：{exc}") from None
+    except signoff.GateFailed as exc:
+        session.commit()  # keeps the gate_failed audit record
+        raise HTTPException(status_code=409, detail={"message": str(exc), "gate": exc.result}) from None
+    except signoff.Forbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
+    except (signoff.ReleaseError, gate.GateError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@router.post("/documents/{document_id}/approve")
+def approve_document(document_id: str, body: PasswordConfirm, user: CurrentUser = Depends(current_user)
+                     ) -> dict[str, Any]:
+    """Review e-signature on one document (COA: issue). Required before the release gate passes."""
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        row = _release_call(session, signoff.approve_document, document_id, user_id=user.id,
+                            principal=user.principal, password=body.password, comment=body.comment)
+        session.commit()
+        return _doc_summary(row)
+
+
+@router.post("/revisions/{revision_id}/candidate")
+def mark_candidate(revision_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        rev = _release_call(session, signoff.mark_candidate, revision_id, user_id=user.id, principal=user.principal)
+        session.commit()
+        return {"id": rev.id, "rev": rev.rev, "state": rev.state}
+
+
+@router.get("/revisions/{revision_id}/gate")
+def evaluate_gate(revision_id: str) -> dict[str, Any]:
+    """Run the ten release-gate checks now (read-only; the checklist view)."""
+    from ..services.plm.release import gate
+
+    with _session() as session:
+        try:
+            return gate.evaluate(session, revision_id)
+        except gate.GateError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@router.post("/revisions/{revision_id}/gate/waivers", status_code=201)
+def add_gate_waiver(revision_id: str, body: WaiverIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        row = _release_call(session, signoff.add_waiver, revision_id, check_key=body.check, item=body.item,
+                            reason=body.reason, user_id=user.id, principal=user.principal, password=body.password)
+        session.commit()
+        return {"id": row.id, "check": row.check_code, "item": row.item_key, "reason": row.reason}
+
+
+@router.post("/revisions/{revision_id}/submit", status_code=201)
+def submit_release(revision_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Gate + freeze the package + open the 4-step sign-off. 409 with the gate result when it fails."""
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        pkg = _release_call(session, signoff.submit, revision_id, user_id=user.id, principal=user.principal)
+        session.commit()
+        return signoff.package_dict(session, pkg)
+
+
+@router.get("/revisions/{revision_id}/packages")
+def list_packages(revision_id: str) -> list[dict[str, Any]]:
+    from sqlalchemy import select
+
+    from ..db.models_plm import ReleasePackageRow
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        rows = session.execute(select(ReleasePackageRow).where(ReleasePackageRow.revision_id == revision_id)
+                               .order_by(ReleasePackageRow.created_at)).scalars().all()
+        return [signoff.package_dict(session, r) for r in rows]
+
+
+@router.get("/packages/{package_id}")
+def get_package(package_id: str) -> dict[str, Any]:
+    from ..db.models_plm import ReleasePackageRow
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        pkg = session.get(ReleasePackageRow, package_id)
+        if pkg is None:
+            raise HTTPException(status_code=404, detail="发布包不存在")
+        return signoff.package_dict(session, pkg)
+
+
+@router.post("/packages/{package_id}/sign")
+def sign_package(package_id: str, body: SignIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Sign the current step (approve / reject). The last approval releases the product."""
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        pkg = _release_call(session, signoff.sign_step, package_id, decision=body.decision, user_id=user.id,
+                            principal=user.principal, password=body.password, comment=body.comment)
+        session.commit()
+        if pkg.status == "released":
+            signoff.run_connectors(session, pkg.id, action="publish")
+            session.commit()
+        return signoff.package_dict(session, pkg)
+
+
+@router.post("/packages/{package_id}/withdraw")
+def withdraw_package(package_id: str, body: WithdrawIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        pkg = _release_call(session, signoff.withdraw, package_id, reason=body.reason, user_id=user.id,
+                            principal=user.principal, password=body.password)
+        session.commit()
+        signoff.run_connectors(session, pkg.id, action="withdraw", reason=body.reason)
+        session.commit()
+        return signoff.package_dict(session, pkg)
+
+
+@router.post("/packages/{package_id}/publish")
+def republish_package(package_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Retry the publish connectors for a released package."""
+    from ..db.models_plm import ProductRevisionRow, ProductRow, ReleasePackageRow
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        pkg = session.get(ReleasePackageRow, package_id)
+        if pkg is None:
+            raise HTTPException(status_code=404, detail="发布包不存在")
+        product = session.get(ProductRow, session.get(ProductRevisionRow, pkg.revision_id).product_id)
+        user.require("release.publish", product.project_id)
+        if pkg.status != "released":
+            raise HTTPException(status_code=409, detail="只能推送已发布的发布包")
+        results = signoff.run_connectors(session, pkg.id, action="publish")
+        session.commit()
+        return {"results": results}
+
+
+@router.get("/packages/{package_id}/delivery")
+def download_delivery(package_id: str):
+    """The delivery ZIP (all PDF / Word files + manifest.json with hashes and signatures)."""
+    from fastapi.responses import Response
+
+    from ..db.models_plm import ReleasePackageRow
+    from ..services.plm import storage
+
+    with _session() as session:
+        pkg = session.get(ReleasePackageRow, package_id)
+        if pkg is None or not pkg.delivery_key:
+            raise HTTPException(status_code=404, detail="交付包尚未生成（发布后生成）")
+        name = pkg.delivery_key.rsplit("/", 1)[-1]
+        return Response(storage.get(pkg.delivery_key), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/connectors")
+def list_connectors() -> dict[str, Any]:
+    from ..services.connectors.base import RESERVED_CONNECTORS, configured_connectors
+
+    return {"configured": [{"name": c.name, "target": getattr(c, "url", "")} for c in configured_connectors()],
+            "reserved": [{"name": k, "description": v} for k, v in RESERVED_CONNECTORS.items()]}
+
+
+@router.get("/audit")
+def audit_log(entity_type: str | None = None, entity_id: str | None = None, limit: int = Query(200, ge=1, le=1000),
+              user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Hash-chained audit records (newest first) and a chain-integrity check."""
+    from sqlalchemy import select
+
+    from ..db.models_plm import AuditLogRow
+    from ..services.audit.hash_chain import verify_chain
+
+    user.require("audit.read")
+    with _session() as session:
+        q = select(AuditLogRow)
+        if entity_type:
+            q = q.where(AuditLogRow.entity_type == entity_type)
+        if entity_id:
+            q = q.where(AuditLogRow.entity_id == entity_id)
+        rows = session.execute(q.order_by(AuditLogRow.seq.desc()).limit(limit)).scalars().all()
+        check = verify_chain(session)
+        return {"chain_ok": check.ok, "chain_rows": check.rows, "first_bad_seq": check.first_bad_seq,
+                "records": [{"seq": r.seq, "ts": r.ts.isoformat(), "actor": r.actor, "action": r.action,
+                             "entity_type": r.entity_type, "entity_id": r.entity_id, "detail": r.detail,
+                             "hash": r.hash} for r in rows]}

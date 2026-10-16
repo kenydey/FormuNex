@@ -17,6 +17,7 @@ def _settings(**overrides):
         "datalab_api_url": "http://localhost:5001",
         "environment": "development",
         "api_auth_enabled": False,
+        "auth_jwt_secret": "k" * 48,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -82,6 +83,13 @@ def test_auth_disabled_in_production_warns_not_fails(tmp_path, monkeypatch):
     )
     assert len(warnings) == 1
     assert "unauthenticated" in warnings[0]
+
+
+def test_production_without_jwt_secret_warns(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    warnings = run_startup_checks(_settings(environment="production", api_auth_enabled=True, auth_jwt_secret=""))
+    assert len(warnings) == 1 and "FORMUNEX_AUTH_JWT_SECRET" in warnings[0]
 
 
 def test_multiple_errors_all_reported(tmp_path, monkeypatch):

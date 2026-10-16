@@ -215,6 +215,7 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
     if doc_type in ("sds", "label"):
         cls, classification_id = _classify_revision(session, rev, payload.get("properties"))
         extra["classification_id"] = classification_id
+        extra["classification_properties"] = payload.get("properties") or {}
         cas = [d["cas"] for d in cls["disclosure"] if d.get("cas")]
         if doc_type == "sds":
             props = {k: ({"value": v} if not isinstance(v, dict) else v)
@@ -287,6 +288,8 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
         raise DocumentError("产品修订版不存在")
     if rev.frozen_at is not None and doc_type != "coa":
         raise DocumentError("修订版已冻结（已发布），只能生成新的修订版文档")
+    if rev.state == "under_review" and doc_type != "coa":
+        raise DocumentError("修订版正在签批，签批结束（发布或驳回）前不能重新生成文档")
     payload = payload or {}
     content, extra = build_content(session, rev, doc_type, lang, payload)
     batch_id = extra.get("batch_id")
@@ -301,6 +304,8 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     doc_id = str(uuid.uuid4())
     if extra.get("classification_id"):
         content["meta"]["classification_id"] = extra["classification_id"]
+        # The release gate recomputes the classification from these to prove it is still current.
+        content["meta"]["classification_properties"] = extra["classification_properties"]
     if prev is not None:
         content["meta"]["diff_from_previous"] = {k: v for k, v in diff_documents(prev.content, content).items()
                                                  if k in ("major", "count")}

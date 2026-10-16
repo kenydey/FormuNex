@@ -34,6 +34,7 @@ from .api import doe, experiments, formulations, optimize, research, tasks
 from .api import search as search_router, ingest as ingest_router, chat as chat_router, settings as settings_router
 from .api import qc as qc_router
 from .api import pageindex as pageindex_router
+from .api import identity as identity_router
 from .api import plm as plm_router
 from .api import ops as ops_router
 from .api import session as session_router
@@ -298,6 +299,7 @@ app.include_router(chat_router.router, prefix="/api")
 app.include_router(kb_router.router, prefix="/api")
 app.include_router(pageindex_router.router, prefix="/api")
 app.include_router(plm_router.router, prefix="/api")
+app.include_router(identity_router.router, prefix="/api")
 app.include_router(embedding_models_router.router, prefix="/api")
 app.include_router(wiki_router.router, prefix="/api")
 app.include_router(session_router.router)

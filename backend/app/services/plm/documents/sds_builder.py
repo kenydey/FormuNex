@@ -447,4 +447,12 @@ def build_sds(ctx: SdsContext) -> dict:
     for gap in cls.get("data_gaps", []):
         if gap.get("severity") == "blocking":
             doc.warnings.append(f"分类数据缺口（阻断发布）：{gap['message']}")
+    # Language-neutral values the release gate compares across documents (方案 §5.5.10 checks 7-8).
+    doc.meta["facts"] = {
+        "pictograms": [p["code"] for p in cls.get("pictograms", [])], "signal_word": cls.get("signal_word"),
+        "h_codes": list(cls.get("h_codes", [])), "p_codes": list(cls.get("p_codes", [])),
+        "un_number": tr.get("un_number") if tr.get("regulated") else None,
+        "properties": {k: v.get("value") for k, v in ctx.properties.items()
+                       if isinstance(v, dict) and isinstance(v.get("value"), (int, float))},
+    }
     return doc.to_dict()

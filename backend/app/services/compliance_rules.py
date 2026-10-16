@@ -174,3 +174,8 @@ def check_compliance(form: Formulation) -> ComplianceResult:
             svhc_hits=svhc_hits,
         )
     return ComplianceResult(compliant=True, status="pass")
+
+
+def rohs_restricted(name: str, cas_no: str | None) -> str | None:
+    """The RoHS restricted-substance label for one ingredient, or None (release gate red line)."""
+    return _match_ingredient(name, cas_no, _ROHS_BY_CAS, _ROHS_BY_NAME)

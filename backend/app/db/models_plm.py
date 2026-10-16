@@ -186,6 +186,31 @@ class ReleasePackageRow(Base):
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # alembic 0060: the delivery ZIP (documents + manifest) and per-connector publish outcomes.
+    delivery_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    publish_results: Mapped[list] = mapped_column(_json, default=list)
+
+
+class ReleaseGateWaiverRow(Base):
+    """An approved exception to one waivable release-gate item (alembic 0060).
+
+    Only gate checks the plan marks waivable (objective targets, data gaps) accept
+    one; every waiver is e-signed and audited and shows up in the gate result.
+    """
+
+    __tablename__ = "release_gate_waivers"
+    __table_args__ = (UniqueConstraint("revision_id", "check_code", "item_key", name="uq_gate_waiver"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    revision_id: Mapped[str] = mapped_column(
+        ForeignKey("product_revisions.id", ondelete="CASCADE"), index=True
+    )
+    check_code: Mapped[str] = mapped_column(String(32))
+    item_key: Mapped[str] = mapped_column(String(200))
+    reason: Mapped[str] = mapped_column(Text)
+    waived_by: Mapped[str] = mapped_column(String(36))
+    signature_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class ApprovalFlowRow(Base):

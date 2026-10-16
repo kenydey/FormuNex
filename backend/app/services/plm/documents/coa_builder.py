@@ -146,5 +146,7 @@ def build_coa(ctx: CoaContext) -> dict:
           t(lang, "按 GB/T 8170-2008 进行数值修约与极限数值判定。", "Rounding and limit judgement per GB/T 8170-2008."), "template")
     c.add("company", t(lang, "签发单位", "Issued by"), doc.require(ctx.company.get("name"), "签发单位"), "company")
     doc.meta.update({"overall": overall, "issuable": overall == "PASS",
-                     "verdicts": dict(zip([s.metric for s in ctx.specs], verdicts, strict=True))})
+                     "verdicts": dict(zip([s.metric for s in ctx.specs], verdicts, strict=True)),
+                     "facts": {"properties": {r.metric: r.value for r in ctx.results
+                                              if isinstance(r.value, (int, float))}}})
     return doc.to_dict()

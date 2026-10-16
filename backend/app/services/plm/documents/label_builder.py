@@ -97,5 +97,7 @@ def build_label(ctx: LabelContext) -> dict:
         size.update(check)
         if not check["ok"]:
             doc.warnings.append(check["note"])
-    doc.meta.update({"size": size, "qr_payload": ctx.qr_payload})
+    doc.meta.update({"size": size, "qr_payload": ctx.qr_payload, "facts": {
+        "pictograms": [p["code"] for p in cls.get("pictograms", [])], "signal_word": cls.get("signal_word"),
+        "h_codes": list(cls.get("h_codes", [])), "p_codes": list(cls.get("label_p_codes", []))}})
     return doc.to_dict()

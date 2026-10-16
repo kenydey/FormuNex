@@ -1,4 +1,4 @@
-"""FormuNex migrations 0051-0059 on a database that predates them.
+"""FormuNex migrations 0051-0060 on a database that predates them.
 
 ``0001_baseline`` builds every *current* table with ``create_all``, so an
 upgrade from empty never exercises the frozen ``op.create_table`` bodies of
@@ -14,6 +14,7 @@ from tests.alembic_helpers import run_downgrade, run_upgrade
 
 NEW_TABLES = [
     # dependants first, so foreign keys never dangle while dropping
+    "user_sessions", "release_gate_waivers",
     "eln_links", "samples", "lab_tasks", "instruments", "test_methods",
     "e_signatures", "approval_steps", "approval_flows", "release_packages", "audit_log",
     "batch_qc_results", "regulatory_documents", "batches", "doc_templates",
@@ -34,7 +35,7 @@ NEW_COLUMNS = {
 
 
 def _strip_to_0050(url: str) -> None:
-    """Remove every object 0051-0059 own, leaving a FormuMind-era schema stamped at 0050."""
+    """Remove every object 0051-0060 own, leaving a FormuMind-era schema stamped at 0050."""
     engine = create_engine(url)
     try:
         with engine.begin() as conn:

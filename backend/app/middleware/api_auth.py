@@ -24,6 +24,10 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
     "/redoc",
     "/openapi.json",
     "/api/auth/status",
+    # Account sign-in: the credential is the password (login) or the httpOnly refresh cookie.
+    "/api/identity/login",
+    "/api/identity/refresh",
+    "/api/identity/logout",
 )
 # Public paths matched exactly only (sub-paths still require auth), so that
 # /health/detailed (which exposes infra details) stays behind auth.
@@ -187,6 +191,18 @@ def _owner_of_token(provided: str) -> str | None:
     return found
 
 
+def _is_valid_access_token(provided: str) -> bool:
+    from ..services.identity import tokens
+
+    if not tokens.looks_like_access_token(provided):
+        return False
+    try:
+        tokens.decode_access_token(provided)
+    except (tokens.InvalidToken, tokens.SigningKeyMissing):
+        return False
+    return True
+
+
 class ApiAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -198,6 +214,10 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
         if not settings.api_auth_enabled or _is_public_path(request.url.path):
             return await call_next(request)
         provided = _extract_token(request)
+        # Signed-in user (方案 §4.4): a valid access token passes; revocation and permissions are
+        # checked by the endpoint's principal dependency, which has a database session.
+        if provided and _is_valid_access_token(provided):
+            return await call_next(request)
         # Phase 2 多用户：JSON 映射中的任意 owner token
         if multi_user_enabled() and provided and _owner_of_token(provided) is not None:
             return await call_next(request)

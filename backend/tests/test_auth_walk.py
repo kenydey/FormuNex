@@ -23,6 +23,13 @@ PUBLIC = {
     ("GET", "/health"),
     ("GET", "/api/auth/status"),
 }
+# Account sign-in (M5): open at the gate because their credential is the password or the httpOnly refresh cookie;
+# each answers for itself (wrong password / no cookie → 401 from the endpoint, not the middleware).
+SIGN_IN = {
+    ("POST", "/api/identity/login"),
+    ("POST", "/api/identity/refresh"),
+    ("POST", "/api/identity/logout"),
+}
 DOCS = ("/docs", "/redoc", "/openapi.json")
 
 
@@ -56,7 +63,7 @@ def test_the_walk_covers_the_whole_api():
 def test_every_operation_but_the_public_ones_rejects_a_missing_token(client):
     offenders = []
     for method, path in _operations():
-        if (method, path) in PUBLIC:
+        if (method, path) in PUBLIC or (method, path) in SIGN_IN:
             continue
         response = client.request(method, _url(path))
         if response.status_code != 401:
@@ -67,7 +74,7 @@ def test_every_operation_but_the_public_ones_rejects_a_missing_token(client):
 def test_every_operation_but_the_public_ones_rejects_a_wrong_token(client):
     offenders = []
     for method, path in _operations():
-        if (method, path) in PUBLIC:
+        if (method, path) in PUBLIC or (method, path) in SIGN_IN:
             continue
         response = client.request(method, _url(path), headers={"Authorization": "Bearer not-the-token"})
         if response.status_code != 401:
@@ -78,6 +85,16 @@ def test_every_operation_but_the_public_ones_rejects_a_wrong_token(client):
 @pytest.mark.parametrize("method, path", sorted(PUBLIC))
 def test_the_public_operations_answer_without_a_token(client, method, path):
     assert client.request(method, path).status_code == 200
+
+
+def test_sign_in_passes_the_gate_and_answers_for_itself(client):
+    gate = "Invalid or missing API token"
+    login = client.post("/api/identity/login", json={"username": "nobody", "password": "x"})
+    assert login.status_code == 401 and login.json()["detail"] != gate
+    refresh = client.post("/api/identity/refresh")
+    assert refresh.status_code == 401 and refresh.json()["detail"] != gate
+    assert client.post("/api/identity/logout").status_code == 200
+    assert {(m, p) for m, p in _operations() if p.startswith("/api/identity/") and (m, p) not in SIGN_IN}
 
 
 @pytest.mark.parametrize("path", DOCS)
@@ -113,6 +130,7 @@ def test_a_valid_token_is_not_rejected_anywhere(client):
         if method != "GET" or "{" in path:
             continue
         response = client.get(_url(path), headers={"Authorization": f"Bearer {TOKEN}"})
-        if response.status_code == 401:
+        # Past the gate, account endpoints (M5) refuse the service key because it is not a person.
+        if response.status_code == 401 and not str(response.json().get("detail", "")).startswith("需要登录账号"):
             rejected.append(path)
     assert not rejected, rejected
