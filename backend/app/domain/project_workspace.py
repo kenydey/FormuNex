@@ -67,6 +67,11 @@ class ProjectWorkspace(BaseModel):
     # W1-3 (P0-5): 项目级 agent 上下文 —— 存于 SQLite JSON payload, 无需迁移;
     #   为空则所有 prompt 注入逻辑跳过(向后兼容旧数据)。
     agent_context: str = ""
+    # FormuNex W2 (方案 §5.2): the project's specification contract beyond the optimisation objectives —
+    # process window, compliance red lines (substances, VOC limit, forbidden pictograms / signal word),
+    # release specs (COA) and acceptance targets (release gate). Copied into a product revision's
+    # ``spec_snapshot`` when a formulation is frozen.
+    spec_contract: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectSummary(BaseModel):

@@ -1,0 +1,4 @@
+.fx-grid revo-grid { height: 100%; }
+.fx-grid revo-grid .rgRow.redline { background: rgba(255, 77, 79, 0.15); }
+.fx-grid revo-grid .rgRow.locked { background: rgba(22, 119, 255, 0.06); }
+.fx-row-bad td { background: rgba(255, 77, 79, 0.12) !important; }

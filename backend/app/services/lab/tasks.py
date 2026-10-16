@@ -195,12 +195,13 @@ def task_dict(session: Session, t: LabTaskRow, *, with_measurements: bool = Fals
            "due_at": t.due_at.isoformat() if t.due_at else None,
            "sample_no": sample.sample_no if sample else None,
            "experiment_id": sample.experiment_id if sample else None}
+    if sample is not None and sample.experiment_id is not None:
+        exp = session.get(ExperimentRow, sample.experiment_id)
+        out["measured"] = exp.measured if exp else {}  # reviewed values only (see measurements.sync_mirror)
     if with_measurements and sample is not None:
         from .measurements import measurement_dict
 
         rows = session.execute(select(MeasurementRow).where(MeasurementRow.experiment_id == sample.experiment_id)
                                .order_by(MeasurementRow.created_at)).scalars().all()
         out["measurements"] = [measurement_dict(r) for r in rows]
-        exp = session.get(ExperimentRow, sample.experiment_id)
-        out["measured"] = exp.measured if exp else {}
     return out
