@@ -70,6 +70,16 @@ file_ingest = [
     "python-docx>=1.1",
     "trafilatura>=1.8",
 ]
+# FormuNex PLM documents (SDS / TDS / COA / labels): pure-Python PDF (ReportLab, no system
+# libraries), Word (python-docx, docxtpl templates), vector GHS pictograms, label QR codes.
+documents = [
+    "reportlab>=4.0",
+    "svglib>=1.5",
+    "python-docx>=1.1",
+    "docxtpl>=0.16",
+    "Jinja2>=3.1",
+    "segno>=1.6",
+]
 # P5 report export (DOCX / PDF / PPTX). Soft-imported; Hub falls back to Markdown.
 report_export = [
     "python-docx>=1.1",

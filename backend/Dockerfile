@@ -40,7 +40,7 @@ RUN pip install --upgrade pip setuptools wheel \
 COPY pyproject.toml README.md alembic.ini ./
 COPY app ./app
 RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu \
-    -e ".[llm,science,optimize,embedding,bo,pydoe,baybe,file_ingest,intel,export,colbert,color,dev,postgres,heavy,crag]" \
+    -e ".[llm,science,optimize,embedding,bo,pydoe,baybe,file_ingest,intel,export,colbert,color,dev,postgres,heavy,crag,documents]" \
     && pip install --extra-index-url https://download.pytorch.org/whl/cpu \
     "pymupdf4llm==1.28.0" "PyMuPDF==1.28.0" docling marker-pdf mineru-open-sdk \
     && pip uninstall -y surya-ocr 2>/dev/null; echo "surya-ocr removed (CPU VPS)"

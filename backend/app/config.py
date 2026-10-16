@@ -945,6 +945,16 @@ class Settings(BaseSettings):
     # 每篇文档的寻址预算：最多跳数，以及交给 LLM 的节点正文总字符数（约 16k token）。
     pageindex_max_hops: int = 6
     pageindex_max_input_chars: int = 48000
+    # PLM documents (方案 §5.5.4-5.5.9): rendered PDF / Word files and uploaded templates.
+    plm_storage_dir: str = "./data/plm"
+    # TrueType CJK font embedded in generated PDFs; empty = search system fonts (see render/fonts.py).
+    plm_doc_font_path: str = ""
+    # Supplier block of SDS section 1 / labels / COA (overridable per request).
+    plm_company_name: str = ""
+    plm_company_address: str = ""
+    plm_company_phone: str = ""
+    plm_company_email: str = ""
+    plm_emergency_phone: str = ""
     # S-1: 跨语言查询扩展。中文查询自动翻译为英文并行检索，结果融合。
     # 成本约 ¥0.00031/中文查询，失败自动降级。默认开启（2026-10-11 Cheng 批准）。
     crosslingual_expand_enabled: bool = True
