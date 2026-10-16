@@ -76,7 +76,9 @@ class DocumentContent:
         return {
             "doc_type": self.doc_type, "lang": self.lang, "title": self.title, "header": self.header,
             "sections": [s.to_dict() for s in self.sections],
-            "validation": {"missing": self.missing, "warnings": self.warnings}, "meta": self.meta,
+            # The same statement can appear in several sections; report each problem once.
+            "validation": {"missing": list(dict.fromkeys(self.missing)), "warnings": list(dict.fromkeys(self.warnings))},
+            "meta": self.meta,
         }
 
 

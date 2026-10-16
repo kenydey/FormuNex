@@ -26,7 +26,7 @@ function RunsTable({ runs, screen }: { runs: Run[]; screen?: ScreenRun[] }) {
   const byRun = new Map((screen ?? []).map((s) => [s.run, s]));
   const keys = Object.keys(runs[0]).filter((k) => !k.startsWith("_"));
   return (
-    <Table size="small" rowKey={(r, i) => String(r._run ?? i)} dataSource={runs} pagination={false} scroll={{ x: true }}
+    <Table size="small" rowKey="_key" dataSource={runs.map((r, i) => ({ ...r, _key: String(r._run ?? i) }))} pagination={false} scroll={{ x: true }}
       rowClassName={(r) => (byRun.get(r._run as number)?.ok === false ? "fx-row-bad" : "")}
       columns={[
         { title: "#", render: (_v, r, i) => r._run ?? i + 1, width: 50 },
@@ -176,7 +176,7 @@ export default function DoeDesignerPage() {
             <Descriptions.Item label={t("doe.max_var", "最大预测方差")}>{Number(model.max_prediction_variance).toFixed(2)}</Descriptions.Item>
             <Descriptions.Item label={t("doe.runs", "试验次数")}>{String(model.runs)}</Descriptions.Item>
           </Descriptions>}
-          {(result.data.notes as string[] | undefined)?.map((n) => <Alert key={n} type="info" showIcon message={n} style={{ marginBottom: 8 }} />)}
+          {(result.data.notes as string[] | undefined)?.map((n, i) => <Alert key={i} type="info" showIcon message={n} style={{ marginBottom: 8 }} />)}
           {screen && screen.flagged.length > 0 && <Alert type="warning" showIcon style={{ marginBottom: 8 }}
             message={t("doe.flagged", "{{n}} 个试验点命中合规红线：{{runs}}", { n: screen.flagged.length, runs: screen.flagged.join(", ") })} />}
           <ErrorAlert error={run.error} />

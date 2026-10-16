@@ -45,7 +45,7 @@ export default function ProjectsPage() {
         ]}
       />
       <Modal open={open} title={t("spec.new_project", "新建项目")} onCancel={() => setOpen(false)} confirmLoading={create.isPending}
-        onOk={async () => create.mutate(await form.validateFields())} destroyOnClose>
+        onOk={async () => create.mutate(await form.validateFields())} destroyOnHidden>
         <Form form={form} layout="vertical" initialValues={{ domain: "anticorrosion_coating" }}>
           <Form.Item name="title" label={t("spec.project", "项目")} rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="domain" label={t("spec.domain", "产品领域")}>

@@ -7,7 +7,7 @@ export function ChangePasswordModal({ open, onClose }: { open: boolean; onClose:
   const { t } = useTranslation();
   const [form] = Form.useForm();
   return (
-    <Modal open={open} title={t("shell.change_password", "修改密码")} onCancel={onClose} destroyOnClose
+    <Modal open={open} title={t("shell.change_password", "修改密码")} onCancel={onClose} destroyOnHidden
       onOk={async () => {
         const v = await form.validateFields();
         try {

@@ -28,7 +28,7 @@ export function WinningModal({ experimentId, open, onClose }: { experimentId: nu
     onError: (e) => message.error(errorText(e)),
   });
   return (
-    <Modal open={open} title={t("winning.title", "设为定型配方")} onCancel={onClose} confirmLoading={win.isPending} destroyOnClose
+    <Modal open={open} title={t("winning.title", "设为定型配方")} onCancel={onClose} confirmLoading={win.isPending} destroyOnHidden
       onOk={async () => win.mutate(await form.validateFields())}>
       <Form form={form} layout="vertical">
         <Form.Item label={t("winning.experiment", "定型实验")}>#{experimentId}</Form.Item>

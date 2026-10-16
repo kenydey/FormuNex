@@ -58,7 +58,7 @@ export default function UsersPage() {
       />
       <Modal open={creating || !!editing} title={editing ? t("users.edit_roles", "调整角色") : t("users.new", "新建用户")}
         onCancel={() => { setCreating(false); setEditing(null); }} confirmLoading={save.isPending}
-        onOk={async () => save.mutate(await form.validateFields())} destroyOnClose>
+        onOk={async () => save.mutate(await form.validateFields())} destroyOnHidden>
         <Form form={form} layout="vertical">
           {!editing && <>
             <Form.Item name="username" label={t("users.username", "用户名")} rules={[{ required: true }]}><Input /></Form.Item>

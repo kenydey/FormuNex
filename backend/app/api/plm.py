@@ -208,7 +208,7 @@ def _doc_summary(row) -> dict[str, Any]:
     v = (row.content or {}).get("validation") or {}
     return {"id": row.id, "revision_id": row.revision_id, "batch_id": row.batch_id, "doc_type": row.doc_type,
             "lang": row.lang, "version_no": row.version_no, "status": row.status, "content_hash": row.content_hash,
-            "supersedes_id": row.supersedes_id, "created_at": row.created_at,
+            "supersedes_id": row.supersedes_id, "created_at": row.created_at, "created_by": row.created_by,
             "has_pdf": bool(row.rendered_pdf_key), "has_docx": bool(row.rendered_docx_key),
             "missing": v.get("missing", []), "warnings": v.get("warnings", [])}
 
@@ -638,3 +638,195 @@ def property_candidates(revision_id: str) -> dict[str, Any]:
             return sds_property_candidates(session, revision_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="产品修订版不存在") from None
+
+
+# --------------------------------------------------------------------------- F4: lists and label layouts for the web UI
+
+
+@router.get("/products")
+def list_products(q: str | None = None, limit: int = Query(200, ge=1, le=1000)) -> list[dict[str, Any]]:
+    from sqlalchemy import func, or_, select
+
+    from ..db.models_plm import ProductRevisionRow, ProductRow
+
+    with _session() as session:
+        stmt = select(ProductRow)
+        if q:
+            like = f"%{q.strip()}%"
+            stmt = stmt.where(or_(ProductRow.code.ilike(like), ProductRow.name_zh.like(like), ProductRow.name_en.ilike(like)))
+        rows = session.execute(stmt.order_by(ProductRow.updated_at.desc()).limit(limit)).scalars().all()
+        counts = dict(session.execute(select(ProductRevisionRow.product_id, func.count()).where(
+            ProductRevisionRow.product_id.in_([r.id for r in rows])).group_by(ProductRevisionRow.product_id)).all()) if rows else {}
+        return [{"id": r.id, "code": r.code, "name_zh": r.name_zh, "name_en": r.name_en, "project_id": r.project_id,
+                 "lifecycle_state": r.lifecycle_state, "revisions": counts.get(r.id, 0), "updated_at": r.updated_at}
+                for r in rows]
+
+
+@router.get("/revisions/{revision_id}")
+def get_revision(revision_id: str) -> dict[str, Any]:
+    from ..db.models_plm import ProductRevisionRow, ProductRow
+
+    with _session() as session:
+        rev = session.get(ProductRevisionRow, revision_id)
+        if rev is None:
+            raise HTTPException(status_code=404, detail="产品修订版不存在")
+        p = session.get(ProductRow, rev.product_id)
+        return {"id": rev.id, "rev": rev.rev, "state": rev.state, "frozen_at": rev.frozen_at,
+                "formulation_version_id": rev.formulation_version_id, "winning_experiment_id": rev.winning_experiment_id,
+                "spec_snapshot": rev.spec_snapshot or {}, "created_at": rev.created_at,
+                "product": {"id": p.id, "code": p.code, "name_zh": p.name_zh, "name_en": p.name_en,
+                            "project_id": p.project_id, "lifecycle_state": p.lifecycle_state}}
+
+
+class RevisionSpecIn(BaseModel):
+    spec_snapshot: dict[str, Any]
+
+
+@router.put("/revisions/{revision_id}/spec")
+def update_revision_spec(revision_id: str, body: RevisionSpecIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Edit release specs / acceptance / red lines of a revision that is not yet submitted."""
+    from ..db.models_plm import ProductRevisionRow, ProductRow
+    from ..services.audit import hash_chain
+
+    with _session() as session:
+        rev = session.get(ProductRevisionRow, revision_id)
+        if rev is None:
+            raise HTTPException(status_code=404, detail="产品修订版不存在")
+        user.require("spec.write", session.get(ProductRow, rev.product_id).project_id)
+        if rev.state not in ("draft", "candidate"):
+            raise HTTPException(status_code=409, detail=f"修订版状态为 {rev.state}，规格已冻结")
+        before = rev.spec_snapshot or {}
+        rev.spec_snapshot = body.spec_snapshot
+        hash_chain.append(session, actor=user.id, action="revision.spec", entity_type="product_revision",
+                          entity_id=rev.id, before=before, after=body.spec_snapshot)
+        session.commit()
+        return {"id": rev.id, "spec_snapshot": rev.spec_snapshot}
+
+
+@router.get("/packages")
+def list_all_packages(status: str | None = None, limit: int = Query(100, ge=1, le=500)) -> list[dict[str, Any]]:
+    """Release packages (newest first) with product, revision and the step waiting for a signature."""
+    from sqlalchemy import select
+
+    from ..db.models_plm import ApprovalFlowRow, ApprovalStepRow, ProductRevisionRow, ProductRow, ReleasePackageRow
+
+    with _session() as session:
+        q = select(ReleasePackageRow)
+        if status:
+            q = q.where(ReleasePackageRow.status == status)
+        out = []
+        for pkg in session.execute(q.order_by(ReleasePackageRow.created_at.desc()).limit(limit)).scalars():
+            rev = session.get(ProductRevisionRow, pkg.revision_id)
+            product = session.get(ProductRow, rev.product_id) if rev else None
+            flow = session.execute(select(ApprovalFlowRow).where(
+                ApprovalFlowRow.subject_type == "release_package", ApprovalFlowRow.subject_id == pkg.id)
+                .order_by(ApprovalFlowRow.created_at.desc()).limit(1)).scalar_one_or_none()
+            step = session.execute(select(ApprovalStepRow).where(
+                ApprovalStepRow.flow_id == flow.id, ApprovalStepRow.seq == flow.current_step)).scalar_one_or_none() \
+                if flow is not None and flow.status == "pending" else None
+            out.append({"id": pkg.id, "status": pkg.status, "revision_id": pkg.revision_id,
+                        "rev": rev.rev if rev else None, "product_id": product.id if product else None,
+                        "product_code": product.code if product else None, "package_hash": pkg.package_hash,
+                        "created_at": pkg.created_at, "released_at": pkg.released_at,
+                        "current_step": {"seq": step.seq, "role": step.role_code} if step else None})
+        return out
+
+
+class LabelTemplateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    lang: Literal["zh-CN", "en-US"] = "zh-CN"
+    is_default: bool = True
+    layout: dict[str, Any]
+
+
+class LabelPreviewIn(BaseModel):
+    layout: dict[str, Any]
+    document_id: str | None = None  # a generated label whose content fills the layout
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+_SAMPLE_LABEL = {
+    "doc_type": "label", "lang": "zh-CN", "title": "化学品安全标签", "meta": {"qr_payload": "FORMUNEX-SAMPLE"},
+    "sections": [{"key": "label", "fields": [
+        {"key": "product_name", "value": "示例产品 FX-100 环氧底漆"},
+        {"key": "ingredients", "value": ["二甲苯", "环氧树脂"]},
+        {"key": "pictograms", "value": ["GHS02", "GHS07"]},
+        {"key": "signal_word", "value": "警告"},
+        {"key": "hazard_statements", "value": [{"code": "H226", "text": "易燃液体和蒸气"},
+                                               {"code": "H315", "text": "造成皮肤刺激"}]},
+        {"key": "precautionary_statements", "value": [{"code": "P210", "text": "远离热源、火花、明火、热表面。禁止吸烟。"},
+                                                      {"code": "P280", "text": "戴防护手套/穿防护服/戴防护眼罩/戴防护面具。"}]},
+        {"key": "supplier", "value": "方枢示例化工有限公司 上海市示例路 1 号 021-0000"},
+        {"key": "emergency_phone", "value": "021-0001"},
+        {"key": "sds_reference", "value": "请参阅化学品安全技术说明书"},
+    ]}],
+}
+
+
+@router.get("/label-templates")
+def list_label_templates(lang: str | None = None) -> list[dict[str, Any]]:
+    from sqlalchemy import select
+
+    from ..db.models_plm import DocTemplateRow
+
+    with _session() as session:
+        q = select(DocTemplateRow).where(DocTemplateRow.engine == "label_json")
+        if lang:
+            q = q.where(DocTemplateRow.lang == lang)
+        return [{"id": r.id, "name": r.name, "lang": r.lang, "version": r.version, "is_default": r.is_default,
+                 "created_at": r.created_at} for r in session.execute(q.order_by(DocTemplateRow.created_at.desc())).scalars()]
+
+
+@router.get("/label-templates/{template_id}")
+def get_label_template(template_id: str) -> dict[str, Any]:
+    from ..db.models_plm import DocTemplateRow
+    from ..services.plm.documents import service as docs
+
+    with _session() as session:
+        row = session.get(DocTemplateRow, template_id)
+        if row is None or row.engine != "label_json":
+            raise HTTPException(status_code=404, detail="标签版式不存在")
+        _id, layout = docs.label_layout(session, row.lang, row.id)
+        return {"id": row.id, "name": row.name, "lang": row.lang, "version": row.version, "is_default": row.is_default,
+                "layout": layout}
+
+
+@router.post("/label-templates", status_code=201)
+def save_label_template(body: LabelTemplateIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm.documents import service as docs
+    from ..services.plm.render.label_layout import LayoutError
+
+    if not (user.principal.can("plm.document.write") or user.principal.can("admin.templates")):
+        raise HTTPException(status_code=403, detail="缺少权限 plm.document.write")
+    with _session() as session:
+        try:
+            row = docs.save_label_template(session, name=body.name, lang=body.lang, layout=body.layout,
+                                           is_default=body.is_default, created_by=user.id)
+        except LayoutError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return {"id": row.id, "name": row.name, "version": row.version, "is_default": row.is_default}
+
+
+@router.post("/label-templates/preview")
+def preview_label_layout(body: LabelPreviewIn):
+    """Render a layout with a real label's content (or sample content) to PDF, without saving anything."""
+    from fastapi.responses import Response
+
+    from ..db.models_plm import RegulatoryDocumentRow
+    from ..services.plm.render.label_layout import LayoutError, render_layout_pdf
+
+    content = _SAMPLE_LABEL
+    if body.document_id:
+        with _session() as session:
+            doc = session.get(RegulatoryDocumentRow, body.document_id)
+            if doc is None or doc.doc_type != "label":
+                raise HTTPException(status_code=404, detail="标签文档不存在")
+            content = doc.content
+    try:
+        pdf, info = render_layout_pdf(content, body.layout, body.variables)
+    except LayoutError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return Response(pdf, media_type="application/pdf", headers={
+        "X-Label-Overflow": ",".join(info["overflow_elements"]),
+        "X-Label-Missing": ",".join(info["missing_elements"])})

@@ -34,7 +34,7 @@ export async function refreshAccessToken(): Promise<string | null> {
   if (!refreshing) {
     refreshing = (async () => {
       try {
-        const res = await fetch("/api/identity/refresh", { method: "POST", credentials: "same-origin" });
+        const res = await fetch(new Request(absolute("/api/identity/refresh"), { method: "POST", credentials: "same-origin" }));
         if (!res.ok) {
           setAccessToken(null);
           return null;
@@ -55,9 +55,13 @@ export async function refreshAccessToken(): Promise<string | null> {
 
 const NO_RETRY = ["/api/identity/login", "/api/identity/refresh", "/api/identity/logout"];
 
+function absolute(input: string | URL): URL {
+  return new URL(input, window.location.origin);
+}
+
 /** fetch with the bearer token; on 401 refresh once and retry. */
 export async function authFetch(input: Request | string | URL, init?: RequestInit): Promise<Response> {
-  const request = input instanceof Request ? input : new Request(input, init);
+  const request = input instanceof Request ? input : new Request(absolute(input), init);
   const attempt = (token: string | null) => {
     const r = request.clone();
     const headers = new Headers(r.headers);

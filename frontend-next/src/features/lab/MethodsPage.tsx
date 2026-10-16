@@ -70,7 +70,7 @@ export default function MethodsPage() {
             ]} />
         ) },
       ]} />
-      <Modal open={!!editM} title={t("methods.title", "检测方法")} onCancel={() => setEditM(null)} confirmLoading={saveM.isPending} destroyOnClose
+      <Modal open={!!editM} title={t("methods.title", "检测方法")} onCancel={() => setEditM(null)} confirmLoading={saveM.isPending} destroyOnHidden
         onOk={async () => {
           const v = await mForm.validateFields();
           saveM.mutate({ ...v, rounding: v.decimals == null ? {} : { decimals: v.decimals } });
@@ -87,7 +87,7 @@ export default function MethodsPage() {
           <Form.Item name="active" label={t("methods.active", "启用")} valuePropName="checked"><Switch /></Form.Item>
         </Form>
       </Modal>
-      <Modal open={!!editI} title={t("instruments.title", "仪器")} onCancel={() => setEditI(null)} confirmLoading={saveI.isPending} destroyOnClose
+      <Modal open={!!editI} title={t("instruments.title", "仪器")} onCancel={() => setEditI(null)} confirmLoading={saveI.isPending} destroyOnHidden
         onOk={async () => {
           const v = await iForm.validateFields();
           saveI.mutate({ ...v, calibrated_at: v.calibrated_at?.toISOString() ?? null, calibration_due: v.calibration_due?.toISOString() ?? null });

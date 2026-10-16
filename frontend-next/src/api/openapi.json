@@ -5259,14 +5259,14 @@
     "summary": "Create Product",
     "operationId": "create_product_api_plm_products_post",
     "requestBody": {
+     "required": true,
      "content": {
       "application/json": {
        "schema": {
         "$ref": "#/components/schemas/ProductIn"
        }
       }
-     },
-     "required": true
+     }
     },
     "responses": {
      "201": {
@@ -5274,9 +5274,73 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response Create Product Api Plm Products Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Products",
+    "operationId": "list_products_api_plm_products_get",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 1000,
+       "minimum": 1,
+       "default": 200,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response List Products Api Plm Products Get"
         }
        }
       }
@@ -6463,6 +6527,351 @@
          "additionalProperties": true,
          "title": "Response Property Candidates Api Plm Revisions  Revision Id  Property Candidates Get"
         }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/revisions/{revision_id}": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Get Revision",
+    "operationId": "get_revision_api_plm_revisions__revision_id__get",
+    "parameters": [
+     {
+      "name": "revision_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Revision Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Revision Api Plm Revisions  Revision Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/revisions/{revision_id}/spec": {
+   "put": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Update Revision Spec",
+    "description": "Edit release specs / acceptance / red lines of a revision that is not yet submitted.",
+    "operationId": "update_revision_spec_api_plm_revisions__revision_id__spec_put",
+    "parameters": [
+     {
+      "name": "revision_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Revision Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RevisionSpecIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Update Revision Spec Api Plm Revisions  Revision Id  Spec Put"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/packages": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List All Packages",
+    "description": "Release packages (newest first) with product, revision and the step waiting for a signature.",
+    "operationId": "list_all_packages_api_plm_packages_get",
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 500,
+       "minimum": 1,
+       "default": 100,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response List All Packages Api Plm Packages Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/label-templates": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Label Templates",
+    "operationId": "list_label_templates_api_plm_label_templates_get",
+    "parameters": [
+     {
+      "name": "lang",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Lang"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response List Label Templates Api Plm Label Templates Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Save Label Template",
+    "operationId": "save_label_template_api_plm_label_templates_post",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LabelTemplateIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Save Label Template Api Plm Label Templates Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/label-templates/{template_id}": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Get Label Template",
+    "operationId": "get_label_template_api_plm_label_templates__template_id__get",
+    "parameters": [
+     {
+      "name": "template_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Template Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Label Template Api Plm Label Templates  Template Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/label-templates/preview": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Preview Label Layout",
+    "description": "Render a layout with a real label's content (or sample content) to PDF, without saving anything.",
+    "operationId": "preview_label_layout_api_plm_label_templates_preview_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LabelPreviewIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
        }
       }
      },
@@ -26864,6 +27273,71 @@
     "title": "LLMSettingsUpdate",
     "description": "Accept both snake_case and camelCase from the frontend."
    },
+   "LabelPreviewIn": {
+    "properties": {
+     "layout": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Layout"
+     },
+     "document_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Document Id"
+     },
+     "variables": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Variables"
+     }
+    },
+    "type": "object",
+    "required": [
+     "layout"
+    ],
+    "title": "LabelPreviewIn"
+   },
+   "LabelTemplateIn": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Name"
+     },
+     "lang": {
+      "type": "string",
+      "enum": [
+       "zh-CN",
+       "en-US"
+      ],
+      "title": "Lang",
+      "default": "zh-CN"
+     },
+     "is_default": {
+      "type": "boolean",
+      "title": "Is Default",
+      "default": true
+     },
+     "layout": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Layout"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "layout"
+    ],
+    "title": "LabelTemplateIn"
+   },
    "LegacySnapshotPayload": {
     "properties": {
      "id": {
@@ -32608,6 +33082,20 @@
     },
     "type": "object",
     "title": "RevisionIn"
+   },
+   "RevisionSpecIn": {
+    "properties": {
+     "spec_snapshot": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Spec Snapshot"
+     }
+    },
+    "type": "object",
+    "required": [
+     "spec_snapshot"
+    ],
+    "title": "RevisionSpecIn"
    },
    "RoCrateExportRequest": {
     "properties": {

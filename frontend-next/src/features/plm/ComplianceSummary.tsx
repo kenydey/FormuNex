@@ -32,10 +32,10 @@ export function ComplianceSummary({ cls, compact }: { cls: Classification; compa
       <Space wrap><SignalWord word={cls.signal_word} />{cls.hazards.map((h) => <HazardTag key={h.hazard_class + h.category} hazardClass={h.hazard_class} category={h.category} />)}</Space>
       {!cls.hazards.length && <Typography.Text type="secondary">{t("ghs.not_classified", "根据 GB 30000 计算，不分类")}</Typography.Text>}
       <List size="small" dataSource={cls.h_codes} renderItem={(c) => <List.Item style={{ padding: "2px 0" }}><Tag>{c}</Tag>{text(c)}</List.Item>} />
-      {blocking.length > 0 && <Alert type="error" showIcon message={t("ghs.blocking_gaps", "阻断性数据缺口")} description={blocking.map((g) => <div key={g.message}>{g.message}</div>)} />}
+      {blocking.length > 0 && <Alert type="error" showIcon message={t("ghs.blocking_gaps", "阻断性数据缺口")} description={blocking.map((g, i) => <div key={i}>{g.message}</div>)} />}
       <Collapse size="small" items={[
         { key: "gaps", label: t("ghs.data_gaps", "数据缺口（{{n}}）", { n: cls.data_gaps.length }),
-          children: cls.data_gaps.map((g) => <div key={g.code + g.message}><Tag color={g.severity === "blocking" ? "red" : "gold"}>{g.code}</Tag>{g.message}</div>) },
+          children: cls.data_gaps.map((g, i) => <div key={i}><Tag color={g.severity === "blocking" ? "red" : "gold"}>{g.code}</Tag>{g.message}</div>) },
         { key: "contrib", label: t("ghs.contributors", "贡献组分（SDS 第 3 部分）"),
           children: (cls.disclosure ?? []).map((d) => <div key={d.name}>{d.name}（{d.cas ?? "—"}，{d.pct}%）{d.hazards.map((h) => <Tag key={h.hazard_class}>{h.h_code ?? h.hazard_class}</Tag>)}</div>) },
         { key: "transport", label: t("ghs.transport", "运输分类"), children: cls.transport?.regulated

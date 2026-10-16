@@ -57,6 +57,11 @@ _LAB = (
     "the Ant Design frontend rewrite (plan §3.4, F3)"
 )
 
+_NEXT = (
+    "called by the Ant Design rewrite in frontend-next/ (plan §3.4, F2/F4: product list, spec studio, sign-off "
+    "queue, label designer); this test scans the legacy frontend until the one-shot cut-over"
+)
+
 # Documented backend routes the frontend does not call, and why that is fine.
 API_ONLY_ROUTES: dict[str, str] = {
     "/api/artifacts/versions/{}": "version metadata; screens read versions through the lineage listing and the diff",
@@ -143,6 +148,12 @@ API_ONLY_ROUTES: dict[str, str] = {
     "/api/lab/eln/conflicts/{}/resolve": _LAB,
     "/api/cockpit/conformal/from-lab": _DOE_LAB,
     "/api/plm/revisions/{}/property-candidates": _LAB,
+    "/api/plm/label-templates": _NEXT,
+    "/api/plm/label-templates/preview": _NEXT,
+    "/api/plm/label-templates/{}": _NEXT,
+    "/api/plm/packages": _NEXT,
+    "/api/plm/revisions/{}": _NEXT,
+    "/api/plm/revisions/{}/spec": _NEXT,
     "/api/kb/sources/{}/toc-tree": _PAGEINDEX,
     "/api/kb/sources/{}/toc-tree/rebuild": _PAGEINDEX,
     "/api/kb/golden-questions": "lists the curated golden retrieval set; the quality screen only runs it (/api/kb/golden-eval/run)",

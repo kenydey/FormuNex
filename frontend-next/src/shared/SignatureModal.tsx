@@ -52,7 +52,7 @@ export function SignatureProvider({ children }: { children: ReactNode }) {
           const v = await form.validateFields();
           close({ password: v.password, comment: v.comment ?? "" });
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Alert type="info" showIcon style={{ marginBottom: 16 }} message={req?.meaning} />
         <Form form={form} layout="vertical">

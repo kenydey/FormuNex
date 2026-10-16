@@ -85,7 +85,7 @@ export default function TaskDetailPage() {
             <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>{t("measure.import", "导入仪器文件")}</Button>
           </Space>}>
           {!editable && <Alert type="info" showIcon message={t("measure.locked", "只有领取人在任务进行中时可以录入")} style={{ marginBottom: 8 }} />}
-          {warnings.length > 0 && <Alert type="warning" showIcon closable style={{ marginBottom: 8 }} message={warnings.map((w) => <div key={w}>{w}</div>)} onClose={() => setWarnings([])} />}
+          {warnings.length > 0 && <Alert type="warning" showIcon closable style={{ marginBottom: 8 }} message={warnings.map((w, i) => <div key={i}>{w}</div>)} onClose={() => setWarnings([])} />}
           {editable && entries.length > 0 && (
             <>
               <Table size="small" pagination={false} rowKey="metric" dataSource={entries} columns={[
@@ -157,7 +157,7 @@ function ImportModal({ open, onClose, methods, instruments, onDone }: { open: bo
   });
   return (
     <Modal open={open} title={t("measure.import", "导入仪器文件")} onCancel={onClose} confirmLoading={submit.isPending}
-      okButtonProps={{ disabled: !file }} onOk={async () => submit.mutate(await form.validateFields())} destroyOnClose>
+      okButtonProps={{ disabled: !file }} onOk={async () => submit.mutate(await form.validateFields())} destroyOnHidden>
       <Form form={form} layout="vertical">
         <Form.Item label={t("measure.file", "文件（CSV / Excel，样品号须与任务单一致）")}>
           <Upload beforeUpload={(f) => { setFile(f); return false; }} maxCount={1} onRemove={() => setFile(null)}>

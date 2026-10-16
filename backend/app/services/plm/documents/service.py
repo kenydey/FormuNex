@@ -232,12 +232,17 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
                 band_edges=tuple(payload.get("band_edges") or DEFAULT_EDGES), lang=lang))
         else:
             label = payload.get("label") or {}
+            layout_id, layout = label_layout(session, lang, label.get("template_id"))
+            if layout is not None:
+                label = {**label, "size_mm": layout["size_mm"]}  # the designed size is the printed size
             content = build_label(LabelContext(
                 product=prod, company=company, classification=cls, statements=cls["statements"],
                 hazardous_ingredients=label.get("hazardous_ingredients") or [
                     d["name"] for d in cls["disclosure"] if not d.get("trade_secret")][:4],
                 container_volume_l=label.get("container_volume_l"),
                 size_mm=tuple(label.get("size_mm") or (100, 150)), qr_payload=label.get("qr_payload"), lang=lang))
+            content["meta"]["layout_template_id"] = layout_id
+            content["meta"]["variables"] = {k: v for k, v in (label.get("variables") or {}).items() if v not in (None, "")}
     elif doc_type == "tds":
         tds = payload.get("tds") or {}
         content = build_tds(TdsContext(
@@ -311,7 +316,19 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
                                                  if k in ("major", "count")}
 
     if doc_type == "label":
-        pdf, info = render_label_pdf(content)
+        layout_id = content["meta"].get("layout_template_id")
+        _id, layout = label_layout(session, lang, layout_id) if layout_id else (None, None)
+        if layout is not None:
+            from ..render.label_layout import render_layout_pdf
+
+            pdf, info = render_layout_pdf(content, layout, content["meta"].get("variables"))
+            if info["missing_elements"]:
+                content["validation"]["warnings"].append(
+                    "标签版式缺少 GB 15258 要素：" + "、".join(info["missing_elements"]))
+        else:
+            pdf, info = render_label_pdf(content)
+        if info.get("overflow"):
+            content["validation"]["warnings"].append("标签内容超出版面（文字被截断），请调整版式或增大标签尺寸")
         docx_key = None
     else:
         pdf, info = render_pdf(content)
@@ -352,3 +369,46 @@ def save_template(session: Session, *, doc_type: str, lang: str, name: str, data
     session.add(row)
     session.flush()
     return row
+
+
+# --------------------------------------------------------------------------- label layouts (label designer)
+
+
+def save_label_template(session: Session, *, name: str, lang: str, layout: dict, is_default: bool = True,
+                        created_by: str | None = None) -> DocTemplateRow:
+    import json
+
+    from ..render.label_layout import validate_layout
+
+    clean = validate_layout(layout)
+    version = (session.execute(select(func.max(DocTemplateRow.version)).where(
+        DocTemplateRow.doc_type == "label", DocTemplateRow.lang == lang, DocTemplateRow.name == name)).scalar() or 0) + 1
+    tid = str(uuid.uuid4())
+    key = storage.put(f"templates/label/{lang}/{tid}.json", json.dumps(clean, ensure_ascii=False).encode("utf-8"))
+    if is_default:
+        for old in session.execute(select(DocTemplateRow).where(
+                DocTemplateRow.doc_type == "label", DocTemplateRow.lang == lang, DocTemplateRow.engine == "label_json",
+                DocTemplateRow.is_default.is_(True))).scalars():
+            old.is_default = False
+    row = DocTemplateRow(id=tid, doc_type="label", lang=lang, name=name, version=version, engine="label_json",
+                         content_key=key, is_default=is_default, created_by=created_by)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def label_layout(session: Session, lang: str, template_id: str | None = None) -> tuple[str | None, dict | None]:
+    """The requested label layout, else the default one for *lang*; ``(None, None)`` = built-in layout."""
+    import json
+
+    if template_id:
+        row = session.get(DocTemplateRow, template_id)
+        if row is None or row.engine != "label_json":
+            raise DocumentError("标签版式不存在")
+    else:
+        row = session.execute(select(DocTemplateRow).where(
+            DocTemplateRow.doc_type == "label", DocTemplateRow.lang == lang, DocTemplateRow.engine == "label_json",
+            DocTemplateRow.is_default.is_(True)).order_by(DocTemplateRow.version.desc()).limit(1)).scalar_one_or_none()
+    if row is None or not storage.exists(row.content_key):
+        return None, None
+    return row.id, json.loads(storage.get(row.content_key))
