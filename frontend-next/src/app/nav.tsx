@@ -3,6 +3,7 @@ import {
   FileProtectOutlined, SettingOutlined, SlidersOutlined,
 } from "@ant-design/icons";
 import type { ReactNode } from "react";
+import { MODULES, type NavGroup } from "./modules";
 
 export interface NavItem {
   path: string;
@@ -14,7 +15,7 @@ export interface NavItem {
 }
 
 /** 生命周期五步导航 + 物料与法规库 + 系统管理 (方案 §3.2). */
-export const NAV: NavItem[] = [
+const BASE_NAV: NavItem[] = [
   { path: "/dashboard", key: "nav.dashboard", zh: "我的工作台", icon: <DashboardOutlined /> },
   { path: "/knowledge", key: "nav.knowledge", zh: "① 知识与情报中心", icon: <BookOutlined />, children: [
     { path: "/knowledge/search", key: "nav.knowledge.search", zh: "检索" },
@@ -50,5 +51,11 @@ export const NAV: NavItem[] = [
     { path: "/admin/connectors", key: "nav.admin.connectors", zh: "连接器" },
   ] },
 ];
+
+/** Base navigation plus the pages each feature module adds to a group (app/modules.ts). */
+export const NAV: NavItem[] = BASE_NAV.map((g) => ({
+  ...g,
+  children: g.children && [...g.children, ...MODULES.flatMap((m) => m.nav[g.path as NavGroup] ?? [])],
+}));
 
 export const AUDIT_ICON = <AuditOutlined />;

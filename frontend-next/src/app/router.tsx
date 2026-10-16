@@ -4,6 +4,7 @@ import { useSession } from "./session";
 import { Shell } from "./Shell";
 import { PageSpin } from "@/shared/PageSpin";
 import LoginPage from "@/features/auth/LoginPage";
+import { MODULES } from "./modules";
 
 const L = (f: () => Promise<{ default: React.ComponentType }>) => {
   const C = lazy(f);
@@ -52,6 +53,7 @@ export const router = createBrowserRouter([
       { path: "admin/users", element: L(() => import("@/features/admin/UsersPage")) },
       { path: "admin/audit", element: L(() => import("@/features/admin/AuditPage")) },
       { path: "admin/connectors", element: L(() => import("@/features/admin/ConnectorsPage")) },
+      ...MODULES.flatMap((m) => m.routes),
       { path: "*", element: L(() => import("@/features/dashboard/NotFoundPage")) },
     ],
   },

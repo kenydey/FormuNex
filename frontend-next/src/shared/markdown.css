@@ -1,0 +1,14 @@
+.fx-markdown { line-height: 1.7; word-break: break-word; }
+.fx-markdown p, .fx-markdown ul, .fx-markdown ol { margin: 6px 0; }
+.fx-markdown ul, .fx-markdown ol { padding-left: 20px; }
+.fx-markdown h1 { font-size: 18px; } .fx-markdown h2 { font-size: 16px; } .fx-markdown h3 { font-size: 14px; }
+.fx-markdown table { border-collapse: collapse; margin: 8px 0; font-size: 12px; display: block; overflow-x: auto; }
+.fx-markdown th, .fx-markdown td { border: 1px solid rgba(128, 128, 128, 0.35); padding: 2px 8px; }
+.fx-markdown th { background: rgba(128, 128, 128, 0.12); }
+.fx-markdown pre { background: rgba(128, 128, 128, 0.1); padding: 8px; border-radius: 6px; overflow-x: auto; }
+.fx-markdown code { font-size: 12px; }
+.fx-markdown blockquote { border-left: 3px solid rgba(128, 128, 128, 0.4); margin: 6px 0; padding-left: 10px; opacity: 0.85; }
+.fx-markdown .katex-display { overflow-x: auto; }
+.fx-smiles { display: inline-block; margin: 4px 0; padding: 4px; border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 6px; }
+.fx-smiles code { display: block; font-size: 10px; opacity: 0.7; word-break: break-all; }
+.fx-mermaid svg { max-width: 100%; }

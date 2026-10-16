@@ -1,3 +1,13 @@
+import chat from "./en/chat";
+import library from "./en/library";
+import research from "./en/research";
+import wiki from "./en/wiki";
+import formulation from "./en/formulation";
+import design from "./en/design";
+import workbench from "./en/workbench";
+import requirements from "./en/requirements";
+import settings from "./en/settings";
+
 /** English strings; Chinese is the inline default in the code (see app/i18n.ts). Checked by i18n.test.ts. */
 const en: Record<string, string> = {
   "app.title": "FormuNex",
@@ -611,4 +621,4 @@ const en: Record<string, string> = {
   "winning.version": "Formulation version",
 };
 
-export default en;
+export default { ...en, ...chat, ...library, ...research, ...wiki, ...formulation, ...design, ...workbench, ...requirements, ...settings } as Record<string, string>;
