@@ -286,6 +286,8 @@ export interface McpApprovalItem {
   session_id?: string | null;
   project_id?: string | null;
   age_s: number;
+  /** Tool-call arguments (secret-looking keys redacted to ``***``); null when the call recorded none. */
+  arguments?: Record<string, unknown> | null;
 }
 
 export interface BuiltinConnector {

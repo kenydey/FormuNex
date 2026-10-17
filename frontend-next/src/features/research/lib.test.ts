@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   citationTarget, deepPercent, dispositionName, draftForEmbodiment, mergeEvidence, pageLabel, parseKbIngest, parseSearchData,
-  sanitizeEvidence, shelfFilename, sortFindings, sourceBadge, stageIndex, toggleDiffPick, confirmPath, chatHistory,
+  sanitizeEvidence, shelfFilename, sortFindings, sourceBadge, stageIndex, toggleDiffPick, confirmPath, chatHistory, mapKbSourceIds, resolveItems,
 } from "./lib";
 import type { EmbodimentDraft, Evidence, PreflightFinding } from "./types";
 
@@ -93,5 +93,26 @@ describe("research lib", () => {
     expect(draftForEmbodiment(d, 3)).toBe(d);
     expect(confirmPath("surechembl")).toContain("/surechembl/");
     expect(confirmPath("surechembl+fulltext")).toContain("/formulations/");
+  });
+});
+
+describe("KB full-text mapping of search hits", () => {
+  const ev = (identifier: string, extra: Partial<Evidence> = {}): Evidence => ({ source: "patents", identifier, title: identifier, snippet: "", relevance: 0.5, ...extra });
+
+  it("maps hits via KB-build docs (patent aliases) and resolve matches, skipping failed docs", () => {
+    const rows = [ev("CN-112345678-A"), ev("10.1000/xyz"), ev("web-1", { url: "https://e.org/a" }), ev("US1234567B2"), ev("kb:abc#c3")];
+    const docs = [
+      { identifier: "CN112345678A", status: "indexed", source_id: "s-pat" },
+      { identifier: "US1234567B2", status: "failed", source_id: "s-bad" },
+    ];
+    const matches = [{ identifier: "10.1000/xyz", source_id: "s-doi" }, { identifier: "https://e.org/a", source_id: "s-web" }];
+    expect(mapKbSourceIds(rows, docs, matches)).toEqual({
+      "CN-112345678-A": "s-pat", "10.1000/xyz": "s-doi", "web-1": "s-web", "kb:abc#c3": "abc",
+    });
+  });
+
+  it("asks the resolve endpoint only for unmapped, real, unique hits", () => {
+    const rows = [ev("a", { url: "https://x" }), ev("a"), ev("b"), ev("kb:z#c0"), ev("seed", { is_seed_corpus: true })];
+    expect(resolveItems(rows, { b: "s-b" })).toEqual([{ identifier: "a", url: "https://x", url_alt: null }]);
   });
 });

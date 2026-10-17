@@ -11,6 +11,13 @@ const POLL_MS = 3000;
 
 type Decision = { id: number; decision: "allow" | "deny"; scope: "once" | "session" };
 
+/** One-line preview of the call arguments (``key=value, …``); null when none were recorded. */
+export function argsPreview(args: Record<string, unknown> | null | undefined, max = 80): string | null {
+  if (args == null) return null;
+  const text = Object.entries(args).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(", ");
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text || "{}";
+}
+
 /** MCP 工具审批中心: tool calls held by the ask policy; undecided requests are auto-denied after 5 minutes. */
 export default function McpApprovalsPage() {
   const { t } = useTranslation();
@@ -35,7 +42,15 @@ export default function McpApprovalsPage() {
         message={t("settings.mcp.intro", "以下 MCP 工具调用被策略拦截（默认 ask），等待审批；无决策时后端 5 分钟后自动拒绝。本页每 3 秒刷新。")} />
       <ErrorAlert error={q.error} />
       <ProTable<McpApprovalItem>
-        rowKey="request_id" search={false} loading={q.isLoading} dataSource={q.data?.items ?? []} pagination={false}
+        rowKey="request_id" search={false}
+        expandable={{
+          rowExpandable: (r) => r.arguments != null,
+          expandedRowRender: (r) => (
+            <pre data-testid="mcp-args" style={{ margin: 0, maxHeight: 260, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+              {JSON.stringify(r.arguments, null, 2)}
+            </pre>
+          ),
+        }} loading={q.isLoading} dataSource={q.data?.items ?? []} pagination={false}
         options={{ reload: () => void q.refetch() }}
         headerTitle={t("settings.mcp.pending", "待审批 {{n}} 条", { n: q.data?.total ?? 0 })}
         locale={{ emptyText: t("settings.mcp.empty", "暂无待审批的工具调用") }}
@@ -43,6 +58,8 @@ export default function McpApprovalsPage() {
           { title: t("settings.mcp.id", "请求 ID"), dataIndex: "request_id", width: 90 },
           { title: t("settings.mcp.server", "服务器"), dataIndex: "server_id", render: (_d, r) => <Typography.Text code>{r.server_id}</Typography.Text> },
           { title: t("settings.mcp.tool", "工具"), dataIndex: "tool_name", render: (_d, r) => <Typography.Text code>{r.tool_name}</Typography.Text> },
+          { title: t("settings.mcp.args", "调用参数"), dataIndex: "arguments", ellipsis: true, render: (_d, r) => argsPreview(r.arguments)
+            ?? <Typography.Text type="secondary">{t("settings.mcp.no_args", "（未记录）")}</Typography.Text> },
           { title: t("settings.mcp.session", "会话"), dataIndex: "session_id", ellipsis: true },
           { title: t("settings.mcp.project", "项目"), dataIndex: "project_id", ellipsis: true },
           { title: t("settings.mcp.age", "等待"), dataIndex: "age_s", width: 90, render: (_d, r) => t("settings.mcp.seconds", "{{n}} 秒", { n: Math.round(r.age_s) }) },
@@ -59,7 +76,7 @@ export default function McpApprovalsPage() {
         ]}
       />
       <Typography.Paragraph type="secondary">
-        {t("settings.mcp.args_note", "调用参数未被后端持久化，因此此处不显示。")}
+        {t("settings.mcp.args_redacted", "调用参数中名称像密钥的字段（token / key / password / secret / authorization）已由后端打码为 ***。展开行查看完整参数。")}
       </Typography.Paragraph>
     </PageContainer>
   );

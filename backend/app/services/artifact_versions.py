@@ -852,6 +852,51 @@ def list_versions(lineage_id: str) -> dict[str, Any]:
     return {"lineage": lineage.to_dict(), "versions": versions, "graph": graph}
 
 
+def list_lineages(project_id: str | None = None, kind: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    """Lineage summaries (newest activity first): id, kind, title, latest version, its status, updated_at.
+
+    Scans the lineage records on disk; unreadable / tampered records are skipped (logged), not fatal.
+    """
+    root = _data_root() / "artifacts" / "lineages"
+    if not root.is_dir():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in root.glob("*.json"):
+        try:
+            lineage = _load_lineage(path.stem)
+        except (ValueError, OSError, json.JSONDecodeError) as exc:
+            logger.warning("skipping unreadable lineage %s: %s", path.stem, exc)
+            continue
+        if lineage is None:
+            continue
+        if project_id and lineage.project_id != project_id:
+            continue
+        if kind and lineage.kind != kind:
+            continue
+        latest: Version | None = None
+        for vid in reversed(lineage.version_ids):
+            try:
+                latest = _load_version(vid)
+            except ValueError:
+                latest = None
+            if latest is not None:
+                break
+        rows.append({
+            "lineage_id": lineage.lineage_id,
+            "project_id": lineage.project_id,
+            "kind": lineage.kind,
+            "title": lineage.name,
+            "version_count": len(lineage.version_ids),
+            "latest_version": len(lineage.version_ids) if lineage.version_ids else None,
+            "latest_version_id": latest.version_id if latest else None,
+            "status": latest.status if latest else None,
+            "created_at": lineage.created_at,
+            "updated_at": max(lineage.created_at, latest.created_at if latest else 0.0, (latest.finalized_at or 0.0) if latest else 0.0),
+        })
+    rows.sort(key=lambda r: r["updated_at"], reverse=True)
+    return rows[: max(0, limit)]
+
+
 def verify_version(version_id: str) -> dict[str, Any]:
     """Recompute the content sha256 and compare with the stored snapshot hash.
 

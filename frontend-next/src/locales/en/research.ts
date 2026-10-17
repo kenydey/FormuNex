@@ -229,6 +229,10 @@ const en: Record<string, string> = {
   "research.shelf.download": "Download",
 
   "research.ver.load": "Load versions",
+  "research.ver.empty_pick": "Pick a logical file, or use “Save as version” on a deep-research report",
+  "research.ver.no_lineages": "No logical files in this project yet",
+  "research.ver.no_version_tag": "No versions",
+  "research.ver.pick": "Pick a logical file (version lineage)",
   "research.ver.new_name": "New logical file name",
   "research.ver.create": "Create",
   "research.ver.help": "staging (draft) → pending (in review) → finalized (immutable); rollback = new version based on an old one (copy-on-write).",
@@ -295,6 +299,7 @@ const en: Record<string, string> = {
   "research.tr.blocked": "Publication preflight failed",
   "research.tr.blocked_body": "Open blocking findings refused the export. Open publication preflight to handle them?",
   "research.tr.open_preflight": "Open publication preflight",
+  "research.sources.fulltext": "Full text",
 };
 
 export default en;

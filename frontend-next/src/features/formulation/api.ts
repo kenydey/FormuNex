@@ -27,6 +27,7 @@ export const fx = {
   },
   syncDatalab: (id: number | string) => call<{ synced?: number; errors?: unknown[] }>("POST", `/api/experiments/${id}/sync-datalab`, {}),
 
+  experiment: (id: number | string) => call<ExperimentSummary>("GET", `/api/experiments/${enc(String(id))}`),
   campaign: (c: number | string) => call<WorkbenchCampaign>("GET", `/api/experiments/workbench/${c}`),
   rowLineage: (c: number | string, r: number | string) => call<WorkbenchRow[]>("GET", `${row(c, r)}/lineage`),
   rowMeasurements: (c: number | string, r: number | string) => call<QCMeasurementList>("GET", `/api/qc/workbench/${c}/rows/${r}/measurements`),

@@ -275,7 +275,9 @@ const en: Record<string, string> = {
   "settings.mcp.deny": "Deny",
   "settings.mcp.allow_once": "Allow once",
   "settings.mcp.allow_session": "Allow for this session",
-  "settings.mcp.args_note": "Call arguments are not persisted by the backend, so they are not shown here.",
+  "settings.mcp.args": "Arguments",
+  "settings.mcp.args_redacted": "Argument values whose names look like secrets (token / key / password / secret / authorization) are masked as *** by the backend. Expand a row to see all arguments.",
+  "settings.mcp.no_args": "(not recorded)",
 
   "settings.conn.imported": "Imported (disabled by default; enable it manually)",
   "settings.conn.add_mcp": "Add MCP server",

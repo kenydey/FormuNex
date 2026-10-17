@@ -2,7 +2,7 @@ import { PageContainer, ProCard } from "@ant-design/pro-components";
 import { Alert, App, Button, Checkbox, Descriptions, Empty, Input, Progress, Space, Steps, Tag, Typography } from "antd";
 import { StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { errorText } from "@/shared/feedback";
 import { fx } from "./api";
@@ -22,7 +22,10 @@ export default function RecommendPage() {
   const task = useResearchTask();
   const openInEditor = useOpenInEditor();
   const [preferCatalog, setPreferCatalog] = useState(false);
-  const [query, setQuery] = useState("");
+  const [params] = useSearchParams();
+  const location = useLocation();
+  // A chat playbook hands over the current question (``?q=`` / location state) as the extra retrieval query.
+  const [query, setQuery] = useState(() => params.get("q") ?? (location.state as { question?: string } | null)?.question ?? "");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [round, setRound] = useState<ResearchResult | null>(null);
@@ -34,7 +37,7 @@ export default function RecommendPage() {
     setError(null);
     try {
       const research = await task.run("/api/research/recommend", {
-        ...requirement, project_id: projectId, sources, query: query.trim() || ws?.search_query || "", prefer_materials_catalog: preferCatalog,
+        ...requirement, project_id: projectId, sources, query: query.trim() || ws?.search_query || "", prefer_materials_catalog: preferCatalog, relation_insight: true,
       });
       let forms = research.recommended ?? [];
       try {

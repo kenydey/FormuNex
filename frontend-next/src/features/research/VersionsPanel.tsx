@@ -1,5 +1,5 @@
 import { ProCard } from "@ant-design/pro-components";
-import { App, Button, Checkbox, Empty, Input, Popconfirm, Space, Table, Tag, Tooltip, Typography, theme } from "antd";
+import { App, Button, Checkbox, Empty, Input, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography, theme } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -9,6 +9,20 @@ import { call } from "@/api/client";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { toggleDiffPick } from "./lib";
 import type { ArtifactDiff, ArtifactLineage, ArtifactVersion, ArtifactVersionList, VersionStatus } from "./types";
+
+/** One row of ``GET /api/artifacts/lineages``. */
+export interface LineageSummary {
+  lineage_id: string;
+  project_id: string;
+  kind: string;
+  title: string;
+  version_count: number;
+  latest_version: number | null;
+  latest_version_id: string | null;
+  status: VersionStatus | null;
+  created_at: number;
+  updated_at: number;
+}
 
 const enc = encodeURIComponent;
 const short = (id: string) => id.slice(0, 8);
@@ -26,27 +40,36 @@ export function VersionsPanel({ projectId, lineageId }: { projectId: string | nu
   const { message } = App.useApp();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [input, setInput] = useState(lineageId ?? "");
   const [name, setName] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [diff, setDiff] = useState<ArtifactDiff | null>(null);
   useEffect(() => {
-    setInput(lineageId ?? "");
     setPicked([]);
     setDiff(null);
   }, [lineageId]);
   useEffect(() => setDiff(null), [picked]);
 
+  const lineagesKey = ["research", "artifact-lineages", projectId];
+  const lineages = useQuery({
+    queryKey: lineagesKey, enabled: !!projectId,
+    queryFn: async () => {
+      const rows = await call<LineageSummary[]>("GET", `/api/artifacts/lineages?project_id=${enc(projectId!)}`);
+      return Array.isArray(rows) ? rows : [];
+    },
+  });
   const key = ["research", "artifact-versions", lineageId];
   const list = useQuery({
     queryKey: key, enabled: !!lineageId,
     queryFn: () => call<ArtifactVersionList>("GET", `/api/artifacts/lineages/${enc(lineageId!)}/versions`),
   });
-  const refresh = () => void qc.invalidateQueries({ queryKey: key });
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: key });
+    void qc.invalidateQueries({ queryKey: lineagesKey });
+  };
   const onErr = (e: unknown) => message.error(errorText(e));
   const create = useMutation({
     mutationFn: () => call<ArtifactLineage>("POST", "/api/artifacts/lineages", { project_id: projectId, name: name.trim(), kind: "report" }),
-    onSuccess: (l) => { setName(""); navigate(`/knowledge/research/artifacts/${l.lineage_id}`); }, onError: onErr,
+    onSuccess: (l) => { setName(""); void qc.invalidateQueries({ queryKey: lineagesKey }); navigate(`/knowledge/research/artifacts/${l.lineage_id}`); }, onError: onErr,
   });
   const action = useMutation({
     mutationFn: ({ id, op }: { id: string; op: "submit" | "finalize" | "restore" }) =>
@@ -74,8 +97,26 @@ export function VersionsPanel({ projectId, lineageId }: { projectId: string | nu
   return (
     <>
       <Space wrap style={{ marginBottom: 16 }}>
-        <Input.Search style={{ width: 340 }} value={input} onChange={(e) => setInput(e.target.value)} placeholder="lineage_id"
-          enterButton={t("research.ver.load", "加载版本")} onSearch={(v) => v.trim() && navigate(`/knowledge/research/artifacts/${v.trim()}`)} />
+        <Select<string> style={{ width: 380 }} showSearch allowClear value={lineageId} loading={lineages.isLoading} data-testid="lineage-select"
+          placeholder={t("research.ver.pick", "选择逻辑文件（版本谱系）")} optionFilterProp="label"
+          notFoundContent={t("research.ver.no_lineages", "该项目暂无逻辑文件")}
+          onChange={(v) => navigate(v ? `/knowledge/research/artifacts/${v}` : "/knowledge/research/artifacts?tab=versions")}
+          options={(lineages.data ?? []).map((l) => ({
+            value: l.lineage_id,
+            label: `${l.title} · ${l.kind} · ${l.latest_version ? `v${l.latest_version}` : "—"} ${short(l.lineage_id)}`,
+          }))}
+          optionRender={(o) => {
+            const l = (lineages.data ?? []).find((x) => x.lineage_id === o.value);
+            if (!l) return o.label;
+            return (
+              <Space size={4} wrap>
+                <Typography.Text strong>{l.title}</Typography.Text>
+                <Tag>{l.kind}</Tag>
+                {l.latest_version ? <Tag color={l.status ? STATUS_COLOR[l.status] : undefined}>v{l.latest_version}</Tag> : <Tag>{t("research.ver.no_version_tag", "无版本")}</Tag>}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>{fmt(l.updated_at)}</Typography.Text>
+              </Space>
+            );
+          }} />
         <Space.Compact>
           <Input style={{ width: 220 }} value={name} onChange={(e) => setName(e.target.value)} placeholder={t("research.ver.new_name", "新建逻辑文件名称")} />
           <Button disabled={!name.trim()} loading={create.isPending} onClick={() => create.mutate()}>{t("research.ver.create", "新建")}</Button>
@@ -85,7 +126,7 @@ export function VersionsPanel({ projectId, lineageId }: { projectId: string | nu
         {t("research.ver.help", "staging（草稿）→ pending（待审）→ finalized（已定版，不可变）；回滚 = 基于旧版新建版本（copy-on-write）。")}
       </Typography.Paragraph>
       <ErrorAlert error={list.error} />
-      {!lineageId && <Empty description={t("research.ver.empty", "输入 lineage_id 或从深度研究报告「存为版本」")} />}
+      {!lineageId && <Empty description={t("research.ver.empty_pick", "选择一个逻辑文件，或从深度研究报告「存为版本」")} />}
       {list.data && (
         <>
           <Typography.Title level={5}>

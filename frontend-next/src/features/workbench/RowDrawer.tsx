@@ -3,7 +3,7 @@ import { DeleteOutlined, DownloadOutlined, UploadOutlined } from "@ant-design/ic
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, download } from "@/api/client";
+import { ApiError, call, download } from "@/api/client";
 import { ErrorAlert } from "@/shared/feedback";
 import { specText, valueMeetsSpec } from "./ledger";
 import type { Attachment, ObjectiveSpec, QcMeasurement, VersionEntry, WorkbenchRow } from "./types";
@@ -148,8 +148,11 @@ function VersionsTab({ campaignId, row, onRestored }: { campaignId: number; row:
   const { message } = App.useApp();
   const qc = useQueryClient();
   const key = ["workbench", campaignId, "row", row.id, "versions"];
-  const q = useQuery({ queryKey: key, enabled: !!row.refcode, retry: false,
-    queryFn: () => call<{ refcode: string; versions: VersionEntry[] }>("GET", `${base(campaignId, row.id)}/versions`) });
+  // DataLab rows (refcode) answer from the ELN; native-store rows from the audit log (source: "native"). A 404 means
+  // the row has no version store at all (e.g. a Datalab ledger row that was never synced).
+  const q = useQuery({ queryKey: key, retry: false,
+    queryFn: () => call<{ refcode: string | null; source?: string; versions: VersionEntry[] }>("GET", `${base(campaignId, row.id)}/versions`) });
+  const unavailable = q.error instanceof ApiError && q.error.status === 404;
   const [diff, setDiff] = useState<{ v1: number; v2: number; keys: string[] } | null>(null);
   const restore = useMutation({ mutationFn: (v: VersionEntry) => call("POST", `${base(campaignId, row.id)}/versions/${v.id}/restore`, {}),
     onSuccess: () => { message.success(t("workbench.ver.restored", "已恢复（平台已留新版本，可再次恢复）")); void qc.invalidateQueries({ queryKey: key }); onRestored(); } });
@@ -163,12 +166,15 @@ function VersionsTab({ campaignId, row, onRestored }: { campaignId: number; row:
     },
     onSuccess: setDiff,
   });
-  if (!row.refcode) return <Empty description={t("workbench.ver.no_refcode", "该行没有 ELN 版本记录（本地台账不保存逐次版本）")} />;
+  if (unavailable) return <Empty description={t("workbench.ver.no_refcode", "该行没有 ELN 版本记录（本地台账不保存逐次版本）")} />;
   return (
     <>
       <ErrorAlert error={q.error ?? restore.error ?? compare.error} />
+      {q.data?.source === "native" && <Typography.Paragraph type="secondary">
+        {t("workbench.ver.native", "本地台账：每次保存台账时自动记录改动行的快照（审计日志），可对比与恢复。")}</Typography.Paragraph>}
       {diff && <Typography.Paragraph>{t("workbench.ver.diff", "v{{a}} → v{{b}} 变更：{{k}}", { a: diff.v1, b: diff.v2, k: diff.keys.join(", ") || t("workbench.ver.same", "两个版本内容一致") })}</Typography.Paragraph>}
       <Table size="small" rowKey="id" loading={q.isLoading} pagination={false} dataSource={q.data?.versions ?? []}
+        locale={{ emptyText: <Empty description={t("workbench.ver.empty", "暂无版本：保存台账后会记录本行的改动")} /> }}
         columns={[
           { title: "v", dataIndex: "version", width: 50 },
           { title: t("workbench.ver.time", "时间"), dataIndex: "timestamp", render: (v?: string) => v?.replace("T", " ").slice(0, 16) ?? "—" },

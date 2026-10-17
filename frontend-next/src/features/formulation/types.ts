@@ -66,7 +66,16 @@ export interface ResearchResult {
   recommend_engine?: "llm" | "offline";
   recommend_id?: string | null;
   chat_markdown?: string;
+  /** KG relation insights of the round (async recommend with ``relation_insight``). */
+  relation_insights?: RelationInsight[];
   [k: string]: unknown;
+}
+
+export interface RelationInsight {
+  component?: string;
+  cas_no?: string | null;
+  substitutes?: string[];
+  relations?: { type?: string; target?: string; confidence?: number | null }[];
 }
 
 export interface ExperimentSummary {

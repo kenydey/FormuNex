@@ -12,6 +12,7 @@ import { ErrorAlert, errorText } from "@/shared/feedback";
 import { fx, saveText } from "./api";
 import { useOpenInEditor } from "./adopt";
 import { FormulaCard } from "./FormulaCard";
+import { RelationInsightsBanner } from "./RelationInsights";
 import { leaderboardToCsv, OBJECTIVE_METRIC, paretoFront, shiftAfterRemove, warningActions } from "./logic";
 import type { Formulation, Ingredient } from "./types";
 import { useResearchTask } from "./useTask";
@@ -136,6 +137,7 @@ export default function LeaderboardPage() {
         ] }}><Button icon={<DownloadOutlined />}>{t("formulation.board.export", "导出列表")}</Button></Dropdown>
       </Space>}>
       <ErrorAlert error={project.error} />
+      <RelationInsightsBanner insights={ws?.research?.relation_insights} />
       {warnings.length > 0 && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={t("formulation.board.validate", "配方校验 / 目录补全提示")}
         description={<>
           <ul style={{ margin: 0, paddingInlineStart: 18, maxHeight: 140, overflow: "auto" }}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>

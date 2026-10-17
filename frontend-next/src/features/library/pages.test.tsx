@@ -16,8 +16,11 @@ vi.mock("@/app/session", () => ({ useSession: () => ({ me: { id: "u" }, can: () 
 vi.mock("@/app/store", () => ({ useUi: (sel: (s: { projectId: string | null; theme: string }) => unknown) => sel({ projectId: "p1", theme: "light" }) }));
 vi.mock("@/shared/Markdown", () => ({ Markdown: ({ content }: { content: string }) => <pre>{content}</pre>, SmilesDrawing: () => null }));
 vi.mock("@/shared/Chart", () => ({ Chart: () => null }));
+const trackTask = vi.fn();
+vi.mock("@/features/chat/taskStore", () => ({ trackTask: (...a: unknown[]) => trackTask(...a) }));
 
 import "@/app/i18n";
+import { awaitTask } from "@/api/stream";
 import SourcesPage from "@/features/knowledge/SourcesPage";
 import ManifestPage from "./ManifestPage";
 import MemoryPage from "./MemoryPage";
@@ -46,6 +49,25 @@ describe("SourcesPage", () => {
     expect(await screen.findByText("提取实施例草稿")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /归\s?档/ }));
     await waitFor(() => expect(call).toHaveBeenCalledWith("POST", "/api/kb/sources/s1/archive", { archived: true }));
+  });
+});
+
+describe("SourcesPage re-parse", () => {
+  it("queues a re-parse task, tracks it and waits for it", async () => {
+    vi.mocked(awaitTask).mockResolvedValue({ status: "COMPLETED", message: "重新解析完成：3 个分块" } as never);
+    call.mockImplementation((m: string, path = "") => {
+      if (path.startsWith("/api/kb/sources?")) return Promise.resolve({ total: 1, sources: [
+        { id: "s1", title: "水性环氧专利", filename: "a.pdf", source_kind: "local", project_id: null, raw_text_chars: 1200, extraction_status: "ok", archived: false }] });
+      if (m === "POST" && path.endsWith("/reparse")) return Promise.resolve({ task_id: "t-1", stream_url: "/api/tasks/t-1/stream" });
+      return Promise.resolve({});
+    });
+    wrap(<SourcesPage />);
+    expect(await screen.findByText("水性环氧专利")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /重新解析/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /确\s?定|OK/ }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith("POST", "/api/kb/sources/s1/reparse"));
+    await waitFor(() => expect(trackTask).toHaveBeenCalledWith("t-1", expect.objectContaining({ link: "/knowledge/sources/s1" })));
+    await waitFor(() => expect(awaitTask).toHaveBeenCalledWith("t-1"));
   });
 });
 

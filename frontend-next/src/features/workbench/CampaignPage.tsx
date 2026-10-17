@@ -1,9 +1,9 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
 import { Alert, App, Badge, Button, Dropdown, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { BarChartOutlined, DownloadOutlined, HistoryOutlined, SaveOutlined, SnippetsOutlined } from "@ant-design/icons";
+import { BarChartOutlined, DownloadOutlined, HistoryOutlined, PaperClipOutlined, RedoOutlined, SaveOutlined, SnippetsOutlined, UndoOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type HTMLAttributes } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { call } from "@/api/client";
@@ -21,6 +21,11 @@ import { RoundsDrawer } from "./RoundsDrawer";
 import { RowDrawer } from "./RowDrawer";
 import { surfacePoints } from "./surface";
 import type { CampaignDetail, PredictionBias, Quality, SyncResponse, WorkbenchRow } from "./types";
+import { emptyHistory, record, redo, shortcut, undo, type UndoHistory } from "./undo";
+
+interface AttachmentCounts { campaign_id: number; counts: Record<string, number> }
+/** Unsaved ledger state captured by undo / redo. */
+interface LedgerSnap { rows: WorkbenchRow[]; dirty: Set<number> }
 
 const STATUS_COLOR: Record<string, string> = { Pending: "default", "In Progress": "processing", Completed: "success", Blocked: "error" };
 const TONE_COLOR: Record<string, string> = { converged: "gold", failed: "error", paused: "default", running: "processing", idle: "purple" };
@@ -52,6 +57,9 @@ export default function CampaignPage() {
   const health = useQuery({ queryKey: ["health"], staleTime: 60_000, retry: false,
     queryFn: () => call<{ datalab?: { ledger_mode?: string } }>("GET", "/health") });
   const ledgerMode = health.data?.datalab?.ledger_mode;
+  const attKey = useMemo(() => ["workbench", campaignId, "attachment-counts"], [campaignId]);
+  const attCounts = useQuery({ queryKey: attKey, enabled: Number.isFinite(campaignId), retry: false,
+    queryFn: () => call<AttachmentCounts>("GET", `/api/experiments/workbench/${campaignId}/attachment-counts`) });
 
   const [rows, setRows] = useState<WorkbenchRow[]>([]);
   const [dirty, setDirty] = useState<Set<number>>(new Set());
@@ -66,14 +74,43 @@ export default function CampaignPage() {
   const [surface, setSurface] = useState<{ open: boolean; x?: string; y?: string; m?: string }>({ open: false });
   const [batchStatus, setBatchStatus] = useState<string>("Completed");
 
+  // Undo / redo of unsaved edits: a bounded history of {rows, dirty} snapshots, cleared on save / reload.
+  const history = useRef<UndoHistory<LedgerSnap>>(emptyHistory());
+  const [, rerender] = useReducer((x: number) => x + 1, 0);
+  const current = useRef<LedgerSnap>({ rows, dirty });
+  current.current = { rows, dirty };
+  const remember = useCallback((key?: string) => { history.current = record(history.current, current.current, key); rerender(); }, []);
+  const clearHistory = useCallback(() => { history.current = emptyHistory(); rerender(); }, []);
+  const step = useCallback((dir: "undo" | "redo") => {
+    const r = (dir === "undo" ? undo : redo)(history.current, current.current);
+    if (!r) return;
+    history.current = r.history;
+    setRows(r.state.rows);
+    setDirty(r.state.dirty);
+    rerender();
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = shortcut(e);
+      const el = e.target as HTMLElement | null;
+      // Leave text areas and dialogs (paste box, drawer note editor) to the browser's own undo.
+      if (!action || el?.tagName === "TEXTAREA" || el?.closest?.(".ant-modal, .ant-drawer")) return;
+      e.preventDefault();
+      step(action);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [step]);
+
   // Reset local edits whenever a fresh server copy arrives (load, sync, restore).
   useEffect(() => {
     if (detail.data) {
       setRows(detail.data.rows);
       setDirty(new Set());
+      clearHistory();
     }
-  }, [detail.data]);
-  useEffect(() => { setSelected([]); setHint(null); setBias(null); }, [campaignId]);
+  }, [detail.data, clearHistory]);
+  useEffect(() => { setSelected([]); setHint(null); setBias(null); clearHistory(); }, [campaignId, clearHistory]);
   useEffect(() => { if (focusRow != null) setDrawerRow(focusRow); }, [focusRow]);
 
   const d = detail.data;
@@ -87,11 +124,13 @@ export default function CampaignPage() {
   const tone = loopRun.running ? "running" : loopTone(loop.status, loop.converged);
 
   const edit = useCallback((id: number, col: string, raw: unknown) => {
+    remember(`${id}:${col}`);
     setRows((prev) => prev.map((r) => (r.id === id ? setCell(r, col, raw, objectives) : r)));
     setDirty((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-  }, [objectives]);
+  }, [objectives, remember]);
 
   const applyToSelected = (mutate: (r: WorkbenchRow) => WorkbenchRow) => {
+    remember();
     const ids = new Set(selected);
     setRows((prev) => prev.map((r) => (ids.has(r.id) ? mutate(r) : r)));
     setDirty((prev) => new Set([...prev, ...ids]));
@@ -126,6 +165,7 @@ export default function CampaignPage() {
       qc.setQueryData<CampaignDetail>(["workbench", campaignId], (old) => (old ? { ...old, rows: res.rows, loop_status: res.loop_status ?? old.loop_status } : old));
       void qc.invalidateQueries({ queryKey: ["workbench", campaignId, "bias-trend"] });
       void qc.invalidateQueries({ queryKey: ["workbench", campaignId, "quality"] });
+      void qc.invalidateQueries({ queryKey: attKey });
       void qc.invalidateQueries({ queryKey: ["workbench", "campaigns"] });
       void qc.invalidateQueries({ queryKey: ["training-status"] });
       if (res.loop_task_id) void followLoop(qc, projectId, res.loop_task_id, campaignId);
@@ -166,6 +206,24 @@ export default function CampaignPage() {
   const sm = surface.m ?? objectives[0]?.metric;
   const sPoints = useMemo(() => (sx && sy && sm ? surfacePoints(rows, sx, sy, sm) : []), [rows, sx, sy, sm]);
 
+  const openRow = useCallback((id: number, tab: string) => { setDrawerTab(tab); setDrawerRow(id); }, []);
+  const rowMenuItems = useMemo(() => [
+    { key: "detail", label: t("workbench.tab.detail", "详情") }, { key: "note", label: t("workbench.tab.note", "备注与标签") },
+    { key: "attachments", label: t("workbench.tab.attachments", "附件") }, { key: "qc", label: t("workbench.tab.qc", "检测报告") },
+    { key: "versions", label: t("workbench.tab.versions", "版本历史") }, { key: "lineage", label: t("workbench.tab.lineage", "谱系") },
+  ], [t]);
+  // Right-click on a ledger row opens the same menu as its 「更多」 button.
+  const tableComponents = useMemo(() => ({ body: { row: (props: HTMLAttributes<HTMLTableRowElement> & { "data-row-key"?: number }) => {
+    const id = props["data-row-key"];
+    if (id == null) return <tr {...props} />;
+    return (
+      <Dropdown trigger={["contextMenu"]} menu={{ items: rowMenuItems, onClick: ({ key }) => openRow(Number(id), key) }}>
+        <tr {...props} />
+      </Dropdown>
+    );
+  } } }), [rowMenuItems, openRow]);
+  const attCount = (id: number) => attCounts.data?.counts?.[String(id)];
+
   const columns: ColumnsType<WorkbenchRow> = [
     { title: "ID", dataIndex: "id", width: 64, fixed: "left",
       render: (id: number) => <Badge dot={dirty.has(id)} offset={[4, 0]}><Button type="link" size="small" style={{ padding: 0 }} onClick={() => { setDrawerTab("detail"); setDrawerRow(id); }}>{id}</Button></Badge> },
@@ -203,13 +261,17 @@ export default function CampaignPage() {
           {r.note && <Tooltip title={r.note}><Typography.Text type="secondary" ellipsis style={{ maxWidth: 120 }}>{r.note}</Typography.Text></Tooltip>}
         </Space>
       ) },
+    { title: t("workbench.col.attachments", "附件"), key: "att", width: 72, align: "center",
+      render: (_v, r) => {
+        const n = attCount(r.id);
+        return n == null ? <Typography.Text type="secondary">—</Typography.Text> : (
+          <Button type="link" size="small" icon={<PaperClipOutlined />} data-testid={`att-count-${r.id}`} style={{ padding: 0 }}
+            onClick={() => openRow(r.id, "attachments")}>{n}</Button>
+        );
+      } },
     { title: t("common.actions", "操作"), key: "act", width: 90, fixed: "right",
       render: (_v, r) => (
-        <Dropdown menu={{ items: [
-          { key: "detail", label: t("workbench.tab.detail", "详情") }, { key: "note", label: t("workbench.tab.note", "备注与标签") },
-          { key: "attachments", label: t("workbench.tab.attachments", "附件") }, { key: "qc", label: t("workbench.tab.qc", "检测报告") },
-          { key: "versions", label: t("workbench.tab.versions", "版本历史") }, { key: "lineage", label: t("workbench.tab.lineage", "谱系") },
-        ], onClick: ({ key }) => { setDrawerTab(key); setDrawerRow(r.id); } }}>
+        <Dropdown menu={{ items: rowMenuItems, onClick: ({ key }) => openRow(r.id, key) }}>
           <Button size="small">{t("workbench.more", "更多")}</Button>
         </Dropdown>
       ) },
@@ -275,6 +337,16 @@ export default function CampaignPage() {
 
       <ProCard bordered>
         <Space wrap style={{ marginBottom: 12 }}>
+          <Space.Compact>
+            <Tooltip title={t("workbench.undo_tip", "撤销未保存的修改（Ctrl+Z）")}>
+              <Button size="small" icon={<UndoOutlined />} disabled={!history.current.past.length} onClick={() => step("undo")}
+                aria-label={t("workbench.undo", "撤销")} />
+            </Tooltip>
+            <Tooltip title={t("workbench.redo_tip", "重做（Ctrl+Shift+Z / Ctrl+Y）")}>
+              <Button size="small" icon={<RedoOutlined />} disabled={!history.current.future.length} onClick={() => step("redo")}
+                aria-label={t("workbench.redo", "重做")} />
+            </Tooltip>
+          </Space.Compact>
           <Select size="small" value={batchStatus} onChange={setBatchStatus} style={{ width: 130 }}
             options={STATUS_OPTIONS.map((o) => ({ value: o, label: statusLabel(t, o) }))} />
           <Button size="small" onClick={() => confirmBatch(t("workbench.batch_status_q", "将选中的 {{n}} 行状态设为「{{s}}」？", { n: selected.length, s: batchStatus }),
@@ -303,7 +375,7 @@ export default function CampaignPage() {
         )}
         <Table<WorkbenchRow> size="small" rowKey="id" bordered loading={detail.isLoading} dataSource={rows} columns={columns}
           pagination={rows.length > 50 ? { pageSize: 50 } : false} scroll={{ x: "max-content" }}
-          rowSelection={{ selectedRowKeys: selected, onChange: (k) => setSelected(k as number[]) }}
+          rowSelection={{ selectedRowKeys: selected, onChange: (k) => setSelected(k as number[]) }} components={tableComponents}
           rowClassName={(r) => (r.id === drawerRow ? "ant-table-row-selected" : "")} />
         <Space wrap style={{ marginTop: 12 }}>
           <Typography.Text type="secondary">
@@ -349,6 +421,7 @@ export default function CampaignPage() {
 
       <RowDrawer campaignId={campaignId} row={drawerData} objectives={objectives} factors={factors} tab={drawerTab} onTab={setDrawerTab}
         onClose={() => { setDrawerRow(null); if (focusRow != null) { search.delete("row"); setSearch(search, { replace: true }); } }}
+        onAttachmentCount={(rowId, n) => qc.setQueryData<AttachmentCounts>(attKey, (old) => (old ? { ...old, counts: { ...old.counts, [String(rowId)]: n } } : old))}
         onRowSaved={(r) => {
           setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, note: r.note, tags: r.tags } : x)));
           void qc.invalidateQueries({ queryKey: ["training-status"] });
@@ -367,6 +440,7 @@ export default function CampaignPage() {
         onOk={() => {
           const cells = parseClipboard(paste.text);
           const res = applyPaste(rows, cells, paste.row, paste.col, cols, objectives);
+          if (res.changed.length) remember();
           setRows(res.rows);
           setDirty((prev) => new Set([...prev, ...res.changed]));
           setPaste((p) => ({ ...p, open: false }));

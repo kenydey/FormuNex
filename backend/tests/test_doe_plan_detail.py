@@ -45,7 +45,7 @@ def test_active_plan_is_persisted_and_dispatchable(env):
     c, h = env
     body = _active(c)
     pid = body["plan"]["plan_id"]
-    assert pid
+    assert pid and body["plan_id"] == pid
     r = c.post("/api/lab/tasks/dispatch", headers=h, json={
         "doe_plan_id": pid, "metrics": ["salt_spray_hours"], "project_id": "p-doe"})
     assert r.status_code == 201, r.text
@@ -58,3 +58,28 @@ def test_active_plan_with_unknown_campaign_still_persists(env):
     r = c.post("/api/lab/tasks/dispatch", headers=h, json={
         "doe_plan_id": pid, "metrics": ["salt_spray_hours"], "project_id": "p-doe"})
     assert r.status_code == 201, r.text
+
+
+def test_get_plan_by_id_with_project_scope(env):
+    c, _ = env
+    body = _active(c)
+    pid = body["plan"]["plan_id"]
+    r = c.get(f"/api/doe/plans/{pid}")
+    assert r.status_code == 200, r.text
+    item = r.json()
+    assert item["plan_id"] == pid and item["project_id"] == "p-doe" and item["status"] == "draft"
+    assert len(item["runs"]) == len(body["plan"]["runs"]) and item["factors"]
+    assert {"design", "notes", "domain", "campaign_id", "round", "created_at"} <= set(item)
+    assert c.get(f"/api/doe/plans/{pid}", params={"project_id": "p-doe"}).status_code == 200
+    assert c.get(f"/api/doe/plans/{pid}", params={"project_id": "other"}).status_code == 404
+    assert c.get("/api/doe/plans/nope").status_code == 404
+    # same item shape as history
+    hist = c.get("/api/doe/history", params={"project_id": "p-doe"}).json()["items"]
+    assert {k: v for k, v in item.items() if k != "project_id"} == next(h for h in hist if h["plan_id"] == pid)
+
+
+def test_active_plan_with_unknown_campaign_reports_plan_id(env):
+    c, _ = env
+    body = _active(c, workbench_campaign_id=55555)
+    assert body["plan_id"] == body["plan"]["plan_id"]
+    assert c.get(f"/api/doe/plans/{body['plan_id']}").json()["campaign_id"] is None

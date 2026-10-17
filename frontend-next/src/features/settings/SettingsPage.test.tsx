@@ -45,7 +45,7 @@ beforeEach(() => {
       { id: "tavily_api_key", env_key: "TAVILY_API_KEY", label: "Tavily", group: "search", set: true, masked: "tvly…9f2c" },
     ] };
     if (path === "/api/mcp/approvals/pending") return { items: [
-      { request_id: 7, server_id: "fs", tool_name: "read_file", session_id: "s1", project_id: null, age_s: 12.3 },
+      { request_id: 7, server_id: "fs", tool_name: "read_file", session_id: "s1", project_id: null, age_s: 12.3, arguments: { path: "/etc/x", api_key: "***" } },
     ], total: 1 };
     throw new Error(`unexpected ${path}`);
   });
@@ -74,10 +74,21 @@ describe("SettingsPage", () => {
   });
 });
 
+describe("argsPreview", () => {
+  it("formats and truncates call arguments", async () => {
+    const { argsPreview } = await import("./McpApprovalsPage");
+    expect(argsPreview(null)).toBeNull();
+    expect(argsPreview({})).toBe("{}");
+    expect(argsPreview({ a: 1, b: { c: "d" } })).toBe('a=1, b={"c":"d"}');
+    expect(argsPreview({ s: "x".repeat(100) }, 10)).toHaveLength(10);
+  });
+});
+
 describe("McpApprovalsPage", () => {
   it("lists pending approvals and posts a decision", async () => {
     renderAt("/admin/mcp-approvals");
     expect(await screen.findByText("read_file")).toBeInTheDocument();
+    expect(screen.getByText("path=/etc/x, api_key=***")).toBeInTheDocument();
     screen.getByRole("button", { name: /允许一次/ }).click();
     await waitFor(() => expect(call).toHaveBeenCalledWith("POST", "/api/mcp/approvals/7/decide", { decision: "allow", scope: "once" }));
   });

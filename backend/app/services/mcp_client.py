@@ -672,6 +672,7 @@ def _approval_gate(
     tool_name: str,
     *,
     settings: Any = None,
+    arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """W2-7 MCP 逐工具审批门禁。返回 None 表示放行，否则返回 error dict。
 
@@ -693,7 +694,7 @@ def _approval_gate(
     try:
         from .mcp_approval import evaluate_call
 
-        verdict = evaluate_call(server_id, tool_name)
+        verdict = evaluate_call(server_id, tool_name, arguments=arguments)
     except Exception:  # noqa: BLE001
         logger.exception("MCP 审批模块异常，按 ask(deny) 处理：%s/%s", server_id, tool_name)
         return {
@@ -774,7 +775,7 @@ def _call_tool(
     *,
     settings: Any = None,
 ) -> dict[str, Any]:
-    gate = _approval_gate(server_id, tool_name, settings=settings)
+    gate = _approval_gate(server_id, tool_name, settings=settings, arguments=arguments)
     if gate is not None:
         return gate
     server = next((s for s in _prefs_servers() if s.get("id") == server_id and s.get("enabled")), None)

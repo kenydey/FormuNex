@@ -8,7 +8,7 @@ same as the other routers; no per-endpoint auth code here.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
@@ -51,6 +51,30 @@ def create_lineage(body: CreateLineageBody) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return lineage.to_dict()
+
+
+class LineageSummary(BaseModel):
+    lineage_id: str
+    project_id: str
+    kind: str
+    title: str
+    version_count: int = 0
+    latest_version: int | None = None
+    latest_version_id: str | None = None
+    status: str | None = None
+    created_at: float
+    updated_at: float
+
+
+@router.get("/lineages", response_model=list[LineageSummary])
+def list_lineages(
+    project_id: str | None = Query(None, max_length=128),
+    kind: str | None = Query(None, max_length=64),
+    limit: int = Query(200, ge=1, le=1000),
+) -> list[dict]:
+    """Artifact lineages (optionally of one project / kind), most recently updated first, with their latest version."""
+    _require_enabled()
+    return svc.list_lineages(project_id=project_id, kind=kind, limit=limit)
 
 
 @router.post("/lineages/{lineage_id}/versions", response_model=dict)

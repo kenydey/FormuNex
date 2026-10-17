@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { EChartsOption } from "echarts";
+import { ApiError } from "@/api/client";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
@@ -39,7 +40,9 @@ export default function WorkbenchRowPage() {
   const lineage = useQuery({ queryKey: [...rowKey(c, r), "lineage"], queryFn: () => fx.rowLineage(c, r) });
   const meas = useQuery({ queryKey: [...rowKey(c, r), "qc"], queryFn: () => fx.rowMeasurements(c, r) });
   const atts = useQuery({ queryKey: [...rowKey(c, r), "attachments"], queryFn: () => fx.rowAttachments(c, r) });
-  const versions = useQuery({ queryKey: [...rowKey(c, r), "versions"], enabled: !!row?.refcode, retry: false, queryFn: () => fx.rowVersions(c, r) });
+  // DataLab rows (refcode) and native-store rows (audit-log snapshots) both have versions; 404 = no version store.
+  const versions = useQuery({ queryKey: [...rowKey(c, r), "versions"], enabled: !!row, retry: false, queryFn: () => fx.rowVersions(c, r) });
+  const noVersions = versions.error instanceof ApiError && versions.error.status === 404;
 
   const patchRow = (fresh: WorkbenchRow) => {
     qc.setQueryData(["formulation", "campaign", c], (old: typeof campaign.data) => old && { ...old, rows: old.rows.map((x) => (x.id === fresh.id ? fresh : x)) });
@@ -80,7 +83,7 @@ export default function WorkbenchRowPage() {
       {row && tab === "overview" && <Overview row={row} objectives={objectives} chain={lineage.data} meas={meas.data} measLoading={meas.isLoading} />}
       {row && tab === "attachments" && <ProCard bordered><RowAttachments campaignId={campaignId} rowId={rowId} /></ProCard>}
       {row && tab === "versions" && <ProCard bordered>
-        {row.refcode ? <RowVersions campaignId={campaignId} rowId={rowId} onRestored={() => void qc.invalidateQueries({ queryKey: ["formulation", "campaign", c] })} />
+        {!noVersions ? <RowVersions campaignId={campaignId} rowId={rowId} onRestored={() => void qc.invalidateQueries({ queryKey: ["formulation", "campaign", c] })} />
           : <Empty description={t("formulation.rowver.no_refcode", "该行尚未同步到 DataLab，无版本记录")} />}
       </ProCard>}
       {row && tab === "lineage" && <ProCard bordered><RowLineage campaignId={campaignId} rowId={rowId} chain={lineage.data} loading={lineage.isLoading} error={lineage.error} /></ProCard>}

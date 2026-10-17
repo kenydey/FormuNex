@@ -25,14 +25,14 @@ class DecideRequest(BaseModel):
 
 @router.get("/pending", response_model=dict)
 def list_pending() -> dict:
-    """Return currently pending MCP tool approval requests."""
+    """Return currently pending MCP tool approval requests, with their (redacted) tool-call arguments."""
     db = mcp_approval.ensure_store()
     now = time.monotonic()
     items: list[dict] = []
     with sqlite3.connect(db) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT id, server_id, tool_name, session_id, project_id, requested_at "
+            "SELECT id, server_id, tool_name, session_id, project_id, requested_at, arguments_json "
             "FROM mcp_approval_requests WHERE status = 'pending' "
             "ORDER BY requested_at ASC"
         ).fetchall()
@@ -48,6 +48,8 @@ def list_pending() -> dict:
                 "session_id": r["session_id"],
                 "project_id": r["project_id"],
                 "age_s": round(age, 1),
+                # Tool-call arguments (secret-looking keys redacted); None when the call recorded none.
+                "arguments": mcp_approval.load_arguments(r["arguments_json"]),
             }
         )
     return {"items": items, "total": len(items)}

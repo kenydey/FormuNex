@@ -9,7 +9,9 @@ ask 无决策时后端默认 deny 并写审计日志，request_id 留给未来�
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -65,11 +67,61 @@ def ensure_store(path: str | Path | None = None) -> Path:
             )
             """
         )
+        # Tool-call arguments shown to the approver (redacted JSON). Added after the table shipped, so older
+        # stores get the column here (this store is outside Alembic; ``ensure_store`` is its migration).
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(mcp_approval_requests)").fetchall()}
+        if "arguments_json" not in cols:
+            conn.execute("ALTER TABLE mcp_approval_requests ADD COLUMN arguments_json TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mcp_approval_req_tool "
             "ON mcp_approval_requests (server_id, tool_name, status)"
         )
     return db
+
+
+_SECRET_KEY_RE = re.compile(r"token|key|password|passwd|secret|authorization|credential|cookie", re.IGNORECASE)
+REDACTED = "***"
+_MAX_ARGS_JSON = 20_000
+
+
+def redact_arguments(value: Any, _depth: int = 0) -> Any:
+    """Copy of tool-call arguments with the values of secret-looking keys (token, key, password, secret,
+    authorization …) replaced by ``***`` — recursively through dicts and lists."""
+    if _depth > 20:
+        return REDACTED
+    if isinstance(value, dict):
+        return {
+            str(k): (REDACTED if _SECRET_KEY_RE.search(str(k)) else redact_arguments(v, _depth + 1))
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [redact_arguments(v, _depth + 1) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _arguments_json(arguments: dict[str, Any] | None) -> str | None:
+    if arguments is None:
+        return None
+    try:
+        text = json.dumps(redact_arguments(arguments), ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return None
+    if len(text) > _MAX_ARGS_JSON:
+        text = json.dumps({"_truncated": True, "preview": text[:_MAX_ARGS_JSON]}, ensure_ascii=False)
+    return text
+
+
+def load_arguments(raw: str | None) -> dict[str, Any] | None:
+    """Stored (already redacted) arguments → dict; redacted again in case a row predates redaction."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return redact_arguments(data) if isinstance(data, dict) else {"value": redact_arguments(data)}
 
 
 def _norm(server_id: str, tool_name: str) -> tuple[str, str]:
@@ -162,8 +214,12 @@ def evaluate_call(
     project_id: str | None = None,
     path: str | Path | None = None,
     now: float | None = None,
+    arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """审批门禁求值。
+
+    ``arguments``: the tool call's arguments, stored redacted on the approval request so the approver sees
+    what the call would do (the latest attempt's arguments replace those of a still-pending request).
 
     返回 {"verdict": "allow"} 或
     {"verdict": "deny", "reason": ..., "request_id": ...}。
@@ -189,9 +245,9 @@ def evaluate_call(
         if pending is None:
             cur = conn.execute(
                 "INSERT INTO mcp_approval_requests "
-                "(server_id, tool_name, session_id, project_id, status, requested_at) "
-                "VALUES (?, ?, ?, ?, 'pending', ?)",
-                (sid, tool, session_id, project_id, mono),
+                "(server_id, tool_name, session_id, project_id, status, requested_at, arguments_json) "
+                "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+                (sid, tool, session_id, project_id, mono, _arguments_json(arguments)),
             )
             request_id = cur.lastrowid
             _audit("approval_required", sid, tool, request_id=request_id)
@@ -204,6 +260,11 @@ def evaluate_call(
             )
             _audit("approval_timeout", sid, tool, request_id=pending["id"], age_s=round(age, 1))
             return {"verdict": "deny", "reason": "approval_timeout", "request_id": pending["id"]}
+        if arguments is not None:
+            conn.execute(
+                "UPDATE mcp_approval_requests SET arguments_json = ? WHERE id = ?",
+                (_arguments_json(arguments), pending["id"]),
+            )
         _audit("approval_pending", sid, tool, request_id=pending["id"], age_s=round(age, 1))
         return {"verdict": "deny", "reason": "approval_pending", "request_id": pending["id"]}
 

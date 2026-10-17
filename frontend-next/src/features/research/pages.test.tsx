@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "antd";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -76,5 +76,18 @@ describe("ArtifactsPage", () => {
     expect(await screen.findByText("深度研究 · 测试")).toBeInTheDocument();
     expect(screen.getByText("待审")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /定\s?版/ })).toBeInTheDocument();
+    await waitFor(() => expect(call).toHaveBeenCalledWith("GET", "/api/artifacts/lineages?project_id=p1"));
+  });
+
+  it("offers the project's lineages in a picker", async () => {
+    call.mockImplementation((_m: string, path: string) => {
+      if (path.startsWith("/api/artifacts/lineages?")) return Promise.resolve([{ lineage_id: "lin2abcdef", project_id: "p1", kind: "report",
+        title: "配方报告", version_count: 1, latest_version: 1, latest_version_id: "v", status: "staging", created_at: 1, updated_at: 2 }]);
+      return Promise.resolve({});
+    });
+    wrap(<ArtifactsPage />, "/knowledge/research/artifacts?tab=versions", "/knowledge/research/artifacts");
+    const select = await screen.findByTestId("lineage-select");
+    fireEvent.mouseDown(select.querySelector(".ant-select-selector")!);
+    expect(await screen.findByText("配方报告")).toBeInTheDocument();
   });
 });

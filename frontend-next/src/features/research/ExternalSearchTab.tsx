@@ -1,6 +1,6 @@
 import { ProTable } from "@ant-design/pro-components";
 import { Alert, App, Badge, Button, Card, Checkbox, Input, Popconfirm, Progress, Space, Tag, Tooltip, Typography, Upload } from "antd";
-import { CloudDownloadOutlined, DeleteOutlined, ExperimentOutlined, UploadOutlined } from "@ant-design/icons";
+import { CloudDownloadOutlined, DeleteOutlined, ExperimentOutlined, FileTextOutlined, UploadOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -9,10 +9,13 @@ import { call } from "@/api/client";
 import { awaitTask, cancelTask, type AsyncTaskAccepted } from "@/api/stream";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { EmbodimentDraftDrawer } from "./EmbodimentDraftDrawer";
-import { citationTarget, evidenceKey, pageLabel, parseKbIngest, parseSearchData, sourceBadge, SOURCE_TYPES } from "./lib";
+import {
+  citationTarget, evidenceKey, mapKbSourceIds, pageLabel, parseKbIngest, parseSearchData, resolveItems, sourceBadge, SOURCE_TYPES,
+  type KbResolveMatch,
+} from "./lib";
 import { useResearch } from "./store";
 import type {
-  EmbodimentDraft, Evidence, IngestEvidenceResponse, KbIngestProgress, SearchProgress, SearchResponse, SourceStatus, SourceType,
+  EmbodimentDraft, Evidence, IngestEvidenceResponse, KbIngestDoc, KbIngestProgress, SearchProgress, SearchResponse, SourceStatus, SourceType,
 } from "./types";
 import { useProjectRequirement } from "./useProjectRequirement";
 
@@ -32,6 +35,8 @@ export default function ExternalSearchTab() {
   const [fallback, setFallback] = useState<string | null>(null);
   const [kb, setKb] = useState<KbBuild | null>(null);
   const [rows, setRows] = useState<Record<string, RowState>>({});
+  /** Row key → KB source id holding the hit's full text (background KB build + resolve endpoint). */
+  const [kbMap, setKbMap] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<EmbodimentDraft | null>(null);
   const [uploading, setUploading] = useState(false);
   const abort = useRef<{ ctrl: AbortController; taskId?: string } | null>(null);
@@ -42,15 +47,41 @@ export default function ExternalSearchTab() {
     staleTime: 60_000,
   });
   const patchRow = (k: string, p: RowState) => setRows((r) => ({ ...r, [k]: { ...r[k], ...p } }));
+  const sourceIdOf = (k: string) => rows[k]?.sourceId || kbMap[k] || null;
+
+  /** Map hits to their KB documents: progress docs first, then one resolve call for whatever is still unmapped. */
+  const resolveKb = async (docs: KbIngestDoc[] = []) => {
+    const all = useResearch.getState().sources;
+    const local = mapKbSourceIds(all, docs);
+    let matches: KbResolveMatch[] = [];
+    const items = resolveItems(all, { ...kbMap, ...local });
+    if (items.length) {
+      try {
+        matches = (await call<{ matches: KbResolveMatch[] }>("POST", "/api/kb/sources/resolve", { items })).matches ?? [];
+      } catch {
+        matches = []; // fail-open: rows simply stay unmapped
+      }
+    }
+    const mapped = { ...local, ...mapKbSourceIds(all, [], matches) };
+    if (Object.keys(mapped).length) setKbMap((m) => ({ ...m, ...mapped }));
+  };
 
   const trackKb = async (taskId: string) => {
     setKb({ taskId, progress: null, message: t("research.kb.building", "知识库后台构建中…"), active: true });
     try {
-      const final = await awaitTask(taskId, { onEvent: (ev) => setKb((k) => k && k.taskId === taskId
-        ? { ...k, progress: parseKbIngest(ev.data) ?? k.progress, message: ev.message || k.message } : k) });
-      setKb((k) => k && k.taskId === taskId ? { ...k, progress: parseKbIngest(final.data) ?? k.progress,
+      const final = await awaitTask(taskId, { onEvent: (ev) => {
+        const p = parseKbIngest(ev.data);
+        if (p) {
+          const live = mapKbSourceIds(useResearch.getState().sources, p.docs);
+          if (Object.keys(live).length) setKbMap((m) => ({ ...m, ...live }));
+        }
+        setKb((k) => k && k.taskId === taskId ? { ...k, progress: p ?? k.progress, message: ev.message || k.message } : k);
+      } });
+      const finalProgress = parseKbIngest(final.data);
+      setKb((k) => k && k.taskId === taskId ? { ...k, progress: finalProgress ?? k.progress,
         message: final.message || t("research.kb.done", "知识库构建完成"), active: false } : k);
       void qc.invalidateQueries({ queryKey: ["kb", "sources"] });
+      await resolveKb(finalProgress?.docs ?? []);
     } catch (e) {
       setKb((k) => k && k.taskId === taskId ? { ...k, active: false,
         message: t("research.kb.untracked", "已停止跟踪进度（{{e}}）——后台任务可能仍在继续", { e: errorText(e) }) } : k);
@@ -99,6 +130,7 @@ export default function ExternalSearchTab() {
       const r = parseSearchData(final.data);
       absorb(r);
       if (r.kbIngestTaskId) void trackKb(r.kbIngestTaskId);
+      void resolveKb(); // hits whose full text is already in the KB
       message.success(final.message || t("research.search.done", "检索完成，共 {{n}} 条", { n: useResearch.getState().sources.length }));
     } catch (e) {
       if (ctrl.signal.aborted) {
@@ -180,7 +212,7 @@ export default function ExternalSearchTab() {
 
   const extract = async (e: Evidence) => {
     const k = evidenceKey(e);
-    const sourceId = rows[k]?.sourceId;
+    const sourceId = sourceIdOf(k);
     patchRow(k, { busy: "draft" });
     try {
       const res = sourceId
@@ -309,17 +341,24 @@ export default function ExternalSearchTab() {
           { title: t("research.sources.col_rel", "相关度"), dataIndex: "relevance", width: 80, sorter: (a, b) => a.relevance - b.relevance,
             render: (_d, e) => Number(e.relevance ?? 0).toFixed(2) },
           { title: t("research.sources.col_snippet", "摘要"), dataIndex: "snippet", ellipsis: true, hideInTable: false },
-          { title: t("common.actions", "操作"), valueType: "option", width: 200, render: (_d, e) => {
+          { title: t("common.actions", "操作"), valueType: "option", width: 260, render: (_d, e) => {
             const k = evidenceKey(e);
             const r = rows[k];
-            const draftable = e.source === "surechembl" || !!r?.sourceId;
+            const sid = sourceIdOf(k);
+            const inKb = r?.status === "indexed" || r?.status === "skipped" || (!!sid && r?.status !== "failed");
+            const draftable = e.source === "surechembl" || !!sid;
             return [
               <Tooltip key="i" title={r?.error ?? undefined}>
                 <Button size="small" type="link" icon={<CloudDownloadOutlined />} loading={r?.busy === "ingest"}
-                  disabled={!e.identifier || r?.status === "indexed" || r?.status === "skipped"} onClick={() => void ingest(e)}>
-                  {r?.status === "indexed" || r?.status === "skipped" ? t("research.ingest.in_kb", "已入库") : t("research.ingest.run", "入库全文")}
+                  disabled={!e.identifier || inKb} onClick={() => void ingest(e)}>
+                  {inKb ? t("research.ingest.in_kb", "已入库") : t("research.ingest.run", "入库全文")}
                 </Button>
               </Tooltip>,
+              sid && (
+                <Link key="ft" to={`/knowledge/sources/${encodeURIComponent(sid)}`}>
+                  <Button size="small" type="link" icon={<FileTextOutlined />}>{t("research.sources.fulltext", "全文")}</Button>
+                </Link>
+              ),
               draftable && (
                 <Button key="d" size="small" type="link" icon={<ExperimentOutlined />} loading={r?.busy === "draft"} onClick={() => void extract(e)}>
                   {t("research.emb.extract", "实施例草稿")}

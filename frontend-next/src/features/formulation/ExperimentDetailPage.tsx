@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { fx } from "./api";
 import { datalabSyncOutcome } from "./logic";
-import type { Attachment, ExperimentSummary, QCMeasurement } from "./types";
+import type { Attachment, QCMeasurement } from "./types";
 
 /** One training experiment: measured snapshot, typed QC measurements, attachments, Datalab sync (legacy ExperimentsBrowser detail). */
 export default function ExperimentDetailPage() {
@@ -17,12 +17,7 @@ export default function ExperimentDetailPage() {
   const { message } = App.useApp();
   const qc = useQueryClient();
   const [syncMsg, setSyncMsg] = useState<{ type: "success" | "warning"; text: string } | null>(null);
-  // There is no GET /api/experiments/{id}; the summary comes from the list (newest 1000).
-  const summary = useQuery({
-    queryKey: ["formulation", "experiments", "all", null, undefined, 1000],
-    queryFn: () => fx.experiments({ limit: 1000 }),
-    select: (rows: ExperimentSummary[]) => rows.find((r) => String(r.id) === id) ?? null,
-  });
+  const summary = useQuery({ queryKey: ["formulation", "experiments", "one", id], enabled: !!id, queryFn: () => fx.experiment(id) });
   const meas = useQuery({ queryKey: ["formulation", "exp-meas", id], queryFn: () => fx.experimentMeasurements(id) });
   const atts = useQuery({ queryKey: ["formulation", "exp-atts", id], queryFn: () => fx.experimentAttachments(id) });
   const upload = useMutation({
