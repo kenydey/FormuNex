@@ -3,7 +3,7 @@
 方案 §3.4 的验收基线：旧前端 `frontend/src` 的每个组件对应到新前端 `frontend-next/src` 的位置与状态。
 新前端在本表 100% 为“已迁移 / 废弃”且 Playwright 主路径全绿之前不替换旧前端（一次性切换）。
 
-统计（123 个组件）：✅ 已迁移 107，🟡 部分 7，⬜ 待迁移 0，➖ 废弃 / 取代 9
+统计（123 个组件）：✅ 已迁移 114，🟡 部分 0，⬜ 待迁移 0，➖ 废弃 / 取代 9
 
 验证：`frontend-next/e2e/routes.spec.ts` 在运行中的后端上逐一打开全部页面（未选 / 已选项目两遍），无未捕获异常、控制台错误、错误边界或 5xx；`e2e/smoke.spec.ts` 走主路径。两者都需手动运行（见 e2e/README.md），不在 CI 中。
 
@@ -19,18 +19,18 @@
 | 壳 | `DegradedBanner` | ✅ 已迁移 | chat/HealthBanners（未配置 LLM key / 检索降级），按钮直达设置页；旧 API token 提示由登录取代 |
 | 壳 | `InfraHealthBanner` | ✅ 已迁移 | chat/HealthBanners：30 s 轮询 /health |
 | 壳 | `Modal` | ➖ 废弃 / 取代 | 由 antd Modal 取代 |
-| 壳 | `NotificationCard` | 🟡 部分 | chat/TaskCenter（顶栏任务中心）；后端无“列出我的后台任务”接口，只跟踪本浏览器发起的任务 |
-| 壳 | `NotificationStack` | 🟡 部分 | chat/TaskCenter（进度、思考步骤、取消、待审批）；同上 |
+| 壳 | `NotificationCard` | ✅ 已迁移 | chat/TaskCenter（顶栏任务中心：服务器任务列表 GET /api/tasks + 本地跟踪、进度、取消、待审批） |
+| 壳 | `NotificationStack` | ✅ 已迁移 | chat/TaskCenter（同上） |
 | ① 知识 | `DocOutline` | ✅ 已迁移 | SourceDetailPage 目录树 |
 | ① 知识 | `SourceDetailModal` | ✅ 已迁移 | knowledge/SourceDetailPage（目录树 + 原文） |
-| ① 知识 | `ResearchPanel` | 🟡 部分 | research/ResearchPage /knowledge/research（外部多源检索、问答、深度研究报告）；检索结果与知识库全文的自动对应未迁移 |
+| ① 知识 | `ResearchPanel` | ✅ 已迁移 | research/ResearchPage /knowledge/research（外部多源检索、问答、深度研究报告；检索结果经 /api/kb/sources/resolve 对应知识库全文） |
 | ① 知识 | `SourcesPanel` | ✅ 已迁移 | knowledge/SourcesPage（归档/恢复/删除/导出/实施例草稿/添加资料）；检索工作区部分由 research 外部检索承担 |
 | ① 知识 | `ThinkingTimeline` | ✅ 已迁移 | chat/ThinkingTimeline + research/TaskThinking |
 | ① 知识 | `AddSourceModal` | ✅ 已迁移 | library/AddSourceDrawer（文件、标识号、网页、粘贴文本、联网检索入库） |
 | ① 知识 | `ArtifactDrawer` | ✅ 已迁移 | research/ArtifactsPage /knowledge/research/artifacts（导出架、版本、预检、报告导出） |
 | ① 知识 | `ArtifactSplitLayout` | ➖ 废弃 / 取代 | 纯布局容器，由 ProCard / PageContainer 取代 |
 | ① 知识 | `ArtifactVersionsPanel` | ✅ 已迁移 | research/VersionsPanel /knowledge/research/artifacts/:lineageId（另加提交/定稿/哈希校验）；后端无按项目列谱系接口 |
-| ① 知识 | `ChatComposerPlus` | 🟡 部分 | chat/ChatComposerPlus（模式、技能、连接器、MCP）；playbooks 未迁移（旧工作流弹窗无对应页面） |
+| ① 知识 | `ChatComposerPlus` | ✅ 已迁移 | chat/ChatComposerPlus（模式、技能、连接器、MCP、行动包 → 对应新页面并带上问题） |
 | ① 知识 | `ChatSlashMenu` | ✅ 已迁移 | chat/TokenPicker（/技能，另加 @知识源） |
 | ① 知识 | `CitationRenderer` | ✅ 已迁移 | chat/CitationAnswer（脚注上标、页码跳转原文） |
 | ① 知识 | `EmbodimentDraftModal` | ✅ 已迁移 | research/EmbodimentDraftDrawer（资料库、检索、/knowledge/research/embodiment 共用一份） |
@@ -82,14 +82,14 @@
 | ③ 实验室 | `DoeResultsPanel` | ✅ 已迁移 | design/ClassicDoePage /lab/doe/classic（全因子/部分因子/PB/CCD/LHS/BBD/单纯形/Sobol/AI 主动选点） |
 | ③ 实验室 | `ExperimentDetail` | ✅ 已迁移 | formulation/WorkbenchRowPage |
 | ③ 实验室 | `ExperimentsBrowser` | ✅ 已迁移 | formulation/ExperimentsPage /lab/experiments（训练记录 + 跨台账检索） |
-| ③ 实验室 | `LabWorkbench` | 🟡 部分 | workbench/CampaignPage /cockpit/workbench/:id；无附件数列、撤销/右键菜单（由粘贴对话框、行菜单与抽屉取代） |
+| ③ 实验室 | `LabWorkbench` | ✅ 已迁移 | workbench/CampaignPage /cockpit/workbench/:id（附件数列、撤销 / 重做、右键菜单、原生台账行版本） |
 | ③ 实验室 | `LeversEditor` | ✅ 已迁移 | design/LeversPanel /lab/doe/levers（含 material_map） |
 | ③ 实验室 | `QCReportModal` | ✅ 已迁移 | design/QcReportPage /lab/qc-report（台账行页可直达） |
 | ③ 实验室 | `VersionHistoryModal` | ✅ 已迁移 | formulation/VersionHistory（列表/图、任意两版差异）+ /lab/lineage |
 | ③ 实验室 | `AttachmentPreview` | ✅ 已迁移 | formulation/RowPanels RowAttachments |
 | ③ 实验室 | `ExperimentDiff` | ✅ 已迁移 | formulation/RowDiffPage |
 | ③ 实验室 | `FormulaExplainPanel` | ✅ 已迁移 | formulation/ExplainPanel |
-| ③ 实验室 | `FormulaLeaderboard` | 🟡 部分 | formulation/LeaderboardPage /lab/leaderboard（PDF / Word 改为服务端配方技术报告，经发布预检）；单卡片 PDF 与 KG 关系洞察横幅未迁移（洞察只在同步推荐接口返回，未随项目保存） |
+| ③ 实验室 | `FormulaLeaderboard` | ✅ 已迁移 | formulation/LeaderboardPage /lab/leaderboard（单卡 PDF、配方技术报告、KG 关系洞察横幅） |
 | ③ 实验室 | `FormulationModeSelector` | ✅ 已迁移 | formulation/ModeSelector（推荐页） |
 | ③ 实验室 | `InverseDesignModal` | ✅ 已迁移 | design/InverseDesignPage /lab/inverse-design（“采纳到排行榜”改为存为配方版本） |
 | ③ 实验室 | `LineageTree` | ✅ 已迁移 | formulation/RowPanels RowLineage |

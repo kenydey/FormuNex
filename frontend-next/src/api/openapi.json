@@ -621,6 +621,69 @@
     }
    }
   },
+  "/api/doe/plans/{plan_id}": {
+   "get": {
+    "tags": [
+     "doe"
+    ],
+    "summary": "Get Doe Plan",
+    "description": "One stored DOE plan by id — the same item shape as ``/doe/history``\n(factors, runs, notes, status, campaign / round provenance) plus ``project_id``.\n\n404 when the plan does not exist or, with ``project_id``, belongs to another\nproject (unscoped legacy rows are not visible under any project, as in history).",
+    "operationId": "get_doe_plan_api_doe_plans__plan_id__get",
+    "parameters": [
+     {
+      "name": "plan_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Plan Id"
+      }
+     },
+     {
+      "name": "project_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "当前项目；给出时只返回属于该项目的计划（与 /doe/history 的项目范围一致）",
+       "title": "Project Id"
+      },
+      "description": "当前项目；给出时只返回属于该项目的计划（与 /doe/history 的项目范围一致）"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Doe Plan Api Doe Plans  Plan Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/doe/{plan_id}/activate": {
    "post": {
     "tags": [
@@ -860,6 +923,88 @@
     }
    }
   },
+  "/api/tasks": {
+   "get": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "List Tasks",
+    "description": "The caller's recent background tasks, newest first, from the durable on-disk task snapshots.\n\nOwnership follows ``assert_owner``: in single-user mode (owner ``default``) every task is listed; with\n``FORMUNEX_MULTI_USER`` only tasks whose ``owner_id`` is the caller's.",
+    "operationId": "list_tasks_api_tasks_get",
+    "parameters": [
+     {
+      "name": "state",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/TaskState"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Only tasks in this state",
+       "title": "State"
+      },
+      "description": "Only tasks in this state"
+     },
+     {
+      "name": "kind",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Only tasks of this kind (e.g. recommend, deep_research)",
+       "title": "Kind"
+      },
+      "description": "Only tasks of this kind (e.g. recommend, deep_research)"
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 200,
+       "minimum": 1,
+       "default": 50,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskList"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/tasks/{task_id}": {
    "get": {
     "tags": [
@@ -1076,6 +1221,44 @@
          "$ref": "#/components/schemas/FormulationValidateResponse"
         }
        }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/formulations/export/pdf": {
+   "post": {
+    "tags": [
+     "metadata"
+    ],
+    "summary": "Export Formulation Pdf",
+    "description": "One formulation (leaderboard card) → PDF: name, domain, ingredient table (wt% / CAS), predicted metrics,\nrationale and warnings, rendered with ReportLab and the project's CJK font.",
+    "operationId": "export_formulation_pdf_api_formulations_export_pdf_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FormulationPdfRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "The formulation as a PDF",
+      "content": {
+       "application/pdf": {}
       }
      },
      "422": {
@@ -1409,6 +1592,48 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/LineageResponse"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/formulations/versions/detail/{version_id}": {
+   "get": {
+    "tags": [
+     "metadata"
+    ],
+    "summary": "Formulation Version Detail",
+    "operationId": "formulation_version_detail_api_formulations_versions_detail__version_id__get",
+    "parameters": [
+     {
+      "name": "version_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Version Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/VersionDetail"
         }
        }
       }
@@ -2585,13 +2810,56 @@
     }
    }
   },
+  "/api/experiments/workbench/{campaign_id}/attachment-counts": {
+   "get": {
+    "tags": [
+     "experiments"
+    ],
+    "summary": "Workbench Attachment Counts",
+    "description": "Attachment count of every row of a campaign in one call (ledger column).",
+    "operationId": "workbench_attachment_counts_api_experiments_workbench__campaign_id__attachment_counts_get",
+    "parameters": [
+     {
+      "name": "campaign_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Campaign Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WorkbenchAttachmentCounts"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/experiments/workbench/{campaign_id}/rows/{row_id}/versions/{version_id}/restore": {
    "post": {
     "tags": [
      "experiments"
     ],
     "summary": "Restore Workbench Row Version",
-    "description": "P3: restore a DOE row's DataLab item to a saved version.\n\nThe platform mints a new \"restored\" version afterwards, so the operation is\nreversible — restoring again to any earlier version stays possible.",
+    "description": "P3: restore a DOE row's DataLab item to a saved version.\n\nThe platform mints a new \"restored\" version afterwards, so the operation is\nreversible — restoring again to any earlier version stays possible.\nNative rows (no refcode) restore the audit-log snapshot ``version_id`` and\nrecord the result as a new ``restore`` version — equally reversible.",
     "operationId": "restore_workbench_row_version_api_experiments_workbench__campaign_id__rows__row_id__versions__version_id__restore_post",
     "parameters": [
      {
@@ -2654,7 +2922,7 @@
      "experiments"
     ],
     "summary": "Workbench Row Versions",
-    "description": "P3: version history of a DOE row's DataLab item (auto-saved on every sync).\n\nWithout compare params returns ``{refcode, versions: [{id, version, action,\ntimestamp, creator}]}``; with ``compare_v1`` + ``compare_v2`` returns the\nDeepDiff between those two version ids under ``diff``.",
+    "description": "P3: version history of a DOE row's DataLab item (auto-saved on every sync).\n\nNative rows (no refcode) answer from the audit log instead (``source: \"native\"``,\n``refcode: null``; each entry also carries its ``snapshot``).\n\nWithout compare params returns ``{refcode, versions: [{id, version, action,\ntimestamp, creator}]}``; with ``compare_v1`` + ``compare_v2`` returns the\nDeepDiff between those two version ids under ``diff``.",
     "operationId": "workbench_row_versions_api_experiments_workbench__campaign_id__rows__row_id__versions_get",
     "parameters": [
      {
@@ -3024,6 +3292,56 @@
     }
    }
   },
+  "/api/experiments/search": {
+   "get": {
+    "tags": [
+     "experiments"
+    ],
+    "summary": "Search Experiments",
+    "description": "Search across all campaigns by keyword (tags, params, measurements).",
+    "operationId": "search_experiments_api_experiments_search_get",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "description": "搜索关键词",
+       "default": "",
+       "title": "Q"
+      },
+      "description": "搜索关键词"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/ExperimentSearchResult"
+         },
+         "title": "Response Search Experiments Api Experiments Search Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/experiments/workbench/{campaign_id}/rounds": {
    "get": {
     "tags": [
@@ -3190,14 +3508,14 @@
     }
    }
   },
-  "/api/experiments/hooks/doecyle-status/{campaign_id}": {
+  "/api/experiments/hooks/doecycle-status/{campaign_id}": {
    "get": {
     "tags": [
      "experiments"
     ],
-    "summary": "Get Doecyle Status",
+    "summary": "Get Doecycle Status",
     "description": "Get the current status of a DOE cycle for a campaign.\n\nReturns: ``{\"isPaused\", \"lastUpdated\" (when it was paused), \"campaignId\", \"pausedUntil\" (null = until resumed),\n\"lapsedAt\" (a pause that ran out by itself within the last week)}``; times are ISO-8601 UTC.",
-    "operationId": "get_doecyle_status_api_experiments_hooks_doecyle_status__campaign_id__get",
+    "operationId": "get_doecycle_status_api_experiments_hooks_doecycle_status__campaign_id__get",
     "parameters": [
      {
       "name": "campaign_id",
@@ -3217,7 +3535,7 @@
         "schema": {
          "type": "object",
          "additionalProperties": true,
-         "title": "Response Get Doecyle Status Api Experiments Hooks Doecyle Status  Campaign Id  Get"
+         "title": "Response Get Doecycle Status Api Experiments Hooks Doecycle Status  Campaign Id  Get"
         }
        }
       }
@@ -3280,6 +3598,59 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Sync Experiment From Datalab Api Experiments  Experiment Id  Sync Datalab Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/experiments/{experiment_id}": {
+   "get": {
+    "tags": [
+     "experiments"
+    ],
+    "summary": "Get Experiment",
+    "description": "One stored experiment (same shape and project scoping as ``GET /experiments``).\n\nDeclared last so the literal ``/experiments/<name>`` routes above win.\n404 when it does not exist or, with ``project_id``, belongs to another project.",
+    "operationId": "get_experiment_api_experiments__experiment_id__get",
+    "parameters": [
+     {
+      "name": "experiment_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Experiment Id"
+      }
+     },
+     {
+      "name": "project_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "default": "",
+       "title": "Project Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ExperimentSummary"
         }
        }
       }
@@ -3436,7 +3807,7 @@
   "/api/ingest": {
    "post": {
     "summary": "Ingest Document",
-    "description": "Queue a single-file ingest: 202 + task_id, results via SSE/poll.\n\nParsing (OCR on a scan) can run for minutes; doing it inside the request\nis what let a proxy in front of uvicorn cut the connection and show the\nuser a 502 for work that had actually completed.",
+    "description": "Queue a single-file ingest: 202 + task_id, results via SSE/poll.\n\nParsing (OCR on a scan) can run for minutes; doing it inside the request\nis what let a proxy in front of uvicorn cut the connection and show the\nuser a 502 for work that had actually completed.\n\n``project_id`` (form field, optional) scopes the new KB source to that\nproject; omitted/empty = global corpus.",
     "operationId": "ingest_document_api_ingest_post",
     "requestBody": {
      "content": {
@@ -3473,7 +3844,7 @@
   "/api/ingest/batch": {
    "post": {
     "summary": "Ingest Batch",
-    "description": "Queue a multi-file ingest: 202 + task_id, results via SSE/poll.",
+    "description": "Queue a multi-file ingest: 202 + task_id, results via SSE/poll.\n\n``project_id`` (form field, optional) scopes every new KB source to that project.",
     "operationId": "ingest_batch_api_ingest_batch_post",
     "requestBody": {
      "content": {
@@ -4533,6 +4904,89 @@
         "schema": {
          "$ref": "#/components/schemas/KBSourceArchiveResponse"
         }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/kb/sources/resolve": {
+   "post": {
+    "tags": [
+     "kb"
+    ],
+    "summary": "外部检索结果 → 知识库文档 id（按 DOI / 专利号 / URL 匹配 origin_url）",
+    "description": "Map search hits to the KB documents that hold their full text.\n\nEach item matches when its identifier, URL or alternate URL (incl. patent\nnumber aliases: compact / hyphenated / Google Patents URL) equals a\nsource's ``origin_url``; rows whose last ingest failed are ignored.\nUnmatched items are simply absent. Fail-open per item.",
+    "operationId": "resolve_sources_api_kb_sources_resolve_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/KBResolveRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/KBResolveResponse"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/kb/sources/{source_id}/reparse": {
+   "post": {
+    "tags": [
+     "kb"
+    ],
+    "summary": "按当前解析配置重新解析知识库文档（后台任务，重建切块/索引/目录树）",
+    "description": "Re-parse the retained original file → full text, chunks, FTS, tables, ToC tree.\n\n202 + ``AsyncTaskAccepted``; 404 unknown source; 409 when KB v2 is off or\nthe original file was never retained (URL / identifier sources).",
+    "operationId": "reparse_source_api_kb_sources__source_id__reparse_post",
+    "parameters": [
+     {
+      "name": "source_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Source Id"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
        }
       }
      },
@@ -12586,7 +13040,7 @@
      "mcp-approvals"
     ],
     "summary": "List Pending",
-    "description": "Return currently pending MCP tool approval requests.",
+    "description": "Return currently pending MCP tool approval requests, with their (redacted) tool-call arguments.",
     "operationId": "list_pending_api_mcp_approvals_pending_get",
     "responses": {
      "200": {
@@ -12914,14 +13368,14 @@
     "summary": "Create Lineage",
     "operationId": "create_lineage_api_artifacts_lineages_post",
     "requestBody": {
+     "required": true,
      "content": {
       "application/json": {
        "schema": {
         "$ref": "#/components/schemas/CreateLineageBody"
        }
       }
-     },
-     "required": true
+     }
     },
     "responses": {
      "200": {
@@ -12929,9 +13383,91 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response Create Lineage Api Artifacts Lineages Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "tags": [
+     "artifacts"
+    ],
+    "summary": "List Lineages",
+    "description": "Artifact lineages (optionally of one project / kind), most recently updated first, with their latest version.",
+    "operationId": "list_lineages_api_artifacts_lineages_get",
+    "parameters": [
+     {
+      "name": "project_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 128
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Project Id"
+      }
+     },
+     {
+      "name": "kind",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 64
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Kind"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 1000,
+       "minimum": 1,
+       "default": 200,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/LineageSummary"
+         },
+         "title": "Response List Lineages Api Artifacts Lineages Get"
         }
        }
       }
@@ -14990,6 +15526,24 @@
        "default": 500,
        "title": "Limit"
       }
+     },
+     {
+      "name": "project_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Only links evidenced by this project's KB documents",
+       "title": "Project Id"
+      },
+      "description": "Only links evidenced by this project's KB documents"
      }
     ],
     "responses": {
@@ -15088,6 +15642,71 @@
           "$ref": "#/components/schemas/KGRelationView"
          },
          "title": "Response Entity Relations Api Kg Relations  Entity Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/kg/path": {
+   "get": {
+    "tags": [
+     "kg"
+    ],
+    "summary": "Entity Path",
+    "operationId": "entity_path_api_kg_path_get",
+    "parameters": [
+     {
+      "name": "src",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Src"
+      }
+     },
+     {
+      "name": "dst",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Dst"
+      }
+     },
+     {
+      "name": "max_depth",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 8,
+       "minimum": 1,
+       "default": 4,
+       "title": "Max Depth"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/KGPathResponse"
         }
        }
       }
@@ -17547,6 +18166,18 @@
        "type": "string",
        "title": "Project Id"
       }
+     },
+     {
+      "name": "allow_empty_sources",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "description": "Explicitly allow an empty ``sources`` list to replace a non-empty one (same as clear_sources)",
+       "default": false,
+       "title": "Allow Empty Sources"
+      },
+      "description": "Explicitly allow an empty ``sources`` list to replace a non-empty one (same as clear_sources)"
      }
     ],
     "requestBody": {
@@ -19798,6 +20429,11 @@
       "type": "integer",
       "title": "Lab Points Used",
       "default": 0
+     },
+     "plan_id": {
+      "type": "string",
+      "title": "Plan Id",
+      "default": ""
      }
     },
     "type": "object",
@@ -20300,6 +20936,17 @@
       },
       "type": "array",
       "title": "Files"
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
      }
     },
     "type": "object",
@@ -20314,6 +20961,17 @@
       "type": "string",
       "contentMediaType": "application/octet-stream",
       "title": "File"
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
      }
     },
     "type": "object",
@@ -23803,6 +24461,51 @@
     "title": "ExperimentRecord",
     "description": "A single measured DOE/lab result fed back into the platform.\n\n``factors`` are the formulation levers in natural units (matching a DOE\nrun's ``natural`` values, e.g. ingredient wt% and cure temperature).\n\nResults live in ``measurements`` as typed rows. ``measured`` remains the\nflat ``{metric: value}`` view every consumer already reads — training, the\nBayBE adapter, active learning, DOE explain/anomaly — and is accepted as\ninput so legacy payloads, stored JSON files, SQLite rows and Datalab blocks\nall still load unchanged."
    },
+   "ExperimentSearchResult": {
+    "properties": {
+     "row_id": {
+      "type": "integer",
+      "title": "Row Id"
+     },
+     "campaign_id": {
+      "type": "integer",
+      "title": "Campaign Id"
+     },
+     "campaign_name": {
+      "type": "string",
+      "title": "Campaign Name"
+     },
+     "item_id": {
+      "type": "string",
+      "title": "Item Id"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "planned_params": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Planned Params"
+     },
+     "measurements": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Measurements"
+     }
+    },
+    "type": "object",
+    "required": [
+     "row_id",
+     "campaign_id",
+     "campaign_name",
+     "item_id",
+     "status",
+     "planned_params",
+     "measurements"
+    ],
+    "title": "ExperimentSearchResult"
+   },
    "ExperimentSubmission": {
     "properties": {
      "records": {
@@ -24606,6 +25309,36 @@
     },
     "type": "object",
     "title": "FormulationModeUpdate"
+   },
+   "FormulationPdfRequest": {
+    "properties": {
+     "formulation": {
+      "$ref": "#/components/schemas/Formulation"
+     },
+     "lang": {
+      "type": "string",
+      "pattern": "^(zh-CN|en-US)$",
+      "title": "Lang",
+      "default": "zh-CN"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 200
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Title"
+     }
+    },
+    "type": "object",
+    "required": [
+     "formulation"
+    ],
+    "title": "FormulationPdfRequest"
    },
    "FormulationSkillOut": {
     "properties": {
@@ -26121,6 +26854,95 @@
     ],
     "title": "KBExtractionTableItem"
    },
+   "KBResolveItem": {
+    "properties": {
+     "identifier": {
+      "type": "string",
+      "maxLength": 1024,
+      "title": "Identifier",
+      "default": ""
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 2048
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url"
+     },
+     "url_alt": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 2048
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url Alt"
+     }
+    },
+    "type": "object",
+    "title": "KBResolveItem"
+   },
+   "KBResolveMatch": {
+    "properties": {
+     "identifier": {
+      "type": "string",
+      "title": "Identifier"
+     },
+     "source_id": {
+      "type": "string",
+      "title": "Source Id"
+     },
+     "title": {
+      "type": "string",
+      "title": "Title",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "required": [
+     "identifier",
+     "source_id"
+    ],
+    "title": "KBResolveMatch"
+   },
+   "KBResolveRequest": {
+    "properties": {
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/KBResolveItem"
+      },
+      "type": "array",
+      "maxItems": 500,
+      "title": "Items"
+     }
+    },
+    "type": "object",
+    "title": "KBResolveRequest"
+   },
+   "KBResolveResponse": {
+    "properties": {
+     "matches": {
+      "items": {
+       "$ref": "#/components/schemas/KBResolveMatch"
+      },
+      "type": "array",
+      "title": "Matches"
+     }
+    },
+    "type": "object",
+    "required": [
+     "matches"
+    ],
+    "title": "KBResolveResponse"
+   },
    "KBSearchResponse": {
     "properties": {
      "results": {
@@ -26641,6 +27463,41 @@
      "source_id"
     ],
     "title": "KGLinkReport"
+   },
+   "KGPathResponse": {
+    "properties": {
+     "src_entity_id": {
+      "type": "string",
+      "title": "Src Entity Id"
+     },
+     "dst_entity_id": {
+      "type": "string",
+      "title": "Dst Entity Id"
+     },
+     "found": {
+      "type": "boolean",
+      "title": "Found",
+      "default": false
+     },
+     "hops": {
+      "type": "integer",
+      "title": "Hops",
+      "default": 0
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/KGPathStep"
+      },
+      "type": "array",
+      "title": "Steps"
+     }
+    },
+    "type": "object",
+    "required": [
+     "src_entity_id",
+     "dst_entity_id"
+    ],
+    "title": "KGPathResponse"
    },
    "KGPathStep": {
     "properties": {
@@ -27528,6 +28385,82 @@
      "lineage_id"
     ],
     "title": "LineageResponse"
+   },
+   "LineageSummary": {
+    "properties": {
+     "lineage_id": {
+      "type": "string",
+      "title": "Lineage Id"
+     },
+     "project_id": {
+      "type": "string",
+      "title": "Project Id"
+     },
+     "kind": {
+      "type": "string",
+      "title": "Kind"
+     },
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "version_count": {
+      "type": "integer",
+      "title": "Version Count",
+      "default": 0
+     },
+     "latest_version": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Version"
+     },
+     "latest_version_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Version Id"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Status"
+     },
+     "created_at": {
+      "type": "number",
+      "title": "Created At"
+     },
+     "updated_at": {
+      "type": "number",
+      "title": "Updated At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "lineage_id",
+     "project_id",
+     "kind",
+     "title",
+     "created_at",
+     "updated_at"
+    ],
+    "title": "LineageSummary"
    },
    "LinkResponse": {
     "properties": {
@@ -30818,6 +31751,11 @@
        }
       ],
       "title": "Title"
+     },
+     "clear_sources": {
+      "type": "boolean",
+      "title": "Clear Sources",
+      "default": false
      }
     },
     "type": "object",
@@ -32756,6 +33694,11 @@
       "type": "boolean",
       "title": "Prefer Materials Catalog",
       "default": false
+     },
+     "relation_insight": {
+      "type": "boolean",
+      "title": "Relation Insight",
+      "default": true
      }
     },
     "type": "object",
@@ -32833,6 +33776,14 @@
        }
       ],
       "title": "Recommend Id"
+     },
+     "relation_insights": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Relation Insights"
      }
     },
     "type": "object",
@@ -35133,6 +36084,22 @@
     ],
     "title": "TaskIn"
    },
+   "TaskList": {
+    "properties": {
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/TaskSummary"
+      },
+      "type": "array",
+      "title": "Items"
+     }
+    },
+    "type": "object",
+    "required": [
+     "items"
+    ],
+    "title": "TaskList"
+   },
    "TaskState": {
     "type": "string",
     "enum": [
@@ -35143,6 +36110,76 @@
      "cancelled"
     ],
     "title": "TaskState"
+   },
+   "TaskSummary": {
+    "properties": {
+     "task_id": {
+      "type": "string",
+      "title": "Task Id"
+     },
+     "kind": {
+      "type": "string",
+      "title": "Kind"
+     },
+     "state": {
+      "$ref": "#/components/schemas/TaskState"
+     },
+     "progress": {
+      "type": "number",
+      "title": "Progress",
+      "default": 0
+     },
+     "message": {
+      "type": "string",
+      "title": "Message",
+      "default": ""
+     },
+     "stage": {
+      "type": "string",
+      "title": "Stage",
+      "default": ""
+     },
+     "stream_url": {
+      "type": "string",
+      "title": "Stream Url",
+      "default": ""
+     },
+     "elapsed_ms": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Elapsed Ms"
+     },
+     "owner_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Owner Id"
+     },
+     "updated_at": {
+      "type": "string",
+      "title": "Updated At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id",
+     "kind",
+     "state",
+     "updated_at"
+    ],
+    "title": "TaskSummary",
+    "description": "One row of ``GET /api/tasks`` — a task snapshot without its (possibly large) result payload."
    },
    "TechReportExportRequest": {
     "properties": {
@@ -35600,6 +36637,87 @@
     ],
     "title": "VerificationDoe",
     "description": "A minimal DOE anchored to one recommended candidate for validation."
+   },
+   "VersionDetail": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "lineage_id": {
+      "type": "string",
+      "title": "Lineage Id"
+     },
+     "version": {
+      "type": "integer",
+      "title": "Version"
+     },
+     "parent_version_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Parent Version Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "domain": {
+      "type": "string",
+      "title": "Domain"
+     },
+     "change_summary": {
+      "type": "string",
+      "title": "Change Summary",
+      "default": ""
+     },
+     "created_by": {
+      "type": "string",
+      "title": "Created By",
+      "default": ""
+     },
+     "created_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Created At"
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
+     },
+     "snapshot": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Snapshot"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "lineage_id",
+     "version",
+     "name",
+     "domain"
+    ],
+    "title": "VersionDetail"
    },
    "VersionView": {
     "properties": {
@@ -36445,6 +37563,26 @@
      "reason"
     ],
     "title": "WithdrawIn"
+   },
+   "WorkbenchAttachmentCounts": {
+    "properties": {
+     "campaign_id": {
+      "type": "integer",
+      "title": "Campaign Id"
+     },
+     "counts": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Counts"
+     }
+    },
+    "type": "object",
+    "required": [
+     "campaign_id"
+    ],
+    "title": "WorkbenchAttachmentCounts"
    },
    "WorkbenchCampaignResponse": {
     "properties": {

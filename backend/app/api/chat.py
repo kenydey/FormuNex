@@ -1015,7 +1015,7 @@ def _stream_answer_plan(req: "ChatRequestValidated", settings):
         include_entity_resolution=req.include_entity_resolution,
     )
     sources, _ref_added = _apply_ref_docs(
-        retrieval_query, sources, req.ref_doc_ids, k=settings.kb_chat_top_k
+        retrieval_query, sources, getattr(req, "ref_doc_ids", None), k=getattr(settings, "kb_chat_top_k", 20)
     )
     kb_used += _ref_added
     try:

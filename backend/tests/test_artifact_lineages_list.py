@@ -58,7 +58,7 @@ def test_lists_with_latest_version_and_filters(client):
 def test_skips_tampered_lineage(client, tmp_path):
     a = _lineage(client, "p1", "A")
     path = tmp_path / "artifacts" / "lineages" / f"{a}.json"
-    path.write_text(path.read_text().replace('"A"', '"B"'))
+    path.write_text(path.read_text(encoding="utf-8").replace('"A"', '"B"'), encoding="utf-8")
     assert client.get("/api/artifacts/lineages").json() == []
 
 

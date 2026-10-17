@@ -39,6 +39,8 @@ def client(tmp_path, monkeypatch):
     from app.main import app
 
     reset_campaign_store(SqliteCampaignStore(default_session_factory()))
+    # get_measurement_store() caches a store bound to whichever database an earlier test used.
+    monkeypatch.setattr("app.db.measurement_store._store", None)
     yield TestClient(app)
     reset_campaign_store(None)
     get_settings.cache_clear()

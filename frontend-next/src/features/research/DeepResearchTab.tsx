@@ -2,7 +2,7 @@ import { ProCard } from "@ant-design/pro-components";
 import { Alert, App, Button, Card, Descriptions, Empty, Input, Select, Space, Table, Tag } from "antd";
 import { DownloadOutlined, InboxOutlined, ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { awaitTask, cancelTask, thinkingSteps, type AsyncTaskAccepted, type ThinkingStep } from "@/api/stream";
@@ -28,7 +28,10 @@ export default function DeepResearchTab() {
   const { projectId, requirement, domain: projectDomain } = useProjectRequirement();
   const domains = useDomainOptions();
   const { query, sources, report, setReport, addSources, setTurns } = useResearch();
-  const [topic, setTopic] = useState(query);
+  // A chat playbook hands its question over as ``?q=`` or location state ``{ question }``.
+  const [params] = useSearchParams();
+  const handed = params.get("q") || (useLocation().state as { question?: string } | null)?.question || "";
+  const [topic, setTopic] = useState(handed || query);
   const [domain, setDomain] = useState(projectDomain);
   useEffect(() => setDomain(projectDomain), [projectDomain]);
   const [run, setRun] = useState<RunState | null>(null);

@@ -244,6 +244,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/doe/plans/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Doe Plan
+         * @description One stored DOE plan by id — the same item shape as ``/doe/history``
+         *     (factors, runs, notes, status, campaign / round provenance) plus ``project_id``.
+         *
+         *     404 when the plan does not exist or, with ``project_id``, belongs to another
+         *     project (unscoped legacy rows are not visible under any project, as in history).
+         */
+        get: operations["get_doe_plan_api_doe_plans__plan_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/doe/{plan_id}/activate": {
         parameters: {
             query?: never;
@@ -335,6 +359,29 @@ export interface paths {
         put?: never;
         /** Start Optimization */
         post: operations["start_optimization_api_optimize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tasks
+         * @description The caller's recent background tasks, newest first, from the durable on-disk task snapshots.
+         *
+         *     Ownership follows ``assert_owner``: in single-user mode (owner ``default``) every task is listed; with
+         *     ``FORMUNEX_MULTI_USER`` only tasks whose ``owner_id`` is the caller's.
+         */
+        get: operations["list_tasks_api_tasks_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -440,6 +487,27 @@ export interface paths {
          * @description Validate and enrich leaderboard / LLM formulations (CAS, structure).
          */
         post: operations["validate_formulation_list_api_formulations_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/formulations/export/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export Formulation Pdf
+         * @description One formulation (leaderboard card) → PDF: name, domain, ingredient table (wt% / CAS), predicted metrics,
+         *     rationale and warnings, rendered with ReportLab and the project's CJK font.
+         */
+        post: operations["export_formulation_pdf_api_formulations_export_pdf_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -573,6 +641,23 @@ export interface paths {
          * @description Every revision of one formulation, oldest first.
          */
         get: operations["formulation_lineage_api_formulations_versions__lineage_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/formulations/versions/detail/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Formulation Version Detail */
+        get: operations["formulation_version_detail_api_formulations_versions_detail__version_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1011,6 +1096,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/experiments/workbench/{campaign_id}/attachment-counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workbench Attachment Counts
+         * @description Attachment count of every row of a campaign in one call (ledger column).
+         */
+        get: operations["workbench_attachment_counts_api_experiments_workbench__campaign_id__attachment_counts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/experiments/workbench/{campaign_id}/rows/{row_id}/versions/{version_id}/restore": {
         parameters: {
             query?: never;
@@ -1026,6 +1131,8 @@ export interface paths {
          *
          *     The platform mints a new "restored" version afterwards, so the operation is
          *     reversible — restoring again to any earlier version stays possible.
+         *     Native rows (no refcode) restore the audit-log snapshot ``version_id`` and
+         *     record the result as a new ``restore`` version — equally reversible.
          */
         post: operations["restore_workbench_row_version_api_experiments_workbench__campaign_id__rows__row_id__versions__version_id__restore_post"];
         delete?: never;
@@ -1044,6 +1151,9 @@ export interface paths {
         /**
          * Workbench Row Versions
          * @description P3: version history of a DOE row's DataLab item (auto-saved on every sync).
+         *
+         *     Native rows (no refcode) answer from the audit log instead (``source: "native"``,
+         *     ``refcode: null``; each entry also carries its ``snapshot``).
          *
          *     Without compare params returns ``{refcode, versions: [{id, version, action,
          *     timestamp, creator}]}``; with ``compare_v1`` + ``compare_v2`` returns the
@@ -1166,6 +1276,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/experiments/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Experiments
+         * @description Search across all campaigns by keyword (tags, params, measurements).
+         */
+        get: operations["search_experiments_api_experiments_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/experiments/workbench/{campaign_id}/rounds": {
         parameters: {
             query?: never;
@@ -1233,7 +1363,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/experiments/hooks/doecyle-status/{campaign_id}": {
+    "/api/experiments/hooks/doecycle-status/{campaign_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1241,13 +1371,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Doecyle Status
+         * Get Doecycle Status
          * @description Get the current status of a DOE cycle for a campaign.
          *
          *     Returns: ``{"isPaused", "lastUpdated" (when it was paused), "campaignId", "pausedUntil" (null = until resumed),
          *     "lapsedAt" (a pause that ran out by itself within the last week)}``; times are ISO-8601 UTC.
          */
-        get: operations["get_doecyle_status_api_experiments_hooks_doecyle_status__campaign_id__get"];
+        get: operations["get_doecycle_status_api_experiments_hooks_doecycle_status__campaign_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1284,6 +1414,29 @@ export interface paths {
          *     500; ``validated`` 恒为 None, 真实端到端验证见 scripts/verify_datalab.py。
          */
         post: operations["sync_experiment_from_datalab_api_experiments__experiment_id__sync_datalab_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/experiments/{experiment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Experiment
+         * @description One stored experiment (same shape and project scoping as ``GET /experiments``).
+         *
+         *     Declared last so the literal ``/experiments/<name>`` routes above win.
+         *     404 when it does not exist or, with ``project_id``, belongs to another project.
+         */
+        get: operations["get_experiment_api_experiments__experiment_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1390,6 +1543,9 @@ export interface paths {
          *     Parsing (OCR on a scan) can run for minutes; doing it inside the request
          *     is what let a proxy in front of uvicorn cut the connection and show the
          *     user a 502 for work that had actually completed.
+         *
+         *     ``project_id`` (form field, optional) scopes the new KB source to that
+         *     project; omitted/empty = global corpus.
          */
         post: operations["ingest_document_api_ingest_post"];
         delete?: never;
@@ -1410,6 +1566,8 @@ export interface paths {
         /**
          * Ingest Batch
          * @description Queue a multi-file ingest: 202 + task_id, results via SSE/poll.
+         *
+         *     ``project_id`` (form field, optional) scopes every new KB source to that project.
          */
         post: operations["ingest_batch_api_ingest_batch_post"];
         delete?: never;
@@ -1862,6 +2020,54 @@ export interface paths {
          * @description W3 soft-archive: hide from lists + retrieval without cascade delete.
          */
         post: operations["archive_source_api_kb_sources__source_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/kb/sources/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 外部检索结果 → 知识库文档 id（按 DOI / 专利号 / URL 匹配 origin_url）
+         * @description Map search hits to the KB documents that hold their full text.
+         *
+         *     Each item matches when its identifier, URL or alternate URL (incl. patent
+         *     number aliases: compact / hyphenated / Google Patents URL) equals a
+         *     source's ``origin_url``; rows whose last ingest failed are ignored.
+         *     Unmatched items are simply absent. Fail-open per item.
+         */
+        post: operations["resolve_sources_api_kb_sources_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/kb/sources/{source_id}/reparse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 按当前解析配置重新解析知识库文档（后台任务，重建切块/索引/目录树）
+         * @description Re-parse the retained original file → full text, chunks, FTS, tables, ToC tree.
+         *
+         *     202 + ``AsyncTaskAccepted``; 404 unknown source; 409 when KB v2 is off or
+         *     the original file was never retained (URL / identifier sources).
+         */
+        post: operations["reparse_source_api_kb_sources__source_id__reparse_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4901,7 +5107,7 @@ export interface paths {
         };
         /**
          * List Pending
-         * @description Return currently pending MCP tool approval requests.
+         * @description Return currently pending MCP tool approval requests, with their (redacted) tool-call arguments.
          */
         get: operations["list_pending_api_mcp_approvals_pending_get"];
         put?: never;
@@ -5028,7 +5234,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Lineages
+         * @description Artifact lineages (optionally of one project / kind), most recently updated first, with their latest version.
+         */
+        get: operations["list_lineages_api_artifacts_lineages_get"];
         put?: never;
         /** Create Lineage */
         post: operations["create_lineage_api_artifacts_lineages_post"];
@@ -5770,6 +5980,23 @@ export interface paths {
         };
         /** Entity Relations */
         get: operations["entity_relations_api_kg_relations__entity_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/kg/path": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Entity Path */
+        get: operations["entity_path_api_kg_path_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7700,6 +7927,11 @@ export interface components {
              * @default 0
              */
             lab_points_used: number;
+            /**
+             * Plan Id
+             * @default
+             */
+            plan_id: string;
         };
         /**
          * AdaptiveDOEMetadata
@@ -7888,11 +8120,15 @@ export interface components {
         Body_ingest_batch_api_ingest_batch_post: {
             /** Files */
             files: string[];
+            /** Project Id */
+            project_id?: string | null;
         };
         /** Body_ingest_document_api_ingest_post */
         Body_ingest_document_api_ingest_post: {
             /** File */
             file: string;
+            /** Project Id */
+            project_id?: string | null;
         };
         /** Body_ingest_qc_report_api_qc_report_post */
         Body_ingest_qc_report_api_qc_report_post: {
@@ -9280,6 +9516,27 @@ export interface components {
              */
             label: string;
         };
+        /** ExperimentSearchResult */
+        ExperimentSearchResult: {
+            /** Row Id */
+            row_id: number;
+            /** Campaign Id */
+            campaign_id: number;
+            /** Campaign Name */
+            campaign_name: string;
+            /** Item Id */
+            item_id: string;
+            /** Status */
+            status: string;
+            /** Planned Params */
+            planned_params: {
+                [key: string]: unknown;
+            };
+            /** Measurements */
+            measurements: {
+                [key: string]: unknown;
+            };
+        };
         /** ExperimentSubmission */
         ExperimentSubmission: {
             /** Records */
@@ -9591,6 +9848,17 @@ export interface components {
              * @default hybrid
              */
             mode: string;
+        };
+        /** FormulationPdfRequest */
+        FormulationPdfRequest: {
+            formulation: components["schemas"]["Formulation"];
+            /**
+             * Lang
+             * @default zh-CN
+             */
+            lang: string;
+            /** Title */
+            title?: string | null;
         };
         /** FormulationSkillOut */
         FormulationSkillOut: {
@@ -10147,6 +10415,40 @@ export interface components {
             /** N Cols */
             n_cols?: number | null;
         };
+        /** KBResolveItem */
+        KBResolveItem: {
+            /**
+             * Identifier
+             * @default
+             */
+            identifier: string;
+            /** Url */
+            url?: string | null;
+            /** Url Alt */
+            url_alt?: string | null;
+        };
+        /** KBResolveMatch */
+        KBResolveMatch: {
+            /** Identifier */
+            identifier: string;
+            /** Source Id */
+            source_id: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+        };
+        /** KBResolveRequest */
+        KBResolveRequest: {
+            /** Items */
+            items?: components["schemas"]["KBResolveItem"][];
+        };
+        /** KBResolveResponse */
+        KBResolveResponse: {
+            /** Matches */
+            matches: components["schemas"]["KBResolveMatch"][];
+        };
         /** KBSearchResponse */
         KBSearchResponse: {
             /** Results */
@@ -10453,6 +10755,25 @@ export interface components {
              * @default 0
              */
             relations_upserted: number;
+        };
+        /** KGPathResponse */
+        KGPathResponse: {
+            /** Src Entity Id */
+            src_entity_id: string;
+            /** Dst Entity Id */
+            dst_entity_id: string;
+            /**
+             * Found
+             * @default false
+             */
+            found: boolean;
+            /**
+             * Hops
+             * @default 0
+             */
+            hops: number;
+            /** Steps */
+            steps?: components["schemas"]["KGPathStep"][];
         };
         /** KGPathStep */
         KGPathStep: {
@@ -10899,6 +11220,32 @@ export interface components {
             lineage_id: string;
             /** Versions */
             versions?: components["schemas"]["VersionView"][];
+        };
+        /** LineageSummary */
+        LineageSummary: {
+            /** Lineage Id */
+            lineage_id: string;
+            /** Project Id */
+            project_id: string;
+            /** Kind */
+            kind: string;
+            /** Title */
+            title: string;
+            /**
+             * Version Count
+             * @default 0
+             */
+            version_count: number;
+            /** Latest Version */
+            latest_version?: number | null;
+            /** Latest Version Id */
+            latest_version_id?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Created At */
+            created_at: number;
+            /** Updated At */
+            updated_at: number;
         };
         /** LinkResponse */
         LinkResponse: {
@@ -12246,6 +12593,11 @@ export interface components {
             };
             /** Title */
             title?: string | null;
+            /**
+             * Clear Sources
+             * @default false
+             */
+            clear_sources: boolean;
         };
         /**
          * ProjectWorkspace
@@ -13083,6 +13435,11 @@ export interface components {
              * @default false
              */
             prefer_materials_catalog: boolean;
+            /**
+             * Relation Insight
+             * @default true
+             */
+            relation_insight: boolean;
         };
         /** ResearchResult */
         ResearchResult: {
@@ -13109,6 +13466,10 @@ export interface components {
             } | null;
             /** Recommend Id */
             recommend_id?: string | null;
+            /** Relation Insights */
+            relation_insights?: {
+                [key: string]: unknown;
+            }[];
         };
         /** ResolveIn */
         ResolveIn: {
@@ -14127,11 +14488,53 @@ export interface components {
              */
             substrate: string;
         };
+        /** TaskList */
+        TaskList: {
+            /** Items */
+            items: components["schemas"]["TaskSummary"][];
+        };
         /**
          * TaskState
          * @enum {string}
          */
         TaskState: "pending" | "running" | "completed" | "failed" | "cancelled";
+        /**
+         * TaskSummary
+         * @description One row of ``GET /api/tasks`` — a task snapshot without its (possibly large) result payload.
+         */
+        TaskSummary: {
+            /** Task Id */
+            task_id: string;
+            /** Kind */
+            kind: string;
+            state: components["schemas"]["TaskState"];
+            /**
+             * Progress
+             * @default 0
+             */
+            progress: number;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
+            /**
+             * Stage
+             * @default
+             */
+            stage: string;
+            /**
+             * Stream Url
+             * @default
+             */
+            stream_url: string;
+            /** Elapsed Ms */
+            elapsed_ms?: number | null;
+            /** Owner Id */
+            owner_id?: string | null;
+            /** Updated At */
+            updated_at: string;
+        };
         /** TechReportExportRequest */
         TechReportExportRequest: {
             /**
@@ -14321,6 +14724,39 @@ export interface components {
             /** Note */
             note: string;
             doe_plan: components["schemas"]["DOEPlan"];
+        };
+        /** VersionDetail */
+        VersionDetail: {
+            /** Id */
+            id: string;
+            /** Lineage Id */
+            lineage_id: string;
+            /** Version */
+            version: number;
+            /** Parent Version Id */
+            parent_version_id?: string | null;
+            /** Name */
+            name: string;
+            /** Domain */
+            domain: string;
+            /**
+             * Change Summary
+             * @default
+             */
+            change_summary: string;
+            /**
+             * Created By
+             * @default
+             */
+            created_by: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Project Id */
+            project_id?: string | null;
+            /** Snapshot */
+            snapshot?: {
+                [key: string]: unknown;
+            };
         };
         /** VersionView */
         VersionView: {
@@ -14704,6 +15140,15 @@ export interface components {
             comment: string;
             /** Reason */
             reason: string;
+        };
+        /** WorkbenchAttachmentCounts */
+        WorkbenchAttachmentCounts: {
+            /** Campaign Id */
+            campaign_id: number;
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            };
         };
         /** WorkbenchCampaignResponse */
         WorkbenchCampaignResponse: {
@@ -15435,6 +15880,42 @@ export interface operations {
             };
         };
     };
+    get_doe_plan_api_doe_plans__plan_id__get: {
+        parameters: {
+            query?: {
+                /** @description 当前项目；给出时只返回属于该项目的计划（与 /doe/history 的项目范围一致） */
+                project_id?: string | null;
+            };
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     activate_doe_plan_api_doe__plan_id__activate_post: {
         parameters: {
             query?: never;
@@ -15591,6 +16072,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tasks_api_tasks_get: {
+        parameters: {
+            query?: {
+                /** @description Only tasks in this state */
+                state?: components["schemas"]["TaskState"] | null;
+                /** @description Only tasks of this kind (e.g. recommend, deep_research) */
+                kind?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskList"];
                 };
             };
             /** @description Validation Error */
@@ -15770,6 +16286,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FormulationValidateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_formulation_pdf_api_formulations_export_pdf_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FormulationPdfRequest"];
+            };
+        };
+        responses: {
+            /** @description The formulation as a PDF */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": unknown;
                 };
             };
             /** @description Validation Error */
@@ -16003,6 +16552,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LineageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    formulation_version_detail_api_formulations_versions_detail__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDetail"];
                 };
             };
             /** @description Validation Error */
@@ -16788,6 +17368,37 @@ export interface operations {
             };
         };
     };
+    workbench_attachment_counts_api_experiments_workbench__campaign_id__attachment_counts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                campaign_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkbenchAttachmentCounts"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     restore_workbench_row_version_api_experiments_workbench__campaign_id__rows__row_id__versions__version_id__restore_post: {
         parameters: {
             query?: never;
@@ -17032,6 +17643,38 @@ export interface operations {
             };
         };
     };
+    search_experiments_api_experiments_search_get: {
+        parameters: {
+            query?: {
+                /** @description 搜索关键词 */
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentSearchResult"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     campaign_rounds_api_experiments_workbench__campaign_id__rounds_get: {
         parameters: {
             query?: {
@@ -17136,7 +17779,7 @@ export interface operations {
             };
         };
     };
-    get_doecyle_status_api_experiments_hooks_doecyle_status__campaign_id__get: {
+    get_doecycle_status_api_experiments_hooks_doecycle_status__campaign_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -17193,6 +17836,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_experiment_api_experiments__experiment_id__get: {
+        parameters: {
+            query?: {
+                project_id?: string;
+            };
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentSummary"];
                 };
             };
             /** @description Validation Error */
@@ -18105,6 +18781,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KBSourceArchiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_sources_api_kb_sources_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KBResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KBResolveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reparse_source_api_kb_sources__source_id__reparse_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -23974,6 +24714,39 @@ export interface operations {
             };
         };
     };
+    list_lineages_api_artifacts_lineages_get: {
+        parameters: {
+            query?: {
+                project_id?: string | null;
+                kind?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LineageSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_lineage_api_artifacts_lineages_post: {
         parameters: {
             query?: never;
@@ -25396,6 +26169,8 @@ export interface operations {
                 /** @description Comma-separated link types; supports measured_* prefix */
                 relation_types?: string | null;
                 limit?: number;
+                /** @description Only links evidenced by this project's KB documents */
+                project_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -25448,6 +26223,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KGRelationView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    entity_path_api_kg_path_get: {
+        parameters: {
+            query: {
+                src: string;
+                dst: string;
+                max_depth?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KGPathResponse"];
                 };
             };
             /** @description Validation Error */
@@ -27329,7 +28137,10 @@ export interface operations {
     };
     update_project_api_projects__project_id__put: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Explicitly allow an empty ``sources`` list to replace a non-empty one (same as clear_sources) */
+                allow_empty_sources?: boolean;
+            };
             header?: never;
             path: {
                 project_id: string;
