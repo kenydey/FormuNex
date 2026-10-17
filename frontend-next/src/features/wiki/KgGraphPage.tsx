@@ -1,5 +1,6 @@
 import { ReloadOutlined } from "@ant-design/icons";
 import { PageContainer } from "@ant-design/pro-components";
+import { FlagLink } from "./FlagLink";
 import { Alert, Button, Card, Col, Descriptions, Empty, Input, Row, Space, Table, Tabs, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
@@ -56,7 +57,7 @@ export default function KgGraphPage() {
         <Alert type="warning" showIcon message={t("wiki.kg_need_project", "请先在顶栏选择项目后再查看材料图谱（只读）")} />
       ) : (
         <>
-          {kgOff && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={t("wiki.kg_off", "知识图谱未启用：请在系统设置的环境开关中打开 kg_enabled")} />}
+          {kgOff && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={t("wiki.kg_off", "知识图谱未启用：请在系统设置的环境开关中打开 kg_enabled")} action={<FlagLink flag="kg_enabled" />} />}
           <Tabs activeKey={tab} onChange={setTab} items={[
             { key: "canvas", label: t("wiki.kg_canvas", "画布"), children: (
               <>

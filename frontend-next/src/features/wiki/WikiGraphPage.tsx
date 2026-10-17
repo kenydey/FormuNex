@@ -1,5 +1,6 @@
 import { ReloadOutlined } from "@ant-design/icons";
 import { PageContainer } from "@ant-design/pro-components";
+import { FlagLink } from "./FlagLink";
 import { Alert, App, Button, Card, Col, Input, Row, Segmented, Select, Space, Switch, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
@@ -64,7 +65,7 @@ export default function WikiGraphPage() {
       {gated && (
         <Alert type="warning" showIcon style={{ marginBottom: 12 }} data-testid="wiki-graph-flag"
           message={t("wiki.graph_flag", "页图未启用或旗标读取失败：请在系统设置的环境开关中打开 wiki_page_graph_enabled（依赖 wiki_enabled）")}
-          description={env.error ? errorText(env.error) : undefined} />
+          description={env.error ? errorText(env.error) : undefined} action={<FlagLink flag={FLAG} />} />
       )}
       {!gated && <ErrorAlert error={graph.error} />}
       <Card size="small" style={{ marginBottom: 16 }}>

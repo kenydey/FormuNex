@@ -1,6 +1,7 @@
 import { Input, Space, Table, Tag, Tooltip, Typography, theme } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { fx } from "./api";
 import { casStatus, weightTotal, type CasStatus } from "./logic";
 import type { ChemicalProfile, Ingredient } from "./types";
@@ -95,6 +96,8 @@ export function IngredientTable({ ingredients, editable, onChange, warnings = []
           {ing.grounding_confidence === "low" && <Tooltip title={t("formulation.ing.low_tip", "缺少文献 / 专利依据，建议补充检索或手动核对")}><Tag color="warning" style={{ marginInlineStart: 4 }}>{t("formulation.ing.low", "低可信")}</Tag></Tooltip>}
           {(ing.evidence_refs?.length ?? 0) > 0 && <div><Typography.Text type="secondary" title={ing.evidence_refs!.join(", ")}>
             {t("formulation.ing.refs", "引用：{{r}}", { r: ing.evidence_refs!.slice(0, 2).join(", ") })}</Typography.Text></div>}
+          {!edit && ing.name && <div><Link to={`/lab/substitution?material=${encodeURIComponent(ing.name)}`}>
+            {t("formulation.ing.substitute", "找替代原料")}</Link></div>}
         </> },
       ]}
       summary={() => (

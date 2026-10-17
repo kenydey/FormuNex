@@ -6,6 +6,9 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
+import { MeasuredMetricHitsBanner } from "@/features/workbench/panels";
+import type { MeasuredMetricHit } from "@/features/workbench/measuredHits";
 import { errorText } from "@/shared/feedback";
 import { fx, saveText, slug } from "./api";
 import { ExplainPanel } from "./ExplainPanel";
@@ -42,6 +45,7 @@ export interface CardProps {
 export function FormulaCard(p: CardProps) {
   const { form } = p;
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -67,6 +71,7 @@ export function FormulaCard(p: CardProps) {
   const hasColor = pred.lab_L != null && pred.lab_a != null && pred.lab_b != null;
   const ratio = pred.pvc_to_cpvc_ratio;
   const pair = form.kg_compat?.incompatible_pairs?.[0];
+  const hits = (form.kg_compat?.measured_metric_hits ?? []) as MeasuredMetricHit[];
 
   return (
     <ProCard bordered collapsible defaultCollapsed={!p.defaultOpen} style={{ marginBottom: 12 }}
@@ -89,6 +94,12 @@ export function FormulaCard(p: CardProps) {
           { key: "json", label: t("formulation.card.copy_json", "复制 JSON"), onClick: () => void copyJson() },
           { key: "csv", label: t("formulation.card.csv", "导出 CSV"), icon: <DownloadOutlined />, onClick: () => saveText(formulaToCsv(form), `${slug(form.name)}.csv`) },
         ] }}><Button size="small" icon={<ExportOutlined />}>{t("formulation.card.export", "导出")}</Button></Dropdown>
+        <Dropdown menu={{ items: [
+          { key: "ip", label: t("formulation.card.ip", "专利 / IP 分析"), onClick: () => navigate("/knowledge/research/ip", { state: { formulation: form } }) },
+          { key: "similar", label: t("formulation.card.similar", "相似历史配方"), onClick: () => navigate("/lab/similar", { state: { formulation: form } }) },
+          { key: "substitution", label: t("formulation.card.substitution", "原料替换"),
+            onClick: () => navigate(`/lab/substitution?material=${encodeURIComponent(form.ingredients[0]?.name ?? "")}`) },
+        ] }}><Button size="small">{t("formulation.card.analyze", "分析")}</Button></Dropdown>
       </Space>}
     >
       <Space direction="vertical" style={{ width: "100%" }}>
@@ -114,8 +125,9 @@ export function FormulaCard(p: CardProps) {
         {(form.warnings?.length ?? 0) > 0 && <Alert type="warning" showIcon message={form.warnings!.join("；")} />}
         {form.kg_compat && form.kg_compat.feasible === false && pair && <Alert type="warning" showIcon
           message={t("formulation.card.incompatible", "{{m}} 不相容，建议在材料库中查找实测优先的替代料", { m: pair.a ?? form.ingredients[0]?.name ?? "" })} />}
-        {(form.kg_compat?.measured_materials?.length ?? 0) > 0 && <Alert type="success" showIcon
-          message={t("formulation.card.measured", "实测验证：{{m}} 已获实测证据加成", { m: form.kg_compat!.measured_materials!.join("、") })} />}
+        {hits.length > 0 ? <MeasuredMetricHitsBanner hits={hits} />
+          : (form.kg_compat?.measured_materials?.length ?? 0) > 0 && <Alert type="success" showIcon
+            message={t("formulation.card.measured", "实测验证：{{m}} 已获实测证据加成", { m: form.kg_compat!.measured_materials!.join("、") })} />}
         <ExplainPanel explain={form.explain} score={form.score} />
         <Space wrap>
           {p.onToggleEdit && <Button size="small" type={p.editing ? "primary" : "default"} icon={p.editing ? <CheckOutlined /> : <EditOutlined />} onClick={p.onToggleEdit}>

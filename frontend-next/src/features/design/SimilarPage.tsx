@@ -3,6 +3,7 @@ import { Alert, Button, Checkbox, Empty, Form, InputNumber, List, Progress, Spac
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useLocation } from "react-router-dom";
 import { call } from "@/api/client";
 import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert } from "@/shared/feedback";
@@ -18,7 +19,9 @@ export default function SimilarPage() {
   const { t } = useTranslation();
   const { projectId, requirement } = useRequirement();
   const [versionId, setVersionId] = useState<string | undefined>();
-  const [parts, setParts] = useState<Part[]>([]);
+  // Prefilled when opened from a leaderboard card (navigate state ``{ formulation }``).
+  const preset = (useLocation().state as { formulation?: { ingredients?: { name: string; weight_pct: number }[] } } | null)?.formulation;
+  const [parts, setParts] = useState<Part[]>(() => (preset?.ingredients ?? []).map((i) => ({ name: i.name, weight_pct: Number(i.weight_pct) })));
   const [sameDomain, setSameDomain] = useState(true);
   const [excludeProject, setExcludeProject] = useState(false);
   const [minSim, setMinSim] = useState(0.3);

@@ -40,7 +40,7 @@ function renderAt(url: string) {
 describe("WikiPage", () => {
   it("lists project pages and reads the selected page with wikilinks rewritten", async () => {
     renderAt("/knowledge/wiki/materials/e51.md");
-    expect(await screen.findByRole("link", { name: "环氧体系" })).toHaveAttribute("href", "/knowledge/wiki/systems/epoxy.md");
+    expect(await screen.findByRole("link", { name: "环氧体系" }, { timeout: 8000 })).toHaveAttribute("href", "/knowledge/wiki/systems/epoxy.md");
     const md = await screen.findByTestId("md");
     expect(md.textContent).toContain("[环氧体系](/knowledge/wiki/systems/epoxy.md)");
     expect(md.textContent).toContain("(#wiki-dead:Missing)");

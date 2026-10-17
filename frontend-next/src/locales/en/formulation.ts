@@ -1,5 +1,11 @@
 /** English strings of this feature area (merged into locales/en-US.ts). */
 const en: Record<string, string> = {
+  "formulation.row.qc_upload": "Upload test report",
+  "formulation.card.ip": "Patent / IP analysis",
+  "formulation.card.similar": "Similar past formulations",
+  "formulation.card.substitution": "Material substitution",
+  "formulation.card.analyze": "Analyse",
+  "formulation.ing.substitute": "Find substitutes",
   "nav.lab.recommend": "AI recommendation",
   "nav.lab.leaderboard": "Leaderboard",
   "nav.lab.lineage": "Formulation lineage",

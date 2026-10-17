@@ -19,6 +19,7 @@ import { CitationAnswer, sourceHref } from "./CitationAnswer";
 import { ChatComposerPlus, TokenPicker, filterSkills, useSkills, type ComposerSelection, type PickItem } from "./ChatComposerPlus";
 import { RagPrewarmBar, WikiChatModeSelector } from "./ChatToolbar";
 import { ReviewerCard } from "./Reviewer";
+import { RelatedWikiList, SaveWikiDraftButton } from "@/features/wiki";
 import { ThinkingTimeline, useStepTitle } from "./ThinkingTimeline";
 import {
   applyChatEvent, historyForRequest, kbSourceId, navigationEvidence, newId, restoreHistory, serializeHistory, sessionTitle, trailingToken,
@@ -118,6 +119,12 @@ function AssistantBody({ m, question, busy, projectId, onClarify }: {
       )}
       <ClaimsList m={m} />
       {m.citations && m.citations.length > 0 && <CitationChips citations={m.citations} />}
+      <RelatedWikiList citations={m.citations} />
+      {m.content && !m.error && !busy && (
+        <div style={{ marginTop: 6 }}>
+          <SaveWikiDraftButton answer={m.content} question={question} citations={m.citations} origin="chat" projectId={projectId} />
+        </div>
+      )}
       {m.reviewRunId && <ReviewerCard runId={m.reviewRunId} ctx={{ question, answer: m.content, citations: m.citations, projectId }} />}
     </div>
   );

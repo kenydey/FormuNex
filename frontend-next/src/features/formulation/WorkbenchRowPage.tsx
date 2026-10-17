@@ -3,7 +3,7 @@ import { App, Badge, Button, Descriptions, Empty, Result, Select, Space, Table, 
 import { EditOutlined, TagsOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { EChartsOption } from "echarts";
 import { Chart } from "@/shared/Chart";
@@ -140,7 +140,8 @@ function Overview({ row, objectives, chain, meas, measLoading }: {
         {trend.rounds.length > 1 && trend.series.length ? <Chart option={option} height={260} />
           : <Empty description={t("formulation.row.no_trend", "暂无多轮趋势（随闭环迭代沿谱系自动生成）")} />}
       </ProCard>
-      <ProCard bordered title={t("formulation.row.qc", "检测报告（{{n}}）", { n: reports.length })}>
+      <ProCard bordered title={t("formulation.row.qc", "检测报告（{{n}}）", { n: reports.length })}
+        extra={<Link to={`/lab/qc-report?campaign=${row.campaign_id}&row=${row.id}`}>{t("formulation.row.qc_upload", "上传检测报告")}</Link>}>
         {reports.length > 0 && <Space wrap style={{ marginBottom: 12 }}>{reports.map((a) => <Tag key={a.id}>{a.source_document_id.slice(0, 16)}</Tag>)}</Space>}
         <MeasurementTable rows={meas?.measurements ?? []} loading={measLoading} />
       </ProCard>

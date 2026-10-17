@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { postSse } from "@/api/stream";
 import { Markdown } from "@/shared/Markdown";
 import { errorText } from "@/shared/feedback";
+import { RelatedWikiList, SaveWikiDraftButton } from "@/features/wiki";
 import { chatHistory, citationTarget, evidenceKey, pageLabel, sanitizeEvidence } from "./lib";
 import { useResearch } from "./store";
 import type { ChatStreamEvent, ChatTurn, Evidence } from "./types";
@@ -145,6 +146,13 @@ export default function ResearchChatTab() {
                   {(m.citations?.length ?? 0) > 0 && (
                     <div style={{ marginTop: 8, paddingTop: 6, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
                       {m.citations!.map((c, j) => <CitationTag key={`${evidenceKey(c)}-${j}`} ev={c} />)}
+                    </div>
+                  )}
+                  <RelatedWikiList citations={m.citations} />
+                  {!m.streaming && m.content && (
+                    <div style={{ marginTop: 6 }}>
+                      <SaveWikiDraftButton answer={m.content} question={turns[i - 1]?.role === "user" ? turns[i - 1].content : ""}
+                        citations={m.citations} origin="chat" />
                     </div>
                   )}
                 </>

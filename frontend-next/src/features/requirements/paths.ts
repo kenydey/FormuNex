@@ -17,19 +17,19 @@ export const PATHS: PathDef[] = [
     { id: "requirement", routes: ["/spec/projects/:projectId", "/spec/projects"] },
     { id: "recommend", routes: ["/formulation/recommend", "/lab/recommend", "/lab/formulations"] },
     { id: "doe", routes: ["/lab/doe"] },
-    { id: "ledger", routes: ["/workbench", "/lab/workbench", "/lab/tasks"] },
+    { id: "ledger", routes: ["/cockpit/workbench", "/lab/tasks"] },
     { id: "loop", routes: ["/cockpit/loop", "/cockpit/pareto"] },
   ] },
   { id: "substitute", maturity: "stable", steps: [
     { id: "materials", routes: ["/materials/raw"] },
-    { id: "substitute", routes: ["/materials/raw?tab=structure"] },
-    { id: "ledger", routes: ["/workbench", "/lab/workbench", "/lab/tasks"] },
+    { id: "substitute", routes: ["/lab/substitution", "/materials/raw?tab=structure"] },
+    { id: "ledger", routes: ["/cockpit/workbench", "/lab/tasks"] },
   ] },
   { id: "knowledge", maturity: "beta", needsProject: true, steps: [
     { id: "sources", routes: ["/spec/projects/:projectId/sources"], needsProject: true },
     { id: "wiki", routes: ["/knowledge/wiki", "/wiki"] },
     { id: "quality", routes: ["/knowledge/quality", "/wiki/quality"] },
-    { id: "reports", routes: ["/knowledge/reports", "/research/reports", "/wiki/reports"] },
+    { id: "reports", routes: ["/knowledge/research/artifacts"] },
   ] },
 ];
 
