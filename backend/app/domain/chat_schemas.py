@@ -87,6 +87,8 @@ class ChatRequest(BaseModel):
     ref_doc_ids: list[str] = Field(default_factory=list, max_length=20)
     # Opaque chat/session id for MCP writeish session grants (optional).
     chat_session_id: str | None = Field(default=None, max_length=80)
+    # 深度模式（方案 §5.1.1）：先做 PageIndex 两阶段检索（长文档目录树导航），把按页定位的读取结果并入证据。
+    deep: bool = False
 
 
 def structure_retrieval_context(structure: dict | None) -> str:

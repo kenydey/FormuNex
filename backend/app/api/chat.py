@@ -32,6 +32,8 @@ from ..services.query_aware_compression import (
 )
 from ..services.rag import active_rag_backend
 
+from ..services.errors import log_handled_exception
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -111,6 +113,8 @@ class ChatRequestValidated(ChatRequest):
     # Who sent it: set by the route from the bearer token, never read from the body (a client must not name its own
     # owner). ``None`` = an internal call with no identity, which the Text2SQL scope treats as "restrict nothing".
     _owner_id: str | None = PrivateAttr(default=None)
+    # Notices from deep mode (PageIndex unavailable / failed / empty), merged into the answer's ``notices``.
+    _deep_notices: list = PrivateAttr(default_factory=list)
 
     @field_validator("sources", mode="before")
     @classmethod
@@ -316,14 +320,19 @@ _ABSTAIN_REASON_UNSUPPORTED = (
 _RETRIEVAL_DEGRADED_MODES = ("degraded", "keyword", "stale")
 
 
-def _retrieval_degradation_notices(kb_used: int) -> list[dict]:
-    """B-1: BM25-only 退化显式提示。
+def _retrieval_degradation_notices(kb_used: int, req: ChatRequest | None = None) -> list[dict]:
+    """B-1: BM25-only 退化显式提示（另含深度模式的降级提示）。
 
     KB 实际参与检索（kb_used>0）但向量层退化/缺失时返回提示位，否则 []。
     探测失败时返回 []（不阻断问答）。
     """
+    deep = list(getattr(req, "_deep_notices", None) or [])
     if not kb_used or kb_used <= 0:
-        return []
+        return deep
+    return deep + _vector_degradation_notices()
+
+
+def _vector_degradation_notices() -> list[dict]:
     try:
         from ..services.kb_index import kb_vector_notice
 
@@ -513,6 +522,34 @@ def _ensure_answer(text: str | None, *, fallback: str = "暂无可用回答。")
     return cleaned or fallback
 
 
+def _with_deep_evidence(req: ChatRequestValidated, query: str, sources: list) -> tuple[list, list[dict]]:
+    """深度模式: PageIndex stage-2 reads (page-anchored) go first; fail-open with a visible notice."""
+    if not getattr(req, "deep", False):
+        return sources, []
+    from ..config import get_settings
+
+    if not get_settings().pageindex_enabled:
+        return sources, [{"code": "deep_mode_unavailable", "message": "深度模式未启用（pageindex_enabled 关闭），已按普通检索回答"}]
+    try:
+        from ..db.source_store import get_source_store
+        from ..services.pageindex.two_stage import navigation_evidence, two_stage_retrieve
+
+        result = two_stage_retrieve(query, project_id=req.project_id, deep=True)
+        store = get_source_store()
+        titles = {}
+        for d in result.documents:
+            doc = store.get(d.source_id)
+            titles[d.source_id] = (doc.title if doc else "") or d.source_id
+        deep = [_sanitize_evidence(ev) for ev in navigation_evidence(result.documents, titles=titles)]
+    except Exception as exc:  # noqa: BLE001 — fail-open, but say so
+        log_handled_exception(logger, exc, "chat deep mode: PageIndex retrieval failed")
+        return sources, [{"code": "deep_mode_failed", "message": "深度检索失败，已按普通检索回答"}]
+    if not deep:
+        return sources, [{"code": "deep_mode_empty", "message": "深度检索未找到可导航的长文档，已按普通检索回答"}]
+    seen = {ev.identifier for ev in deep}
+    return (deep + [ev for ev in sources if ev.identifier not in seen])[:50], []
+
+
 def _bind_owner(req: ChatRequestValidated, request: Request | None) -> None:
     """Record the caller's owner on the request so the structured (Text2SQL) half reads only what they may see."""
     if request is not None:
@@ -553,6 +590,7 @@ def chat(req: ChatRequestValidated, request: Request = None):  # type: ignore[as
             rewritten_query = rewritten_query or retrieval_query
 
         sources = [_sanitize_evidence(ev) for ev in req.sources]
+        sources, req._deep_notices = _with_deep_evidence(req, retrieval_query, sources)
         sources, kb_used, entity_resolution, kg_stats = _augment_with_kb(
             retrieval_query,
             sources,
@@ -561,7 +599,7 @@ def chat(req: ChatRequestValidated, request: Request = None):  # type: ignore[as
         )
         # B-1: BM25-only 退化显式提示。KB 实际参与检索（kb_used>0）但向量层
         # 退化/缺失时，语义排序已失效，用户必须看得见。
-        retrieval_notices = _retrieval_degradation_notices(kb_used)
+        retrieval_notices = _retrieval_degradation_notices(kb_used, req)
         try:
             from ..services.connectors_builtin import gather_connector_evidence
 
@@ -898,6 +936,7 @@ def _stream_answer_plan(req: "ChatRequestValidated", settings):
         rewritten_query = rewritten_query or retrieval_query
 
     sources = [_sanitize_evidence(ev) for ev in req.sources]
+    sources, req._deep_notices = _with_deep_evidence(req, retrieval_query, sources)
     sources, kb_used, entity_resolution, kg_stats = _augment_with_kb(
         retrieval_query,
         sources,
@@ -1346,7 +1385,7 @@ async def chat_stream(req: "ChatRequestValidated", request: Request = None):  # 
                             "evidence_reviewer": reviewer,
                             "reviewer_fix": reviewer_fix,
                             # P1-j: 补 degradation notices（与其他路径对齐）
-                            "notices": list(_retrieval_degradation_notices(kb_used) or [])
+                            "notices": list(_retrieval_degradation_notices(kb_used, req) or [])
                             + list(gate_notices or [])
                             + _reviewer_notices(reviewer) or None,
                         }
@@ -1498,7 +1537,7 @@ async def chat_stream(req: "ChatRequestValidated", request: Request = None):  # 
                                     pass
                         except Exception as exc:  # noqa: BLE001 - fail-open
                             logger.warning("chat/stream structured fix-loop: %s", exc)
-                    _degr_notices = _retrieval_degradation_notices(kb_used) or []
+                    _degr_notices = _retrieval_degradation_notices(kb_used, req) or []
                     # v21-fix: fix-loop 可能修改答案，重算 claims/audit（与同步路径对齐）。
                     # v22-fix: 用答案文本比较触发（"repaired" 键不存在，v21-5 死代码）。
                     if reviewer_fix and answer != _answer_before:
@@ -1710,7 +1749,7 @@ async def chat_stream(req: "ChatRequestValidated", request: Request = None):  # 
                             "reviewer_fix": reviewer_fix,
                             # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
                             "notices": (
-                                list(_retrieval_degradation_notices(kb_used) or [])
+                                list(_retrieval_degradation_notices(kb_used, req) or [])
                                 + list(_gate_notices or [])
                                 + _reviewer_notices(reviewer)
                             ) or None,
@@ -1944,7 +1983,7 @@ async def chat_stream(req: "ChatRequestValidated", request: Request = None):  # 
                     "reviewer_fix": reviewer_fix,
                     # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
                     "notices": (
-                        list(_retrieval_degradation_notices(kb_used) or [])
+                        list(_retrieval_degradation_notices(kb_used, req) or [])
                         + list(_gate_notices or [])
                         + _reviewer_notices(reviewer)
                     ) or None,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   acceptedTaskId, applyChatEvent, degradedReasons, evidenceToAnchors, historyForRequest, infraState, kbSourceId, maskCitationMarkers,
-  navigationEvidence, parseFootnotes, PH_CLOSE, PH_OPEN, progressPct, restoreHistory, splitCitationMarkdown, trailingToken,
+  parseFootnotes, PH_CLOSE, PH_OPEN, progressPct, restoreHistory, splitCitationMarkdown, trailingToken,
 } from "./logic";
 import type { ChatMessage, ChatStreamEvent } from "./types";
 
@@ -87,20 +87,6 @@ describe("stream reducer", () => {
 });
 
 describe("deep mode evidence", () => {
-  it("maps PageIndex navigation to page-anchored evidence", () => {
-    const ev = navigationEvidence([{ source_id: "S", mode: "pageindex", reason: "", stage1_chunk_ids: [],
-      navigation: { mode: "llm", node_path: [], reasoning_trace: [], hops: 1, chars_read: 10, stopped: "done",
-        evidence: [{ node_id: "n1", title: "实施例 3", label: null, page_range: [4, 6], text: "配方…" },
-          { node_id: "n2", title: "表 2", label: null, page_range: [7, 7], text: "" }] } },
-      { source_id: "T", mode: "stage1", reason: "short", stage1_chunk_ids: [], navigation: null }]);
-    expect(ev).toHaveLength(2);
-    expect(ev[0]).toMatchObject({ source: "kb_pageindex", identifier: "S#n1", page: 4, page_end: 6, relevance: 0.9 });
-    expect(ev[1].page_end).toBeNull();
-    expect(ev[1].snippet).toBe("表 2");
-  });
-});
-
-describe("banners and tasks", () => {
   it("classifies /health", () => {
     expect(infraState({ status: "ok" }).level).toBe("none");
     expect(infraState({ status: "ok", datalab: { required: false, reachable: false, ledger_mode: "local", hint: "h" } }))

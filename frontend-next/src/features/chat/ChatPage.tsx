@@ -14,7 +14,6 @@ import { call } from "@/api/client";
 import { postSse } from "@/api/stream";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
-import type { DocDepth } from "@/features/knowledge/types";
 import { CitationAnswer, sourceHref } from "./CitationAnswer";
 import { ChatComposerPlus, TokenPicker, filterSkills, useSkills, type ComposerSelection, type PickItem } from "./ChatComposerPlus";
 import { RagPrewarmBar, WikiChatModeSelector } from "./ChatToolbar";
@@ -22,7 +21,7 @@ import { ReviewerCard } from "./Reviewer";
 import { RelatedWikiList, SaveWikiDraftButton } from "@/features/wiki";
 import { ThinkingTimeline, useStepTitle } from "./ThinkingTimeline";
 import {
-  applyChatEvent, historyForRequest, kbSourceId, navigationEvidence, newId, restoreHistory, serializeHistory, sessionTitle, trailingToken,
+  applyChatEvent, historyForRequest, kbSourceId, newId, restoreHistory, serializeHistory, sessionTitle, trailingToken,
 } from "./logic";
 import type { ChatMessage, ChatStreamEvent, Evidence, SessionInfo, StructureResult } from "./types";
 
@@ -257,21 +256,9 @@ export default function ChatPage() {
     const timer = window.setTimeout(() => ctrl.abort(), TIMEOUT_MS);
     let finished = false;
     try {
-      let sources: Evidence[] = [];
-      if (deep) {
-        apply({ type: "step", id: "pageindex", title: "pageindex", status: "running" });
-        try {
-          const r = await call<{ documents: DocDepth[] }>("POST", "/api/kb/pageindex/search",
-            { query: q, top_k: 12, max_docs: 3, project_id: projectId, include_global: true, deep: true, use_llm: true });
-          sources = navigationEvidence(r.documents ?? []);
-          apply({ type: "step", id: "pageindex", title: "pageindex", status: "done",
-            detail: t("chat.deep.read", "{{d}} 篇文档 · {{n}} 段目录节点证据", { d: (r.documents ?? []).length, n: sources.length }) });
-        } catch (e) {
-          apply({ type: "step", id: "pageindex", title: "pageindex", status: "error", detail: errorText(e) });
-        }
-      }
       await postSse<ChatStreamEvent>("/api/chat/stream", {
-        question: q, sources, project_id: projectId ?? undefined, history,
+        // 深度模式: the backend runs PageIndex navigation first and reports a notice if it falls back.
+        question: q, sources: [], deep, project_id: projectId ?? undefined, history,
         mode: sel.mode, selected_skills: sel.skills, selected_connectors: sel.connectors, selected_mcp_servers: sel.mcpServers,
         ref_doc_ids: refs.map((r) => r.id), attachment_source_ids: refs.map((r) => r.id),
         chat_session_id: sid, structure: structure ?? undefined, clarified_entities: opts.clarifiedEntities ?? [],

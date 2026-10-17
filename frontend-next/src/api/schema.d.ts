@@ -8063,6 +8063,11 @@ export interface components {
             ref_doc_ids?: string[];
             /** Chat Session Id */
             chat_session_id?: string | null;
+            /**
+             * Deep
+             * @default false
+             */
+            deep: boolean;
         };
         /** ChatResponse */
         ChatResponse: {

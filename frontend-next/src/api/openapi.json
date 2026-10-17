@@ -20719,6 +20719,11 @@
        }
       ],
       "title": "Chat Session Id"
+     },
+     "deep": {
+      "type": "boolean",
+      "title": "Deep",
+      "default": false
      }
     },
     "type": "object",

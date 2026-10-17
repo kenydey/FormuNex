@@ -1,7 +1,6 @@
 /** Pure helpers of the Q&A chat and the shell banners (unit-tested in logic.test.ts). */
 import type { ThinkingStep } from "@/api/stream";
 import type { ChatMessage, ChatStreamEvent, Evidence, PlatformHealth } from "./types";
-import type { DocDepth } from "@/features/knowledge/types";
 
 // ── Citations ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -291,27 +290,6 @@ export function sessionTitle(messages: ChatMessage[]): string {
 }
 
 // ── Deep mode (PageIndex) ──────────────────────────────────────────────────────────────────────────────────────────
-
-/** Stage-2 PageIndex reads as page-anchored Evidence — client-side mirror of ``pageindex.two_stage.navigation_evidence``. */
-export function navigationEvidence(docs: DocDepth[], snippetChars = 1600): Evidence[] {
-  const out: Evidence[] = [];
-  for (const d of docs) {
-    if (!d.navigation) continue;
-    const n = d.navigation.evidence.length;
-    d.navigation.evidence.forEach((ev, i) => {
-      const pr = ev.page_range ?? [null, null];
-      out.push({
-        source: "kb_pageindex",
-        identifier: `${d.source_id}#${ev.node_id}`,
-        title: `${d.source_id} · ${ev.title || ""}`.replace(/[\s·]+$/, ""),
-        snippet: (ev.text || "").slice(0, snippetChars) || ev.title || d.source_id,
-        relevance: Math.round(Math.max(0.3, 0.9 - (0.6 * i) / Math.max(1, n)) * 1000) / 1000,
-        page: pr[0], page_end: pr[1] !== pr[0] ? pr[1] : null,
-      });
-    });
-  }
-  return out.slice(0, 50);
-}
 
 // ── Banners ────────────────────────────────────────────────────────────────────────────────────────────────────────
 

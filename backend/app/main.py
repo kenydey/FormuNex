@@ -21,13 +21,14 @@ if not logging.getLogger().handlers:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .services.errors import log_handled_exception, optional_import
 
+from .api._admin_guard import admin_guard
 from .api import auth as auth_router
 from .api import chemistry as chemistry_router
 from .api import doe, experiments, formulations, optimize, research, tasks
@@ -275,6 +276,7 @@ app = FastAPI(
     "(anti-corrosion coatings, degreasers, surface treatment agents).",
     version="0.1.0",
     lifespan=lifespan,
+    dependencies=[Depends(admin_guard)],
 )
 
 # The last middleware added is the outermost. CORS has to wrap auth and rate limiting: their 401 / 429 answers are built
