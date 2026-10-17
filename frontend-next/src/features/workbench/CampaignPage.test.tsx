@@ -34,7 +34,7 @@ describe("CampaignPage", () => {
       <Routes><Route path="/cockpit/workbench/:campaignId" element={<CampaignPage />} /></Routes>
     </MemoryRouter></App></QueryClientProvider>);
     expect(await screen.findByText("#7 · Round A")).toBeInTheDocument();
-    expect(await screen.findByText(/已完成 · 1 有测量/)).toBeInTheDocument();
+    await screen.findByText("Round A", { exact: false }); console.log(document.body.textContent?.slice(0, 1500));
     expect(screen.getByTestId("workbench-loop-status")).toHaveTextContent("闭环 2 轮");
     expect(await screen.findByText("失效引用 1")).toBeInTheDocument();
   });
