@@ -73,7 +73,7 @@ function UploadTab({ onDone }: { onDone: () => void }) {
         <div>
           {batch && batch[1] > 1 && <Typography.Text type="secondary">{t("library.add.batch", "第 {{i}} / {{n}} 批", { i: batch[0], n: batch[1] })} · </Typography.Text>}
           <Typography.Text type="secondary">{ev?.message || t("library.add.queued", "排队中…")}</Typography.Text>
-          <Progress percent={Math.round((ev?.progress ?? 0) * (ev && ev.progress && ev.progress > 1 ? 1 : 100))} size="small" />
+          <Progress percent={Math.round(Math.min(1, ev?.progress ?? 0) * 100)} size="small" />
         </div>
       )}
       <ErrorAlert error={run.error} />
