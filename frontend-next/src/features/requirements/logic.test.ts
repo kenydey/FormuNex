@@ -3,6 +3,7 @@ import {
   addConstraint, clearConstraintValue, customConstraints, getConstraintValue, parseActiveConstraints, removeConstraint, removeCustomConstraint,
   resetConstraints, setCustomConstraint,
 } from "./constraints";
+import type { ConstraintRequirement } from "./constraints";
 import { previewEffectTrace, traceCounts } from "./effectTrace";
 import { applyLookup, draftFromView, lookupQuery, lookupSource, nextAvailability, payloadFromDraft, structureMode, EMPTY_DRAFT } from "./materials/materialForm";
 import { causeParts } from "./ProjectHistory";
@@ -10,7 +11,7 @@ import { flattenPaths, resolveStep } from "./paths";
 import { idsMatch, mergeSourceRows, normalizePatentPub, parseEvidence, resolveOpenUrl, toggleSelected, type KbSource } from "./sourceRows";
 
 describe("constraints", () => {
-  const base = { domain: "anticorrosion_coating", voc_limit_gpl: 300 as number | null, constraint_values: { "VOC 上限": 300, 附着力: 1 } };
+  const base: ConstraintRequirement = { domain: "anticorrosion_coating", voc_limit_gpl: 300, constraint_values: { "VOC 上限": 300, 附着力: 1 } };
 
   it("reads values with defaults", () => {
     expect(getConstraintValue(base, "voc_limit_gpl")).toBe(300);
@@ -34,7 +35,7 @@ describe("constraints", () => {
   });
 
   it("resets to domain defaults and clears constraints of other domains", () => {
-    const r = resetConstraints({ domain: "degreaser", cure_temperature_c: 120, cleaning_efficiency: 90 });
+    const r = resetConstraints<ConstraintRequirement>({ domain: "degreaser", cure_temperature_c: 120, cleaning_efficiency: 90 });
     expect(r.keys).toEqual(["voc_limit_gpl", "ph_target"]);
     expect(r.req.cure_temperature_c).toBeNull();
     expect(r.req.cleaning_efficiency).toBe(90);
