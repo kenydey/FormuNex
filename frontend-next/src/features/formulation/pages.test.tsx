@@ -36,7 +36,8 @@ describe("LineagePage", () => {
       { id: "a", lineage_id: "L1", version: 1, parent_version_id: null, name: "Epoxy", domain: "d", change_summary: "first", created_by: "", created_at: null },
       { id: "b", lineage_id: "L1", version: 2, parent_version_id: "a", name: "Epoxy", domain: "d", change_summary: "more zinc", created_by: "u", created_at: null },
     ];
-    call.mockImplementation((_m: string, path: string) => {
+    call.mockImplementation((_m: string, p?: string) => {
+      const path = String(p ?? "");
       if (path.includes("/diff/")) return Promise.resolve({ from_version: 1, to_version: 2, change_summary: "", topology_changed: true, renamed: null,
         ingredient_changes: [{ name: "Zinc", change: "added", before_pct: null, after_pct: 5, delta_pct: 5 }], metric_deltas: {} });
       if (path.startsWith("/api/provenance")) return Promise.resolve({ edges: [] });
