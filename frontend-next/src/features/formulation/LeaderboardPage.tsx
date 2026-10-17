@@ -1,4 +1,5 @@
 import { ModalForm, PageContainer, ProFormTextArea } from "@ant-design/pro-components";
+import { TechReportExport } from "@/features/research/TechReportExport";
 import { Alert, App, Button, Dropdown, Empty, Segmented, Space, Table, Tag, Typography } from "antd";
 import { DownloadOutlined, PlusOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -125,6 +126,7 @@ export default function LeaderboardPage() {
       tags={ws?.research?.recommend_engine ? <Tag color={ws.research.recommend_engine === "llm" ? "blue" : "default"}>
         {ws.research.recommend_engine === "llm" ? t("formulation.rec.llm", "LLM 推荐") : t("formulation.rec.offline", "离线模板")}</Tag> : undefined}
       extra={<Space wrap>
+        <TechReportExport kind="formulation" projectId={projectId} />
         <Segmented value={view} onChange={(v) => setParams(v === "cards" ? {} : { view: String(v) })} options={[
           { value: "cards", label: t("formulation.board.cards", "卡片") }, { value: "table", label: t("formulation.board.table", "列表") },
           { value: "pareto", label: t("formulation.board.pareto", "帕累托") }, { value: "parallel", label: t("formulation.board.parallel", "平行坐标") }]} />

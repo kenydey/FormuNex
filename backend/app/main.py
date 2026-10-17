@@ -464,6 +464,19 @@ def health() -> dict:
         _health_lock.release()
 
 
+def _ledger_mode(cfg, datalab_ok: bool, datalab_required: bool) -> str:
+    """Where experiment rows live, for the UI badge: ``native`` (FormuNex database, the default since M7 — Datalab is
+    simply not used), ``eln`` (Datalab reachable), ``eln_required_down`` (Datalab configured but down) or ``local``
+    (``auto`` backends that fell back to the local ledger because Datalab is unreachable: soft-degrade)."""
+    if datalab_ok:
+        return "eln"
+    if datalab_required:
+        return "eln_required_down"
+    if cfg.campaign_backend.lower() == "native" and cfg.experiment_backend.lower() == "native":
+        return "native"
+    return "local"
+
+
 def _probe_health() -> dict:
     cfg = get_settings()
 
@@ -474,12 +487,7 @@ def _probe_health() -> dict:
         or cfg.datalab_required
     )
     # Soft-degrade ledger mode for UI badge (Top-5″ #2).
-    if datalab_ok:
-        ledger_mode = "eln"
-    elif datalab_required:
-        ledger_mode = "eln_required_down"
-    else:
-        ledger_mode = "local"
+    ledger_mode = _ledger_mode(cfg, datalab_ok, datalab_required)
 
     db_ok = True
     db_scheme = "postgresql" if cfg.db_url.startswith("postgresql") else "sqlite"
@@ -529,7 +537,7 @@ def _probe_health() -> dict:
         if datalab_reason:
             hint = f"{hint} 原因：{datalab_reason}"
         datalab_payload["hint"] = hint
-    elif not datalab_ok and not datalab_required:
+    elif ledger_mode == "local":
         datalab_payload["hint"] = (
             "Datalab 不可达；已启用本地 sqlite 台账（soft-degrade）。"
             "需要 ELN 时启动 compose 并设 DATALAB_REQUIRED=true。"
@@ -609,12 +617,7 @@ def health_detailed() -> dict:
         or cfg.experiment_backend.lower() == "datalab"
         or cfg.datalab_required
     )
-    if datalab_ok:
-        ledger_mode = "eln"
-    elif datalab_required:
-        ledger_mode = "eln_required_down"
-    else:
-        ledger_mode = "local"
+    ledger_mode = _ledger_mode(cfg, datalab_ok, datalab_required)
 
     db_ok = True
     db_scheme = "postgresql" if cfg.db_url.startswith("postgresql") else "sqlite"

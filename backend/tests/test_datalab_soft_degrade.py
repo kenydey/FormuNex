@@ -83,3 +83,17 @@ def test_health_soft_local_ledger_when_optional_down(monkeypatch):
     assert body["datalab"]["ledger_mode"] == "local"
     assert "本地" in (body["datalab"].get("hint") or "")
     assert body["datalab"]["campaign_backend"] == "auto"
+
+
+def test_health_native_ledger_is_not_a_degradation(monkeypatch):
+    """Native backends (the default since M7) do not use Datalab at all: no soft-degrade hint."""
+    monkeypatch.setenv("FORMUNEX_CAMPAIGN_BACKEND", "native")
+    monkeypatch.setenv("FORMUNEX_EXPERIMENT_BACKEND", "native")
+    monkeypatch.setenv("FORMUNEX_DATALAB_REQUIRED", "false")
+    monkeypatch.setenv("FORMUNEX_DATALAB_API_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("FORMUNEX_CELERY_EAGER", "true")
+    get_settings.cache_clear()
+    body = TestClient(app).get("/health").json()
+    assert body["datalab"]["ledger_mode"] == "native"
+    assert "hint" not in body["datalab"]
+    get_settings.cache_clear()

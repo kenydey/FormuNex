@@ -1,6 +1,7 @@
-# Browser smoke test (frontend-next)
+# Browser tests (frontend-next)
 
-`smoke.spec.ts` logs in and walks the core screens (dashboard, products → revision → SDS proofreader,
+`routes.spec.ts` opens every page twice (without and with a project selected) and fails on uncaught errors,
+console errors, the error boundary or 5xx API responses. `smoke.spec.ts` logs in and walks the core screens (dashboard, products → revision → SDS proofreader,
 release gate, label designer, formulation editor, lab tasks, audit log in English). It needs a running
 backend and Vite dev server, so it is **not** part of `npm test` or CI.
 
@@ -19,7 +20,7 @@ export FORMUNEX_CELERY_EAGER=true
 npx vite --port 5174 &
 
 # 3. test (PW_CHROMIUM points at a preinstalled Chromium if Playwright's own is not downloaded)
-npx playwright test
+npx playwright test            # both specs; or e.g. npx playwright test e2e/routes.spec.ts
 ```
 
 The seed is not idempotent (unique usernames); delete the database file before re-seeding. The test
