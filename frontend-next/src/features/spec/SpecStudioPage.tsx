@@ -1,21 +1,25 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { App, Button, Checkbox, Form, Input, InputNumber, Select, Slider, Space, Tabs, Timeline, Typography } from "antd";
+import { App, Button, Checkbox, Form, Input, InputNumber, Select, Slider, Space, Tabs, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { useUi } from "@/app/store";
 import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { GhsPictogram } from "@/shared/ghs";
+import { AgentContextCard } from "@/features/requirements/AgentContextCard";
+import { ConstraintsEditor } from "@/features/requirements/ConstraintsEditor";
+import { EffectTrace } from "@/features/requirements/EffectTrace";
+import { ProjectHistory } from "@/features/requirements/ProjectHistory";
+import { parseActiveConstraints, type ConstraintKey } from "@/features/requirements/constraints";
+import { previewEffectTrace } from "@/features/requirements/effectTrace";
 import { DOMAINS, SUBSTRATES, type Acceptance, type Objective, type ProjectDetail, type RedLineSubstance, type ReleaseSpec,
   type Requirement, type SpecContract } from "./types";
 
 const PICTOS = ["GHS01", "GHS02", "GHS03", "GHS04", "GHS05", "GHS06", "GHS07", "GHS08", "GHS09"];
 const METHODS = ["airless", "air_spray", "electrostatic", "dip", "roller", "brush", "electrophoretic", "autodeposition"];
-
-interface HistoryItem { version: number; created_at: string; cause: string }
 
 /** 研发需求工作台 (方案 §5.2): scenario, objective contract, process window, red lines, release specs. */
 export default function SpecStudioPage() {
@@ -26,18 +30,19 @@ export default function SpecStudioPage() {
   const qc = useQueryClient();
   const en = i18n.language === "en-US";
   const q = useQuery({ queryKey: ["project", projectId], queryFn: () => call<ProjectDetail>("GET", `/api/projects/${projectId}`) });
-  const history = useQuery({ queryKey: ["project", projectId, "history"], queryFn: () => call<{ versions: HistoryItem[] }>("GET", `/api/projects/${projectId}/history`) });
   const [req, setReq] = useState<Requirement | null>(null);
   const [spec, setSpec] = useState<SpecContract>({});
+  const [activeKeys, setActiveKeys] = useState<ConstraintKey[]>([]);
   useEffect(() => { setProject(projectId); }, [projectId, setProject]);
   useEffect(() => {
     if (q.data) {
       setReq(q.data.workspace.requirement ?? { domain: q.data.domain || "anticorrosion_coating", objectives: [] });
       setSpec(q.data.workspace.spec_contract ?? {});
+      setActiveKeys(parseActiveConstraints(q.data.workspace.active_constraints));
     }
   }, [q.data]);
   const save = useMutation({
-    mutationFn: () => call("PUT", `/api/projects/${projectId}`, { workspace: { requirement: { ...req, project_id: projectId }, spec_contract: spec } }),
+    mutationFn: () => call("PUT", `/api/projects/${projectId}`, { workspace: { requirement: { ...req, project_id: projectId }, spec_contract: spec, active_constraints: activeKeys } }),
     onSuccess: () => {
       message.success(t("spec.saved", "规格契约已保存（生成新版本）"));
       void qc.invalidateQueries({ queryKey: ["project", projectId] });
@@ -49,11 +54,13 @@ export default function SpecStudioPage() {
   const setR = (patch: Partial<Requirement>) => setReq({ ...req, ...patch });
   const setS = (patch: Partial<SpecContract>) => setSpec({ ...spec, ...patch });
   const pw = spec.process_window ?? {};
-  const hist = history.data?.versions ?? [];
 
   return (
     <PageContainer title={q.data?.title} subTitle={t("spec.sub", "规格契约是 DOE、寻优、合规拦截与发布门禁的共同依据")}
-      extra={<Button type="primary" loading={save.isPending} onClick={() => save.mutate()}>{t("common.save", "保存")}</Button>}>
+      extra={<Space>
+        <Link to={`/spec/projects/${projectId}/sources`}>{t("requirements.sources.link", "项目资料")}</Link>
+        <Button type="primary" loading={save.isPending} onClick={() => save.mutate()}>{t("common.save", "保存")}</Button>
+      </Space>}>
       <ProCard split="vertical" bordered>
         <ProCard>
           <Tabs items={[
@@ -104,6 +111,12 @@ export default function SpecStudioPage() {
                     options={METHODS.map((m) => ({ value: m, label: t(`spec.method.${m}`, { airless: "高压无气喷涂", air_spray: "空气喷涂", electrostatic: "静电喷涂", dip: "浸涂", roller: "辊涂", brush: "刷涂", electrophoretic: "电泳", autodeposition: "自沉积" }[m]!) }))} />
                 </Form.Item>
               </Form>
+            ) },
+            { key: "constraints", label: t("requirements.constraints.tab", "工艺约束"), children: (
+              <Space direction="vertical" style={{ width: "100%" }} size={16}>
+                <ConstraintsEditor requirement={req} activeKeys={activeKeys} onChange={(r, keys) => { setReq(r); setActiveKeys(keys); }} />
+                <EffectTrace items={previewEffectTrace(req)} />
+              </Space>
             ) },
             { key: "redlines", label: t("spec.tab.redlines", "合规红线"), children: (
               <>
@@ -164,10 +177,13 @@ export default function SpecStudioPage() {
                 />
               </>
             ) },
+            { key: "agent", label: t("requirements.agent.title", "Agent 上下文"), children: (
+              <AgentContextCard projectId={projectId} value={typeof q.data?.workspace.agent_context === "string" ? q.data.workspace.agent_context : ""} />
+            ) },
           ]} />
         </ProCard>
-        <ProCard colSpan={260} title={t("spec.history", "契约版本")}>
-          <Timeline items={hist.slice(0, 20).map((h) => ({ children: <span>v{h.version} · {h.cause} <br /><Typography.Text type="secondary">{h.created_at?.slice(0, 19).replace("T", " ")}</Typography.Text></span> }))} />
+        <ProCard colSpan={340}>
+          <ProjectHistory projectId={projectId} />
         </ProCard>
       </ProCard>
     </PageContainer>

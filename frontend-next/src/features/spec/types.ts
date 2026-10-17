@@ -44,7 +44,15 @@ export interface Requirement {
   substrate?: string;
   notes?: string;
   voc_limit_gpl?: number | null;
+  cure_temperature_c?: number | null;
+  ph_target?: number | null;
+  salt_spray_hours?: number;
+  film_weight_gsm?: number;
+  cleaning_efficiency?: number;
   objectives?: Objective[];
+  levers?: { name: string; low: number; high: number; unit?: string }[];
+  /** 工艺约束 SSOT {名称: 值}: catalogue labels and free-form entries. */
+  constraint_values?: Record<string, number>;
   [k: string]: unknown;
 }
 
@@ -55,5 +63,16 @@ export interface ProjectDetail {
   domain: string;
   created_at: string;
   updated_at: string;
-  workspace: { requirement: Requirement | null; spec_contract?: SpecContract; [k: string]: unknown };
+  workspace: {
+    requirement: Requirement | null;
+    spec_contract?: SpecContract;
+    /** Catalogue constraints shown in the constraints editor (requirements/constraints.ts). */
+    active_constraints?: string[];
+    /** Free text injected into this project's agent prompts. */
+    agent_context?: string;
+    /** Session evidence list and the identifiers ticked for Q&A. */
+    sources?: Record<string, unknown>[];
+    selected_sources?: string[];
+    [k: string]: unknown;
+  };
 }
