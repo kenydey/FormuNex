@@ -13,7 +13,7 @@ import time
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -182,21 +182,37 @@ def _write_upload(content: bytes, filename: str, dest_dir: str) -> str:
     return path
 
 
+def _scope(project_id: str | None) -> str | None:
+    pid = (project_id or "").strip()
+    if len(pid) > 64:
+        raise HTTPException(status_code=422, detail="project_id 过长")
+    return pid or None
+
+
 @router.post("/ingest")
-async def ingest_document(file: UploadFile = File(...)):
+async def ingest_document(
+    file: UploadFile = File(...),
+    project_id: str | None = Form(default=None),
+):
     """Queue a single-file ingest: 202 + task_id, results via SSE/poll.
 
     Parsing (OCR on a scan) can run for minutes; doing it inside the request
     is what let a proxy in front of uvicorn cut the connection and show the
     user a 502 for work that had actually completed.
+
+    ``project_id`` (form field, optional) scopes the new KB source to that
+    project; omitted/empty = global corpus.
     """
+    project_id = _scope(project_id)
     started = time.time()
     content = await _read_upload_capped(file, file.filename or "upload")
     filename = file.filename or "upload"
 
     upload_dir = tempfile.mkdtemp(prefix="formunex_upload_")
     path = _write_upload(content, filename, upload_dir)
-    task_id = dispatch_file_ingest([{"name": filename, "path": path}], upload_dir=upload_dir)
+    task_id = dispatch_file_ingest(
+        [{"name": filename, "path": path}], upload_dir=upload_dir, project_id=project_id
+    )
     if not task_id:
         shutil.rmtree(upload_dir, ignore_errors=True)
         raise HTTPException(
@@ -211,9 +227,17 @@ async def ingest_document(file: UploadFile = File(...)):
 
 
 @router.post("/ingest/batch")
-async def ingest_batch(files: list[UploadFile] = File(...)):
-    """Queue a multi-file ingest: 202 + task_id, results via SSE/poll."""
+async def ingest_batch(
+    files: list[UploadFile] = File(...),
+    project_id: str | None = Form(default=None),
+):
+    """Queue a multi-file ingest: 202 + task_id, results via SSE/poll.
+
+    ``project_id`` (form field, optional) scopes every new KB source to that project.
+    """
     import asyncio
+
+    project_id = _scope(project_id)
 
     started = time.time()
     if not files:
@@ -246,7 +270,7 @@ async def ingest_batch(files: list[UploadFile] = File(...)):
         shutil.rmtree(upload_dir, ignore_errors=True)
         raise
 
-    task_id = dispatch_file_ingest(queued, upload_dir=upload_dir)
+    task_id = dispatch_file_ingest(queued, upload_dir=upload_dir, project_id=project_id)
     if not task_id:
         shutil.rmtree(upload_dir, ignore_errors=True)
         raise HTTPException(

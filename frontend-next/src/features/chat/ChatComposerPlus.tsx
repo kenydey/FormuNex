@@ -1,10 +1,12 @@
 import { PlusOutlined } from "@ant-design/icons";
-import { Button, Divider, Empty, List, Popover, Segmented, Space, Spin, Tag, Typography, theme } from "antd";
+import { Button, Divider, Empty, List, Popover, Segmented, Space, Spin, Tag, Tooltip, Typography, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { trailingToken } from "./logic";
+import { builtinTarget, playbookTarget, uncoveredBuiltins, type PlaybookContext, type PlaybookTarget } from "./playbooks";
 import type { BuiltinConnector, McpServerConfig, UnifiedSkill } from "./types";
 
 export type ChatMode = "chat" | "evidence";
@@ -25,14 +27,39 @@ export function useSkills(enabled: boolean) {
     queryFn: async () => (await call<{ skills: UnifiedSkill[] }>("GET", "/api/skills")).skills.filter((s) => s.enabled) });
 }
 
-/** "+" menu of the composer: answer mode, chat skills, built-in connectors and MCP servers (≤ 4). */
-export function ChatComposerPlus({ value, onChange }: { value: ComposerSelection; onChange: (v: ComposerSelection) => void }) {
+/**
+ * "+" menu of the composer: answer mode, chat skills, playbooks (→ their pages, carrying the current question and
+ * project; prompt-only ones prefill the draft), built-in connectors and MCP servers (≤ 4).
+ */
+export function ChatComposerPlus({ value, onChange, context, onPrefill }: {
+  value: ComposerSelection; onChange: (v: ComposerSelection) => void;
+  /** Current question / project handed to the playbook's target page. */
+  context?: PlaybookContext;
+  onPrefill?: (text: string) => void;
+}) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const skills = useSkills(open);
   const conns = useQuery({ queryKey: ["chat", "connectors"], enabled: open, staleTime: 60_000,
     queryFn: () => call<{ builtin: BuiltinConnector[]; mcp: McpServerConfig[] }>("GET", "/api/connectors") });
   const chatSkills = (skills.data ?? []).filter((s) => s.kind === "chat_skill");
+  const playbooks = (skills.data ?? []).filter((s) => s.kind === "playbook");
+  const builtins = uncoveredBuiltins(playbooks);
+  const builtinLabel: Record<string, string> = {
+    recommend: t("chat.playbook.recommend", "AI 配方推荐"),
+    doe_classic: t("chat.playbook.doe_classic", "经典 DOE（CCD 筛选）"),
+    loop: t("chat.playbook.loop", "BayBE 自驱动闭环"),
+    inverse_design: t("chat.playbook.inverse_design", "逆向设计"),
+    substitution: t("chat.playbook.substitution", "原料替代"),
+    deep_research: t("chat.playbook.deep_research", "深度研究报告"),
+    ip_analysis: t("chat.playbook.ip_analysis", "IP / FTO 分析"),
+  };
+  const run = (target: PlaybookTarget) => {
+    setOpen(false);
+    if (target.kind === "navigate") navigate(target.to, { state: target.state });
+    else onPrefill?.(target.text);
+  };
   const builtin = (conns.data?.builtin ?? []).filter((c) => c.enabled);
   const mcp = (conns.data?.mcp ?? []).filter((m) => m.enabled);
   const content = (
@@ -56,6 +83,26 @@ export function ChatComposerPlus({ value, onChange }: { value: ComposerSelection
           {!skills.isLoading && !chatSkills.length && <Typography.Text type="secondary">{t("chat.plus.no_skills", "无已启用技能")}</Typography.Text>}
         </Space>
       </Spin>
+      <Typography.Text type="secondary">{t("chat.plus.playbooks", "行动包（打开对应页面）")}</Typography.Text>
+      <Space size={[4, 4]} wrap style={{ margin: "4px 0 8px" }} data-testid="chat-playbooks">
+        {playbooks.map((s) => (
+          <Tooltip key={s.id} title={[s.summary, s.when_to_use].filter(Boolean).join(" · ") || undefined}>
+            <Button size="small" data-testid={`playbook-${s.id}`} onClick={() => run(playbookTarget(s, context ?? {}))}>
+              {s.icon} {s.title}
+            </Button>
+          </Tooltip>
+        ))}
+        {builtins.map((b) => (
+          <Button key={b.id} size="small" data-testid={`playbook-${b.id}`} onClick={() => run(builtinTarget(b, context ?? {}))}>
+            {b.icon} {builtinLabel[b.id] ?? b.id}
+          </Button>
+        ))}
+      </Space>
+      {context?.question?.trim() && (
+        <div style={{ marginBottom: 8 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t("chat.plus.playbook_carry", "将携带当前问题与项目打开")}</Typography.Text>
+        </div>
+      )}
       <Typography.Text type="secondary">{t("chat.plus.connectors", "连接器")}</Typography.Text>
       <Spin spinning={conns.isLoading}>
         <Space size={[4, 4]} wrap style={{ margin: "4px 0 8px" }}>

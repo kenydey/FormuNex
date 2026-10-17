@@ -353,6 +353,32 @@ class TaskManager:
 task_manager = TaskManager()
 
 
+def list_persisted_task_ids(limit: int = 1000) -> list[tuple[str, float]]:
+    """``(task_id, mtime)`` of the task snapshots on disk, newest first.
+
+    The per-task JSON snapshots in ``task_dir()`` are the durable record (Redis meta expires, the in-memory
+    registry is per process), so the task list is built from them. Files that are not snapshots (temp files,
+    the ``progress/`` sub-directory) are skipped.
+    """
+    root = _task_persist_dir()
+    if not root.is_dir():
+        return []
+    entries: list[tuple[str, float]] = []
+    try:
+        for path in root.glob("*.json"):
+            task_id = path.stem
+            if not _TASK_ID_RE.fullmatch(task_id):
+                continue
+            try:
+                entries.append((task_id, path.stat().st_mtime))
+            except OSError:
+                continue
+    except OSError as exc:
+        return degrade_return(logger, exc, "task snapshot listing failed", [])
+    entries.sort(key=lambda e: e[1], reverse=True)
+    return entries[: max(0, limit)]
+
+
 def cancel_task(task_id: str) -> bool:
     return task_manager.cancel(task_id)
 
@@ -555,6 +581,7 @@ def run_recommend_task(self, payload: dict) -> dict:
             n=n,
             sources=sources,
             prefer_materials_catalog=bool(payload.get("prefer_materials_catalog")),
+            relation_insight=bool(payload.get("relation_insight")),
         )
         tracker.emit(
             "recommend",
@@ -587,6 +614,8 @@ def run_recommend_task(self, payload: dict) -> dict:
             # P1-1: 异步路径透传 recommend_id —— 否则前端 lastRecommendId
             # 恒为 null，采纳按钮静默禁用，C-8 分子永远采不到。
             "recommend_id": result_raw.get("recommend_id"),
+            # KG relation insights (only computed when the payload asked for relation_insight).
+            "relation_insights": result_raw.get("relation_insights") or [],
         }
         result = {"research": research}
 
@@ -883,6 +912,7 @@ def _file_ingest_body(task_id: str, payload: dict) -> dict:
     # Now each file goes through ingest_files_batch as a single-item batch
     # (reusing all its merge/error handling), then `del content` truly frees.
     file_items = list(payload.get("files") or [])
+    project_id = str(payload.get("project_id") or "").strip() or None
     total_files = len(file_items)
 
     duplicates: list[str] = []
@@ -954,6 +984,13 @@ def _file_ingest_body(task_id: str, payload: dict) -> dict:
         files_processed += 1
         if outcome.source_id:
             last_source_id = outcome.source_id
+            # Project-scoped upload: stamp the new source (fail-open — a global
+            # row is still a usable row).
+            if project_id and _store is not None:
+                try:
+                    _store.update_fields(outcome.source_id, project_id=project_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("file ingest: project scope skipped for %s (%s)", name, exc)
             # PageIndex 借鉴 P6: 源文件落盘 —— 持久化原文件供"新页面打开"下载。
             # Fail-open: 落盘失败不影响入库。
             try:
@@ -1019,17 +1056,22 @@ def _file_ingest_body(task_id: str, payload: dict) -> dict:
     return result
 
 
-def dispatch_file_ingest(files: list[dict], *, upload_dir: str | None = None) -> str | None:
+def dispatch_file_ingest(
+    files: list[dict], *, upload_dir: str | None = None, project_id: str | None = None
+) -> str | None:
     """Enqueue an upload ingest job; return the task id for SSE/status polling.
 
     ``files`` is ``[{"name": ..., "path": ...}]`` — payloads stay on disk so a
-    multi-megabyte PDF is never serialised into the broker.
+    multi-megabyte PDF is never serialised into the broker. ``project_id``
+    scopes the new KB sources to a project (None = global corpus).
     """
     from ..config import get_settings
 
     if not files:
         return None
-    payload = {"files": files, "dir": upload_dir}
+    payload: dict = {"files": files, "dir": upload_dir}
+    if (project_id or "").strip():
+        payload["project_id"] = project_id.strip()
     try:
         if get_settings().celery_eager:
             task_id = f"fileingest-{uuid.uuid4().hex[:16]}"
@@ -2096,3 +2138,38 @@ def run_chunk_quality_sample(self, n: int = 20) -> dict:
         return cq.run_quality_sample(n=n)
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:200]}
+
+
+# ── KB: re-parse one source from its retained original file ────────────────
+def _kb_reparse_impl(task_id: str, payload: dict) -> dict:
+    from ..services.kb_reparse import reparse_source
+
+    source_id = str(payload.get("source_id") or "").strip()
+    try:
+        publish_progress(
+            task_id, TaskProgressStatus.RUNNING, stage="reparse",
+            message="重新解析…", progress=0.02,
+        )
+
+        def _progress(msg: str, frac: float) -> None:
+            publish_progress(
+                task_id, TaskProgressStatus.RUNNING, stage="reparse",
+                message=msg, progress=frac,
+            )
+
+        result = reparse_source(source_id, progress=_progress)
+    except Exception as exc:
+        logger.exception("kb reparse failed for %s", source_id)
+        err = {"error": str(exc), "source_id": source_id}
+        persist_result(task_id, err, failed=True)
+        _persist_terminal(task_id, "kb_reparse", err, failed=True, message=str(exc))
+        raise
+    message = f"重新解析完成：{result.get('chunks', 0)} 个分块"
+    _persist_terminal(task_id, "kb_reparse", result, message=message)
+    persist_result(task_id, result, failed=False)
+    return result
+
+
+@celery_app.task(bind=True, name="formunex.kb_reparse")
+def run_kb_reparse_task(self, payload: dict) -> dict:
+    return _kb_reparse_impl(self.request.id, payload)

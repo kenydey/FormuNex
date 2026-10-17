@@ -1,7 +1,8 @@
-import { BellOutlined, CloseOutlined, StopOutlined } from "@ant-design/icons";
+import { BellOutlined, CloseOutlined, EyeOutlined, StopOutlined } from "@ant-design/icons";
 import { App, Badge, Button, Empty, List, Popover, Progress, Space, Tabs, Tag, Tooltip, Typography } from "antd";
-import { useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { call } from "@/api/client";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
@@ -9,7 +10,9 @@ import { errorText } from "@/shared/feedback";
 import { usePendingMcp, usePendingPlans, useApprovalUi } from "./Approvals";
 import { ThinkingTimeline } from "./ThinkingTimeline";
 import { acceptedTaskId, progressPct } from "./logic";
-import { cancelTracked, dismissTask, isTerminal, resumeTracking, trackTask, useTaskCenter, type TrackedTask } from "./taskStore";
+import {
+  cancelTracked, dismissTask, isTerminal, mergeServerTasks, resumeTracking, trackTask, useTaskCenter, type ServerTask, type TrackedTask,
+} from "./taskStore";
 
 /** Auto-track every mutation that answers with ``{ task_id }`` (HTTP 202), so all pages feed the centre. */
 function useAutoTrack() {
@@ -39,6 +42,9 @@ function TaskRow({ task }: { task: TrackedTask }) {
   const title = task.title || task.kind || t("chat.task.untitled", "后台任务");
   return (
     <List.Item data-testid="task-row" actions={[
+      task.server && !done && <Tooltip key="f" title={t("chat.task.follow", "跟踪进度")}>
+        <Button size="small" type="text" icon={<EyeOutlined />} onClick={() => trackTask(task.id)} />
+      </Tooltip>,
       !done && <Tooltip key="c" title={t("chat.task.cancel", "取消任务")}>
         <Button size="small" type="text" danger icon={<StopOutlined />}
           onClick={() => cancelTracked(task.id).catch((e) => message.error(errorText(e)))} />
@@ -51,7 +57,10 @@ function TaskRow({ task }: { task: TrackedTask }) {
         <Space size={6} wrap>
           {task.link ? <Link to={task.link}>{title}</Link> : <Typography.Text strong>{title}</Typography.Text>}
           <Tag color={color}>{stateLabel}</Tag>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{dayjs(task.startedAt).format("HH:mm:ss")}</Typography.Text>
+          {task.startedAt > 0 && <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {dayjs(task.startedAt).format(dayjs(task.startedAt).isSame(dayjs(), "day") ? "HH:mm:ss" : "MM-DD HH:mm")}
+          </Typography.Text>}
+          {task.server && <Tag bordered={false}>{t("chat.task.server", "服务器")}</Tag>}
         </Space>
         {!done || task.state === "completed"
           ? <Progress size="small" percent={task.state === "completed" ? 100 : progressPct(task.progress)} status={status[task.state]} />
@@ -68,14 +77,29 @@ function TaskRow({ task }: { task: TrackedTask }) {
 export function TaskCenter() {
   const { t } = useTranslation();
   useAutoTrack();
-  const tasks = useTaskCenter((s) => s.tasks);
-  const clearFinished = useTaskCenter((s) => s.clearFinished);
+  const local = useTaskCenter((s) => s.tasks);
+  const hidden = useTaskCenter((s) => s.hidden);
+  const hide = useTaskCenter((s) => s.hide);
+  const clearLocalFinished = useTaskCenter((s) => s.clearFinished);
+  const [open, setOpen] = useState(false);
+  // The caller's recent tasks from the server (durable task snapshots) — also those started in other tabs/devices.
+  const server = useQuery({
+    queryKey: ["tasks", "mine"],
+    queryFn: () => call<{ items: ServerTask[] }>("GET", "/api/tasks?limit=30"),
+    refetchInterval: open ? 10_000 : 60_000,
+    retry: false,
+  });
+  const tasks = useMemo(() => mergeServerTasks(local, server.data?.items ?? [], hidden), [local, server.data, hidden]);
+  const clearFinished = () => {
+    hide(tasks.filter((x) => x.server && isTerminal(x.state)).map((x) => x.id));
+    clearLocalFinished();
+  };
   const markSeen = useTaskCenter((s) => s.markSeen);
   const plans = usePendingPlans();
   const mcp = usePendingMcp();
   const { openPlan, openMcp } = useApprovalUi();
-  const running = tasks.filter((x) => !isTerminal(x.state)).length;
-  const unseen = tasks.filter((x) => x.unseen).length;
+  const running = local.filter((x) => !isTerminal(x.state)).length;
+  const unseen = local.filter((x) => x.unseen).length;
   const approvals = (plans.data?.length ?? 0) + (mcp.data?.length ?? 0);
   const content = (
     <div style={{ width: 420 }} data-testid="task-centre">
@@ -109,7 +133,7 @@ export function TaskCenter() {
     </div>
   );
   return (
-    <Popover trigger="click" placement="bottomRight" content={content} onOpenChange={(o) => o && markSeen()}>
+    <Popover trigger="click" placement="bottomRight" content={content} onOpenChange={(o) => { setOpen(o); if (o) { markSeen(); void server.refetch(); } }}>
       <Tooltip title={t("chat.task.centre", "任务与通知中心")}>
         <Badge count={running + approvals + unseen} size="small" data-testid="task-centre-badge">
           <Button type="text" icon={<BellOutlined />} aria-label={t("chat.task.centre", "任务与通知中心")} />

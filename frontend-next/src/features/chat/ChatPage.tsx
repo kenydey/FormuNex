@@ -410,7 +410,9 @@ export default function ChatPage() {
             {atItems && <TokenPicker title={t("chat.picker.sources", "@ 引用知识源")} items={atItems} loading={kbSources.isLoading}
               empty={t("chat.picker.no_sources", "无匹配知识源")} onPick={pickAt} />}
             <Space.Compact style={{ width: "100%" }} block>
-              <ChatComposerPlus value={sel} onChange={setSel} />
+              <ChatComposerPlus value={sel} onChange={setSel}
+                context={{ question: draft.trim() || [...messages].reverse().find((m) => m.role === "user")?.content, projectId }}
+                onPrefill={setDraft} />
               <Upload accept="image/png,image/jpeg,image/webp" showUploadList={false}
                 beforeUpload={(f) => { uploadStructure.mutate(f); return false; }}>
                 <Tooltip title={t("chat.structure.upload", "上传化学结构式图片（MolScribe 识别 → 相似材料检索）")}>

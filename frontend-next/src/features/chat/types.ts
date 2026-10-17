@@ -97,6 +97,10 @@ export interface UnifiedSkill {
   summary: string;
   icon: string;
   enabled: boolean;
+  /** Playbooks: the action they start (recommend / doe / optimize / loop / deep_research …). */
+  action?: string;
+  when_to_use?: string;
+  checklist?: { id: string; title: string }[];
 }
 
 export interface BuiltinConnector { id: string; display_name: string; description: string; enabled: boolean }

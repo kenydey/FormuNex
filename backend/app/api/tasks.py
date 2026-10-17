@@ -7,9 +7,11 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 from ..config import get_settings
 from ..domain.schemas import AsyncTaskAccepted, TaskState, TaskStatus
@@ -21,7 +23,7 @@ from ..worker.task_progress import (
     get_task_meta,
     task_exists,
 )
-from ..worker.tasks import load_persisted_task, task_manager
+from ..worker.tasks import list_persisted_task_ids, load_persisted_task, task_manager
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,79 @@ def accepted_response(task_id: str, kind: str, outbox_id: str | None = None, own
         outbox_id=outbox_id,
     )
     return JSONResponse(status_code=202, content=body.model_dump())
+
+
+class TaskSummary(BaseModel):
+    """One row of ``GET /api/tasks`` — a task snapshot without its (possibly large) result payload."""
+
+    task_id: str
+    kind: str
+    state: TaskState
+    progress: float = 0.0
+    message: str = ""
+    stage: str = ""
+    stream_url: str = ""
+    elapsed_ms: int | None = None
+    owner_id: str | None = None
+    updated_at: str
+
+
+class TaskList(BaseModel):
+    items: list[TaskSummary]
+
+
+_LIST_SCAN_MAX = 2000
+_TERMINAL_STATES = (TaskState.completed, TaskState.failed, TaskState.cancelled)
+
+
+@router.get("/tasks", response_model=TaskList)
+def list_tasks(
+    request: Request,
+    state: TaskState | None = Query(None, description="Only tasks in this state"),
+    kind: str | None = Query(None, description="Only tasks of this kind (e.g. recommend, deep_research)"),
+    limit: int = Query(50, ge=1, le=200),
+) -> TaskList:
+    """The caller's recent background tasks, newest first, from the durable on-disk task snapshots.
+
+    Ownership follows ``assert_owner``: in single-user mode (owner ``default``) every task is listed; with
+    ``FORMUNEX_MULTI_USER`` only tasks whose ``owner_id`` is the caller's.
+    """
+    from ..middleware.api_auth import get_current_owner
+
+    current = get_current_owner(request)
+    items: list[TaskSummary] = []
+    for task_id, mtime in list_persisted_task_ids(_LIST_SCAN_MAX):
+        status = load_persisted_task(task_id)
+        if status is None:
+            continue
+        if current != "default" and status.owner_id != current:
+            continue
+        if status.state not in _TERMINAL_STATES:
+            # A pending/running snapshot may be stale: refresh it from the live progress meta.
+            fresh = task_manager.get(task_id)
+            if fresh is not None:
+                status = fresh
+        if state is not None and status.state != state:
+            continue
+        if kind and status.kind != kind:
+            continue
+        items.append(
+            TaskSummary(
+                task_id=status.task_id,
+                kind=status.kind,
+                state=status.state,
+                progress=status.progress,
+                message=status.message,
+                stage=status.stage,
+                stream_url=status.stream_url or f"/api/tasks/{task_id}/stream",
+                elapsed_ms=status.elapsed_ms,
+                owner_id=status.owner_id,
+                updated_at=datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+            )
+        )
+        if len(items) >= limit:
+            break
+    return TaskList(items=items)
 
 
 @router.get("/tasks/{task_id}", response_model=TaskStatus)

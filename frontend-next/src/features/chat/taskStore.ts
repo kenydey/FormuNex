@@ -1,5 +1,6 @@
 /**
- * Task centre state: background tasks this browser knows about (the backend has no "list my tasks" endpoint).
+ * Task centre state: background tasks this browser tracks, merged (``mergeServerTasks``) with the caller's recent
+ * tasks from ``GET /api/tasks`` so tasks started elsewhere (another tab/device, a page that did not track) show too.
  * A task is tracked when any TanStack mutation resolves with an ``AsyncTaskAccepted`` body (see TaskCenter), or when
  * a page calls ``trackTask`` itself. Tracking streams progress with ``awaitTask``; ids survive a reload (persisted)
  * and tracking resumes. Dismissing stops listening only — it never cancels the server-side task; cancel is explicit.
@@ -22,10 +23,55 @@ export interface TrackedTask {
   finishedAt?: number;
   /** A finished task the user has not opened the centre since. */
   unseen?: boolean;
+  /** Known only from the server list (not followed by this browser). */
+  server?: boolean;
+}
+
+/** One row of ``GET /api/tasks``. */
+export interface ServerTask {
+  task_id: string;
+  kind: string;
+  state: TaskState;
+  progress: number;
+  message: string;
+  stage: string;
+  stream_url: string;
+  elapsed_ms?: number | null;
+  owner_id?: string | null;
+  updated_at: string;
+}
+
+/**
+ * Local tracked tasks + server tasks, newest first. A locally tracked task keeps its title/link/steps but takes a
+ * terminal state from the server when the local copy is still non-terminal (its watcher was lost). Server-only
+ * tasks the user dismissed (``hidden``) are left out.
+ */
+export function mergeServerTasks(local: TrackedTask[], server: ServerTask[], hidden: readonly string[] = []): TrackedTask[] {
+  const hide = new Set(hidden);
+  const byId = new Map(server.map((s) => [s.task_id, s]));
+  const merged: TrackedTask[] = local.map((t) => {
+    const s = byId.get(t.id);
+    if (!s || isTerminal(t.state) || !isTerminal(s.state)) return t;
+    return { ...t, state: s.state, progress: s.progress, message: s.message || t.message, stage: s.stage || t.stage };
+  });
+  const known = new Set(local.map((t) => t.id));
+  for (const s of server) {
+    if (known.has(s.task_id) || hide.has(s.task_id)) continue;
+    const at = Date.parse(s.updated_at);
+    merged.push({
+      id: s.task_id, kind: s.kind, state: s.state, progress: s.progress, message: s.message, stage: s.stage || undefined,
+      steps: [], startedAt: Number.isNaN(at) ? 0 : at, server: true,
+      ...(isTerminal(s.state) && !Number.isNaN(at) ? { finishedAt: at } : {}),
+    });
+  }
+  return merged.sort((a, b) => b.startedAt - a.startedAt);
 }
 
 interface TaskCenterState {
   tasks: TrackedTask[];
+  /** Server-listed task ids the user dismissed from the centre. */
+  hidden: string[];
+  hide: (ids: string[]) => void;
   upsert: (t: Partial<TrackedTask> & { id: string }) => void;
   remove: (id: string) => void;
   clearFinished: () => void;
@@ -41,6 +87,8 @@ export const useTaskCenter = create<TaskCenterState>()(
   persist(
     (set) => ({
       tasks: [],
+      hidden: [],
+      hide: (ids) => set((s) => ({ hidden: [...new Set([...ids, ...s.hidden])].slice(0, 300) })),
       upsert: (t) => set((s) => {
         const i = s.tasks.findIndex((x) => x.id === t.id);
         if (i < 0) {
@@ -55,7 +103,7 @@ export const useTaskCenter = create<TaskCenterState>()(
       clearFinished: () => set((s) => ({ tasks: s.tasks.filter((x) => !isTerminal(x.state)) })),
       markSeen: () => set((s) => ({ tasks: s.tasks.map((x) => (x.unseen ? { ...x, unseen: false } : x)) })),
     }),
-    { name: "formunex-task-centre", partialize: (s) => ({ tasks: s.tasks.map((t) => ({ ...t, steps: [] })) }) },
+    { name: "formunex-task-centre", partialize: (s) => ({ tasks: s.tasks.map((t) => ({ ...t, steps: [] })), hidden: s.hidden }) },
   ),
 );
 
@@ -87,6 +135,7 @@ function watch(id: string) {
 
 /** Show a background task in the header task centre and follow its progress. */
 export function trackTask(id: string, opts: { title?: string; link?: string } = {}) {
+  if (useTaskCenter.getState().hidden.includes(id)) useTaskCenter.setState((s) => ({ hidden: s.hidden.filter((x) => x !== id) }));
   const exists = useTaskCenter.getState().tasks.some((t) => t.id === id);
   useTaskCenter.getState().upsert({ id, ...opts, ...(exists ? {} : { state: "pending" as TaskState }) });
   watch(id);
@@ -101,6 +150,8 @@ export function dismissTask(id: string) {
   watchers.get(id)?.abort();
   watchers.delete(id);
   useTaskCenter.getState().remove(id);
+  // also keep it out of the server list merge
+  useTaskCenter.getState().hide([id]);
 }
 
 export async function cancelTracked(id: string) {

@@ -1655,8 +1655,8 @@ def pause_doecyle(
     )
 
 
-@router.get("/experiments/hooks/doecyle-status/{campaign_id}", response_model=Dict[str, Any])
-def get_doecyle_status(
+@router.get("/experiments/hooks/doecycle-status/{campaign_id}", response_model=Dict[str, Any])
+def get_doecycle_status(
     campaign_id: int,
     request: Request,
 ) -> Dict[str, Any]:
@@ -1680,6 +1680,19 @@ def get_doecyle_status(
             "pausedUntil": None, "lapsedAt": None, "degraded": True,
         }
     return status_val
+
+
+@router.get(
+    "/experiments/hooks/doecyle-status/{campaign_id}",
+    response_model=Dict[str, Any],
+    include_in_schema=False,
+)
+def get_doecyle_status(
+    campaign_id: int,
+    request: Request,
+) -> Dict[str, Any]:
+    """Misspelled legacy path of :func:`get_doecycle_status`, kept for the legacy frontend."""
+    return get_doecycle_status(campaign_id, request)
 
 
 # ── P0-2: Datalab -> 优化器手动同步 ──────────────────────────────────────────

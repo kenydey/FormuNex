@@ -487,6 +487,9 @@ class ResearchResult(BaseModel):
     recommend_meta: dict | None = None
     # F-4: C-8 round id — lets the /api/research entry path report adopt signals.
     recommend_id: str | None = None
+    # KG relation insights of the round (component → substitutes / relations), produced by the recommend path
+    # with ``relation_insight``; kept in the project workspace's research block for the leaderboard banner.
+    relation_insights: list[dict] = Field(default_factory=list)
 
 
 class ComprehensiveReport(BaseModel):
@@ -672,6 +675,9 @@ class ActiveDoeResult(AdaptiveDOEMetadata):
     physical_constraints: dict | None = None
     # v16 P2-4: 实际喂给 GP 的 lab 点数（血缘；legacy 路径为 0）。
     lab_points_used: int = 0
+    # id under which /doe/active stored the plan in ``doe_plans`` ("" = not
+    # persisted, so it cannot be dispatched / read back by id).
+    plan_id: str = ""
 
 
 class OptimizationResult(BaseModel):

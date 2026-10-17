@@ -37,20 +37,38 @@ def _persist_doe_plan(
     plan: DOEPlan,
     campaign_id: int | None = None,
     project_id: str | None = None,
-) -> None:
-    """Best-effort: persist a single DOEPlan to the doe_plans table."""
+) -> str:
+    """Best-effort: persist a single DOEPlan to the doe_plans table.
+
+    Returns the stored plan id, or ``""`` when the plan could not be stored.
+    A ``campaign_id`` that is not a row of the local ``campaigns`` table (e.g.
+    a stale / foreign workbench id) is dropped instead of letting the FK
+    violation be swallowed by ``save``'s duplicate-id guard — that used to
+    lose the plan silently, so dispatching it as lab tasks then failed.
+    """
+    saved = ""
     try:
         from ..db import doe_plan_store
         from ..db.database import default_session_factory
+        from ..db.models import Campaign
         from ..db.session_utils import commit_session
 
         factory = default_session_factory()
         with commit_session(factory) as session:
-            doe_plan_store.save(
+            if campaign_id is not None and session.get(Campaign, campaign_id) is None:
+                logger.warning(
+                    "persist doe plan: campaign %s not found; storing plan unattached", campaign_id
+                )
+                campaign_id = None
+            saved = doe_plan_store.save(
                 session, plan, campaign_id=campaign_id, project_id=project_id
             )
+        with factory() as session:
+            if doe_plan_store.load(session, saved) is None:
+                saved = ""
     except Exception as exc:
         logger.warning("persist doe plan failed: %s", exc, exc_info=True)
+        saved = ""
     # P4.2: optional dossier S4 patch (default OFF).
     try:
         from ..services.wiki.dossier import notify_dossier_event_for_campaign
@@ -58,6 +76,7 @@ def _persist_doe_plan(
         notify_dossier_event_for_campaign(campaign_id, "doe_updated")
     except Exception:
         pass
+    return saved
 
 
 @router.post("/doe", response_model=DOEPlan)
@@ -158,7 +177,9 @@ def active_doe(req: ActiveDoeRequest) -> ActiveDoeResult:
     except ValueError as exc:
         # v9: 离散因子 + 非 full_factorial 设计 fail-closed → 422 而非 500。
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _persist_doe_plan(
+    # Same persistence as POST /doe, so the plan can be read back by id
+    # (GET /doe/plans/{plan_id}) and dispatched as lab tasks.
+    result.plan_id = _persist_doe_plan(
         result.plan,
         campaign_id=req.workbench_campaign_id,
         project_id=req.project_id or None,
@@ -346,6 +367,30 @@ def doe_history(
             page_size=page_size,
         )
     return DoeHistoryResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.get("/doe/plans/{plan_id}")
+def get_doe_plan(
+    plan_id: str,
+    project_id: str | None = Query(
+        None, description="当前项目；给出时只返回属于该项目的计划（与 /doe/history 的项目范围一致）"
+    ),
+) -> dict:
+    """One stored DOE plan by id — the same item shape as ``/doe/history``
+    (factors, runs, notes, status, campaign / round provenance) plus ``project_id``.
+
+    404 when the plan does not exist or, with ``project_id``, belongs to another
+    project (unscoped legacy rows are not visible under any project, as in history).
+    """
+    from ..db import doe_plan_store
+    from ..db.database import default_session_factory
+
+    factory = default_session_factory()
+    with factory() as session:
+        item = doe_plan_store.get_item(session, plan_id)
+    if item is None or (project_id and item.get("project_id") != project_id):
+        raise HTTPException(status_code=404, detail=f"DOE plan {plan_id} not found.")
+    return item
 
 
 class DoeAbortBody(BaseModel):

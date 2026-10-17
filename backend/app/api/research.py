@@ -21,6 +21,8 @@ class ResearchRequest(Requirement):
     query: str = ""
     # Soft catalog bias for recommend path (never materials-only).
     prefer_materials_catalog: bool = False
+    # Recommend path: also compute KG relation insights for the candidates' components (substitutes / relations).
+    relation_insight: bool = True
 
 
 class DeepResearchRequest(BaseModel):
@@ -55,7 +57,7 @@ def start_research(body: ResearchRequest) -> ResearchResult:
         logger.warning("POST /api/research source_types ignored; use ColBERT KB + CRAG fallback")
     req = Requirement(**{
         k: v for k, v in body.model_dump().items()
-        if k not in ("sources", "source_types", "query")
+        if k not in ("sources", "source_types", "query", "relation_insight")
     })
     pre_sources = body.sources if body.sources else None
     result = workflow.run_research(req, pre_sources=pre_sources, query=body.query)
@@ -69,7 +71,7 @@ def start_recommend_research(body: ResearchRequest, request: Request) -> JSONRes
 
     req = Requirement(**{
         k: v for k, v in body.model_dump().items()
-        if k not in ("sources", "source_types", "query", "prefer_materials_catalog")
+        if k not in ("sources", "source_types", "query", "prefer_materials_catalog", "relation_insight")
     })
     payload = {
         "topic": body.query or req.headline(),
@@ -77,6 +79,7 @@ def start_recommend_research(body: ResearchRequest, request: Request) -> JSONRes
         "sources": [s.model_dump() for s in body.sources],
         "query": body.query or req.headline(),
         "prefer_materials_catalog": bool(body.prefer_materials_catalog),
+        "relation_insight": bool(body.relation_insight),
     }
     outbox_id = _enqueue_outbox("research_recommend", payload)
     return submit(run_recommend_task, payload, "recommend", outbox_id=outbox_id, owner_id=get_current_owner(request))

@@ -182,21 +182,28 @@ def list_history(
         .limit(page_size)
     ).scalars().all()
 
-    items: list[dict] = []
-    for r in rows:
-        params: dict = r.parameters or {}
-        items.append(
-            {
-                "plan_id": r.id,
-                "design": r.design_type,
-                "domain": params.get("domain"),
-                "factors": params.get("factors", []),
-                "runs": params.get("runs", []),
-                "notes": params.get("notes", ""),
-                "campaign_id": r.campaign_id,
-                "round": r.round,
-                "status": getattr(r, "status", None) or "draft",
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-        )
-    return items, total
+    return [_history_item(r) for r in rows], total
+
+
+def _history_item(r: DOEPlanRow) -> dict:
+    params: dict = r.parameters or {}
+    return {
+        "plan_id": r.id,
+        "design": r.design_type,
+        "domain": params.get("domain"),
+        "factors": params.get("factors", []),
+        "runs": params.get("runs", []),
+        "notes": params.get("notes", ""),
+        "campaign_id": r.campaign_id,
+        "round": r.round,
+        "status": getattr(r, "status", None) or "draft",
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+def get_item(session: Session, plan_id: str) -> dict | None:
+    """One plan in the ``list_history`` item shape, plus its ``project_id``."""
+    row = session.get(DOEPlanRow, plan_id)
+    if row is None:
+        return None
+    return {**_history_item(row), "project_id": row.project_id}

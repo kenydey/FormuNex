@@ -415,6 +415,89 @@ def archive_source(source_id: str, body: KBSourceArchiveRequest) -> KBSourceArch
     )
 
 
+class KBResolveItem(BaseModel):
+    identifier: str = Field(default="", max_length=1024)
+    url: str | None = Field(default=None, max_length=2048)
+    url_alt: str | None = Field(default=None, max_length=2048)
+
+
+class KBResolveRequest(BaseModel):
+    items: list[KBResolveItem] = Field(default_factory=list, max_length=500)
+
+
+class KBResolveMatch(BaseModel):
+    identifier: str
+    source_id: str
+    title: str = ""
+
+
+class KBResolveResponse(BaseModel):
+    matches: list[KBResolveMatch]
+
+
+@router.post(
+    "/sources/resolve",
+    response_model=KBResolveResponse,
+    summary="外部检索结果 → 知识库文档 id（按 DOI / 专利号 / URL 匹配 origin_url）",
+)
+def resolve_sources(body: KBResolveRequest) -> KBResolveResponse:
+    """Map search hits to the KB documents that hold their full text.
+
+    Each item matches when its identifier, URL or alternate URL (incl. patent
+    number aliases: compact / hyphenated / Google Patents URL) equals a
+    source's ``origin_url``; rows whose last ingest failed are ignored.
+    Unmatched items are simply absent. Fail-open per item.
+    """
+    from ..db.source_store import get_source_store
+
+    store = get_source_store()
+    matches: list[KBResolveMatch] = []
+    seen: set[str] = set()
+    for it in body.items:
+        ident = (it.identifier or "").strip()
+        keys = [k.strip() for k in (ident, it.url, it.url_alt) if k and k.strip()]
+        if not keys or (ident and ident in seen):
+            continue
+        try:
+            row = store.find_by_origin_urls(keys, include_failed=False)
+        except Exception:  # noqa: BLE001
+            logger.debug("kb resolve lookup failed for %s", ident, exc_info=True)
+            continue
+        if row is None:
+            continue
+        seen.add(ident)
+        matches.append(
+            KBResolveMatch(identifier=ident or keys[0], source_id=row.id, title=row.title or "")
+        )
+    return KBResolveResponse(matches=matches)
+
+
+@router.post(
+    "/sources/{source_id}/reparse",
+    status_code=202,
+    summary="按当前解析配置重新解析知识库文档（后台任务，重建切块/索引/目录树）",
+)
+def reparse_source(source_id: str):
+    """Re-parse the retained original file → full text, chunks, FTS, tables, ToC tree.
+
+    202 + ``AsyncTaskAccepted``; 404 unknown source; 409 when KB v2 is off or
+    the original file was never retained (URL / identifier sources).
+    """
+    if not kb_index.kb_enabled():
+        raise HTTPException(status_code=409, detail="知识库 v2 未启用（FORMUNEX_KB_V2_ENABLED）")
+    from ..services.kb_reparse import SourceFileMissing, SourceNotFound, original_file
+    from ..worker.tasks import run_kb_reparse_task
+    from ._dispatch import submit
+
+    try:
+        original_file(source_id)
+    except SourceNotFound:
+        raise HTTPException(status_code=404, detail="source not found") from None
+    except SourceFileMissing as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return submit(run_kb_reparse_task, {"source_id": source_id}, "kb_reparse")
+
+
 class KBSourceDeleteResponse(BaseModel):
     ok: bool
     source_id: str

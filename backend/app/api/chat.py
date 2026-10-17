@@ -236,6 +236,72 @@ def _augment_with_kb(
     return sources + added, len(added) + wiki_added, resolution, kg_stats
 
 
+_REF_DOC_CHUNK_SCAN = 400
+
+
+def _kb_source_of(ev: Evidence) -> str | None:
+    """``kb:<source_id>#c<ord>`` → ``source_id`` (None for non-KB evidence)."""
+    ident = ev.identifier or ""
+    if not ident.startswith("kb:"):
+        return None
+    return ident[3:].split("#", 1)[0] or None
+
+
+def _apply_ref_docs(
+    question: str,
+    sources: list[Evidence],
+    ref_doc_ids: list[str] | None,
+    *,
+    k: int,
+) -> tuple[list[Evidence], int]:
+    """Restrict KB evidence to the documents the user ``@``-referenced.
+
+    The best-matching chunks of each referenced KB document (token overlap
+    with the question; every referenced document contributes at least its
+    best chunk) are put first, and KB chunks from *other* documents are
+    dropped. Caller-supplied, Wiki, KG and connector evidence is kept.
+    Fail-open: unknown ids, an empty KB or any error leaves ``sources``
+    untouched. Returns ``(sources, n_ref_chunks_added)``.
+    """
+    ids = [s.strip() for s in (ref_doc_ids or []) if s and s.strip()]
+    if not ids:
+        return sources, 0
+    try:
+        from ..db.chunk_store import get_chunk_store
+        from ..services.kb_index import _chunk_to_evidence, _keyword_score, _source_meta, _tokens
+
+        store = get_chunk_store()
+        meta = _source_meta()
+        q_tokens = _tokens(question)
+        per_doc = max(1, k // len(ids)) if k > 0 else 1
+        picked: list[tuple[float, object]] = []
+        for sid in dict.fromkeys(ids):
+            chunks = [c for c in store.get_by_source(sid, limit=_REF_DOC_CHUNK_SCAN) if (c.text or "").strip()]
+            if not chunks:
+                continue
+            scored = sorted(
+                ((_keyword_score(q_tokens, c.text or ""), -c.ord, c) for c in chunks),
+                key=lambda t: (t[0], t[1]),
+                reverse=True,
+            )
+            picked.extend((s, c) for s, _o, c in scored[:per_doc])
+        if not picked:
+            return sources, 0
+        picked.sort(key=lambda t: t[0], reverse=True)
+        ref_set = set(ids)
+        ref_ev = [_chunk_to_evidence(c, meta, max(0.5, s)) for s, c in picked]
+        seen = {e.identifier for e in ref_ev}
+        kept = [
+            e for e in sources
+            if e.identifier not in seen
+            and (_kb_source_of(e) is None or _kb_source_of(e) in ref_set)
+        ]
+        return ref_ev + kept, len(ref_ev)
+    except Exception as exc:  # noqa: BLE001 - fail-open
+        logger.debug("ref_doc_ids restriction skipped: %s", exc)
+        return sources, 0
+
+
 from ..services.citation_coords import claims_evidence as _claims_evidence
 from ..services.citation_coords import reviewer_view as _reviewer_view
 
@@ -597,6 +663,11 @@ def chat(req: ChatRequestValidated, request: Request = None):  # type: ignore[as
             project_id=req.project_id,
             include_entity_resolution=req.include_entity_resolution,
         )
+        # @-referenced KB documents restrict the KB half of the evidence (fail-open).
+        sources, _ref_added = _apply_ref_docs(
+            retrieval_query, sources, req.ref_doc_ids, k=settings.kb_chat_top_k
+        )
+        kb_used += _ref_added
         # B-1: BM25-only 退化显式提示。KB 实际参与检索（kb_used>0）但向量层
         # 退化/缺失时，语义排序已失效，用户必须看得见。
         retrieval_notices = _retrieval_degradation_notices(kb_used, req)
@@ -943,6 +1014,10 @@ def _stream_answer_plan(req: "ChatRequestValidated", settings):
         project_id=req.project_id,
         include_entity_resolution=req.include_entity_resolution,
     )
+    sources, _ref_added = _apply_ref_docs(
+        retrieval_query, sources, req.ref_doc_ids, k=settings.kb_chat_top_k
+    )
+    kb_used += _ref_added
     try:
         from ..services.connectors_builtin import gather_connector_evidence
 
