@@ -52,7 +52,7 @@ export function ConstraintsEditor<R extends ConstraintRequirement>({ requirement
                 onChange={(n) => onChange(setConstraintValue(requirement, def.key, n), activeKeys)} />
             </Col>
             <Col flex="150px">
-              <InputNumber size="small" min={def.min} max={def.max} step={def.step} value={v} disabled={disabled} addonAfter={def.unit || undefined}
+              <InputNumber size="small" min={def.min} max={def.max} step={def.step} value={v} disabled={disabled} suffix={def.unit || undefined}
                 onChange={(n) => n != null && onChange(setConstraintValue(requirement, def.key, n), activeKeys)} style={{ width: "100%" }} />
             </Col>
             <Col flex="32px">

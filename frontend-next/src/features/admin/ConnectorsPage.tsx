@@ -3,6 +3,7 @@ import { Descriptions, List, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { McpConnectorsSection } from "@/features/settings/McpConnectorsSection";
 
 interface PlmConnectors { configured: { name: string; target: string }[]; reserved: { name: string; description: string }[] }
 interface ElnConnector { name: string; configured: boolean; can_push: boolean }
@@ -38,6 +39,9 @@ export default function ConnectorsPage() {
             {t("connectors.env_hint", "连接器在服务器环境变量中配置：FORMUNEX_PLM_PUBLISH_WEBHOOK_URL / _SECRET、FORMUNEX_LAB_ELABFTW_URL / _API_KEY。")}
           </Typography.Paragraph>
         </ProCard>
+      </ProCard>
+      <ProCard gutter={16} ghost wrap style={{ marginTop: 16 }}>
+        <McpConnectorsSection />
       </ProCard>
     </PageContainer>
   );

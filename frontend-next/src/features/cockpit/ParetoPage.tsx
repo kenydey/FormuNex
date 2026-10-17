@@ -1,5 +1,5 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { Alert, Button, Empty, Input, Select, Space, Switch, Table, Tag, Typography } from "antd";
+import { Alert, Button, Empty, Input, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,6 +10,7 @@ import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
 import type { LabTask } from "@/features/lab/types";
+import { ParallelChart } from "@/features/workbench/charts";
 import { WinningModal } from "./WinningModal";
 
 interface Obj { metric: string; direction: "maximize" | "minimize" | "match_target"; target_value?: number | null }
@@ -74,20 +75,31 @@ export default function ParetoPage() {
       {!done.length && <Empty style={{ marginTop: 24 }} description={t("pareto.empty", "当前项目还没有已复核的实验结果")} />}
       {res && xm && ym && (
         <ProCard bordered style={{ marginTop: 16 }}>
-          <Chart height={420}
-            option={{
-              tooltip: { trigger: "item", formatter: (p: unknown) => { const d = (p as { data: { name: string; value: number[] } }).data; return `${d.name}<br/>${xm}: ${d.value[0]}<br/>${ym}: ${d.value[1]}`; } },
-              xAxis: { name: xm, scale: true }, yAxis: { name: ym, scale: true },
-              legend: { data: [t("pareto.frontier", "帕累托前沿"), t("pareto.others", "其他")] },
-              series: [
-                { name: t("pareto.frontier", "帕累托前沿"), type: "scatter", symbolSize: 14,
-                  data: res.points.filter((p) => p.rank === 0).map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
-                { name: t("pareto.others", "其他"), type: "scatter", symbolSize: 8, itemStyle: { opacity: 0.5 },
-                  data: res.points.filter((p) => p.rank !== 0).map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
-              ],
-            }}
-            onEvents={{ click: (p) => { const exp = byNo.get((p as { name: string }).name)?.experiment_id; if (exp && can("formulation.freeze")) setWinning(exp); } }}
-          />
+          <Tabs items={[
+            { key: "scatter", label: t("pareto.view_scatter", "散点"), children: (
+              <Chart height={420}
+                option={{
+                  tooltip: { trigger: "item", formatter: (p: unknown) => { const d = (p as { data: { name: string; value: number[] } }).data; return `${d.name}<br/>${xm}: ${d.value[0]}<br/>${ym}: ${d.value[1]}`; } },
+                  xAxis: { name: xm, scale: true }, yAxis: { name: ym, scale: true },
+                  legend: { data: [t("pareto.frontier", "帕累托前沿"), t("pareto.others", "其他")] },
+                  series: [
+                    { name: t("pareto.frontier", "帕累托前沿"), type: "scatter", symbolSize: 14,
+                      data: res.points.filter((p) => p.rank === 0).map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
+                    { name: t("pareto.others", "其他"), type: "scatter", symbolSize: 8, itemStyle: { opacity: 0.5 },
+                      data: res.points.filter((p) => p.rank !== 0).map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
+                  ],
+                }}
+                onEvents={{ click: (p) => { const exp = byNo.get((p as { name: string }).name)?.experiment_id; if (exp && can("formulation.freeze")) setWinning(exp); } }}
+              />
+            ) },
+            { key: "parallel", label: t("pareto.view_parallel", "平行坐标"), children: (
+              <ParallelChart
+                axes={[...objectives.map((o) => ({ key: o.metric, label: o.metric, direction: o.direction })),
+                  ...(hazard ? [{ key: "hazard_score", label: t("pareto.hazard_col", "危害评分"), direction: "minimize" as const }] : [])]}
+                items={res.points.map((p) => ({ id: p.id, values: { ...p.values, ...(hazard ? { hazard_score: p.hazard_score } : {}) } }))}
+                highlight={new Set(res.points.filter((p) => p.rank === 0).map((p) => p.id))} />
+            ) },
+          ]} />
           <Table size="small" rowKey="id" pagination={false} dataSource={[...res.points].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))} columns={[
             { title: t("tasks.no", "任务单"), dataIndex: "id" },
             { title: t("pareto.rank", "前沿层级"), dataIndex: "rank", render: (r: number) => (r === 0 ? <Tag color="green">0</Tag> : r) },

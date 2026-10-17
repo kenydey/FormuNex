@@ -14,6 +14,7 @@ import { useUi } from "./store";
 import { themeConfig } from "./theme";
 import { SignatureProvider } from "@/shared/SignatureModal";
 import { ApiError } from "@/api/client";
+import { ErrorBoundary } from "@/features/chat/ErrorBoundary";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,13 +37,15 @@ export default function App() {
     <ConfigProvider locale={locale === "zh-CN" ? zhCN : enUS} theme={themeConfig(theme)}>
       <ProConfigProvider dark={theme === "dark"}>
         <AntApp>
-          <QueryClientProvider client={queryClient}>
-            <SessionProvider>
-              <SignatureProvider>
-                <RouterProvider router={router} />
-              </SignatureProvider>
-            </SessionProvider>
-          </QueryClientProvider>
+          <ErrorBoundary fullPage>
+            <QueryClientProvider client={queryClient}>
+              <SessionProvider>
+                <SignatureProvider>
+                  <RouterProvider router={router} />
+                </SignatureProvider>
+              </SessionProvider>
+            </QueryClientProvider>
+          </ErrorBoundary>
         </AntApp>
       </ProConfigProvider>
     </ConfigProvider>

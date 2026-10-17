@@ -18,9 +18,12 @@ export function EmbodimentDraftDrawer({ draft, onClose }: { draft: EmbodimentDra
   const current = useMemo(() => (draft ? draftForEmbodiment(draft, idx) : null), [draft, idx]);
   const ingredients: EmbodimentIngredient[] = current?.formulation?.ingredients ?? [];
   const confirm = useMutation({
-    mutationFn: () => call<ConfirmResult>("POST", draftConfirmPath(current!.origin), { draft: current }),
-    onSuccess: (r) => {
+    mutationFn: async () => {
+      const r = await call<ConfirmResult>("POST", draftConfirmPath(current!.origin), { draft: current });
       if (!r.ok) throw new Error(t("library.draft.failed", "确认失败"));
+      return r;
+    },
+    onSuccess: (r) => {
       if (r.promoted_to_pool) { message.error(t("library.draft.gate_breach", "安全闸失败：不应写入生产配方池")); return; }
       const pending = (r.pending_materials ?? []).filter((p) => p.action === "pending").length;
       const note = r.note || t("library.draft.done", "已确认：{{n}} 条原料进入 pending；配方实体 {{id}}；未写入生产配方池",

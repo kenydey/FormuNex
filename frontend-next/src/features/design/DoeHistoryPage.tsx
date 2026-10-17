@@ -53,7 +53,7 @@ function CyclePause({ campaignId }: { campaignId: number }) {
         <Button size="small" loading={toggle.isPending} onClick={() => toggle.mutate(false)}>{t("design.hist.resume", "恢复闭环")}</Button>
       ) : (
         <>
-          <InputNumber size="small" min={0} max={720} value={ttl} onChange={setTtl} addonAfter={t("design.hist.hours", "小时")} style={{ width: 130 }} />
+          <InputNumber size="small" min={0} max={720} value={ttl} onChange={setTtl} suffix={t("design.hist.hours", "小时")} style={{ width: 130 }} />
           <Button size="small" loading={toggle.isPending} onClick={() => toggle.mutate(true)}>{t("design.hist.pause", "暂停闭环")}</Button>
         </>
       )}

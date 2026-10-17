@@ -1,8 +1,8 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { Alert, Card, Collapse, Empty, Input, Space, Switch, Tag, Timeline, Typography } from "antd";
+import { Alert, Button, Card, Collapse, Empty, Input, Space, Switch, Tag, Timeline, Typography } from "antd";
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { useUi } from "@/app/store";
@@ -14,6 +14,7 @@ interface Result { query: string; stage1: Chunk[]; documents: DocDepth[] }
 /** Two-stage retrieval: hybrid search, then table-of-contents navigation with an auditable trace (方案 §5.1). */
 export default function DeepSearchPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const projectId = useUi((s) => s.projectId);
   const [deep, setDeep] = useState(true);
   const [llm, setLlm] = useState(true);
@@ -22,7 +23,11 @@ export default function DeepSearchPage() {
       { query, top_k: 12, max_docs: 3, project_id: projectId, include_global: true, deep, use_llm: llm }),
   });
   return (
-    <PageContainer subTitle={t("knowledge.deep.sub", "长文档（专利、标准）沿目录树逐节寻址：配方表 ↔ 性能表跨页关联，附推理轨迹与页码")}>
+    <PageContainer subTitle={t("knowledge.deep.sub", "长文档（专利、标准）沿目录树逐节寻址：配方表 ↔ 性能表跨页关联，附推理轨迹与页码")}
+      extra={<Space>
+        <Button onClick={() => navigate("/knowledge/research/embodiment")}>{t("research.entry.embodiment", "提取实施例草稿")}</Button>
+        <Button onClick={() => navigate("/knowledge/research?tab=deep")}>{t("research.entry.deep", "深度研究报告")}</Button>
+      </Space>}>
       <Card>
         <Input.Search size="large" enterButton loading={run.isPending}
           placeholder={t("knowledge.deep.placeholder", "例如：实施例 3 的配方及其耐盐雾结果")} onSearch={(q) => q.trim() && run.mutate(q)} />

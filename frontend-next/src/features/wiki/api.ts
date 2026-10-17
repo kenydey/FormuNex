@@ -1,4 +1,4 @@
-import { ApiError, call } from "@/api/client";
+import { call } from "@/api/client";
 import { errorText } from "@/shared/feedback";
 import type {
   EnvFlag, KgContradiction, KgRelation, KgResolve, KgSubstitute, WikiDossier, WikiFlagItem, WikiPageDetail, WikiPageItem,
@@ -49,4 +49,3 @@ export function isFlagGateError(e: unknown, ...attrs: string[]): boolean {
   return attrs.some((a) => m.includes(a.toLowerCase())) || /未启用|is false/i.test(m);
 }
 
-export const isNotFound = (e: unknown) => e instanceof ApiError && e.status === 404;

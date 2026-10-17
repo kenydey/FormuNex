@@ -1,5 +1,5 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { App, Button, Descriptions, Empty, Tag, Tree, Typography } from "antd";
+import { App, Button, Descriptions, Empty, Space, Tabs, Tag, Tree, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -7,6 +7,9 @@ import { useTranslation } from "react-i18next";
 import { ApiError, call } from "@/api/client";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { pages, type Chunk, type TocNode } from "./types";
+import { EmbodimentDraftDrawer } from "@/features/library/EmbodimentDraftDrawer";
+import { ExtractionTablesPanel, TableBadges } from "@/features/library/SourceTables";
+import type { EmbodimentDraft, SourceDetail } from "@/features/library/types";
 
 interface TreeResponse { source_id: string; doc_kind: string; node_count: number; max_depth: number; page_count: number; summaries_status: string; built_at: string; tree: TocNode }
 
@@ -55,10 +58,24 @@ export default function SourceDetailPage() {
   }, [chunks.data]);
   const node = selected && tree.data ? find(tree.data.tree, selected) : null;
   const nodeChunks = node ? allChunks.filter((c) => node.chunk_ids.includes(c.id)) : [];
+  const detail = useQuery({
+    queryKey: ["kb", "source-detail", sourceId], retry: false,
+    queryFn: () => call<SourceDetail>("GET", `/api/sources/${encodeURIComponent(sourceId)}/detail`),
+  });
+  const [draft, setDraft] = useState<EmbodimentDraft | null>(null);
+  const extract = useMutation({
+    mutationFn: () => call<{ ok: boolean; draft?: EmbodimentDraft; reason?: string }>("POST", "/api/formulations/extract-embodiment-draft", { source_id: sourceId }),
+    onSuccess: (r) => (r.ok && r.draft ? setDraft(r.draft) : message.warning(r.reason || t("library.search.no_draft", "无法提取实施例草稿"))),
+    onError: (e) => message.error(errorText(e)),
+  });
   const missing = tree.error instanceof ApiError && tree.error.status === 404;
 
   return (
-    <PageContainer title={sourceId} extra={<Button loading={rebuild.isPending} onClick={() => rebuild.mutate()}>{t("knowledge.tree.rebuild", "重建目录树")}</Button>}>
+    <PageContainer title={detail.data?.title || sourceId} extra={<Space>
+      <Button loading={extract.isPending} onClick={() => extract.mutate()}>{t("library.search.draft", "提取实施例草稿")}</Button>
+      <Button loading={rebuild.isPending} onClick={() => rebuild.mutate()}>{t("knowledge.tree.rebuild", "重建目录树")}</Button></Space>}>
+      <Tabs items={[
+        { key: "tree", label: t("knowledge.tree.title", "目录树"), children: <>
       {!missing && <ErrorAlert error={tree.error} />}
       {tree.data && (
         <Descriptions size="small" column={5} style={{ marginBottom: 12 }}>
@@ -84,6 +101,26 @@ export default function SourceDetailPage() {
           {node && !nodeChunks.length && <Empty />}
         </ProCard>
       </ProCard>
+        </> },
+        { key: "tables", label: t("library.detail.tables", "表格资产"), children: <TableBadges sourceId={sourceId} /> },
+        { key: "extract", label: t("library.detail.extract", "结构化抽取"), children: <ExtractionTablesPanel sourceId={sourceId} /> },
+        { key: "info", label: t("library.detail.info", "文档信息"), children: <>
+          <ErrorAlert error={detail.error} />
+          {detail.data && (
+            <Descriptions size="small" bordered column={2}>
+              <Descriptions.Item label={t("library.detail.filename", "文件名")}>{detail.data.filename}</Descriptions.Item>
+              <Descriptions.Item label={t("knowledge.sources.kind", "类型")}><Tag>{detail.data.source_kind}</Tag></Descriptions.Item>
+              <Descriptions.Item label={t("knowledge.sources.chars", "字数")}>{detail.data.raw_text_chars}</Descriptions.Item>
+              <Descriptions.Item label={t("knowledge.sources.status", "解析")}>{detail.data.extraction_status}</Descriptions.Item>
+              <Descriptions.Item label={t("library.detail.fulltext", "全文")}>{detail.data.has_fulltext ? t("common.yes", "是") : t("common.no", "否")}</Descriptions.Item>
+              <Descriptions.Item label={t("library.detail.chunks", "切块")}>{detail.data.total_chunks}</Descriptions.Item>
+              <Descriptions.Item label={t("common.created", "创建时间")}>{detail.data.created_at}</Descriptions.Item>
+              <Descriptions.Item label={t("library.detail.lineage", "上游血缘")}>{detail.data.provenance_upstream.length}</Descriptions.Item>
+            </Descriptions>
+          )}
+        </> },
+      ]} />
+      <EmbodimentDraftDrawer draft={draft} onClose={() => setDraft(null)} />
     </PageContainer>
   );
 }

@@ -1,9 +1,11 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { Alert, App, Button, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Statistic, Tooltip, Typography } from "antd";
+import { Alert, App, Button, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Statistic, Tooltip, Typography } from "antd";
+import { ApartmentOutlined, BulbOutlined, HistoryOutlined } from "@ant-design/icons";
 import { RevoGrid } from "@revolist/react-datagrid";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { call } from "@/api/client";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
@@ -11,6 +13,12 @@ import type { ProjectDetail } from "@/features/spec/types";
 import { ComplianceSummary, type Classification } from "@/features/plm/ComplianceSummary";
 import { ROLES, fillWith, newRow, normalize, redLineViolations, total, type Row } from "./formula";
 import "./grid.css";
+import { VersionHistory } from "@/features/formulation/VersionHistory";
+import { ProvenanceDrawer } from "@/features/formulation/Provenance";
+import { ExplainPanel } from "@/features/formulation/ExplainPanel";
+import { ingredientsToEditorRows } from "@/features/formulation/logic";
+import type { AdoptState } from "@/features/formulation/adopt";
+import type { Formulation } from "@/features/formulation/types";
 
 interface Lineage { lineage_id: string; versions: { id: string; version: number; name: string; domain: string; created_at: string | null; change_summary: string }[] }
 
@@ -30,6 +38,12 @@ export default function FormulationEditorPage() {
   const [clsError, setClsError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [form] = Form.useForm();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [provOpen, setProvOpen] = useState(false);
+  const [adopted, setAdopted] = useState<Formulation | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
   const project = useQuery({
     queryKey: ["project", projectId], enabled: !!projectId,
     queryFn: () => call<ProjectDetail>("GET", `/api/projects/${projectId}`),
@@ -82,6 +96,27 @@ export default function FormulationEditorPage() {
     setLoadOpen(false);
   };
 
+  // Entry points: ?version=<id> (from the lineage page) and router state { adopt } (from recommend / leaderboard).
+  const versionParam = params.get("version");
+  useEffect(() => {
+    if (!versionParam) return;
+    void loadVersion(versionParam).catch((e) => message.error(errorText(e)));
+    setParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versionParam]);
+  useEffect(() => {
+    const st = location.state as AdoptState | null;
+    if (!st?.adopt) return;
+    setRows(ingredientsToEditorRows(st.adopt.ingredients).map((i) => ({ ...newRow(), ...i })));
+    setName(st.adopt.name);
+    setLineage(null);
+    setAdopted(st.adopt);
+    navigate(location.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
+  const current: Formulation = { name: name || t("formula.untitled", "未命名配方"), domain, source: "manual",
+    ingredients: filled.map((r) => ({ name: r.name, zh_name: r.zh_name, cas_no: r.cas_no || null, role: r.role || "other", weight_pct: Number(r.weight_pct) })) };
+
   const save = useMutation({
     mutationFn: (v: { name: string; change_summary: string }) => call<{ id: string; lineage_id: string; version: number }>("POST", "/api/formulations/versions", {
       formulation: { name: v.name, domain, source: "manual",
@@ -112,7 +147,12 @@ export default function FormulationEditorPage() {
     <PageContainer
       title={name || t("formula.untitled", "未命名配方")}
       subTitle={lineage ? t("formula.lineage", "版本链 {{id}}", { id: lineage.lineage_id.slice(0, 8) }) : t("formula.new", "新配方")}
-      extra={<Space>
+      extra={<Space wrap>
+        <Link to="/lab/recommend"><Button icon={<BulbOutlined />}>{t("formulation.editor.recommend", "AI 推荐")}</Button></Link>
+        <Button icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>{t("formulation.editor.history", "版本历史与对比")}</Button>
+        <Tooltip title={!lineage ? t("formulation.editor.prov_need_save", "保存为版本后可查看证据谱系") : undefined}>
+          <Button icon={<ApartmentOutlined />} disabled={!lineage} onClick={() => setProvOpen(true)}>{t("formulation.prov.open", "证据谱系")}</Button>
+        </Tooltip>
         <Button onClick={() => setLoadOpen(true)}>{t("formula.open", "打开版本")}</Button>
         <Tooltip title={violations.some((v) => v.uid) ? t("formula.blocked", "命中合规红线，不能保存") : undefined}>
           <Button type="primary" disabled={!filled.length || violations.some((v) => v.uid)}
@@ -121,6 +161,9 @@ export default function FormulationEditorPage() {
       </Space>}
     >
       {!projectId && <Alert type="info" showIcon style={{ marginBottom: 12 }} message={t("formula.no_project", "未选择项目：不检查项目的合规红线")} />}
+      {adopted && <Alert type="success" showIcon closable style={{ marginBottom: 12 }} onClose={() => setAdopted(null)}
+        message={t("formulation.editor.adopted", "已载入推荐配方「{{n}}」，调整后保存为新版本即开始记录谱系。", { n: adopted.name })}
+        description={(adopted.explain || adopted.score != null) ? <ExplainPanel explain={adopted.explain} score={adopted.score} /> : undefined} />}
       <ProCard split="vertical" bordered>
         <ProCard>
           <div className="fx-grid" style={{ height: 420 }}>
@@ -150,6 +193,15 @@ export default function FormulationEditorPage() {
           {cls ? <ComplianceSummary cls={cls} compact /> : <Empty description={t("formula.empty", "输入组分后自动评估")} />}
         </ProCard>
       </ProCard>
+      <Drawer open={historyOpen} onClose={() => setHistoryOpen(false)} width={780} destroyOnHidden
+        title={t("formulation.editor.history", "版本历史与对比")}
+        extra={lineage && <Link to={`/lab/lineage/${lineage.lineage_id}`}>{t("formulation.ver.open_page", "在谱系页打开")}</Link>}>
+        {lineage || name ? <VersionHistory lineageId={lineage?.lineage_id} formulation={filled.length ? current : undefined}
+          onLineage={(l) => { setLineage(l); setName(current.name); }}
+          onOpenVersion={(id) => { setHistoryOpen(false); void loadVersion(id); }} />
+          : <Empty description={t("formulation.editor.no_lineage", "尚未打开或保存任何版本")} />}
+      </Drawer>
+      {lineage && <ProvenanceDrawer open={provOpen} onClose={() => setProvOpen(false)} nodeType="formulation" nodeId={lineage.parent} title={name} />}
       <LoadModal open={loadOpen} onClose={() => setLoadOpen(false)} onPick={(id) => void loadVersion(id)} />
       <Modal open={saveOpen} title={t("formula.save", "保存为新版本")} onCancel={() => setSaveOpen(false)} confirmLoading={save.isPending}
         onOk={async () => save.mutate(await form.validateFields())}>

@@ -7,6 +7,8 @@ import { call } from "@/api/client";
 import { useUi } from "@/app/store";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
+import { useCampaigns } from "@/features/workbench/hooks";
+import { BiasTrendCard } from "@/features/workbench/panels";
 
 interface HistoryPoint { index: number; id: string | null; predicted: number; actual: number; lower: number | null; upper: number | null; covered: boolean; rolling_coverage: number }
 interface Out {
@@ -31,6 +33,9 @@ export default function ConformalPage() {
       .map((r) => ({ predicted: Number(r[0]), actual: Number(r[1]), sigma: r[2] ? Number(r[2]) : null }));
     return call<Out>("POST", "/api/cockpit/conformal", { metric, pairs, alpha, normalized });
   } });
+  const campaigns = useCampaigns();
+  const [biasCampaign, setBiasCampaign] = useState<number | undefined>();
+  const biasId = biasCampaign ?? campaigns.items[0]?.id;
   const out = lab.data ?? manual.data;
   const h = out?.monitor.history ?? [];
   return (
@@ -88,6 +93,12 @@ export default function ConformalPage() {
           </ProCard>
         </>
       )}
+      <div style={{ marginTop: 16 }}>
+        <BiasTrendCard campaignId={biasId} extra={
+          <Select size="small" style={{ width: 240 }} placeholder={t("workbench.campaign", "实验台账")} value={biasId}
+            onChange={setBiasCampaign} options={campaigns.items.map((c) => ({ value: c.id, label: `#${c.id} · ${c.name}` }))} />
+        } />
+      </div>
     </PageContainer>
   );
 }

@@ -12,6 +12,10 @@ import { NAV, type NavItem } from "./nav";
 import { ChangePasswordModal } from "@/features/auth/ChangePasswordModal";
 import { GlobalSearch } from "@/features/knowledge/GlobalSearch";
 import { PageSpin } from "@/shared/PageSpin";
+import { ErrorBoundary } from "@/features/chat/ErrorBoundary";
+import { DegradedBanner, InfraHealthBanner } from "@/features/chat/HealthBanners";
+import { TaskCenter } from "@/features/chat/TaskCenter";
+import { ApprovalCenters } from "@/features/chat/Approvals";
 
 interface ProjectSummary { id: string; title: string; domain: string }
 
@@ -57,6 +61,7 @@ export function Shell() {
           onChange={(v) => ui.setProject(v ?? null)}
           options={(projects.data ?? []).map((p) => ({ value: p.id, label: p.title }))}
         />,
+        <TaskCenter key="tasks" />,
         <Tooltip key="todo" title={t("shell.review_queue", "待复核测量值")}>
           <Badge count={reviewQueue.data?.length ?? 0} size="small">
             <Button type="text" onClick={() => navigate("/lab/review")}>{t("shell.todo", "待办")}</Button>
@@ -86,9 +91,14 @@ export function Shell() {
         ),
       }}
     >
-      <Suspense fallback={<PageSpin />}>
-        <Outlet />
-      </Suspense>
+      <InfraHealthBanner />
+      <DegradedBanner />
+      <ErrorBoundary resetKey={location.pathname}>
+        <Suspense fallback={<PageSpin />}>
+          <Outlet />
+        </Suspense>
+      </ErrorBoundary>
+      <ApprovalCenters />
       <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
     </ProLayout>
   );
