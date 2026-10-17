@@ -33,7 +33,7 @@ beforeEach(() => call.mockReset());
 
 describe("SourcesPage", () => {
   it("lists the project's documents and archives one", async () => {
-    call.mockImplementation((m: string, path = "") => { if (!path) console.log("CALLARGS", m);
+    call.mockImplementation((m: string, path = "") => {
       if (path.startsWith("/api/kb/sources?")) return Promise.resolve({ total: 1, sources: [
         { id: "s1", title: "水性环氧专利", filename: "a.pdf", source_kind: "patent", project_id: "p1", raw_text_chars: 1200, extraction_status: "ok", archived: false }] });
       if (path === "/api/formulations/embodiment-eligibility") return Promise.resolve({ items: [{ source_id: "s1", eligible: true }] });
@@ -51,7 +51,7 @@ describe("SourcesPage", () => {
 
 describe("ManifestPage", () => {
   it("shows coverage of the frozen subset", async () => {
-    call.mockImplementation((_m: string, path = "") => { if (!path) console.log("CALLARGS", _m);
+    call.mockImplementation((_m: string, path = "") => {
       if (path === "/api/wiki/literature/p1") return Promise.resolve({
         project_id: "p1", coverage: { candidate_count: 2, frozen_count: 1 },
         frozen: { at: 1700000000, actor: "hub", item_ids: ["a"], digest: "abcdef123456" },

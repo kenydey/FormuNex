@@ -7,8 +7,9 @@ import { call } from "@/api/client";
 import { degradedReasons, infraState, UNREACHABLE_HEALTH, type InfraIssue } from "./logic";
 import type { PlatformHealth } from "./types";
 
-/** Settings page of the new UI (registered by the settings area). */
-export const SETTINGS_PATH = "/settings";
+/** Settings tabs of the new UI (registered by the settings area). */
+export const SETTINGS_MODEL_PATH = "/admin/settings/model";
+export const SETTINGS_DEPS_PATH = "/admin/settings/deps";
 
 /** /health every 30 s: rose banner for real outages, amber advisory for the soft-degraded local ELN ledger. */
 export function InfraHealthBanner() {
@@ -55,7 +56,7 @@ export function DegradedBanner() {
   return <Alert banner closable type="warning" data-testid="degraded-banner" onClose={() => setDismissed(true)}
     message={<Space wrap><b>{t("shell.degraded.title", "离线降级模式")}</b>{text.join(" · ")}
       {t("shell.degraded.desc", "—— 深度研究、在线检索、跨源交叉验证等功能以离线兜底运行。")}</Space>}
-    action={<Button size="small" onClick={() => navigate(SETTINGS_PATH)}>
+    action={<Button size="small" onClick={() => navigate(reasons.includes("llm_key") ? SETTINGS_MODEL_PATH : SETTINGS_DEPS_PATH)}>
       {reasons.includes("llm_key") ? t("shell.degraded.go_model", "去配置大模型") : t("shell.degraded.go_deps", "去安装依赖")}
     </Button>} />;
 }
