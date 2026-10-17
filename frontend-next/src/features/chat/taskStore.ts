@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { awaitTask, cancelTask, getTask, thinkingSteps, type TaskProgressEvent, type TaskState, type ThinkingStep } from "@/api/stream";
+import { notifyDesktop } from "@/desktop/notify";
 
 export interface TrackedTask {
   id: string;
@@ -119,6 +120,10 @@ function watch(id: string) {
     signal: ctrl.signal,
     onEvent: (ev) => {
       const state = STATE[ev.status] ?? "running";
+      const before = useTaskCenter.getState().tasks.find((t) => t.id === id);
+      if (isTerminal(state) && before && !isTerminal(before.state)) {
+        void notifyDesktop(before.title || before.kind || "FormuNex", ev.message || state);
+      }
       const steps = thinkingSteps(ev);
       upsert({ id, state, progress: ev.progress ?? 0, message: ev.message, stage: ev.stage,
         ...(steps.length ? { steps } : {}),

@@ -1,0 +1,67 @@
+# Backend container image for the desktop stack and servers (plan §2.2):
+#   ghcr.io/<owner>/formunex-backend:<version> (tags v1.2.3 → 1.2.3) and :edge from main.
+# On version tags it also produces the offline image pack (all stack images, `docker save | gzip`) as a workflow
+# artifact — it is several GB, above GitHub's 2 GB release-asset limit, so it is distributed separately
+# (deploy/desktop/make-offline-pack.sh builds the same pack locally).
+name: Images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/formunex-backend
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=edge,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  offline-pack:
+    if: github.ref_type == 'tag'
+    needs: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the pack
+        env:
+          FORMUNEX_IMAGE: ghcr.io/${{ github.repository_owner }}/formunex-backend
+        run: |
+          df -h /
+          bash deploy/desktop/make-offline-pack.sh "${{ needs.backend.outputs.version }}" "$RUNNER_TEMP/pack"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: formunex-images-${{ needs.backend.outputs.version }}
+          path: ${{ runner.temp }}/pack/
+          retention-days: 30
+          compression-level: 0

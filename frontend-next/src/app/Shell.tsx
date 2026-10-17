@@ -21,7 +21,7 @@ interface ProjectSummary { id: string; title: string; domain: string }
 
 function toRoutes(items: NavItem[], t: (k: string, d: string) => string, can: (p: string) => boolean): unknown[] {
   return items
-    .filter((i) => !i.permission || can(i.permission))
+    .filter((i) => (!i.permission || can(i.permission)) && (!i.when || i.when()))
     .map((i) => ({ path: i.path, name: t(i.key, i.zh), icon: i.icon, routes: i.children && toRoutes(i.children, t, can) }));
 }
 

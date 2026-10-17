@@ -4,15 +4,11 @@ import { useTranslation } from "react-i18next";
 import { authFetch } from "@/api/auth";
 import { ApiError } from "@/api/client";
 import { useUi } from "@/app/store";
+import { saveBlob as sharedSaveBlob } from "@/shared/saveFile";
 
-/** Save a blob under *filename* (the browser download). */
+/** Save a blob under *filename* (browser download / desktop save dialog). */
 export function saveBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  void sharedSaveBlob(blob, filename);
 }
 
 async function failure(res: Response): Promise<ApiError> {

@@ -1,0 +1,103 @@
+# FormuNex desktop installers (plan §3.5): Windows .msi/.exe, macOS .dmg (arm64 + x64), Linux .deb/.AppImage.
+# Runs on version tags (v0.2.0 …) and on demand; publishes a draft GitHub release with the installers.
+#
+# Signing is optional and switched on by repository secrets:
+#   macOS   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#           notarisation: APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID
+#   Windows WINDOWS_SIGN_COMMAND — a signtool / cloud-HSM command for the EV certificate, with %1 for the file
+#           (Tauri's bundle.windows.signCommand), e.g. "signtool sign /sha1 <thumbprint> /fd sha256 /tr <tsa> /td sha256 %1"
+#   Updater TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD) and TAURI_UPDATER_PUBKEY: signed update bundles and latest.json
+# Without them the installers are built unsigned (fine for internal testing; Gatekeeper / SmartScreen will warn).
+name: Desktop release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: macos-14 # Apple silicon
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-13 # Intel
+            args: "--target x86_64-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend-next/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend-next/src-tauri
+
+      - name: Install frontend dependencies
+        working-directory: frontend-next
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci
+
+      - name: Release configuration (updater, Windows signing)
+        shell: bash
+        env:
+          UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+          REPO: ${{ github.repository }}
+        run: |
+          node -e '
+            const c = {};
+            if (process.env.UPDATER_PUBKEY) {
+              c.bundle = { createUpdaterArtifacts: true };
+              c.plugins = { updater: { pubkey: process.env.UPDATER_PUBKEY,
+                endpoints: [`https://github.com/${process.env.REPO}/releases/latest/download/latest.json`] } };
+            }
+            if (process.env.WINDOWS_SIGN_COMMAND && process.platform === "win32") {
+              c.bundle = { ...(c.bundle || {}), windows: { signCommand: process.env.WINDOWS_SIGN_COMMAND } };
+            }
+            require("fs").writeFileSync("frontend-next/src-tauri/tauri.release.conf.json", JSON.stringify(c, null, 1));
+          '
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: frontend-next
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: "FormuNex ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json

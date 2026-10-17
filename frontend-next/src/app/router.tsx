@@ -1,10 +1,11 @@
-import { lazy, type ReactNode } from "react";
+import { Suspense, lazy, type ReactNode } from "react";
 import { Navigate, createBrowserRouter, useLocation } from "react-router-dom";
 import { useSession } from "./session";
 import { Shell } from "./Shell";
 import { PageSpin } from "@/shared/PageSpin";
 import LoginPage from "@/features/auth/LoginPage";
 import { MODULES } from "./modules";
+import { needsSetup, useDesktop } from "@/desktop/runtime";
 
 const L = (f: () => Promise<{ default: React.ComponentType }>) => {
   const C = lazy(f);
@@ -14,6 +15,8 @@ const L = (f: () => Promise<{ default: React.ComponentType }>) => {
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useSession();
   const location = useLocation();
+  const desktopInfo = useDesktop((s) => s.info);
+  if (needsSetup(desktopInfo)) return <Navigate to="/setup" replace />;
   if (!ready) return <PageSpin />;
   if (!me) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
   return <>{children}</>;
@@ -21,6 +24,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
 
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
+  { path: "/setup", element: <Suspense fallback={<PageSpin />}>{L(() => import("@/features/desktop/SetupPage"))}</Suspense> },
   {
     path: "/",
     element: <RequireAuth><Shell /></RequireAuth>,

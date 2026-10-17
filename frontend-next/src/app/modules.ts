@@ -9,6 +9,7 @@ import design from "@/features/design/module";
 import workbench from "@/features/workbench/module";
 import requirements from "@/features/requirements/module";
 import settings from "@/features/settings/module";
+import desktopModule from "@/features/desktop/module";
 
 /** Navigation groups a feature module can add pages to (方案 §3.2). */
 export type NavGroup = "/knowledge" | "/spec" | "/lab" | "/cockpit" | "/plm" | "/materials" | "/admin";
@@ -19,4 +20,4 @@ export interface FeatureModule {
   nav: Partial<Record<NavGroup, NavItem[]>>;
 }
 
-export const MODULES: FeatureModule[] = [chat, library, research, wiki, formulation, design, workbench, requirements, settings];
+export const MODULES: FeatureModule[] = [chat, library, research, wiki, formulation, design, workbench, requirements, settings, desktopModule];

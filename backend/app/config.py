@@ -34,6 +34,9 @@ _INFRA_ENV_KEYS = frozenset({
     "FORMUNEX_TASK_PROGRESS_DIR",
     "FORMUNEX_TABLES_DIR",
     "FORMUNEX_BACKEND_BIND",  # docker-compose.yml only: which host address the API port is published on
+    "FORMUNEX_IMAGE",  # deploy/desktop compose: backend image the desktop stack runs (written by the Tauri shell)
+    "FORMUNEX_VERSION",  # deploy/desktop compose: its tag
+    "FORMUNEX_API_PORT",  # deploy/desktop compose: loopback port the API is published on
     "FORMUNEX_NEW_USER_PASSWORD",  # scripts/create_user.py only: non-interactive password for the new account
     # P1 owner Phase2 多用户开关
     "FORMUNEX_MULTI_USER",

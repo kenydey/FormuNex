@@ -3,6 +3,7 @@ import { authFetch } from "@/api/auth";
 import { ApiError } from "@/api/client";
 import { dispositionName } from "./lib";
 import type { ArtifactLineage, ArtifactVersion, ExportFile } from "./types";
+import { saveBlob as sharedSaveBlob } from "@/shared/saveFile";
 
 const enc = encodeURIComponent;
 
@@ -26,12 +27,7 @@ export function saveText(text: string, filename: string, type = "text/markdown;c
 }
 
 export function saveBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  void sharedSaveBlob(blob, filename);
 }
 
 /** POST a JSON body and receive a file (``/api/reports/export``); errors keep the server's ``detail``. */

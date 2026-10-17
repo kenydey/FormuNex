@@ -3,3 +3,7 @@ dist
 *.local
 test-results
 playwright-report
+src-tauri/target
+src-tauri/gen/schemas
+src-tauri/tauri.release.conf.json
+e2e-desktop/screenshots

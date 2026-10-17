@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window: app commands, native file dialogs and writes to user-chosen paths, notifications, deep links, updater, relaunch, opening URLs / the data folder.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-save",
+    "dialog:allow-open",
+    "dialog:allow-message",
+    "dialog:allow-ask",
+    "fs:allow-write-file",
+    "notification:default",
+    "deep-link:default",
+    "process:allow-restart",
+    "opener:allow-open-url",
+    "opener:allow-reveal-item-in-dir",
+    "updater:default"
+  ]
+}

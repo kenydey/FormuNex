@@ -3,6 +3,7 @@ import { call } from "@/api/client";
 import { useUi } from "@/app/store";
 import type { ProjectDetail } from "@/features/spec/types";
 import type { CampaignSummary, LoopWorkspace, TrainingStatus } from "./types";
+import { saveText as sharedSaveText } from "@/shared/saveFile";
 
 /** GET /api/meta engine probes; an engine whose probe has not loaded counts as available (legacy ``useEngineAvailability``). */
 export function useEngines() {
@@ -52,12 +53,7 @@ export function coldStartMessage(stage: string | undefined, message: string | un
   return fallback;
 }
 
-/** Trigger a browser download of in-memory text. */
+/** Save in-memory text (browser download / desktop save dialog). */
 export function saveText(text: string, filename: string, type = "text/csv;charset=utf-8") {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  void sharedSaveText(text, filename, type);
 }

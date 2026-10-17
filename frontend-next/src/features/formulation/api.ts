@@ -1,6 +1,7 @@
 /** Endpoint wrappers of the formulation area (all through ``call`` → auth + token refresh). */
 import { ApiError, call } from "@/api/client";
 import { authFetch } from "@/api/auth";
+import { saveBlob as sharedSaveBlob, saveText as sharedSaveText } from "@/shared/saveFile";
 import type {
   Attachment, ChemicalProfile, ExperimentSearchHit, ExperimentSummary, Formulation, Lineage, ModeChoice, ProvenanceEdge,
   QCMeasurementList, RowVersion, VersionDiff, WorkbenchCampaign, WorkbenchRow,
@@ -74,14 +75,9 @@ export const fx = {
     call<{ adopted: boolean; experiment_validated: boolean; formula_name: string | null }>("GET", `/api/formulations/recommend/${enc(recommendId)}/outcome`),
 };
 
-/** Save a text file in the browser. */
+/** Save a text file (browser download / desktop save dialog). */
 export function saveText(text: string, filename: string, type = "text/csv;charset=utf-8") {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  void sharedSaveText(text, filename, type);
 }
 
 export const slug = (name: string) => name.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || "formula";
@@ -99,12 +95,7 @@ export async function exportFormulationPdf(formulation: Formulation, lang: "zh-C
   return res.blob();
 }
 
-/** Save a blob in the browser. */
+/** Save a blob (browser download / desktop save dialog). */
 export function saveBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  void sharedSaveBlob(blob, filename);
 }

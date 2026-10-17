@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getAccessToken, refreshAccessToken, setAccessToken } from "@/api/auth";
+import { getAccessToken, logoutBody, refreshAccessToken, rememberRefreshToken, setAccessToken } from "@/api/auth";
 import { ApiError, call } from "@/api/client";
 
 export interface Me {
@@ -48,14 +48,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [reload]);
 
   const login = useCallback(async (username: string, password: string) => {
-    const out = await call<{ access_token: string }>("POST", "/api/identity/login", { username, password });
+    const out = await call<{ access_token: string; refresh_token?: string }>("POST", "/api/identity/login", { username, password });
+    await rememberRefreshToken(out.refresh_token);
     setAccessToken(out.access_token);
     await reload();
   }, [reload]);
 
   const logout = useCallback(async () => {
     try {
-      await call("POST", "/api/identity/logout");
+      await call("POST", "/api/identity/logout", await logoutBody());
     } finally {
       setAccessToken(null);
       setMe(null);

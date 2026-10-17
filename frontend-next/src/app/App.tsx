@@ -15,6 +15,7 @@ import { themeConfig } from "./theme";
 import { SignatureProvider } from "@/shared/SignatureModal";
 import { ApiError } from "@/api/client";
 import { ErrorBoundary } from "@/features/chat/ErrorBoundary";
+import { startDeepLinks } from "@/desktop/runtime";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,6 +29,10 @@ export const queryClient = new QueryClient({
 
 export default function App() {
   const { theme, locale } = useUi();
+  useEffect(() => {
+    // Desktop: open formunex://… links in the running window.
+    void startDeepLinks((route) => void router.navigate(route));
+  }, []);
   useEffect(() => {
     void i18n.changeLanguage(locale);
     dayjs.locale(locale === "zh-CN" ? "zh-cn" : "en");

@@ -290,6 +290,9 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
+    # The desktop UI (tauri://localhost) calls the API cross-origin and reads download names and render
+    # diagnostics from response headers (Content-Disposition, X-Label-Overflow, X-Font-Embedded, …).
+    expose_headers=["*"],
 )
 
 app.include_router(research.router)

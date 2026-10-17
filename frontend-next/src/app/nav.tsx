@@ -12,6 +12,8 @@ export interface NavItem {
   icon?: ReactNode;
   children?: NavItem[];
   permission?: string;
+  /** Shown only when this returns true (e.g. desktop-only pages). */
+  when?: () => boolean;
 }
 
 /** 生命周期五步导航 + 物料与法规库 + 系统管理 (方案 §3.2). */

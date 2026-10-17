@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FormuNex",
+  "mainBinaryName": "formunex",
+  "version": "0.2.0",
+  "identifier": "com.formunex.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      { "label": "main", "title": "方枢 FormuNex", "width": 1440, "height": 900, "minWidth": 1024, "minHeight": 700, "dragDropEnabled": false }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* https:; frame-src 'self' blob:; worker-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis", "dmg", "app", "deb", "appimage"],
+    "category": "Productivity",
+    "shortDescription": "方枢 FormuNex — 配方研发与合规文档平台",
+    "longDescription": "FormuNex desktop: runs the full FormuNex stack locally with Docker Desktop, or connects to a FormuNex server.",
+    "copyright": "FormuNex",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "windows": { "webviewInstallMode": { "type": "downloadBootstrapper" } },
+    "macOS": { "minimumSystemVersion": "11.0" }
+  },
+  "plugins": {
+    "deep-link": { "desktop": { "schemes": ["formunex"] } }
+  }
+}

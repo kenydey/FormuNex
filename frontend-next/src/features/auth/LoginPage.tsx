@@ -1,10 +1,11 @@
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Form, Input, Typography } from "antd";
 import { useState } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useSession } from "@/app/session";
 import { errorText } from "@/shared/feedback";
+import { useDesktop } from "@/desktop/runtime";
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -13,7 +14,9 @@ export default function LoginPage() {
   const location = useLocation();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const target = (location.state as { from?: string } | null)?.from || "/dashboard";
+  const state = location.state as { from?: string; username?: string } | null;
+  const target = state?.from || "/dashboard";
+  const desktopInfo = useDesktop((s) => s.info);
   if (me) return <Navigate to={target} replace />;
 
   return (
@@ -27,6 +30,7 @@ export default function LoginPage() {
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
         <Form
           layout="vertical"
+          initialValues={{ username: state?.username }}
           onFinish={async (v: { username: string; password: string }) => {
             setBusy(true);
             setError(null);
@@ -51,6 +55,11 @@ export default function LoginPage() {
         <Typography.Paragraph type="secondary" style={{ marginTop: 16, fontSize: 12 }}>
           {t("login.first_admin", "首次部署请在服务器执行 backend/scripts/create_user.py 创建管理员账号。")}
         </Typography.Paragraph>
+        {desktopInfo?.api_base && (
+          <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, textAlign: "center", fontSize: 12 }}>
+            {t("login.server", "服务器：{{s}}", { s: desktopInfo.api_base })} · <Link to="/setup">{t("login.change_server", "更改连接")}</Link>
+          </Typography.Paragraph>
+        )}
       </Card>
     </div>
   );

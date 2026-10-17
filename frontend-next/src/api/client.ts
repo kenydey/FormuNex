@@ -1,6 +1,7 @@
 import createClient from "openapi-fetch";
 import type { paths } from "./schema";
 import { authFetch } from "./auth";
+import { saveBlob } from "@/shared/saveFile";
 
 /** Typed client generated from the backend's OpenAPI (scripts/gen-api.mjs). */
 export const api = createClient<paths>({ baseUrl: window.location.origin, fetch: authFetch });
@@ -59,10 +60,7 @@ export async function fetchBlobUrl(path: string): Promise<string> {
 }
 
 export async function download(path: string, filename: string): Promise<void> {
-  const url = await fetchBlobUrl(path);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  const res = await authFetch(path);
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  await saveBlob(await res.blob(), filename);
 }
