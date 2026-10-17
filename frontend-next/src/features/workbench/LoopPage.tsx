@@ -48,7 +48,7 @@ export default function LoopPage() {
   const envAutoAdopt = envFlags.data?.flags?.find((f) => f.attr === "auto_adopt_next_doe_on_loop")?.value;
 
   const status = useQuery({ queryKey: ["workbench", cid, "cycle-status"], enabled: cid != null, refetchInterval: 5000, retry: false,
-    queryFn: () => call<CycleStatus>("GET", `/api/experiments/hooks/doecyle-status/${cid}`) });
+    queryFn: () => call<CycleStatus>("GET", `/api/experiments/hooks/doecycle-status/${cid}`) });
   const stats = useQuery({ queryKey: ["doe", "cycle-runs", projectId], enabled: !!projectId, retry: false,
     queryFn: () => call<CycleRuns>("GET", `/api/doe/cycle-runs?project_id=${encodeURIComponent(projectId!)}`) });
   const pause = useMutation({

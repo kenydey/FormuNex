@@ -9,7 +9,7 @@ import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
 import { kbStatusLabel } from "./labels";
-import { mergeSourceRows, parseEvidence, resolveOpenUrl, toggleSelected, type KbSource, type SourceRow } from "./sourceRows";
+import { mergeSourceRows, parseEvidence, removeEvidenceBody, resolveOpenUrl, toggleSelected, type KbSource, type SourceRow } from "./sourceRows";
 
 interface IngestResult { ok: boolean; status: string; source_id?: string | null; canonical_id?: string | null; reason?: string | null }
 
@@ -72,15 +72,12 @@ export default function ProjectSourcesPage() {
   });
   const remove = useMutation({
     mutationFn: async (r: SourceRow) => {
-      await call("DELETE", `/api/kb/sources/${encodeURIComponent(r.source_id!)}`);
-      // Also drop it from the session evidence (the backend refuses to overwrite a non-empty list with an empty one).
-      if (r.evidence) {
-        const next = evidence.filter((e) => e.identifier !== r.identifier);
-        if (next.length) await putWorkspace({ sources: next, selected_sources: selected.filter((x) => x !== r.identifier) });
-      }
+      if (r.source_id) await call("DELETE", `/api/kb/sources/${encodeURIComponent(r.source_id)}`);
+      // Also drop it from the session evidence; deleting the last item sends the explicit clear flag.
+      if (r.evidence) await call("PUT", `/api/projects/${encodeURIComponent(projectId)}`, removeEvidenceBody(evidence, selected, r.identifier));
     },
-    onSuccess: () => {
-      message.success(t("requirements.sources.deleted", "已从知识库永久删除"));
+    onSuccess: (_d, r) => {
+      message.success(r.source_id ? t("requirements.sources.deleted", "已从知识库永久删除") : t("requirements.sources.evidence_removed", "已移出会话证据"));
       refreshKb();
       void qc.invalidateQueries({ queryKey: ["project", projectId] });
     },
@@ -139,6 +136,10 @@ export default function ProjectSourcesPage() {
                     onConfirm={() => archive.mutateAsync({ id: r.source_id!, archived: true }).catch(() => undefined)}>
                     <Button type="link" size="small" disabled={busy}>{t("requirements.sources.archive", "归档")}</Button>
                   </Popconfirm>),
+              !r.source_id && r.evidence && <Popconfirm key="unlink" title={t("requirements.sources.unlink_confirm", "将「{{t}}」移出会话证据？", { t: r.title })}
+                onConfirm={() => remove.mutateAsync(r).catch(() => undefined)}>
+                <Button type="link" size="small" danger disabled={busy}>{t("requirements.sources.unlink", "移出")}</Button>
+              </Popconfirm>,
               r.source_id && <Popconfirm key="del" title={t("requirements.sources.delete_confirm", "永久删除「{{t}}」？", { t: r.title })}
                 description={t("requirements.sources.delete_desc", "将移除切块与图谱提及，不可撤销（一般请用「归档」）。")} okButtonProps={{ danger: true }}
                 onConfirm={() => remove.mutateAsync(r).catch(() => undefined)}>

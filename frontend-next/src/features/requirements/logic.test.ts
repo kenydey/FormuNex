@@ -8,7 +8,7 @@ import { previewEffectTrace, traceCounts } from "./effectTrace";
 import { applyLookup, draftFromView, lookupQuery, lookupSource, nextAvailability, payloadFromDraft, structureMode, EMPTY_DRAFT } from "./materials/materialForm";
 import { causeParts } from "./ProjectHistory";
 import { flattenPaths, resolveStep } from "./paths";
-import { idsMatch, mergeSourceRows, normalizePatentPub, parseEvidence, resolveOpenUrl, toggleSelected, type KbSource } from "./sourceRows";
+import { idsMatch, mergeSourceRows, normalizePatentPub, parseEvidence, removeEvidenceBody, resolveOpenUrl, toggleSelected, type KbSource } from "./sourceRows";
 
 describe("constraints", () => {
   const base: ConstraintRequirement = { domain: "anticorrosion_coating", voc_limit_gpl: 300, constraint_values: { "VOC 上限": 300, 附着力: 1 } };
@@ -142,5 +142,15 @@ describe("history & paths", () => {
     expect(resolveStep({ id: "r", routes: ["/spec/projects/:projectId"] }, known, "p 1")).toBe("/spec/projects/p%201");
     expect(resolveStep({ id: "m", routes: ["/materials/raw?tab=structure"] }, known, null)).toBe("/materials/raw?tab=structure");
     expect(resolveStep({ id: "w", routes: ["/knowledge/wiki"] }, known, null)).toBeNull();
+  });
+});
+
+describe("removeEvidenceBody", () => {
+  const ev = [{ source: "patent", identifier: "a", title: "A" }, { source: "patent", identifier: "b", title: "B" }];
+  it("drops the item and its selection without the clear flag while items remain", () => {
+    expect(removeEvidenceBody(ev, ["a", "b"], "a")).toEqual({ workspace: { sources: [ev[1]], selected_sources: ["b"] } });
+  });
+  it("sends clear_sources when the last item goes", () => {
+    expect(removeEvidenceBody([ev[0]], ["a"], "a")).toEqual({ workspace: { sources: [], selected_sources: [] }, clear_sources: true });
   });
 });

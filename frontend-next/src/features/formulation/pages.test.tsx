@@ -52,3 +52,22 @@ describe("LineagePage", () => {
     await waitFor(() => expect(call).toHaveBeenCalledWith("GET", "/api/formulations/versions/a/diff/b"));
   });
 });
+
+describe("ExperimentDetailPage", () => {
+  it("loads the experiment by id instead of scanning the list", async () => {
+    call.mockImplementation(async (_m: string, p?: string) => {
+      const path = String(p ?? "");
+      if (path === "/api/experiments/42") return { id: 42, domain: "degreaser", label: "Batch 42", source: "lab", project_id: "p1",
+        measured: { ph: 9.1 }, measurement_count: 0, created_at: "2026-10-01T08:00:00" };
+      if (path.includes("/measurements")) return { experiment_id: 42, measurements: [] };
+      if (path.endsWith("/attachments")) return [];
+      return null;
+    });
+    const { default: Detail } = await import("./ExperimentDetailPage");
+    wrap("/lab/experiments/42", "/lab/experiments/:id", <Detail />);
+    expect(await screen.findByText("Batch 42")).toBeInTheDocument();
+    expect(await screen.findByText("9.1")).toBeInTheDocument();
+    expect(call).toHaveBeenCalledWith("GET", "/api/experiments/42");
+    expect(call).not.toHaveBeenCalledWith("GET", expect.stringContaining("limit=1000"));
+  });
+});

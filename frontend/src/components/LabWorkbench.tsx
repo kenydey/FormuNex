@@ -255,21 +255,16 @@ export default function LabWorkbench({
           );
           setLoopStatusLabel(String(data.loop_status?.status || "idle"));
           setLoopStatusMessage(String(data.loop_status?.message || ""));
-          // Phase 2.1: preload attachment counts for the 📎 badge column.
+          // Phase 2.1: preload attachment counts for the 📎 badge column — one batch call for the whole ledger.
           void (async () => {
-            const counts: Record<number, number> = {};
-            await Promise.all(
-              data.rows.map(async (r) => {
-                try {
-                  counts[r.id] = (
-                    await api.getWorkbenchAttachments(campaignId, r.id)
-                  ).length;
-                } catch {
-                  counts[r.id] = 0;
-                }
-              })
-            );
-            if (!cancelled) setAttachmentCounts(counts);
+            try {
+              const res = await api.getWorkbenchAttachmentCounts(campaignId);
+              const counts: Record<number, number> = {};
+              for (const [id, n] of Object.entries(res.counts ?? {})) counts[Number(id)] = n;
+              if (!cancelled) setAttachmentCounts(counts);
+            } catch {
+              if (!cancelled) setAttachmentCounts({});
+            }
           })();
         }
       } catch (e) {

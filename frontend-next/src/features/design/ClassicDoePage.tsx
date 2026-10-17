@@ -153,6 +153,8 @@ export default function ClassicDoePage() {
   const exportPlan = (fmt: "csv" | "xlsx") => plan && download(`/api/doe/${encodeURIComponent(plan.plan_id)}/export?format=${fmt}`,
     `doe_${plan.plan_id}.${fmt}`).catch((e) => message.error(errorText(e)));
 
+  // AI active-selection plans are dispatchable only once /api/doe/active has persisted them (it returns that id).
+  const dispatchId = active ? active.plan_id : plan?.plan_id;
   const explainByRun = new Map((active?.run_explanations ?? []).map((e) => [e.run_id, e]));
   const steps = thinkingSteps(cycleEv);
 
@@ -246,7 +248,9 @@ export default function ClassicDoePage() {
             <Button onClick={() => exportPlan("csv")}>{t("design.doe.export_csv", "导出 CSV")}</Button>
             <Button onClick={() => exportPlan("xlsx")}>XLSX</Button>
             <Button loading={adopt.isPending} onClick={() => adopt.mutate(plan)}>{t("design.doe.adopt", "写入实验台账")}</Button>
-            {plan.plan_id && <DispatchButton planId={plan.plan_id} />}
+            {dispatchId ? <DispatchButton planId={dispatchId} />
+              : <Tooltip title={t("design.doe.not_persisted", "该计划未能保存到 DOE 历史，无法下发为实验任务")}>
+                <Button type="primary" disabled>{t("doe.dispatch", "下发为实验任务")}</Button></Tooltip>}
           </Space>}>
           {plan.notes && <Typography.Paragraph type="secondary" style={{ whiteSpace: "pre-wrap" }}>{plan.notes}</Typography.Paragraph>}
           {active && (

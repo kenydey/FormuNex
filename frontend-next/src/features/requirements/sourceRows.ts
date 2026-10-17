@@ -137,3 +137,16 @@ export function mergeSourceRows(evidence: Evidence[], selected: string[], kbDocs
 export function toggleSelected(selected: string[], identifier: string): string[] {
   return selected.includes(identifier) ? selected.filter((x) => x !== identifier) : [...selected, identifier];
 }
+
+/**
+ * ``PUT /api/projects/{id}`` body that drops one item from the session evidence. The backend refuses to replace a
+ * non-empty ``sources`` list with an empty one (safety net against accidental wipes), so removing the LAST item
+ * sends the explicit ``clear_sources`` flag.
+ */
+export function removeEvidenceBody(evidence: Evidence[], selected: string[], identifier: string): {
+  workspace: { sources: Evidence[]; selected_sources: string[] }; clear_sources?: true;
+} {
+  const sources = evidence.filter((e) => e.identifier !== identifier);
+  const body = { workspace: { sources, selected_sources: selected.filter((x) => x !== identifier) } };
+  return sources.length === 0 && evidence.length > 0 ? { ...body, clear_sources: true } : body;
+}

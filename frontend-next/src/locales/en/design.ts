@@ -46,6 +46,7 @@ const en: Record<string, string> = {
   "design.doe.models": "Surrogate model R²",
   "design.doe.n": "Runs",
   "design.doe.n_suggest": "Suggested runs",
+  "design.doe.not_persisted": "This plan could not be saved to the DOE history, so it cannot be dispatched as lab tasks",
   "design.doe.native": "Classic native",
   "design.doe.next_action": "Recommended next step",
   "design.doe.no_levers": "The project defines no levers; factors will be derived from the current formulation.",

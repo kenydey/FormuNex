@@ -84,6 +84,8 @@ export interface ActiveDoeResult {
   recommended_next_action?: string;
   chemical_feasibility?: { feasible: boolean; status: string; reasons: string[] } | null;
   physical_constraints?: { feasible: boolean; status: string; reasons: string[] } | null;
+  /** id under which /api/doe/active stored the plan ("" = not persisted → cannot be dispatched). */
+  plan_id?: string;
 }
 
 export interface ModelInfo {

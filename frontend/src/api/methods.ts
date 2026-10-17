@@ -550,6 +550,12 @@ export const apiMethods = {
       `/api/experiments/workbench/${campaignId}/rows/${rowId}/attachments`
     ),
 
+  /** Attachment count of every row of a campaign in one call (row id → count). */
+  getWorkbenchAttachmentCounts: (campaignId: number) =>
+    get<{ campaign_id: number; counts: Record<string, number> }>(
+      `/api/experiments/workbench/${campaignId}/attachment-counts`
+    ),
+
   workbenchAttachmentDownloadUrl: (
     campaignId: number,
     rowId: number,
