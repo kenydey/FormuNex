@@ -155,8 +155,11 @@ function RetentionPurgeCard() {
       extra={near ? <Tag color="warning">{t("settings.purge.near_cap", "扫描近上限")}</Tag> : null}
       subTitle={t("settings.purge.sub", "仅删除已软归档且超龄的源；先预览，不会自动 TTL")}>
       <Space wrap>
-        <InputNumber min={1} max={3650} value={days} onChange={(v) => { setDays(v ?? 1); setDry(null); }}
-          addonBefore={t("settings.purge.older", "超过")} addonAfter={t("settings.purge.days", "天")} />
+        <Space.Compact>
+          <Button disabled>{t("settings.purge.older", "超过")}</Button>
+          <InputNumber min={1} max={3650} value={days} onChange={(v) => { setDays(v ?? 1); setDry(null); }} />
+          <Button disabled>{t("settings.purge.days", "天")}</Button>
+        </Space.Compact>
         <Button loading={run.isPending && run.variables === false} onClick={() => run.mutate(false)}>{t("settings.preview", "预览")}</Button>
         <Button danger disabled={!dry || dry.candidate_count === 0} loading={run.isPending && run.variables === true}
           onClick={() => modal.confirm({

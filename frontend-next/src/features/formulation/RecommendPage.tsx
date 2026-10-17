@@ -64,9 +64,9 @@ export default function RecommendPage() {
             <Descriptions size="small" column={{ xs: 1, md: 2 }} items={[
               { key: "d", label: t("formulation.exp.domain", "产品领域"), children: requirement.domain },
               { key: "s", label: t("formulation.rec.substrate", "基材"), children: String(requirement.substrate ?? "—") },
-              { key: "o", label: t("formulation.rec.objectives", "优化目标"), span: 2,
+              { key: "o", label: t("formulation.rec.objectives", "优化目标"), span: "filled",
                 children: objectives.length ? <Space wrap size={4}>{objectives.map((o) => <Tag key={o.metric}>{o.display_name || o.metric} · {o.direction}</Tag>)}</Space> : "—" },
-              { key: "e", label: t("formulation.rec.evidence", "依据证据"), children: t("formulation.rec.evidence_n", "{{n}} 条知识源", { n: sources.length }) },
+              { key: "e", label: t("formulation.rec.evidence", "依据证据"), span: "filled", children: t("formulation.rec.evidence_n", "{{n}} 条知识源", { n: sources.length }) },
             ]} />
             <Space direction="vertical" style={{ width: "100%", marginTop: 12 }}>
               <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("formulation.rec.query_ph", "补充检索关键词（可选，默认用需求摘要）")} />

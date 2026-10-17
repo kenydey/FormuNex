@@ -90,7 +90,7 @@ export function MeasurementTable({ rows, loading }: { rows: QCMeasurement[]; loa
   const { t } = useTranslation();
   const { token } = theme.useToken();
   return (
-    <Table<QCMeasurement> size="small" pagination={false} loading={loading} dataSource={rows} rowKey={(m, i) => `${m.metric}-${i}`}
+    <Table<QCMeasurement> size="small" pagination={false} loading={loading} dataSource={rows.map((m, i) => ({ ...m, _key: `${m.metric}-${i}` }))} rowKey="_key"
       locale={{ emptyText: <Empty description={t("formulation.exp.no_typed", "暂无结构化测量")} /> }}
       columns={[
         { title: t("formulation.exp.metric", "指标"), dataIndex: "metric" },

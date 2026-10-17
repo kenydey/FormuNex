@@ -113,7 +113,7 @@ export default function QcReportPage() {
       <ProCard bordered style={{ marginTop: 16 }} loading={existing.isLoading}
         title={t("design.qc.measurements", "计量项（共 {{n}} 条）", { n: shown.length })}>
         <ErrorAlert error={existing.error} />
-        <Table<QCMeasurementView> size="small" rowKey={(m, i) => `${m.metric}-${i}`} dataSource={shown} pagination={false} scroll={{ x: true }}
+        <Table<QCMeasurementView> size="small" rowKey="_key" dataSource={shown.map((m, i) => ({ ...m, _key: `${m.metric}-${i}` }))} pagination={false} scroll={{ x: true }}
           columns={[
             { title: t("design.qc.metric", "检测项"), dataIndex: "metric" },
             { title: t("design.qc.value", "实测值"), dataIndex: "value", align: "right" },
