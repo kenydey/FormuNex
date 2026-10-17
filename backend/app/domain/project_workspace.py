@@ -116,6 +116,9 @@ class ProjectUpdateRequest(BaseModel):
 
     workspace: dict[str, Any]
     title: str | None = None
+    # Explicit clear: allow ``workspace.sources == []`` to replace a non-empty list (the user deleted the
+    # last item). Without it the guard above keeps the stored sources.
+    clear_sources: bool = False
 
 
 class LegacySnapshotPayload(BaseModel):

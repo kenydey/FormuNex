@@ -1,5 +1,8 @@
 /** English strings of this feature area (merged into locales/en-US.ts). */
 const en: Record<string, string> = {
+  "workbench.stored_plan": "DOE plan",
+  "workbench.source_stored": "A stored DOE plan",
+  "workbench.pick_plan": "Pick a stored DOE plan",
   "nav.cockpit.loop": "Self-driving loop",
   "nav.cockpit.models": "Surrogate models",
   "nav.cockpit.surface": "Response surface",

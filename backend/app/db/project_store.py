@@ -237,8 +237,12 @@ class ProjectStore:
         *,
         title: str | None = None,
         cause: str = "update",
+        allow_empty_sources: bool = False,
     ) -> ProjectDetail | None:
         """Presence-based merge update (2026-09-05): 只写请求出现的键。
+
+        ``allow_empty_sources``: the caller explicitly clears ``sources`` (user deleted the last item) — lifts
+        the empty-overwrite guard below for this one request.
 
         防空覆盖保护:
         - ``chat_history`` 请求值忽略 —— 由 chat_messages 表重建镜像(权威在表);
@@ -260,13 +264,15 @@ class ProjectStore:
                 if key == "chat_history":
                     # 镜像由消息表权威重建 —— 不接受前端覆盖
                     continue
-                if key == "sources" and not value and cur.get("sources"):
+                if key == "sources" and not value and cur.get("sources") and not allow_empty_sources:
                     log.warning(
                         "project %s: 拒绝 sources 非空→空覆盖(保留 %d 条)",
                         project_id,
                         len(cur["sources"]),
                     )
                     continue
+                if key == "sources" and not value and cur.get("sources"):
+                    log.info("project %s: sources 显式清空(原 %d 条)", project_id, len(cur["sources"]))
                 cur[key] = value
             # 3) chat_history 镜像 = chat_messages 重建(该项目最新 N 条)
             cur["chat_history"] = _chat_mirror(session, project_id)

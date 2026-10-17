@@ -1,7 +1,7 @@
-import { ModalForm, PageContainer, ProFormDigit, ProFormRadio, ProFormSelect, ProFormText, ProTable } from "@ant-design/pro-components";
+import { ModalForm, PageContainer, ProFormDependency, ProFormDigit, ProFormRadio, ProFormSelect, ProFormText, ProTable } from "@ant-design/pro-components";
 import { Alert, App, Button, Tag, Typography } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import { call } from "@/api/client";
@@ -9,9 +9,10 @@ import { ErrorAlert } from "@/shared/feedback";
 import { useCampaigns, useEngines, useProjectWorkspace } from "./hooks";
 import { adoptPlan } from "./loop";
 import { TrainingDataBanner } from "./panels";
+import { fetchStoredPlan, storedPlanLabel, toDoePlan, type StoredPlan } from "./storedPlan";
 import type { CampaignSummary, DoePlan } from "./types";
 
-interface NewCampaign { name?: string; source: "project" | "generate"; design?: string; n?: number }
+interface NewCampaign { name?: string; source: "project" | "generate" | "stored"; design?: string; n?: number; plan_id?: string }
 
 /** 实验台账列表 (legacy ``WorkbenchModal`` campaign picker + "create from DOE"). */
 export default function WorkbenchPage() {
@@ -24,9 +25,16 @@ export default function WorkbenchPage() {
   const engines = useEngines();
   const plan = ws.doe_plan;
   const pendingAdopt = !!plan && (!plan.plan_id || plan.plan_id !== ws.workbench_adopted_plan_id);
+  // Any stored plan of the project (/api/doe/history) can seed a ledger, read back in full by id.
+  const stored = useQuery({ queryKey: ["design", "doe-history", "picker", projectId], enabled: !!projectId,
+    queryFn: () => call<{ items: StoredPlan[] }>("GET", `/api/doe/history?project_id=${encodeURIComponent(projectId ?? "")}&page=1&page_size=100`) });
 
   const create = async (v: NewCampaign) => {
     let p: DoePlan | null | undefined = v.source === "project" ? plan : null;
+    if (v.source === "stored") {
+      if (!v.plan_id) throw new Error(t("workbench.pick_plan", "请选择一个已存储的 DOE 计划"));
+      p = toDoePlan(await fetchStoredPlan(v.plan_id, projectId));
+    }
     if (v.source === "generate") {
       const req = { ...(project.data?.workspace.requirement ?? { domain: project.data?.domain ?? "anticorrosion_coating", objectives: [] }), project_id: projectId };
       const qs = new URLSearchParams({ design: v.design ?? "full_factorial" });
@@ -69,7 +77,15 @@ export default function WorkbenchPage() {
             <ProFormRadio.Group name="source" label={t("workbench.source", "实验方案来源")} options={[
               { value: "project", label: t("workbench.source_project", "项目当前 DOE 计划"), disabled: !plan },
               { value: "generate", label: t("workbench.source_generate", "按项目需求生成新 DOE") },
+              { value: "stored", label: t("workbench.source_stored", "已存储的 DOE 计划") },
             ]} />
+            <ProFormDependency name={["source"]}>
+              {({ source }) => source === "stored" && (
+                <ProFormSelect name="plan_id" label={t("workbench.stored_plan", "DOE 计划")} showSearch rules={[{ required: true }]}
+                  fieldProps={{ loading: stored.isLoading }}
+                  options={(stored.data?.items ?? []).map((s) => ({ value: s.plan_id, label: storedPlanLabel(s) }))} />
+              )}
+            </ProFormDependency>
             <ProFormSelect name="design" label={t("workbench.design", "设计")} dependencies={["source"]}
               options={(engines.designs.length ? engines.designs : ["full_factorial", "fractional_factorial", "ccd", "box_behnken", "lhs"]).map((d) => ({ value: d, label: d }))} />
             <ProFormDigit name="n" label={t("workbench.n_runs", "实验点数（可选）")} min={2} max={200} />

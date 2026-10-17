@@ -52,8 +52,16 @@ def get_project(project_id: str) -> ProjectDetail:
 
 
 @router.put("/{project_id}", response_model=ProjectDetail)
-def update_project(project_id: str, req: ProjectUpdateRequest) -> ProjectDetail:
-    detail = get_project_store().update(project_id, req.workspace, title=req.title)
+def update_project(
+    project_id: str,
+    req: ProjectUpdateRequest,
+    allow_empty_sources: bool = Query(
+        False, description="Explicitly allow an empty ``sources`` list to replace a non-empty one (same as clear_sources)"
+    ),
+) -> ProjectDetail:
+    detail = get_project_store().update(
+        project_id, req.workspace, title=req.title, allow_empty_sources=req.clear_sources or allow_empty_sources
+    )
     if detail is None:
         raise HTTPException(status_code=404, detail="Project not found")
     # Best-effort: promote requirement.materials into the global catalog.

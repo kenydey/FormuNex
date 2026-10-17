@@ -2,12 +2,14 @@ import { PageContainer, ProCard, ProTable } from "@ant-design/pro-components";
 import { Alert, App, Button, Descriptions, Drawer, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { DispatchButton } from "@/features/lab/DispatchButton";
+import { adoptPlan } from "@/features/workbench/loop";
+import { toDoePlan, type StoredPlan } from "@/features/workbench/storedPlan";
 import { planActions } from "./logic";
 import type { DoeHistoryItem, WorkbenchCampaignSummary } from "./types";
 
@@ -33,7 +35,7 @@ function CyclePause({ campaignId }: { campaignId: number }) {
   const qc = useQueryClient();
   const [ttl, setTtl] = useState<number | null>(24);
   const key = ["design", "doe-pause", campaignId];
-  const status = useQuery({ queryKey: key, queryFn: () => call<PauseStatus>("GET", `/api/experiments/hooks/doecyle-status/${campaignId}`) });
+  const status = useQuery({ queryKey: key, queryFn: () => call<PauseStatus>("GET", `/api/experiments/hooks/doecycle-status/${campaignId}`) });
   const toggle = useMutation({
     mutationFn: (pause: boolean) => call("POST", `/api/experiments/hooks/pause-doecycle/${campaignId}`,
       pause ? { isPaused: true, ttlHours: ttl ?? 0 } : { isPaused: false }),
@@ -73,6 +75,7 @@ export default function DoeHistoryPage() {
   const [detail, setDetail] = useState<DoeHistoryItem | null>(null);
   const [abortFor, setAbortFor] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+  const navigate = useNavigate();
 
   const campaigns = useQuery({ queryKey: ["workbench", "campaigns"],
     queryFn: () => call<WorkbenchCampaignSummary[]>("GET", "/api/experiments/workbench/campaigns") });
@@ -85,6 +88,22 @@ export default function DoeHistoryPage() {
     mutationFn: ({ id, action, why }: { id: string; action: "activate" | "complete" | "abort"; why?: string }) =>
       call("POST", `/api/doe/${encodeURIComponent(id)}/${action}`, action === "abort" ? { reason: why ?? "" } : {}),
     onSuccess: () => { setAbortFor(null); setReason(""); void qc.invalidateQueries({ queryKey: ["design", "doe-history"] }); },
+    onError: (e) => message.error(errorText(e)),
+  });
+
+  // The drawer reads the full plan by id (GET /api/doe/plans/{id}); the list row is only the placeholder while it loads.
+  const detailId = detail?.plan_id;
+  const planQ = useQuery({ queryKey: ["design", "doe-plan", detailId, projectId], enabled: !!detailId && !!projectId,
+    queryFn: () => call<DoeHistoryItem>("GET", `/api/doe/plans/${encodeURIComponent(detailId!)}?project_id=${encodeURIComponent(projectId ?? "")}`) });
+  const shown = planQ.data ?? detail;
+  const adopt = useMutation({
+    mutationFn: (item: DoeHistoryItem) => adoptPlan(qc, projectId, toDoePlan(item as StoredPlan)),
+    onSuccess: ({ campaign, warning }) => {
+      if (warning) message.warning(t("design.doe.activate_failed", "DOE 计划状态同步失败（计划已采纳）：{{e}}", { e: warning }));
+      message.success(t("design.doe.adopted", "已创建实验台账 #{{id}}", { id: campaign.campaign_id }));
+      void qc.invalidateQueries({ queryKey: ["design", "doe-history"] });
+      navigate(`/cockpit/workbench/${campaign.campaign_id}`);
+    },
     onError: (e) => message.error(errorText(e)),
   });
 
@@ -130,23 +149,26 @@ export default function DoeHistoryPage() {
         <Input.TextArea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t("design.hist.reason", "终止原因（可空）")} />
       </Modal>
       <Drawer open={!!detail} onClose={() => setDetail(null)} width={Math.min(900, window.innerWidth - 32)}
-        title={detail ? `${detail.design ?? ""} · ${detail.plan_id?.slice(0, 8) ?? ""}` : ""}
+        title={shown ? `${shown.design ?? ""} · ${shown.plan_id?.slice(0, 8) ?? ""}` : ""}
         extra={detail?.plan_id && <Space>
           <Button onClick={() => download(`/api/doe/${encodeURIComponent(detail.plan_id!)}/export?format=csv`, `doe_${detail.plan_id}.csv`)
             .catch((e) => message.error(errorText(e)))}>{t("design.doe.export_csv", "导出 CSV")}</Button>
+          <Button loading={adopt.isPending} disabled={!planQ.data} onClick={() => planQ.data && adopt.mutate(planQ.data)}>
+            {t("design.doe.adopt", "写入实验台账")}</Button>
           <DispatchButton planId={detail.plan_id} />
         </Space>}>
-        {detail && (
+        <ErrorAlert error={planQ.error} />
+        {shown && (
           <>
             <Descriptions size="small" column={2} style={{ marginBottom: 12 }}>
-              <Descriptions.Item label={t("design.hist.status", "状态")}><DoeStatusTag status={detail.status} /></Descriptions.Item>
-              <Descriptions.Item label={t("design.hist.domain", "产品域")}>{detail.domain || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("design.hist.status", "状态")}><DoeStatusTag status={shown.status} /></Descriptions.Item>
+              <Descriptions.Item label={t("design.hist.domain", "产品域")}>{shown.domain || "—"}</Descriptions.Item>
               <Descriptions.Item label={t("design.hist.notes", "备注")} span={2}>
-                <span style={{ whiteSpace: "pre-wrap" }}>{detail.notes || "—"}</span></Descriptions.Item>
+                <span style={{ whiteSpace: "pre-wrap" }}>{shown.notes || "—"}</span></Descriptions.Item>
             </Descriptions>
-            <Table size="small" rowKey="run_id" dataSource={detail.runs ?? []} pagination={false} scroll={{ x: true }}
+            <Table size="small" rowKey="run_id" dataSource={shown.runs ?? []} loading={planQ.isFetching && !planQ.data} pagination={false} scroll={{ x: true }}
               columns={[{ title: "#", dataIndex: "run_id", width: 60 },
-                ...(detail.factors ?? []).map((f) => ({ title: f.name, key: f.name, align: "right" as const,
+                ...(shown.factors ?? []).map((f) => ({ title: f.name, key: f.name, align: "right" as const,
                   render: (_v: unknown, r: NonNullable<DoeHistoryItem["runs"]>[number]) => {
                     const v = r.natural?.[f.name];
                     return typeof v === "number" ? Number(v.toFixed(4)) : String(v ?? "—");
