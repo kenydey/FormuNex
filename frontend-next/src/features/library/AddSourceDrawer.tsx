@@ -31,6 +31,9 @@ function UploadTab({ onDone }: { onDone: () => void }) {
   const [ev, setEv] = useState<TaskProgressEvent | null>(null);
   const [batch, setBatch] = useState<[number, number] | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const projectId = useUi((s) => s.projectId);
+  const [scope, setScope] = useState<"project" | "global">(projectId ? "project" : "global");
+  const scopedProject = scope === "project" ? projectId : null;
   const run = useMutation({
     mutationFn: async () => {
       const raws = files.map((f) => f.originFileObj).filter((f): f is NonNullable<typeof f> => !!f);
@@ -42,6 +45,7 @@ function UploadTab({ onDone }: { onDone: () => void }) {
         const fd = new FormData();
         const single = groups[i].length === 1;
         for (const f of groups[i]) fd.append(single ? "file" : "files", f);
+        if (scopedProject) fd.append("project_id", scopedProject);
         const acc = await call<AsyncTaskAccepted>("POST", single ? "/api/ingest" : "/api/ingest/batch", fd);
         const final = await awaitTask(acc.task_id, { onEvent: setEv, timeoutMs: 900_000 });
         const data = (final.data ?? {}) as Partial<IngestResponse>;
@@ -60,6 +64,15 @@ function UploadTab({ onDone }: { onDone: () => void }) {
   });
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
+      <Space wrap>
+        <Typography.Text>{t("library.add.scope", "入库范围")}</Typography.Text>
+        <Radio.Group optionType="button" size="small" value={projectId ? scope : "global"} disabled={run.isPending}
+          onChange={(e) => setScope(e.target.value as "project" | "global")} options={[
+            { value: "global", label: t("library.add.scope_global", "全局") },
+            { value: "project", label: t("library.add.scope_project", "当前项目"), disabled: !projectId },
+          ]} />
+        {!projectId && <Typography.Text type="secondary">{t("library.add.scope_no_project", "未选择项目，上传将进入全局知识库")}</Typography.Text>}
+      </Space>
       <Upload.Dragger multiple accept={UPLOAD_ACCEPT} fileList={files} beforeUpload={() => false}
         onChange={({ fileList }) => setFiles(fileList)} disabled={run.isPending}>
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>

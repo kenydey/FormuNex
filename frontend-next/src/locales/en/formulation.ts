@@ -70,6 +70,8 @@ const en: Record<string, string> = {
   "formulation.card.copied": "Copied",
   "formulation.card.copy_json": "Copy JSON",
   "formulation.card.csv": "Export CSV",
+  "formulation.card.pdf": "Export PDF",
+  "formulation.card.pdf_failed": "PDF export failed: {{e}}",
   "formulation.card.doe_base": "DOE baseline",
   "formulation.card.doe_base_tip": "Current DOE baseline: generated DOE factors are designed around this formulation's amounts",
   "formulation.card.doe_tip": "Save to the version store and set as the DOE baseline (factors will be designed around it)",

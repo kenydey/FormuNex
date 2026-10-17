@@ -1,5 +1,5 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { App, Button, Descriptions, Empty, Space, Tabs, Tag, Tree, Typography } from "antd";
+import { App, Button, Descriptions, Empty, Popconfirm, Space, Tabs, Tag, Tree, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { ApiError, call } from "@/api/client";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { pages, type Chunk, type TocNode } from "./types";
+import { useReparse } from "./reparse";
 import { EmbodimentDraftDrawer } from "@/features/library/EmbodimentDraftDrawer";
 import { ExtractionTablesPanel, TableBadges } from "@/features/library/SourceTables";
 import type { EmbodimentDraft, SourceDetail } from "@/features/library/types";
@@ -69,11 +70,16 @@ export default function SourceDetailPage() {
     onError: (e) => message.error(errorText(e)),
   });
   const missing = tree.error instanceof ApiError && tree.error.status === 404;
+  const { reparse, isRunning } = useReparse();
 
   return (
     <PageContainer title={detail.data?.title || sourceId} extra={<Space>
       <Button loading={extract.isPending} onClick={() => extract.mutate()}>{t("library.search.draft", "提取实施例草稿")}</Button>
-      <Button loading={rebuild.isPending} onClick={() => rebuild.mutate()}>{t("knowledge.tree.rebuild", "重建目录树")}</Button></Space>}>
+      <Button loading={rebuild.isPending} onClick={() => rebuild.mutate()}>{t("knowledge.tree.rebuild", "重建目录树")}</Button>
+      <Popconfirm title={t("library.sources.reparse_confirm", "按当前解析配置重新解析原文件？将重建切块、索引与目录树。")}
+        onConfirm={() => reparse(sourceId)}>
+        <Button loading={isRunning(sourceId)}>{t("library.sources.reparse", "重新解析")}</Button>
+      </Popconfirm></Space>}>
       <Tabs items={[
         { key: "tree", label: t("knowledge.tree.title", "目录树"), children: <>
       {!missing && <ErrorAlert error={tree.error} />}

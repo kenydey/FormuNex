@@ -1,6 +1,6 @@
 import { PageContainer, ProTable } from "@ant-design/pro-components";
 import { App, Button, Popconfirm, Select, Space, Switch, Tag, Tooltip, Typography } from "antd";
-import { DeleteOutlined, DownloadOutlined, InboxOutlined, PlusOutlined, RollbackOutlined } from "@ant-design/icons";
+import { DeleteOutlined, DownloadOutlined, InboxOutlined, PlusOutlined, RedoOutlined, RollbackOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -13,6 +13,7 @@ import { EmbodimentDraftDrawer } from "@/features/library/EmbodimentDraftDrawer"
 import { KB_EXPORT_FORMATS, KB_EXPORT_MAX, type KbExportFormat } from "@/features/library/logic";
 import { postDownload } from "@/features/library/shared";
 import type { EmbodimentDraft, KbSource as Source } from "@/features/library/types";
+import { useReparse } from "./reparse";
 
 interface DeleteResult { chunks_removed: number; links_removed: number; wiki_pages_touched: number }
 
@@ -70,6 +71,7 @@ export default function SourcesPage() {
     onError: (e) => message.error(errorText(e)),
   });
   const livePicked = picked.filter((id) => ids.includes(id));
+  const { reparse, isRunning } = useReparse();
 
   return (
     <PageContainer extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>{t("library.sources.add", "添加数据源")}</Button>}>
@@ -104,8 +106,12 @@ export default function SourcesPage() {
           { title: t("knowledge.sources.status", "解析"), dataIndex: "extraction_status", width: 110 },
           { title: t("knowledge.sources.project", "项目"), dataIndex: "project_id", width: 200, ellipsis: true,
             render: (_d, r) => r.project_id ?? <Tag>{t("knowledge.sources.global", "全局")}</Tag> },
-          { title: t("common.actions", "操作"), width: 230, render: (_d, r) => (
+          { title: t("common.actions", "操作"), width: 300, render: (_d, r) => (
             <Space size={0} wrap>
+              <Popconfirm title={t("library.sources.reparse_confirm", "按当前解析配置重新解析原文件？将重建切块、索引与目录树。")}
+                onConfirm={() => reparse(r.id)}>
+                <Button type="link" size="small" icon={<RedoOutlined />} loading={isRunning(r.id)}>{t("library.sources.reparse", "重新解析")}</Button>
+              </Popconfirm>
               {isEligible(r.id) && (
                 <Button type="link" size="small" loading={extract.isPending && extract.variables === r.id} onClick={() => extract.mutate(r.id)}>
                   {t("library.search.draft", "提取实施例草稿")}

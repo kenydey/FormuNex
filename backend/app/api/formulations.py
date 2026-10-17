@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..domain.examples import BUILTIN_METRICS, EXAMPLE_PROJECTS, ROLE_CATALOG, load_example
@@ -88,6 +89,38 @@ def validate_formulation_list(body: FormulationValidateRequest) -> FormulationVa
     """Validate and enrich leaderboard / LLM formulations (CAS, structure)."""
     forms, warnings = validate_formulations(body.formulations, req=body.requirement)
     return FormulationValidateResponse(formulations=forms, warnings=warnings)
+
+
+class FormulationPdfRequest(BaseModel):
+    formulation: Formulation
+    lang: str = Field(default="zh-CN", pattern=r"^(zh-CN|en-US)$")
+    title: str | None = Field(default=None, max_length=200)
+
+
+@router.post(
+    "/formulations/export/pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}, "description": "The formulation as a PDF"}},
+)
+def export_formulation_pdf(body: FormulationPdfRequest) -> Response:
+    """One formulation (leaderboard card) → PDF: name, domain, ingredient table (wt% / CAS), predicted metrics,
+    rationale and warnings, rendered with ReportLab and the project's CJK font."""
+    import re
+    from urllib.parse import quote
+
+    from ..services.formulation_pdf import render_formulation_pdf
+
+    pdf, info = render_formulation_pdf(body.formulation, lang=body.lang, title=body.title)
+    stem = re.sub(r"[\\/:*?\"<>|\s]+", "_", (body.title or body.formulation.name or "formulation").strip())[:80] or "formulation"
+    ascii_stem = re.sub(r"[^A-Za-z0-9._-]", "_", stem) or "formulation"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{ascii_stem}.pdf\"; filename*=UTF-8''{quote(stem)}.pdf",
+            "X-Font-Embedded": "1" if info.get("embedded") else "0",
+        },
+    )
 
 
 # Upper bound on evidence echoed back in a recommend response.

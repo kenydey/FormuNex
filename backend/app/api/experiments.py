@@ -566,10 +566,17 @@ async def sync_workbench(
         raise HTTPException(status_code=404, detail="Campaign not found")
     assert_owner(getattr(_campaign, "owner_id", None), get_current_owner(request))
 
+    native = _is_native_store(store)
+    before_rows = await store.list_rows(payload.campaign_id) if native else []
     updated, rows = await store.batch_sync(
         payload.campaign_id,
         [row.model_dump() for row in payload.rows],
     )
+    if native:
+        await run_in_threadpool(
+            _record_native_row_versions,
+            payload.campaign_id, before_rows, rows, get_current_owner(request), "workbench_row.update",
+        )
     # Best-effort: unknown factor keys → material pending queue / catalog.
     try:
         from ..services.material_promote import safe_propose_from_workbench_rows
@@ -915,6 +922,217 @@ async def get_workbench_row_attachments(
     ]
 
 
+class WorkbenchAttachmentCounts(BaseModel):
+    campaign_id: int
+    # row id → number of attachments (rows not yet ingested as experiments count 0)
+    counts: dict[int, int] = Field(default_factory=dict)
+
+
+def _attachment_counts(campaign_id: int, rows: list[WorkbenchRow]) -> dict[int, int]:
+    """Two queries for the whole ledger: row label → experiment id, experiment id → count."""
+    from ..db.database import default_session_factory
+    from ..db.models import ExperimentAttachment, ExperimentRow
+    from ..services.workbench_training import workbench_record_label
+
+    label_by_row = {r.id: workbench_record_label(campaign_id, r.item_id) for r in rows}
+    counts = {r.id: 0 for r in rows}
+    if not label_by_row:
+        return counts
+    with default_session_factory()() as session:
+        exp_by_label: dict[str, int] = {}
+        for exp_id, label in (
+            session.query(ExperimentRow.id, ExperimentRow.label)
+            .filter(ExperimentRow.label.in_(set(label_by_row.values())))
+            .order_by(ExperimentRow.id)
+        ):
+            exp_by_label.setdefault(label, exp_id)  # first match, like the per-row lookup
+        n_by_exp = dict(
+            session.query(ExperimentAttachment.experiment_id, func.count(ExperimentAttachment.id))
+            .filter(ExperimentAttachment.experiment_id.in_(set(exp_by_label.values()) or {0}))
+            .group_by(ExperimentAttachment.experiment_id)
+            .all()
+        )
+    for row_id, label in label_by_row.items():
+        exp_id = exp_by_label.get(label)
+        if exp_id is not None:
+            counts[row_id] = int(n_by_exp.get(exp_id, 0))
+    return counts
+
+
+@router.get(
+    "/experiments/workbench/{campaign_id}/attachment-counts",
+    response_model=WorkbenchAttachmentCounts,
+)
+async def workbench_attachment_counts(
+    campaign_id: int,
+    request: Request,
+) -> WorkbenchAttachmentCounts:
+    """Attachment count of every row of a campaign in one call (ledger column)."""
+    from ..middleware.api_auth import assert_owner, get_current_owner
+
+    store = get_campaign_store()
+    campaign = await store.get_campaign(campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    assert_owner(getattr(campaign, "owner_id", None), get_current_owner(request))
+    rows = await store.list_rows(campaign_id)
+    counts = await run_in_threadpool(_attachment_counts, campaign_id, rows)
+    return WorkbenchAttachmentCounts(campaign_id=campaign_id, counts=counts)
+
+
+# ── Native row versions (no Datalab refcode) ────────────────────────────────
+# The native store keeps a row as one JSON entry of ``campaigns.sample_refs``
+# and overwrites it in place on every save, so it has no history of its own.
+# Each native save therefore appends the changed rows' snapshots to the
+# append-only, hash-chained ``audit_log`` (entity ``workbench_row``,
+# id ``"<campaign>:<row>"``); those entries are the row's versions.
+_NATIVE_VERSION_ENTITY = "workbench_row"
+_SNAPSHOT_FIELDS = ("status", "planned_params", "actual_params", "measurements", "note", "tags")
+
+
+def _is_native_store(store: Any) -> bool:
+    from ..db.campaign_store import SqliteCampaignStore
+
+    return isinstance(store, SqliteCampaignStore)
+
+
+def _row_snapshot(row: WorkbenchRow) -> dict:
+    return {
+        "status": row.status,
+        "planned_params": dict(row.planned_params or {}),
+        "actual_params": dict(row.actual_params or {}),
+        "measurements": dict(row.measurements or {}),
+        "note": row.note,
+        "tags": list(row.tags or []),
+    }
+
+
+def _native_entity_id(campaign_id: int, row_id: int) -> str:
+    return f"{campaign_id}:{row_id}"
+
+
+def _record_native_row_versions(
+    campaign_id: int,
+    before: list[WorkbenchRow],
+    after: list[WorkbenchRow],
+    actor: str,
+    action: str,
+) -> int:
+    """Append one audit version per changed row (plus a baseline before its first change).
+
+    Best-effort: a failure is logged and never fails the save. Returns the number of rows versioned.
+    """
+    from ..db.database import default_session_factory
+    from ..db.models_plm import AuditLogRow
+    from ..db.session_utils import commit_session
+    from ..services.audit import hash_chain
+
+    before_by_id = {r.id: _row_snapshot(r) for r in before}
+    changed: list[tuple[int, dict | None, dict]] = []
+    for r in after:
+        snap = _row_snapshot(r)
+        old = before_by_id.get(r.id)
+        if old is None or hash_chain.canonical_json(old) != hash_chain.canonical_json(snap):
+            changed.append((r.id, old, snap))
+    if not changed:
+        return 0
+    try:
+        with commit_session(default_session_factory()) as session:
+            for row_id, old, snap in changed:
+                entity_id = _native_entity_id(campaign_id, row_id)
+                has_history = session.query(AuditLogRow.seq).filter(
+                    AuditLogRow.entity_type == _NATIVE_VERSION_ENTITY,
+                    AuditLogRow.entity_id == entity_id,
+                ).first() is not None
+                if not has_history and old is not None:
+                    hash_chain.append(
+                        session, actor=actor or "system", action="workbench_row.baseline",
+                        entity_type=_NATIVE_VERSION_ENTITY, entity_id=entity_id, after=old,
+                        detail={"campaign_id": campaign_id, "row_id": row_id, "snapshot": old},
+                    )
+                hash_chain.append(
+                    session, actor=actor or "system", action=action,
+                    entity_type=_NATIVE_VERSION_ENTITY, entity_id=entity_id, before=old, after=snap,
+                    detail={"campaign_id": campaign_id, "row_id": row_id, "snapshot": snap},
+                )
+    except Exception as exc:  # noqa: BLE001 - versioning must never block a save
+        logger.warning("native row versions for campaign %s not recorded: %s", campaign_id, exc)
+        return 0
+    return len(changed)
+
+
+def _native_row_versions(campaign_id: int, row_id: int) -> list[dict]:
+    """Audit entries of one native row, oldest first: ``{id, version, action, timestamp, creator, snapshot}``."""
+    from ..db.database import default_session_factory
+    from ..db.models_plm import AuditLogRow
+
+    with default_session_factory()() as session:
+        entries = (
+            session.query(AuditLogRow)
+            .filter(
+                AuditLogRow.entity_type == _NATIVE_VERSION_ENTITY,
+                AuditLogRow.entity_id == _native_entity_id(campaign_id, row_id),
+            )
+            .order_by(AuditLogRow.seq)
+            .all()
+        )
+        return [
+            {
+                "id": str(e.seq),
+                "version": i,
+                "action": e.action.removeprefix("workbench_row."),
+                "timestamp": e.ts.isoformat() if e.ts else None,
+                "creator": e.actor,
+                "snapshot": dict((e.detail or {}).get("snapshot") or {}),
+            }
+            for i, e in enumerate(entries, start=1)
+        ]
+
+
+def _snapshot_diff(old: dict, new: dict) -> dict:
+    """DeepDiff-shaped diff of two row snapshots (``values_changed`` / ``dictionary_item_added|removed``)."""
+    changed: dict[str, dict] = {}
+    added: list[str] = []
+    removed: list[str] = []
+
+    def walk(a: Any, b: Any, path: str) -> None:
+        if isinstance(a, dict) and isinstance(b, dict):
+            for k in sorted(set(a) | set(b), key=str):
+                p = f"{path}[{k!r}]"
+                if k not in a:
+                    added.append(p)
+                elif k not in b:
+                    removed.append(p)
+                else:
+                    walk(a[k], b[k], p)
+        elif a != b:
+            changed[path] = {"old_value": a, "new_value": b}
+
+    walk(old or {}, new or {}, "root")
+    out: dict[str, Any] = {}
+    if changed:
+        out["values_changed"] = changed
+    if added:
+        out["dictionary_item_added"] = added
+    if removed:
+        out["dictionary_item_removed"] = removed
+    return out
+
+
+async def _native_row_or_404(campaign_id: int, row_id: int) -> tuple[Any, WorkbenchRow] | None:
+    """(store, row) when the row lives in the native store without a refcode; None otherwise."""
+    store = get_campaign_store()
+    if not _is_native_store(store):
+        return None
+    rows = await store.list_rows(campaign_id)
+    match = next((r for r in rows if r.id == row_id), None)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Row not found")
+    if getattr(match, "refcode", None):
+        return None
+    return store, match
+
+
 @router.post(
     "/experiments/workbench/{campaign_id}/rows/{row_id}/versions/{version_id}/restore",
     response_model=dict,
@@ -923,15 +1141,45 @@ async def restore_workbench_row_version(
     campaign_id: int,
     row_id: int,
     version_id: str,
+    request: Request,
 ) -> dict:
     """P3: restore a DOE row's DataLab item to a saved version.
 
     The platform mints a new "restored" version afterwards, so the operation is
     reversible — restoring again to any earlier version stays possible.
+    Native rows (no refcode) restore the audit-log snapshot ``version_id`` and
+    record the result as a new ``restore`` version — equally reversible.
     """
     from ..config import get_settings
     from ..db.campaign_store import get_campaign_store
     from ..db.datalab_client import restore_item_version
+
+    native = await _native_row_or_404(campaign_id, row_id)
+    if native is not None:
+        from ..middleware.api_auth import assert_owner, get_current_owner
+
+        store, current = native
+        campaign = await store.get_campaign(campaign_id)
+        assert_owner(getattr(campaign, "owner_id", None), get_current_owner(request))
+        versions = await run_in_threadpool(_native_row_versions, campaign_id, row_id)
+        target = next((v for v in versions if v["id"] == version_id), None)
+        if target is None or not target["snapshot"]:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        snap = target["snapshot"]
+        _, rows = await store.batch_sync(campaign_id, [{
+            "id": row_id,
+            "actual_params": snap.get("actual_params") or {},
+            "measurements": snap.get("measurements") or {},
+            "status": snap.get("status") or "Pending",
+            "note": snap.get("note"),
+            "tags": list(snap.get("tags") or []),
+        }])
+        await run_in_threadpool(
+            _record_native_row_versions,
+            campaign_id, [current], [r for r in rows if r.id == row_id],
+            get_current_owner(request), "workbench_row.restore",
+        )
+        return {"restored": True, "refcode": None, "version_id": version_id}
 
     rows = await get_campaign_store().list_rows(campaign_id)
     match = next((r for r in rows if r.id == row_id), None)
@@ -960,6 +1208,9 @@ async def workbench_row_versions(
 ) -> dict:
     """P3: version history of a DOE row's DataLab item (auto-saved on every sync).
 
+    Native rows (no refcode) answer from the audit log instead (``source: "native"``,
+    ``refcode: null``; each entry also carries its ``snapshot``).
+
     Without compare params returns ``{refcode, versions: [{id, version, action,
     timestamp, creator}]}``; with ``compare_v1`` + ``compare_v2`` returns the
     DeepDiff between those two version ids under ``diff``.
@@ -967,6 +1218,16 @@ async def workbench_row_versions(
     from ..config import get_settings
     from ..db.campaign_store import get_campaign_store
     from ..db.datalab_client import diff_item_versions, list_item_versions
+
+    if await _native_row_or_404(campaign_id, row_id) is not None:
+        versions = await run_in_threadpool(_native_row_versions, campaign_id, row_id)
+        if compare_v1 and compare_v2:
+            by_id = {v["id"]: v["snapshot"] for v in versions}
+            if compare_v1 not in by_id or compare_v2 not in by_id:
+                raise HTTPException(status_code=404, detail="版本不存在")
+            return {"refcode": None, "source": "native",
+                    "diff": _snapshot_diff(by_id[compare_v1], by_id[compare_v2])}
+        return {"refcode": None, "source": "native", "versions": versions}
 
     rows = await get_campaign_store().list_rows(campaign_id)
     match = next((r for r in rows if r.id == row_id), None)
@@ -1815,3 +2076,36 @@ def sync_experiment_from_datalab(
         except Exception as exc:  # noqa: BLE001 - fail-open
             logger.warning("U-4 experiment validation write skipped: %s", exc)
     return report
+
+
+@router.get("/experiments/{experiment_id}", response_model=ExperimentSummary)
+def get_experiment(
+    experiment_id: int,
+    project_id: str = Query(default=""),
+) -> ExperimentSummary:
+    """One stored experiment (same shape and project scoping as ``GET /experiments``).
+
+    Declared last so the literal ``/experiments/<name>`` routes above win.
+    404 when it does not exist or, with ``project_id``, belongs to another project.
+    """
+    _ensure_eln_when_required()
+    from ..db.database import default_session_factory
+    from ..db.models import ExperimentRow, MeasurementRow
+
+    with default_session_factory()() as session:
+        row = session.get(ExperimentRow, experiment_id)
+        if row is None or (project_id and (row.project_id or "") != project_id):
+            raise HTTPException(status_code=404, detail=f"experiment {experiment_id} not found")
+        n = session.query(func.count(MeasurementRow.id)).filter(
+            MeasurementRow.experiment_id == experiment_id
+        ).scalar()
+        return ExperimentSummary(
+            id=row.id,
+            domain=row.domain,
+            label=row.label or "",
+            source=row.source or "",
+            project_id=row.project_id or "",
+            measured=dict(row.measured or {}),
+            measurement_count=int(n or 0),
+            created_at=row.created_at.isoformat() if row.created_at else None,
+        )

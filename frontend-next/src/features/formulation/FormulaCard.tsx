@@ -1,7 +1,7 @@
 import { ProCard } from "@ant-design/pro-components";
 import { Alert, App, Button, Drawer, Dropdown, Popconfirm, Space, Tag, Tooltip, Typography } from "antd";
 import {
-  ApartmentOutlined, CheckOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, ExportOutlined, HistoryOutlined, LikeOutlined, RobotOutlined, SaveOutlined,
+  ApartmentOutlined, CheckOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, ExportOutlined, FilePdfOutlined, HistoryOutlined, LikeOutlined, RobotOutlined, SaveOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -10,7 +10,7 @@ import { useNavigate } from "react-router-dom";
 import { MeasuredMetricHitsBanner } from "@/features/workbench/panels";
 import type { MeasuredMetricHit } from "@/features/workbench/measuredHits";
 import { errorText } from "@/shared/feedback";
-import { fx, saveText, slug } from "./api";
+import { exportFormulationPdf, fx, saveBlob, saveText, slug } from "./api";
 import { ExplainPanel } from "./ExplainPanel";
 import { IngredientTable } from "./IngredientTable";
 import { formulaToCsv, materialMapOf } from "./logic";
@@ -44,10 +44,15 @@ export interface CardProps {
 /** One recommended / leaderboard formulation with all its actions (legacy FormulaLeaderboard › FormulaCard). */
 export function FormulaCard(p: CardProps) {
   const { form } = p;
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { message } = App.useApp();
   const qc = useQueryClient();
+  const pdf = useMutation({
+    mutationFn: () => exportFormulationPdf(form, i18n.language?.startsWith("en") ? "en-US" : "zh-CN"),
+    onSuccess: (blob) => saveBlob(blob, `${slug(form.name)}.pdf`),
+    onError: (e) => message.error(t("formulation.card.pdf_failed", "PDF 导出失败：{{e}}", { e: errorText(e) })),
+  });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [provOpen, setProvOpen] = useState(false);
   const outcome = useQuery({ queryKey: ["formulation", "outcome", p.recommendId], enabled: !!p.recommendId, queryFn: () => fx.outcome(p.recommendId!) });
@@ -93,7 +98,8 @@ export function FormulaCard(p: CardProps) {
         <Dropdown menu={{ items: [
           { key: "json", label: t("formulation.card.copy_json", "复制 JSON"), onClick: () => void copyJson() },
           { key: "csv", label: t("formulation.card.csv", "导出 CSV"), icon: <DownloadOutlined />, onClick: () => saveText(formulaToCsv(form), `${slug(form.name)}.csv`) },
-        ] }}><Button size="small" icon={<ExportOutlined />}>{t("formulation.card.export", "导出")}</Button></Dropdown>
+          { key: "pdf", label: t("formulation.card.pdf", "导出 PDF"), icon: <FilePdfOutlined />, disabled: pdf.isPending, onClick: () => pdf.mutate() },
+        ] }}><Button size="small" icon={<ExportOutlined />} loading={pdf.isPending} data-testid="card-export">{t("formulation.card.export", "导出")}</Button></Dropdown>
         <Dropdown menu={{ items: [
           { key: "ip", label: t("formulation.card.ip", "专利 / IP 分析"), onClick: () => navigate("/knowledge/research/ip", { state: { formulation: form } }) },
           { key: "similar", label: t("formulation.card.similar", "相似历史配方"), onClick: () => navigate("/lab/similar", { state: { formulation: form } }) },

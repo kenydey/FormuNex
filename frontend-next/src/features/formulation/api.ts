@@ -1,5 +1,6 @@
 /** Endpoint wrappers of the formulation area (all through ``call`` → auth + token refresh). */
-import { call } from "@/api/client";
+import { ApiError, call } from "@/api/client";
+import { authFetch } from "@/api/auth";
 import type {
   Attachment, ChemicalProfile, ExperimentSearchHit, ExperimentSummary, Formulation, Lineage, ModeChoice, ProvenanceEdge,
   QCMeasurementList, RowVersion, VersionDiff, WorkbenchCampaign, WorkbenchRow,
@@ -83,3 +84,26 @@ export function saveText(text: string, filename: string, type = "text/csv;charse
 }
 
 export const slug = (name: string) => name.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || "formula";
+
+/** POST /api/formulations/export/pdf → the card as a PDF blob (the endpoint answers binary, so not ``call``). */
+export async function exportFormulationPdf(formulation: Formulation, lang: "zh-CN" | "en-US"): Promise<Blob> {
+  const res = await authFetch("/api/formulations/export/pdf", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ formulation, lang }),
+  });
+  if (!res.ok) {
+    let detail: unknown = res.statusText;
+    try { detail = ((await res.json()) as { detail?: unknown }).detail ?? detail; } catch { /* not JSON */ }
+    throw new ApiError(res.status, detail);
+  }
+  return res.blob();
+}
+
+/** Save a blob in the browser. */
+export function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}

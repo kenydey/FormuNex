@@ -1,6 +1,7 @@
 /** Pure helpers of the research area (unit-tested in lib.test.ts). */
+import { idsMatch } from "@/features/requirements/sourceRows";
 import type {
-  ChatTurn, EmbodimentDraft, Evidence, KbIngestProgress, PreflightFinding, SearchProgress, SourceStatus, SourceType,
+  ChatTurn, EmbodimentDraft, Evidence, KbIngestDoc, KbIngestProgress, PreflightFinding, SearchProgress, SourceStatus, SourceType,
 } from "./types";
 
 /** Federated search connectors (legacy SourceTypePicker; ``local`` is the upload path, not a search source). */
@@ -184,4 +185,44 @@ export const confirmPath = (origin: string) =>
 export function dispositionName(header: string | null, fallback: string): string {
   const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header || "");
   return m?.[1] ? decodeURIComponent(m[1]) : fallback;
+}
+
+/** One ``POST /api/kb/sources/resolve`` match: a search hit (by identifier) → the KB document holding its full text. */
+export interface KbResolveMatch { identifier: string; source_id: string; title?: string }
+
+/** Body for ``POST /api/kb/sources/resolve``: the rows that are not mapped yet (≤ 500, de-duplicated by identifier). */
+export function resolveItems(rows: Evidence[], mapped: Record<string, string | null | undefined>): { identifier: string; url?: string | null; url_alt?: string | null }[] {
+  const seen = new Set<string>();
+  const out: { identifier: string; url?: string | null; url_alt?: string | null }[] = [];
+  for (const e of rows) {
+    const k = evidenceKey(e);
+    if (!e.identifier || !k || mapped[k] || seen.has(e.identifier) || /^kb:/.test(e.identifier) || e.is_seed_corpus) continue;
+    seen.add(e.identifier);
+    out.push({ identifier: e.identifier, url: e.url ?? null, url_alt: e.url_alt ?? null });
+    if (out.length >= 500) break;
+  }
+  return out;
+}
+
+/**
+ * KB source id of each search hit (row key → source id), from the background KB build's per-document progress
+ * (``docs[].identifier/source_id``) and/or the resolve endpoint's matches; DOI / patent number (compact ↔ hyphenated
+ * ↔ Google Patents URL) / URL aliases all match. Mirrors legacy ``SourcesPanel.resolveSourceId``. Hits that already
+ * are KB chunks (``kb:<id>#c…``) map to their own document.
+ */
+export function mapKbSourceIds(rows: Evidence[], docs: KbIngestDoc[] = [], matches: KbResolveMatch[] = []): Record<string, string> {
+  const out: Record<string, string> = {};
+  const candidates: { identifier?: string | null; source_id?: string | null }[] = [
+    ...docs.filter((d) => d.source_id && d.status !== "failed"),
+    ...matches,
+  ];
+  for (const e of rows) {
+    const k = evidenceKey(e);
+    if (!k) continue;
+    const kb = /^kb:([^#]+)/.exec(e.identifier || "");
+    if (kb) { out[k] = kb[1]; continue; }
+    const hit = candidates.find((d) => d.source_id && (idsMatch(d.identifier, e.identifier) || idsMatch(d.identifier, e.url) || idsMatch(d.identifier, e.url_alt)));
+    if (hit?.source_id) out[k] = hit.source_id;
+  }
+  return out;
 }
