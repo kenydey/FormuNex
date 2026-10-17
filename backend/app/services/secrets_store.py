@@ -342,6 +342,10 @@ def update_secrets(updates: dict[str, str | None]) -> list[str]:
     for attr, raw in updates.items():
         if attr not in _ATTR_BY_ID:
             continue
+        # ``None`` clears a secret; an empty string is a no-op, so a form saved with an untouched (blank) field
+        # can never wipe a configured key by accident.
+        if raw is not None and not raw.strip():
+            continue
         value = (raw or "").strip()
         check_env_value(value, what=attr)
         if attr in _SERVICE_URL_ATTRS and value:

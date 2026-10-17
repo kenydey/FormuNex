@@ -52,13 +52,26 @@ def _display_name(ent) -> str:
     return name or ent.id
 
 
+def _project_source_ids(project_id: str) -> set[str]:
+    from ...db.database import default_session_factory
+    from ...db.models import SourceDocument
+
+    with default_session_factory()() as session:
+        return {sid for (sid,) in session.query(SourceDocument.id).filter(SourceDocument.project_id == project_id)}
+
+
 def build_material_graph(
     *,
     relation_types: list[str] | None = None,
     limit: int = 500,
     scan_links: int = 8000,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return {ok, nodes, edges, meta} for Hub materials KG canvas."""
+    """Return {ok, nodes, edges, meta} for Hub materials KG canvas.
+
+    ``project_id``: keep only links whose evidence cites one of the project's knowledge-base documents
+    (links without document evidence — catalogue aliases, measured links — are global and dropped).
+    """
     if not kg_enabled():
         raise PermissionError("kg_enabled is false")
 
@@ -66,6 +79,10 @@ def build_material_graph(
     types = expand_relation_type_filters(relation_types)
     store = get_entity_store()
     links = store.list_semantic_links(link_types=types, limit=scan_links, valid_only=True)
+    if project_id:
+        project_sources = _project_source_ids(project_id)
+        links = [lk for lk in links
+                 if any((r or {}).get("source_id") in project_sources for r in (lk.evidence_refs or []))]
 
     out_degree: dict[str, int] = {}
     in_degree: dict[str, int] = {}
@@ -138,6 +155,7 @@ def build_material_graph(
             "elapsed_ms": elapsed_ms,
             "relation_types": types,
             "scanned_links": len(links),
+            "project_id": project_id,
             "backend": "sqlite",
         },
     }

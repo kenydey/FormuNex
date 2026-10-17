@@ -1,7 +1,7 @@
 import { ReloadOutlined } from "@ant-design/icons";
 import { PageContainer } from "@ant-design/pro-components";
 import { FlagLink } from "./FlagLink";
-import { Alert, Button, Card, Col, Descriptions, Empty, Input, Row, Space, Table, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Descriptions, Empty, Input, Row, Segmented, Space, Table, Tabs, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -30,10 +30,12 @@ export default function KgGraphPage() {
   const [typesDraft, setTypesDraft] = useState(DEFAULT_TYPES);
   const [types, setTypes] = useState(DEFAULT_TYPES);
   const [selected, setSelected] = useState<KgGraphNode | null>(null);
+  const [scope, setScope] = useState<"project" | "global">("project");
 
   const graph = useQuery({
-    queryKey: ["kg", "graph", types], enabled: !!projectId && tab === "canvas",
-    queryFn: () => call<KgGraphResponse>("GET", `/api/kg/graph?${new URLSearchParams({ relation_types: types || DEFAULT_TYPES, limit: "400" })}`),
+    queryKey: ["kg", "graph", types, scope, projectId], enabled: !!projectId && tab === "canvas",
+    queryFn: () => call<KgGraphResponse>("GET", `/api/kg/graph?${new URLSearchParams({
+      relation_types: types || DEFAULT_TYPES, limit: "400", ...(scope === "project" && projectId ? { project_id: projectId } : {}) })}`),
   });
   const stats = useQuery({ queryKey: ["kg", "stats"], queryFn: () => call<KgStats>("GET", "/api/kg/stats"), enabled: !!projectId && tab === "stats", retry: false });
   const neo = useQuery({ queryKey: ["kg", "neo4j", "stats"], queryFn: () => call<Neo4jStats>("GET", "/api/kg/neo4j/stats"), enabled: !!projectId && tab === "stats", retry: false });
@@ -50,8 +52,10 @@ export default function KgGraphPage() {
 
   return (
     <PageContainer
-      subTitle={t("wiki.kg_sub", "材料关系（配方 KG · SQLite）· 全局语料预览（尚未按项目切分）· 与 Wiki 链接图分离")}
-      extra={<Button icon={<ReloadOutlined />} disabled={!projectId} loading={graph.isFetching || stats.isFetching} onClick={refetch}>{t("wiki.refresh", "刷新")}</Button>}
+      subTitle={t("wiki.kg_sub2", "材料关系（配方 KG · SQLite）· 与 Wiki 链接图分离")}
+      extra={<Space><Segmented value={scope} onChange={(v) => setScope(v as "project" | "global")} options={[
+        { value: "project", label: t("wiki.kg_scope_project", "本项目文献证据") }, { value: "global", label: t("wiki.kg_scope_global", "全局") }]} />
+        <Button icon={<ReloadOutlined />} disabled={!projectId} loading={graph.isFetching || stats.isFetching} onClick={refetch}>{t("wiki.refresh", "刷新")}</Button></Space>}
     >
       {!projectId ? (
         <Alert type="warning" showIcon message={t("wiki.kg_need_project", "请先在顶栏选择项目后再查看材料图谱（只读）")} />

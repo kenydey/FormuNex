@@ -317,6 +317,7 @@ def material_graph(
         description="Comma-separated link types; supports measured_* prefix",
     ),
     limit: int = Query(default=500, ge=1, le=2000),
+    project_id: str | None = Query(default=None, description="Only links evidenced by this project's KB documents"),
 ) -> dict:
     """Hub materials KG canvas projection (SQLite links; Neo4j not required)."""
     if not kg_enabled():
@@ -327,7 +328,7 @@ def material_graph(
         [t.strip() for t in (relation_types or "").split(",") if t.strip()]
     )
     try:
-        return build_material_graph(relation_types=types, limit=limit)
+        return build_material_graph(relation_types=types, limit=limit, project_id=project_id)
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -344,7 +345,7 @@ def entity_relations(
     return get_entity_relations(entity_id, direction=direction, extraction_method=extraction_method, limit=limit)
 
 
-@router.get("/path", response_model=KGPathResponse, include_in_schema=False)
+@router.get("/path", response_model=KGPathResponse)
 def entity_path(
     src: str = Query(min_length=1),
     dst: str = Query(min_length=1),

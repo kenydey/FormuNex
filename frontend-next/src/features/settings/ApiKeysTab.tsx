@@ -36,7 +36,7 @@ function SecretRow({ s }: { s: SecretStatus }) {
   const [draft, setDraft] = useState("");
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const save = useMutation({
-    mutationFn: (value: string) => call<{ secrets: SecretStatus[] }>("POST", "/api/settings/secrets", { updates: { [s.id]: value } }),
+    mutationFn: (value: string | null) => call<{ secrets: SecretStatus[] }>("POST", "/api/settings/secrets", { updates: { [s.id]: value } }),
     onSuccess: (r, value) => {
       qc.setQueryData(SECRETS_KEY, { secrets: r.secrets });
       setEditing(false);
@@ -68,7 +68,7 @@ function SecretRow({ s }: { s: SecretStatus }) {
           <Button key="t" size="small" loading={test.isPending} onClick={() => test.mutate()}>{t("settings.keys.test", "测试")}</Button>
         ) : null,
         s.set && !editing ? (
-          <Popconfirm key="c" title={t("settings.keys.confirm_clear", "清除该配置？")} onConfirm={() => save.mutate("")}>
+          <Popconfirm key="c" title={t("settings.keys.confirm_clear", "清除该配置？")} onConfirm={() => save.mutate(null)}>
             <Button size="small" danger type="text">{t("settings.keys.clear", "清除")}</Button>
           </Popconfirm>
         ) : null,

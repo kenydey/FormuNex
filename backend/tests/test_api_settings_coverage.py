@@ -174,7 +174,9 @@ def test_a_cleared_address_falls_back_to_the_default(env_file):
     default = Settings.model_fields["mineru_base_url"].default
     ss.update_secrets({"mineru_base_url": "https://mineru.internal.example/api/v4"})
     assert setting_or_default(s, "mineru_base_url") == "https://mineru.internal.example/api/v4"
-    ss.update_secrets({"mineru_base_url": ""})
+    ss.update_secrets({"mineru_base_url": ""})  # a blank field is ignored, never a silent wipe
+    assert setting_or_default(s, "mineru_base_url") == "https://mineru.internal.example/api/v4"
+    ss.update_secrets({"mineru_base_url": None})  # explicit clear
     assert effective_setting(s, "mineru_base_url") in (None, "")
     assert setting_or_default(s, "mineru_base_url") == default
 

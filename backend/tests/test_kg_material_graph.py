@@ -122,3 +122,16 @@ def test_kg_graph_all_semantic_includes_synergizes(entity_store):
     assert "synergizes" in rels
     by_id = {n["id"]: n for n in r.json()["nodes"]}
     assert by_id["chem:b"]["degree_out"] >= 2
+
+
+def test_graph_project_filter_keeps_links_evidenced_by_project_documents(entity_store, monkeypatch):
+    import app.services.kg.material_graph as mg
+
+    _seed(entity_store)
+    monkeypatch.setattr(mg, "_project_source_ids", lambda pid: {"s2"} if pid == "p1" else set())
+    out = mg.build_material_graph(relation_types=["substitutes", "synergizes", "measured_*"], project_id="p1")
+    assert {(e["source"], e["target"]) for e in out["edges"]} == {("chem:a", "chem:c")}
+    assert out["meta"]["project_id"] == "p1"
+    assert mg.build_material_graph(relation_types=["substitutes"], project_id="other")["edges"] == []
+    # no project: unchanged global view
+    assert len(mg.build_material_graph(relation_types=["substitutes", "synergizes", "measured_*"])["edges"]) == 3

@@ -58,8 +58,8 @@ _LAB = (
 )
 
 _NEXT = (
-    "called by the Ant Design rewrite in frontend-next/ (plan §3.4, F2/F4: product list, spec studio, sign-off "
-    "queue, label designer); this test scans the legacy frontend until the one-shot cut-over"
+    "called by the Ant Design rewrite in frontend-next/ (plan §3.4, F2–F5); this test scans the legacy frontend "
+    "until the one-shot cut-over"
 )
 
 # Documented backend routes the frontend does not call, and why that is fine.
@@ -148,6 +148,8 @@ API_ONLY_ROUTES: dict[str, str] = {
     "/api/lab/eln/conflicts/{}/resolve": _LAB,
     "/api/cockpit/conformal/from-lab": _DOE_LAB,
     "/api/plm/revisions/{}/property-candidates": _LAB,
+    "/api/formulations/versions/detail/{}": _NEXT,
+    "/api/tasks": _NEXT,
     "/api/plm/label-templates": _NEXT,
     "/api/plm/label-templates/preview": _NEXT,
     "/api/plm/label-templates/{}": _NEXT,

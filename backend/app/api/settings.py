@@ -114,6 +114,7 @@ class LLMModelsRefreshRequest(BaseModel):
 
 
 class SecretsUpdate(BaseModel):
+    # value → set; null → clear; "" → ignored (never clears)
     updates: dict[str, str | None] = Field(default_factory=dict)
 
 

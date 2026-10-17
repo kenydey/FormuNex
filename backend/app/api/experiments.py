@@ -1247,7 +1247,7 @@ class ExperimentSearchResult(BaseModel):
     measurements: dict[str, Any]
 
 
-@router.get("/experiments/search", response_model=list[ExperimentSearchResult], include_in_schema=False)
+@router.get("/experiments/search", response_model=list[ExperimentSearchResult])
 async def search_experiments(
     q: str = Query(default="", description="搜索关键词"),
 ) -> list[ExperimentSearchResult]:

@@ -668,7 +668,7 @@ def formulation_lineage(lineage_id: str) -> LineageResponse:
     return LineageResponse(lineage_id=lineage_id, versions=[_to_view(r) for r in rows])
 
 
-@router.get("/formulations/versions/detail/{version_id}", response_model=VersionDetail, include_in_schema=False)
+@router.get("/formulations/versions/detail/{version_id}", response_model=VersionDetail)
 def formulation_version_detail(version_id: str) -> VersionDetail:
     from ..services.formulation_history import get_history_store
 

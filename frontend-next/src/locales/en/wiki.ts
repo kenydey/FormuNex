@@ -1,5 +1,8 @@
 /** English strings of this feature area (merged into locales/en-US.ts). */
 const en: Record<string, string> = {
+  "wiki.kg_sub2": "Material relations (formulation KG · SQLite) · separate from the wiki link graph",
+  "wiki.kg_scope_project": "This project's literature",
+  "wiki.kg_scope_global": "Global",
   "wiki.open_flag": "Turn on",
   "nav.knowledge.wiki": "Wiki",
   "nav.knowledge.wiki_graph": "Wiki link graph",

@@ -51,8 +51,9 @@ export default function ApiSettingsPanel({ reloadKey = 0 }: { reloadKey?: number
     setBusy(id);
     setMessage(null);
     try {
-      const value = drafts[id] ?? "";
-      await api.postSecrets({ [id]: value });
+      const value = (drafts[id] ?? "").trim();
+      // Saving an emptied field clears the key (null); the API ignores "" so nothing is wiped by accident.
+      await api.postSecrets({ [id]: value || null });
       setEditing((prev) => {
         const next = new Set(prev);
         next.delete(id);

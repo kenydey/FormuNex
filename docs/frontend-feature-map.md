@@ -42,7 +42,7 @@
 | ① 知识 | `MarkdownMessage` | ✅ 已迁移 | shared/Markdown（GFM、KaTeX、SMILES、Mermaid） |
 | ① 知识 | `MermaidBlock` | ✅ 已迁移 | shared/Markdown MermaidBlock |
 | ① 知识 | `NotebookLMPanel` | ✅ 已迁移 | library/NotebookLMPage /knowledge/notebooklm |
-| ① 知识 | `OcsrPanel` | 🟡 部分 | library/ParsingPage /knowledge/parsing（状态 + SMILES 输入绘制）；Ketcher 结构编辑器未接入 |
+| ① 知识 | `OcsrPanel` | ✅ 已迁移 | library/ParsingPage /knowledge/parsing（识别状态 + SMILES 输入绘制；旧组件本身也只有状态面板，Ketcher 从未接入） |
 | ① 知识 | `ProjectNotebookLMModal` | ✅ 已迁移 | library/NotebookLMPage（项目笔记本 ID 存入项目） |
 | ① 知识 | `PublicationPreflightPanel` | ✅ 已迁移 | research/PreflightPanel（产出页 ?tab=preflight） |
 | ① 知识 | `RagPrewarmBar` | ✅ 已迁移 | chat/ChatToolbar |

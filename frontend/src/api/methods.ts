@@ -2568,7 +2568,7 @@ export const apiMethods = {
 
   getSecrets: () => get<SecretsListResponse>("/api/settings/secrets"),
 
-  postSecrets: (updates: Record<string, string>) =>
+  postSecrets: (updates: Record<string, string | null>) =>
     post<SecretsListResponse>("/api/settings/secrets", { updates }),
 
   testSecret: (id: string) =>
