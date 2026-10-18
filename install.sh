@@ -85,6 +85,8 @@ install_docker() {
     exit 1
   fi
   echo "    Docker $(docker --version | sed 's/Docker version //;s/,.*//') ✓"
+  # 3-12：Docker Desktop 许可告知（用户必经的安装流程）。
+  echo "    提示：使用 Docker Desktop 需遵守 Docker Desktop 许可条款，详见 Docker 官网法律条款页（docker.com/legal）。"
 
   if ! docker compose version >/dev/null 2>&1; then
     echo "❌ 未找到 docker compose v2（需要 Docker Compose v2，docker-compose v1 不可用）"

@@ -1,6 +1,9 @@
 """Renderers for structured PLM documents: PDF (ReportLab), Word (python-docx / docxtpl), labels."""
 
 
+from .pdfa import PdfaError  # noqa: F401 - re-exported for API error mapping
+
+
 class MissingRenderDependency(RuntimeError):
     """A render backend (reportlab / python-docx) is not installed.
 

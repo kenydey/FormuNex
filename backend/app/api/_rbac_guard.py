@@ -109,10 +109,15 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
     # spec / label-templates are endpoint-enforced below.)
     (re.compile(r"^/api/plm/batches(/|$)"), "qc.write"),
     (re.compile(r"^/api/plm/ghs(/|$)"), "plm.document.write"),
+    # Plan 3-10: rule-set batch recompute persists new classification rows.
+    (re.compile(r"^/api/plm/rulesets(/|$)"), "plm.document.write"),
     (re.compile(r"^/api/plm/label-templates/preview$"), "plm.document.read"),
     (re.compile(r"^/api/plm/products(/|$)"), "plm.document.write"),
     (re.compile(r"^/api/plm/revisions/[^/]+/documents$"), "plm.document.write"),
     (re.compile(r"^/api/plm/templates$"), "plm.document.write"),
+    # Phase 3B: template preview / label batch are pure renders (nothing saved) → read, like label-templates/preview.
+    (re.compile(r"^/api/plm/templates/preview$"), "plm.document.read"),
+    (re.compile(r"^/api/plm/labels/batch$"), "plm.document.read"),
     (re.compile(r"^/api/plm/substances(/|$)"), "knowledge.write"),
     (re.compile(r"^/api/plm/regulatory/ask$"), "knowledge.read"),
     # Wiki — report / export / lint / preflight-review generate a view;

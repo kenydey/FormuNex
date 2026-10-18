@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.perf  # `pytest -m perf` runs the full performance regression suite
+
 pytest.importorskip("reportlab")
 pytest.importorskip("docx")
 

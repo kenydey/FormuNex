@@ -11,8 +11,11 @@ chunks unchanged, so turning PageIndex on can only add evidence.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +24,119 @@ from .navigator import LLMJson, NavigationResult, navigate
 from .tree_builder import BUILDER_VERSION, build_toc_tree
 
 log = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- result cache (plan 3-11)
+#
+# ``two_stage_retrieve`` is LLM-expensive (stage-2 navigation per document),
+# so results are cached in-process keyed by (normalised query, retrieval
+# params, corpus fingerprint). Invalidation rules:
+#   * any SourceDocument in the query's scope changes (insert / update /
+#     delete) → the corpus fingerprint moves → old entries miss;
+#   * fingerprint unavailable (DB error, …) → fail-open: bypass the cache,
+#     never serve a possibly-stale hit;
+#   * entries older than ``_PAGEINDEX_CACHE_TTL_S`` are dropped on read;
+#   * cache is per-process: a multi-worker deployment keeps one cache per
+#     worker (stale at most TTL after a doc change the fingerprint missed —
+#     see the fingerprint caveat below).
+#
+# Fingerprint: a hash of the state two_stage_retrieve actually reads —
+# the chunk store (engine + write generation + counts) and the ToC-tree
+# store (engine + tree-content hash). It deliberately does NOT read the
+# SourceDocument table: retrieval never reads it (titles reach stage 2 via
+# the stored trees), and the default-DB fingerprint missed stores swapped
+# onto another engine (tests) entirely. Store identity comes from the
+# engine URL, not id(): a swapped-in store on another database must never
+# collide with the previous store's fingerprint.
+_PAGEINDEX_CACHE: dict[str, tuple[float, "TwoStageResult"]] = {}
+_PAGEINDEX_CACHE_LOCK = threading.Lock()
+_PAGEINDEX_CACHE_TTL_S = 3600
+_PAGEINDEX_CACHE_MAX = 256
+
+
+def _engine_url(factory: Any) -> str:
+    """Stable identity for a session factory: its engine URL (id() fallback)."""
+    try:
+        bind = getattr(factory, "bind", None)
+        if bind is not None:
+            return str(bind.url)
+    except Exception:  # noqa: BLE001 - fall through to id()
+        pass
+    return f"id:{id(factory)}"
+
+
+def corpus_fingerprint(*, project_id: str | None = None, include_global: bool = True) -> str | None:
+    """Fingerprint of the corpus state ``two_stage_retrieve`` reads.
+
+    ``project_id`` / ``include_global`` are accepted for call-site symmetry
+    but do not narrow the fingerprint: the chunk/tree stores are not
+    project-scoped, so narrowing would risk serving a hit after an
+    out-of-scope write changed shared state. The fingerprint is
+    conservative (extra invalidation, never stale).
+
+    Returns ``None`` when the stores are unreachable (caller bypasses cache).
+    """
+    try:
+        from ...db.chunk_store import get_chunk_store
+        from ...db.toc_tree_store import get_toc_tree_store
+
+        chunk_store = get_chunk_store()
+        toc_store = get_toc_tree_store()
+        raw = "|".join([
+            _engine_url(chunk_store.session_factory),
+            str(chunk_store.generation),
+            str(chunk_store.counts()),
+            _engine_url(toc_store._factory),
+            toc_store.fingerprint(),
+        ])
+        return hashlib.sha1(raw.encode()).hexdigest()
+    except Exception as exc:  # noqa: BLE001 - fingerprint failure must never break retrieval
+        log.warning("pageindex cache fingerprint unavailable: %s", exc)
+        return None
+
+
+def invalidate_pageindex_cache() -> int:
+    """Drop every cached PageIndex result; returns the number dropped."""
+    with _PAGEINDEX_CACHE_LOCK:
+        n = len(_PAGEINDEX_CACHE)
+        _PAGEINDEX_CACHE.clear()
+        return n
+
+
+def _settings_snapshot() -> str:
+    """PageIndex settings that change ``two_stage_retrieve`` output."""
+    s = get_settings()
+    return "|".join(str(getattr(s, k, None)) for k in (
+        "pageindex_enabled", "pageindex_colbert_rerank", "pageindex_min_pages",
+        "pageindex_max_hops", "pageindex_max_input_chars", "pageindex_max_input_tokens"))
+
+
+def _cache_key(query: str, *, top_k: int, max_docs: int, project_id: str | None,
+               include_global: bool, deep: bool | None, use_llm: bool, query_kind: str,
+               fingerprint: str) -> str:
+    params = "|".join([query.strip().lower(), str(top_k), str(max_docs), str(project_id),
+                       str(include_global), str(deep), str(use_llm), query_kind, fingerprint,
+                       _settings_snapshot()])
+    return hashlib.sha1(params.encode()).hexdigest()
+
+
+def _cache_get(key: str) -> "TwoStageResult | None":
+    with _PAGEINDEX_CACHE_LOCK:
+        hit = _PAGEINDEX_CACHE.get(key)
+        if hit is None:
+            return None
+        at, result = hit
+        if time.monotonic() - at > _PAGEINDEX_CACHE_TTL_S:
+            del _PAGEINDEX_CACHE[key]
+            return None
+        return result
+
+
+def _cache_put(key: str, result: "TwoStageResult") -> None:
+    with _PAGEINDEX_CACHE_LOCK:
+        if len(_PAGEINDEX_CACHE) >= _PAGEINDEX_CACHE_MAX:
+            _PAGEINDEX_CACHE.pop(next(iter(_PAGEINDEX_CACHE)))
+        _PAGEINDEX_CACHE[key] = (time.monotonic(), result)
 
 
 # --------------------------------------------------------------------------- query-type gate (plan §5.1.1 限定场景)
@@ -360,6 +476,7 @@ def two_stage_retrieve(
     llm: LLMJson | None = None,
     use_llm: bool = True,
     query_kind: str = "auto",
+    use_cache: bool = True,
 ) -> TwoStageResult:
     """Stage 1 ``hybrid_search`` (+ ColBERT rerank) → stage 2 PageIndex navigation on the top documents.
 
@@ -367,9 +484,22 @@ def two_stage_retrieve(
     ``True`` = every top document that has a tree, ``False`` = stage 1 only.
     ``query_kind``: ``"auto"`` = classify the query; a known context
     (``extraction`` / ``deep_research`` / ``explicit``) bypasses the classifier.
+    ``use_cache``: plan 3-11 — serve the cached result when (query, params,
+    corpus fingerprint) match; a cache hit returns the *same*
+    ``TwoStageResult`` object (callers must treat it as read-only).
     """
     from ..hybrid_search import hybrid_search
 
+    cache_key: str | None = None
+    if use_cache:
+        fingerprint = corpus_fingerprint(project_id=project_id, include_global=include_global)
+        if fingerprint is not None:
+            cache_key = _cache_key(query, top_k=top_k, max_docs=max_docs, project_id=project_id,
+                                   include_global=include_global, deep=deep, use_llm=use_llm,
+                                   query_kind=query_kind, fingerprint=fingerprint)
+            hit = _cache_get(cache_key)
+            if hit is not None:
+                return hit
     stage1 = hybrid_search(query, top_k=top_k, project_id=project_id, include_global=include_global)
     stage1, reranked = _colbert_rerank_stage1(query, stage1)
     by_doc: dict[str, list[str]] = {}
@@ -380,8 +510,11 @@ def two_stage_retrieve(
                             stage1_chunks=by_doc, stage1=stage1, query_kind=query_kind)
     answer = next((d.navigation.answer for d in docs if d.navigation and d.navigation.answer), None)
     source = next((d.navigation.answer_source for d in docs if d.navigation and d.navigation.answer), "none")
-    return TwoStageResult(query=query, stage1=stage1, documents=docs,
-                          answer=answer, answer_source=source, stage1_reranked=reranked)
+    result = TwoStageResult(query=query, stage1=stage1, documents=docs,
+                            answer=answer, answer_source=source, stage1_reranked=reranked)
+    if cache_key is not None:
+        _cache_put(cache_key, result)
+    return result
 
 
 def navigation_evidence(depths: list[DocumentDepth], *, titles: dict[str, str] | None = None,

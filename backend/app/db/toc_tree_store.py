@@ -24,6 +24,28 @@ class TocTreeStore:
 
         return default_session_factory()()
 
+    def fingerprint(self) -> str:
+        """Content hash of every stored tree (source_id, builder_version, tree).
+
+        Lets services cache derived results (e.g. PageIndex retrieval) and
+        invalidate exactly when a tree is built, updated or deleted —
+        ``update_tree`` touches no timestamp, so a count / ``built_at``
+        aggregate would miss it.
+        """
+        import hashlib
+        import json
+
+        with self._session_factory() as session:
+            rows = session.query(
+                DocumentTocTreeRow.source_id, DocumentTocTreeRow.builder_version,
+                DocumentTocTreeRow.tree,
+            ).order_by(DocumentTocTreeRow.source_id).all()
+        raw = "\n".join(
+            f"{sid}|{ver}|{json.dumps(tree, sort_keys=True, ensure_ascii=False)}"
+            for sid, ver, tree in rows
+        )
+        return hashlib.sha1(raw.encode()).hexdigest()
+
     def get(self, source_id: str) -> DocumentTocTreeRow | None:
         with self._session_factory() as session:
             return session.get(DocumentTocTreeRow, source_id)

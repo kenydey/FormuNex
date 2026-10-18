@@ -102,6 +102,30 @@ def get_ruleset() -> dict[str, Any]:
     return {"version": rs.version, "status": rs.status, "available": available_rulesets(), "parameters": rs.as_dict()}
 
 
+@router.post("/rulesets/{version}/recompute")
+def recompute_ruleset(version: str, apply: bool = Query(default=False)) -> dict[str, Any]:
+    """Plan 3-10: batch re-classification on a rule-set release.
+
+    ``apply=false`` (default) is a dry run: reports affected products and
+    what would change, persists nothing. ``apply=true`` persists each fresh
+    result as a *new* classification row; old rows are never mutated, and
+    documents citing them still need regeneration (listed per product).
+    Requires ``plm.document.write`` (see ``_rbac_guard``).
+    """
+    from ..services.plm.release import ruleset_recompute
+
+    with _session() as session:
+        try:
+            out = ruleset_recompute.recompute_ruleset(session, version, apply=apply)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        if apply:
+            session.commit()
+        return out
+
+
 @router.post("/ghs/classify")
 def classify_composition(body: ClassifyRequest) -> dict[str, Any]:
     """Classify a composition (real-time: called by the formulation editor's compliance panel)."""
@@ -364,6 +388,7 @@ class DocumentIn(BaseModel):
     tds: dict[str, Any] = Field(default_factory=dict)
     coa: dict[str, Any] = Field(default_factory=dict)
     label: dict[str, Any] = Field(default_factory=dict)
+    pdfa: bool = False  # PDF/A-2b 输出（3-13；字体未嵌入时 422）
 
 
 def _doc_summary(row) -> dict[str, Any]:
@@ -462,14 +487,16 @@ def generate_document(revision_id: str, body: DocumentIn,
                       user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
     """Generate a new version of an SDS / TDS / COA / label (never edits an existing version)."""
     from ..services.plm.documents import service as docs
-    from ..services.plm.render import MissingRenderDependency
+    from ..services.plm.render import MissingRenderDependency, PdfaError
 
-    payload = body.model_dump(exclude={"doc_type", "lang"})
+    payload = body.model_dump(exclude={"doc_type", "lang", "pdfa"})
     payload["properties"] = body.properties.model_dump() if body.properties else None
     with _session() as session:
         try:
             row = docs.generate_document(session, revision_id, body.doc_type, lang=body.lang, payload=payload,
-                                         created_by=user.id if user else None)
+                                         created_by=user.id if user else None, pdfa=body.pdfa)
+        except PdfaError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
         except MissingRenderDependency as exc:
             # 缺渲染依赖（reportlab / python-docx 未安装）是 503，不是 500。
             raise HTTPException(status_code=503, detail=str(exc)) from None
@@ -588,6 +615,78 @@ async def upload_template(
             raise _doc_error(exc) from None
         session.commit()
         return {"id": row.id, "doc_type": row.doc_type, "lang": row.lang, "name": row.name, "version": row.version}
+
+
+@router.get("/templates")
+def list_templates(doc_type: str | None = None, lang: str | None = None) -> list[dict[str, Any]]:
+    """List uploaded Word templates (Phase 3B, 3-13: template admin needs a list, not just upload)."""
+    from sqlalchemy import select
+
+    from ..db.models_plm import DocTemplateRow
+
+    with _session() as session:
+        q = select(DocTemplateRow).where(DocTemplateRow.engine == "docx")
+        if doc_type:
+            q = q.where(DocTemplateRow.doc_type == doc_type)
+        if lang:
+            q = q.where(DocTemplateRow.lang == lang)
+        return [{"id": r.id, "doc_type": r.doc_type, "lang": r.lang, "name": r.name, "version": r.version,
+                 "is_default": r.is_default, "created_at": r.created_at}
+                for r in session.execute(q.order_by(DocTemplateRow.created_at.desc())).scalars()]
+
+
+@router.post("/templates/preview")
+async def preview_template(
+    file: UploadFile | None = File(None),
+    template_id: str | None = Form(None),
+    doc_type: Literal["sds", "tds", "coa"] = Form(...),
+    lang: Literal["zh-CN", "en-US"] = Form("zh-CN"),
+    document_id: str | None = Form(None),
+):
+    """Preview a Word template (Phase 3B, 3-13): render sample content — or a real
+    document's content when ``document_id`` is given — with the uploaded template
+    (or a stored one via ``template_id``) and return the DOCX. Nothing is saved."""
+    from fastapi.responses import Response
+
+    from ..db.models_plm import DocTemplateRow, RegulatoryDocumentRow
+    from ..services.plm import storage
+    from ..services.plm.render import MissingRenderDependency
+    from ..services.plm.render.docx import render_docx
+
+    if file is None and template_id is None:
+        raise HTTPException(status_code=422, detail="需上传模板文件或提供 template_id")
+    with _session() as session:
+        if file is not None:
+            data = await file.read()
+            if not data.startswith(b"PK"):
+                raise HTTPException(status_code=422, detail="模板必须是 .docx 文件")
+        else:
+            row = session.get(DocTemplateRow, template_id)
+            if row is None or row.engine != "docx":
+                raise HTTPException(status_code=404, detail="模板不存在")
+            data = storage.get(row.content_key)
+        if document_id:
+            doc = session.get(RegulatoryDocumentRow, document_id)
+            if doc is None:
+                raise HTTPException(status_code=404, detail="文档不存在")
+            content = doc.content
+        else:
+            # Minimal sample content shaped like real builder output, so a template
+            # can be previewed before any document exists.
+            content = {"title": f"{doc_type.upper()} 模板预览", "lang": lang,
+                       "header": {"product_name": "示例产品", "product_code": "SAMPLE-001",
+                                  "version": "v1", "revision_date": "2026-10-18", "standard": "GB 15258-2009"},
+                       "sections": [{"no": 1, "title": "示例章节",
+                                     "fields": [{"label": "产品名称", "key": "product_name", "value": "示例产品", "source": "manual"}],
+                                     "tables": [], "paragraphs": ["这是一段示例正文，用于预览模板排版。"]}]}
+    try:
+        out = render_docx(content, data)
+    except MissingRenderDependency as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    except Exception as exc:  # noqa: BLE001 - template tag errors surface here
+        raise HTTPException(status_code=422, detail=f"模板渲染失败：{exc}") from None
+    return Response(out, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": f'attachment; filename="template-preview-{doc_type}-{lang}.docx"'})
 
 
 # --------------------------------------------------------------------------- M5: release gate & sign-off
@@ -1015,3 +1114,47 @@ def preview_label_layout(body: LabelPreviewIn):
     return Response(pdf, media_type="application/pdf", headers={
         "X-Label-Overflow": ",".join(info["overflow_elements"]),
         "X-Label-Missing": ",".join(info["missing_elements"])})
+
+
+class LabelBatchItem(BaseModel):
+    content: dict[str, Any]  # label content, same shape as a generated label document's content
+    filename: str | None = None  # default: label-{index}.pdf
+
+
+class LabelBatchIn(BaseModel):
+    labels: list[LabelBatchItem] = Field(min_length=1, max_length=50)
+    color_space: Literal["rgb", "cmyk"] = "rgb"
+    pdfa: bool = False
+
+
+@router.post("/labels/batch")
+def batch_labels(body: LabelBatchIn):
+    """Batch-generate labels (Phase 3B, 3-14): render N label contents to one ZIP of PDFs.
+
+    Pure render — nothing is saved, no document versions are created. ``color_space="cmyk"``
+    draws text / borders / QR with DeviceCMYK inks (SVG pictograms keep their source colours);
+    ``pdfa=True`` post-processes each PDF to PDF/A-2b.
+    """
+    import zipfile
+    from io import BytesIO
+
+    from fastapi.responses import Response
+
+    from ..services.plm.render import MissingRenderDependency, PdfaError
+    from ..services.plm.render.label_pdf import render_label_pdf
+
+    buf = BytesIO()
+    try:
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, item in enumerate(body.labels):
+                pdf, _info = render_label_pdf(item.content, pdfa=body.pdfa, color_space=body.color_space)
+                name = (item.filename or f"label-{i + 1}.pdf").replace("/", "_")
+                if not name.endswith(".pdf"):
+                    name += ".pdf"
+                zf.writestr(name, pdf)
+    except MissingRenderDependency as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    except (PdfaError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="labels.zip"'})

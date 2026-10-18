@@ -64,6 +64,8 @@ def test_guard_table_covers_new_prefixes():
         ("POST", "/api/plm/substances/sds-import", "knowledge.write"),
         ("POST", "/api/plm/ghs/classify", "plm.document.write"),
         ("POST", "/api/plm/label-templates/preview", "plm.document.read"),
+        ("POST", "/api/plm/templates/preview", "plm.document.read"),  # Phase 3B：模板预览，纯渲染
+        ("POST", "/api/plm/labels/batch", "plm.document.read"),  # Phase 3B：标签批量，纯渲染
         ("POST", "/api/artifacts/lineages", "project.write"),
         ("POST", "/api/collections", "knowledge.write"),
         ("POST", "/api/kg/rebuild", "knowledge.write"),

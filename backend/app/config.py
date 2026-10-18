@@ -56,6 +56,9 @@ _INFRA_ENV_KEYS = frozenset({
     "FORMUNEX_RULES_DIR",   # services/rule_loader.py editable rules directory
     # 2-11：基材配置扩展，domain/schemas.py 的 extra_substrates() 直接读环境变量。
     "FORMUNEX_EXTRA_SUBSTRATES",
+    # Phase 3B：COA 编号规则（documents/service.py）与 PDF/A ICC 路径（render/pdfa.py），均直接读环境变量。
+    "FORMUNEX_COA_NUMBER_RULE",
+    "FORMUNEX_PDFA_ICC_PATH",
     "FORMUNEX_DEEPEVAL",    # scripts/deepeval_gate.py on/off switch (CI)
     "FORMUNEX_RIGOR_GATE",  # scripts/rigor_gate.py skip switch (CI)
     # Deployment knobs read by compose / shell scripts, never by the app. They live in the

@@ -102,6 +102,20 @@ def test_dispatch_is_one_task_per_run_and_idempotent(lab):
     assert scanned["task"]["id"] == t["id"]
 
 
+def test_3_17_dispatch_task_factors_match_doe_matrix(lab):
+    """3-17：任务单因子取值逐行 = DOE 矩阵行 natural 值（不仅键名一致），待测指标与下发一致。"""
+    c = lab["c"]
+    plan_id = _plan(c)
+    plan = c.get(f"/api/doe/plans/{plan_id}").json()
+    by_run = {r["run_id"]: r["natural"] for r in plan["runs"]}
+    assert len(by_run) == 4
+    tasks = _dispatch(lab, plan_id)
+    assert {t["run_index"] for t in tasks} == set(by_run)
+    for t in tasks:
+        assert t["factors"] == by_run[t["run_index"]], (t["run_index"], t["factors"], by_run[t["run_index"]])
+        assert {m["metric"] for m in t["requested_metrics"]} == {"density_g_cm3", "salt_spray_hours"}
+
+
 # --------------------------------------------------------------------------- entry checks
 
 

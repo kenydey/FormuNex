@@ -96,10 +96,13 @@ def _text_for(content: dict, e: dict, variables: dict[str, Any]) -> str:
     return str(_field(content, t) or "")
 
 
-def render_layout_pdf(content: dict, layout: dict[str, Any], variables: dict[str, Any] | None = None
-                      ) -> tuple[bytes, dict]:
+def render_layout_pdf(content: dict, layout: dict[str, Any], variables: dict[str, Any] | None = None,
+                      *, pdfa: bool = False, color_space: str = "rgb") -> tuple[bytes, dict]:
     if rl_canvas is None:
         raise MissingRenderDependency("reportlab")
+    if color_space not in ("rgb", "cmyk"):
+        raise ValueError("color_space 仅支持 rgb / cmyk")
+    ink = colors.CMYKColor(0, 0, 0, 1) if color_space == "cmyk" else colors.black
     layout = validate_layout(layout)
     variables = variables or {}
     font = resolve_font()
@@ -108,6 +111,7 @@ def render_layout_pdf(content: dict, layout: dict[str, Any], variables: dict[str
     c = rl_canvas.Canvas(buf, pagesize=(w, h))
     c.setTitle(content.get("title", ""))
     if layout["border"]:
+        c.setStrokeColor(ink)
         c.rect(1.5 * mm, 1.5 * mm, w - 3 * mm, h - 3 * mm)
     overflow: list[str] = []
     for e in layout["elements"]:
@@ -136,7 +140,7 @@ def render_layout_pdf(content: dict, layout: dict[str, Any], variables: dict[str
                 n = len(matrix)
                 side = min(ew, eh)
                 cell = side / n
-                c.setFillColor(colors.black)
+                c.setFillColor(ink)
                 for r, row in enumerate(matrix):
                     for col, bit in enumerate(row):
                         if bit:
@@ -147,7 +151,7 @@ def render_layout_pdf(content: dict, layout: dict[str, Any], variables: dict[str
             continue
         size = e["font_size"] * (1.4 if e["type"] == "signal_word" and e["font_size"] < 9 else 1)
         style = ParagraphStyle(e["id"], fontName=font.bold_name if e["bold"] or e["type"] == "signal_word" else font.name,
-                               fontSize=size, leading=size * 1.25, wordWrap="CJK",
+                               fontSize=size, leading=size * 1.25, wordWrap="CJK", textColor=ink,
                                alignment={"left": 0, "center": 1, "right": 2}.get(e["align"], 0))
         story = [Paragraph("<br/>".join(escape(line) for line in text.split("\n")), style)]
         Frame(x, top - eh, ew, eh, showBoundary=0, leftPadding=0, rightPadding=0, topPadding=0,
@@ -156,5 +160,17 @@ def render_layout_pdf(content: dict, layout: dict[str, Any], variables: dict[str
             overflow.append(e["id"])
     c.showPage()
     c.save()
-    return buf.getvalue(), {"font": font.name, "font_embedded": font.embedded, "overflow": bool(overflow),
-                            "overflow_elements": overflow, "missing_elements": layout["missing_elements"]}
+    pdf_bytes = buf.getvalue()
+    info: dict = {"font": font.name, "font_embedded": font.embedded, "overflow": bool(overflow),
+                  "overflow_elements": overflow, "missing_elements": layout["missing_elements"],
+                  "color_space": color_space}
+    if pdfa:
+        if not font.embedded:
+            from .pdfa import PdfaError
+
+            raise PdfaError("PDF/A-2b 要求全部字体嵌入：未找到可嵌入的 TrueType 字体（plm_doc_font_path）")
+        from .pdfa import apply_pdfa_2b
+
+        pdf_bytes, pdfa_info = apply_pdfa_2b(pdf_bytes, title=content.get("title", ""))
+        info.update(pdfa_info)
+    return pdf_bytes, info

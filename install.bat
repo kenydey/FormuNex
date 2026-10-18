@@ -4,6 +4,8 @@ REM Double-click to run; bypasses the PowerShell execution policy for this scrip
 REM
 REM Default: Docker mode (PostgreSQL + Redis + Neo4j + backend + frontend via Docker).
 REM   Requires Docker Desktop. No Python / Node.js needed.
+REM   NOTE: Using Docker Desktop is subject to the Docker Desktop license terms;
+REM   see the legal terms page on Docker's official website (docker.com/legal).
 REM Native mode (dev only, venv + npm + SQLite): install.bat -Native
 REM   Switches are forwarded as given, e.g.: install.bat -Native -Minimal / -Native -Full / -Native -SkipFrontend
 REM

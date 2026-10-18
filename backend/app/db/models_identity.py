@@ -28,9 +28,11 @@ class UserRow(Base):
     display_name: Mapped[str] = mapped_column(String(120), default="")
     email: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     # argon2id hash. NULL = cannot log in with a password (legacy owner rows
-    # imported by 0051, or users that only authenticate through LDAP / OIDC).
+    # imported by 0051). LDAP / OIDC are NOT implemented (see 开发方案附录 B D-6):
+    # no user authenticates through them today.
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # local | ldap | oidc | legacy_token | service
+    # local | legacy_token | service are in use. ldap | oidc are reserved enum
+    # values only — no LDAP/OIDC implementation exists (see D-6).
     auth_provider: Mapped[str] = mapped_column(String(16), default="local", index=True)
     external_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(default=True, index=True)

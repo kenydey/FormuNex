@@ -3,6 +3,8 @@
 One layout for every document type: title block, numbered sections with
 label/value field tables and data tables, a running header (product, version)
 and "第 x 页 共 y 页" footer (two-pass page count).
+
+``pdfa=True`` post-processes the output to PDF/A-2b (see ``pdfa.py``).
 """
 from __future__ import annotations
 
@@ -104,7 +106,7 @@ def _numbered_canvas(header_left: str, header_right: str, lang: str, font: str):
     return NumberedCanvas
 
 
-def render_pdf(content: dict) -> tuple[bytes, dict]:
+def render_pdf(content: dict, *, pdfa: bool = False) -> tuple[bytes, dict]:
     """Return (pdf bytes, render info: font, embedded)."""
     if Paragraph is None:
         raise MissingRenderDependency("reportlab")
@@ -160,4 +162,16 @@ def render_pdf(content: dict) -> tuple[bytes, dict]:
     left = " · ".join(str(b) for b in (header.get("product_name"), content.get("title")) if b)
     right = " · ".join(str(b) for b in (header.get("product_code"), header.get("batch_no") or header.get("version")) if b)
     doc.build(story, canvasmaker=_numbered_canvas(left, right, lang, font.name))
-    return buf.getvalue(), {"font": font.name, "font_embedded": font.embedded, "font_path": font.path}
+    pdf_bytes = buf.getvalue()
+    info: dict = {"font": font.name, "font_embedded": font.embedded, "font_path": font.path}
+    if pdfa:
+        if not font.embedded:
+            from .pdfa import PdfaError
+
+            raise PdfaError("PDF/A-2b 要求全部字体嵌入：未找到可嵌入的 TrueType 字体（plm_doc_font_path）")
+        from .pdfa import apply_pdfa_2b
+
+        pdf_bytes, pdfa_info = apply_pdfa_2b(pdf_bytes, title=content.get("title", ""),
+                                              author=header.get("product_name") or "")
+        info.update(pdfa_info)
+    return pdf_bytes, info

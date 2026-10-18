@@ -116,6 +116,7 @@ def build_coa(ctx: CoaContext) -> dict:
                 "product_code": ctx.product.get("code"), "batch_no": ctx.batch.get("batch_no"), "coa_no": ctx.coa_no},
     )
     s = doc.section(1, "batch", t(lang, "批次信息", "Batch information"))
+    s.add("coa_no", t(lang, "报告编号", "Report No."), ctx.coa_no, "computed")
     s.add("product_name", t(lang, "产品名称", "Product"), doc.header["product_name"], "product")
     s.add("product_code", t(lang, "产品代码", "Product code"), ctx.product.get("code"), "product")
     s.add("batch_no", t(lang, "批号", "Batch No."), doc.require(ctx.batch.get("batch_no"), "批号"), "batch")

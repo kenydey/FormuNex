@@ -9,6 +9,8 @@ released document stays exactly what was signed.
 """
 from __future__ import annotations
 
+import os
+import re
 import uuid
 from typing import Any
 
@@ -45,6 +47,32 @@ DOC_TYPES = ("sds", "tds", "coa", "label")
 
 class DocumentError(ValueError):
     pass
+
+
+# --------------------------------------------------------------------------- COA numbering (Phase 3B, 3-15)
+
+DEFAULT_COA_NUMBER_RULE = "COA-{product_code}-{batch_no}-{n}"
+_COA_PLACEHOLDERS = ("product_code", "batch_no", "n", "date")
+
+
+def coa_number_rule() -> str:
+    """Configurable COA number rule (env ``FORMUNEX_COA_NUMBER_RULE``).
+
+    Placeholders: ``{product_code}``, ``{batch_no}``, ``{n}`` (per-batch COA
+    version), ``{date}`` (YYYY-MM-DD). Default: ``COA-{product_code}-{batch_no}-{n}``.
+    """
+    return os.environ.get("FORMUNEX_COA_NUMBER_RULE") or DEFAULT_COA_NUMBER_RULE
+
+
+def generate_coa_number(rule: str, *, product_code: str, batch_no: str, n: int, date: str) -> str:
+    values = {"product_code": product_code, "batch_no": batch_no, "n": n, "date": date}
+    unknown = [m for m in re.findall(r"\{(\w+)\}", rule) if m not in _COA_PLACEHOLDERS]
+    if unknown:
+        raise DocumentError(f"COA 编号规则含未知占位符：{', '.join(unknown)}（可用：{', '.join(_COA_PLACEHOLDERS)}）")
+    try:
+        return rule.format(**values)
+    except (KeyError, IndexError, ValueError) as exc:
+        raise DocumentError(f"COA 编号规则无法应用：{exc}") from None
 
 
 # --------------------------------------------------------------------------- products / revisions / batches
@@ -271,7 +299,10 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
             results=[ResultItem(metric=r.metric, value=r.value, value_text=r.value_text or None,
                                 conforms=None, measurement_id=r.measurement_id) for r in qc]
             + [ResultItem(**r) for r in coa.get("qualitative_results") or []],
-            coa_no=f"COA-{product.code}-{batch.batch_no}-{n}", lang=lang))
+            coa_no = coa.get("coa_no") or generate_coa_number(
+                coa_number_rule(), product_code=product.code, batch_no=batch.batch_no, n=n,
+                date=(batch.produced_at.date().isoformat() if batch.produced_at else utcnow().date().isoformat())),
+            lang=lang))
         extra["batch_id"] = batch.id
         # Store the verdicts back on the QC rows for traceability.
         verdicts = content["meta"]["verdicts"]
@@ -287,7 +318,8 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
 
 
 def generate_document(session: Session, revision_id: str, doc_type: str, *, lang: str = "zh-CN",
-                      payload: dict | None = None, created_by: str | None = None) -> RegulatoryDocumentRow:
+                      payload: dict | None = None, created_by: str | None = None,
+                      pdfa: bool = False) -> RegulatoryDocumentRow:
     if doc_type not in DOC_TYPES:
         raise DocumentError(f"未知文档类型 {doc_type}")
     if lang not in ("zh-CN", "en-US"):
@@ -325,17 +357,17 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
         if layout is not None:
             from ..render.label_layout import render_layout_pdf
 
-            pdf, info = render_layout_pdf(content, layout, content["meta"].get("variables"))
+            pdf, info = render_layout_pdf(content, layout, content["meta"].get("variables"), pdfa=pdfa)
             if info["missing_elements"]:
                 content["validation"]["warnings"].append(
                     "标签版式缺少 GB 15258 要素：" + "、".join(info["missing_elements"]))
         else:
-            pdf, info = render_label_pdf(content)
+            pdf, info = render_label_pdf(content, pdfa=pdfa)
         if info.get("overflow"):
             content["validation"]["warnings"].append("标签内容超出版面（文字被截断），请调整版式或增大标签尺寸")
         docx_key = None
     else:
-        pdf, info = render_pdf(content)
+        pdf, info = render_pdf(content, pdfa=pdfa)
         template_id, template = _template(session, doc_type, lang)
         docx_key = storage.put(f"documents/{doc_id}/{doc_type}-{lang}-v{version_no}.docx",
                                render_docx(content, template))
@@ -343,6 +375,10 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     content["meta"]["render"] = info
     if not info.get("font_embedded"):
         content["validation"]["warnings"].append("PDF 未嵌入中文字体（未找到可嵌入的 TrueType 字体），发布前须配置 plm_doc_font_path")
+    if info.get("pdfa") and not info.get("pdfa_output_intent"):
+        content["validation"]["warnings"].append(
+            "PDF/A-2b 输出缺少 OutputIntent（未获得 sRGB ICC 配置文件）：仅为 PDF/A-2b-ready，"
+            "配置 FORMUNEX_PDFA_ICC_PATH 或安装 liblcms2 后才是完整 PDF/A-2b")
     pdf_key = storage.put(f"documents/{doc_id}/{doc_type}-{lang}-v{version_no}.pdf", pdf)
 
     row = RegulatoryDocumentRow(

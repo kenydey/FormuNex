@@ -187,4 +187,5 @@ markers = [
     "golden_eval: golden QA dataset evaluation — slower, use -m 'not golden_eval' to skip in fast local runs",
     "flaky: historically intermittent (timeouts / external deps); still run in CI but easy to filter",
     "network: test may reach the public internet (everything else runs with outbound connects blocked)",
+    "perf: performance-budget regression — timing assertions, run with -m perf",
 ]

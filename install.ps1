@@ -141,6 +141,8 @@ function Install-Docker {
   }
   $dockerVer = (Invoke-Probe { & docker --version }).Output
   Write-Ok "Docker $dockerVer"
+  # 3-12：Docker Desktop 许可告知（用户必经的安装流程）。
+  Write-Host "  提示：使用 Docker Desktop 需遵守 Docker Desktop 许可条款，详见 Docker 官网法律条款页（docker.com/legal）。"
 
   $composeProbe = Invoke-Probe { & docker compose version }
   if (-not $composeProbe.Ok) {

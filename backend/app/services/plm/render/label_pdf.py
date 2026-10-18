@@ -5,6 +5,11 @@ drawn as vectors so print quality does not depend on resolution. Layout, top
 to bottom: product identifier and hazardous ingredients, pictograms with the
 signal word, hazard statements, precautionary statements, supplier block with
 the 24 h emergency telephone and SDS reference, optional QR code.
+
+``color_space="cmyk"`` draws *our* elements (text, border, QR) with
+DeviceCMYK inks for print-shop output; the embedded SVG pictograms keep
+their source colours. ``pdfa=True`` post-processes to PDF/A-2b (see
+``pdfa.py``).
 """
 from __future__ import annotations
 
@@ -53,9 +58,12 @@ def _field(content: dict, key: str):
     return None
 
 
-def render_label_pdf(content: dict) -> tuple[bytes, dict]:
+def render_label_pdf(content: dict, *, pdfa: bool = False, color_space: str = "rgb") -> tuple[bytes, dict]:
     if rl_canvas is None:
         raise MissingRenderDependency("reportlab")
+    if color_space not in ("rgb", "cmyk"):
+        raise ValueError("color_space 仅支持 rgb / cmyk")
+    ink = colors.CMYKColor(0, 0, 0, 1) if color_space == "cmyk" else colors.black
     font = resolve_font()
     size = (content.get("meta") or {}).get("size") or {}
     w, h = float(size.get("width_mm", 100)) * mm, float(size.get("height_mm", 150)) * mm
@@ -63,11 +71,12 @@ def render_label_pdf(content: dict) -> tuple[bytes, dict]:
     buf = io.BytesIO()
     c = rl_canvas.Canvas(buf, pagesize=(w, h))
     c.setTitle(content.get("title", ""))
-    c.setStrokeColor(colors.black)
+    c.setStrokeColor(ink)
     c.rect(1.5 * mm, 1.5 * mm, w - 3 * mm, h - 3 * mm)
 
     scale = min(w, h) / (100 * mm)  # type scales with the label
-    base = ParagraphStyle("b", fontName=font.name, fontSize=6.5 * scale, leading=8.5 * scale, wordWrap="CJK")
+    base = ParagraphStyle("b", fontName=font.name, fontSize=6.5 * scale, leading=8.5 * scale, wordWrap="CJK",
+                            textColor=ink)
     name_style = ParagraphStyle("n", parent=base, fontSize=11 * scale, leading=14 * scale, alignment=1)
     signal_style = ParagraphStyle("s", parent=base, fontSize=13 * scale, leading=16 * scale, alignment=1)
 
@@ -129,11 +138,22 @@ def render_label_pdf(content: dict) -> tuple[bytes, dict]:
         n = len(matrix)
         cell = qr_side / n
         qx, qy = w - pad - qr_side, pad
-        c.setFillColor(colors.black)
+        c.setFillColor(ink)
         for r, row in enumerate(matrix):
             for col, bit in enumerate(row):
                 if bit:
                     c.rect(qx + col * cell, qy + (n - 1 - r) * cell, cell, cell, stroke=0, fill=1)
     c.showPage()
     c.save()
-    return buf.getvalue(), {"font": font.name, "font_embedded": font.embedded, "overflow": overflow}
+    pdf_bytes = buf.getvalue()
+    info: dict = {"font": font.name, "font_embedded": font.embedded, "overflow": overflow, "color_space": color_space}
+    if pdfa:
+        if not font.embedded:
+            from .pdfa import PdfaError
+
+            raise PdfaError("PDF/A-2b 要求全部字体嵌入：未找到可嵌入的 TrueType 字体（plm_doc_font_path）")
+        from .pdfa import apply_pdfa_2b
+
+        pdf_bytes, pdfa_info = apply_pdfa_2b(pdf_bytes, title=content.get("title", ""))
+        info.update(pdfa_info)
+    return pdf_bytes, info
