@@ -279,7 +279,7 @@ backend/app/
 │  │  ├─ render/         # html_pdf(WeasyPrint), docx(docxtpl), label_pdf(ReportLab)
 │  │  ├─ diff.py
 │  │  └─ release_gate.py
-│  ├─ identity/          # 密码哈希(argon2)、JWT、RBAC 策略、LDAP/OIDC 接口(预留)
+│  ├─ identity/          # 密码哈希(argon2)、JWT、RBAC 策略；LDAP/OIDC 预留未实施（附录 B D-6）
 │  ├─ approvals/         # 签批状态机、电子签名
 │  ├─ audit/             # 哈希链审计日志
 │  ├─ llm_router.py      # 敏感数据路由
@@ -321,7 +321,7 @@ API 统一加 `/api/v1` 前缀；旧路径在一个版本内保留 307 重定向
 | `audit_log` | `seq`, `actor`, `action`, `entity`, `before/after_hash`, `prev_hash`, `hash`（**哈希链**，追加写；DB 触发器禁止 UPDATE / DELETE） |
 | `lineage_edges` | 见 §2.3 |
 
-**身份与权限**：`users`、`roles`、`user_roles`、`project_members(project_id, user_id, role)`、`auth_providers`(local / ldap / oidc 预留)。
+**身份与权限**：`users`、`roles`、`user_roles`、`project_members(project_id, user_id, role)`；`users.auth_provider` 取值 local / legacy_token / service（ldap / oidc 仅为预留枚举值，未实施，见附录 B D-6；无独立 `auth_providers` 表）。
 
 **PageIndex**：`document_toc_trees(source_id, tree_json(JSONB), builder_version, node_count, max_depth, built_at, summaries_status)`。
 
@@ -355,7 +355,7 @@ API 统一加 `/api/v1` 前缀；旧路径在一个版本内保留 307 重定向
 - **数据隔离**：配方精确配比属商业机密，按 `project_members` 授权；非成员只看到区间化组成（与 SDS 第 3 节一致的脱敏）。
 - **会话**：JWT 访问令牌（15 分钟）+ 刷新令牌（httpOnly Cookie；Tauri 中存钥匙串）；密码 argon2id；登录失败锁定。
 - **电子签名**：签名时要求重新输入密码，记录签名含义、时间、被签对象哈希。
-- **预留**：`AuthProvider` 接口，LDAP（ldap3）与 OIDC（Authlib）实现留桩。
+- **预留未实施**：LDAP（ldap3）与 OIDC（Authlib）本期不做，无 `AuthProvider` 接口；仅 `users.auth_provider` 字段预留 ldap / oidc 枚举值（见附录 B D-6）。
 - 旧 Bearer Token 保留为「服务账号 API Key」（用于脚本 / 集成）。
 
 ### 4.5 LLM 敏感数据路由
@@ -864,6 +864,7 @@ deploy/helm/formunex/**（新）
 | D-3 | CI 为单体 `ci.yml` + `desktop-release` / `playwright-nightly` / `docker-smoke` 等专项文件，非方案的 `{backend,frontend,desktop-build,e2e}.yml` 四分 | 现有 CI 作业覆盖已全 | 2026-10-18 接受偏离，不拆分 |
 | D-4 | 部署：Helm Chart 延后；TLS 应用内不终止；MinIO 延后；pgvector 不做 | Helm：单机 compose 已满足当前部署模型，有 K8s 客户需求时再做。TLS：TLS 终止属于边缘反代，不进应用，见 `deploy/reverse-proxy/` 反代 TLS 示例 + 部署文档。MinIO：单机本地卷够用，S3 抽象已预留，接入只增运维负担。pgvector：现有检索引擎可用，迁移向量库高成本高风险、无实测收益 | 2026-10-18（Cheng 委托最优方案） |
 | D-5 | RDKit.js 暂不做 | Ketcher 自带渲染，smiles-drawer 覆盖只读描绘需求，暂不引入 wasm 重量；Ketcher 做（结构绘制核心交互，见补齐计划 D-5） | 2026-10-18（Cheng 委托最优方案） |
+| D-6 | LDAP / OIDC 预留未实施 | 本期无客户需求；无 LDAP/OIDC 接口，登录流程只支持本地账号 + 服务 Key；仅 `users.auth_provider` 字段预留 ldap / oidc 枚举值，待有需求时再做（补齐计划 3-18） | 2026-10-18（补齐计划 3-18） |
 
 ### 与整合方案的边界
 

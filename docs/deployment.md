@@ -5,6 +5,7 @@
 ## 环境要求
 
 - Docker Engine 24+ / Compose v2（生产推荐；本沙箱内核限制容器无法启动，仅做配置校验）
+  - 使用 Docker Desktop 需遵守 Docker Desktop 许可条款，详见 Docker 官网法律条款页（docker.com/legal）。
 - 或：Python 3.11+、Node 20+、Redis 7（裸机部署）
 - 磁盘：`./data` 卷至少 20 GB（SQLite + ColBERT 索引 + 备份）
 
