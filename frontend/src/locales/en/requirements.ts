@@ -80,6 +80,8 @@ const en: Record<string, string> = {
   "requirements.mat.commit": "Confirm import",
   "requirements.mat.cycle_tip": "Click to cycle In stock → Restricted → Discontinued (drives substitution)",
   "requirements.mat.density": "Density g/cm³",
+  "requirements.mat.draw": "Draw…",
+  "requirements.mat.draw_title": "Draw a molecular structure",
   "requirements.mat.edit_title": "Edit material: {{n}}",
   "requirements.mat.empty": "No matching materials — click “New material”, or discover candidates in “Structure search”",
   "requirements.mat.enrich": "Enrich properties",
@@ -136,6 +138,7 @@ const en: Record<string, string> = {
   "requirements.mat.status": "Status",
   "requirements.mat.store_disabled": "Material store disabled: only built-in seed materials can be browsed; editing / import / archive are unavailable.",
   "requirements.mat.structure": "Structure",
+  "requirements.mat.use_structure": "Use this structure",
   "requirements.mat.suppliers": "Suppliers ({{n}})",
   "requirements.mat.suppliers_help": "Price / lead time / MOQ are entered manually only; saving also writes the normalised supplier table.",
   "requirements.mat.tab_library": "Materials",
@@ -208,6 +211,8 @@ const en: Record<string, string> = {
 
   "requirements.struct.cas_formula": "CAS / formula",
   "requirements.struct.count": "{{n}} hits",
+  "requirements.struct.draw": "Draw structure…",
+  "requirements.struct.draw_title": "Draw a molecular structure and search",
   "requirements.struct.empty": "No match — try a simpler SMARTS (e.g. C(=O)O) or check the SMILES",
   "requirements.struct.help": "Substructure: filter catalogue materials containing a functional group / ring (SMARTS). Scaffold substitutes: same Murcko scaffold = drop-in candidates, side chains being the main difference — useful when an in-stock material is discontinued / restricted.",
   "requirements.struct.scaffold": "Scaffold substitutes",
@@ -233,6 +238,15 @@ const en: Record<string, string> = {
   "requirements.trace.title": "Constraint trace",
   "requirements.trace.unwired": "unwired",
   "requirements.trace.wired": "wired",
+  "struct_editor.empty": "Draw a structure on the canvas first (or enter SMILES below and click “Load to canvas”).",
+  "struct_editor.help": "Canvas and SMILES text stay in sync; invalid text only shows a warning and never clears the canvas.",
+  "struct_editor.invalid_smiles": "SMILES could not be parsed; canvas unchanged. Please check and retry.",
+  "struct_editor.load_to_canvas": "Load to canvas",
+  "struct_editor.loading": "Loading structure editor…",
+  "struct_editor.read_failed": "Failed to read the canvas structure: {{msg}}",
+  "struct_editor.read_from_canvas": "Read canvas",
+  "struct_editor.smiles_ph": "Or enter SMILES text here (e.g. CCO for ethanol), then click “Load to canvas” to sync it to the canvas",
+  "struct_editor.title": "Draw a molecular structure",
 };
 
 export default en;

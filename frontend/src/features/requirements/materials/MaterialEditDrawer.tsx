@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { EditableRows } from "@/shared/EditableRows";
 import { SmilesDrawing } from "@/shared/Markdown";
+import { StructureEditorModal } from "@/shared/StructureEditor";
 import { errorText } from "@/shared/feedback";
 import {
   EMPTY_DRAFT, ROLES, applyLookup, draftFromView, lookupQuery, lookupSource, payloadFromDraft,
@@ -25,6 +26,7 @@ export function MaterialEditDrawer({ open, material, onClose, onSaved }: {
   const { message } = App.useApp();
   const [d, setD] = useState<MaterialDraft>(EMPTY_DRAFT);
   const [lookupMsg, setLookupMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   useEffect(() => {
     if (open) { setD(material ? draftFromView(material) : EMPTY_DRAFT); setLookupMsg(null); }
   }, [open, material]);
@@ -87,7 +89,20 @@ export function MaterialEditDrawer({ open, material, onClose, onSaved }: {
           <Col span={12}><Form.Item label={t("requirements.mat.zh_name", "中文名")}><Input value={d.zh_name ?? ""} onChange={(e) => set({ zh_name: e.target.value })} /></Form.Item></Col>
           <Col span={12}><Form.Item label="CAS No."><Input value={d.cas_no ?? ""} onChange={(e) => set({ cas_no: e.target.value })} /></Form.Item></Col>
           <Col span={12}><Form.Item label={t("requirements.mat.formula", "分子式")}><Input value={d.formula ?? ""} onChange={(e) => set({ formula: e.target.value })} /></Form.Item></Col>
-          <Col span={12}><Form.Item label="SMILES"><Input value={d.smiles ?? ""} onChange={(e) => set({ smiles: e.target.value })} /></Form.Item></Col>
+          <Col span={12}><Form.Item label="SMILES">
+            <Space.Compact style={{ width: "100%" }}>
+              <Input value={d.smiles ?? ""} onChange={(e) => set({ smiles: e.target.value })} />
+              <Button onClick={() => setEditorOpen(true)}>{t("requirements.mat.draw", "绘制…")}</Button>
+            </Space.Compact>
+          </Form.Item></Col>
+          <StructureEditorModal
+            open={editorOpen}
+            initialSmiles={d.smiles ?? undefined}
+            title={t("requirements.mat.draw_title", "绘制分子结构")}
+            actions={[{ key: "use", label: t("requirements.mat.use_structure", "使用此结构"), primary: true }]}
+            onApply={(s) => { set({ smiles: s.smiles }); setEditorOpen(false); }}
+            onClose={() => setEditorOpen(false)}
+          />
           {numField("molar_mass", t("requirements.mat.molar_mass", "摩尔质量 g/mol"))}
           {numField("price_cny_per_kg", t("requirements.mat.price", "价格 ¥/kg"))}
           {numField("voc_contrib", t("requirements.mat.voc", "VOC 贡献 g/L"))}

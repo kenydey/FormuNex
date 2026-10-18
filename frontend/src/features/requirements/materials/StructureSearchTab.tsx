@@ -1,10 +1,11 @@
 import { ProCard, ProTable } from "@ant-design/pro-components";
-import { Input, Space, Tag, Typography } from "antd";
+import { Button, Input, Space, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { ErrorAlert } from "@/shared/feedback";
+import { StructureEditorModal } from "@/shared/StructureEditor";
 import { AVAIL_COLOR, availabilityLabel } from "../labels";
 import { structureMode } from "./materialForm";
 
@@ -19,6 +20,7 @@ type Search = { mode: "substructure" | "scaffold"; query: string } | null;
 export function StructureSearchTab() {
   const { t } = useTranslation();
   const [search, setSearch] = useState<Search>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   const q = useQuery({
     queryKey: ["materials", "structure", search],
     enabled: !!search,
@@ -45,8 +47,25 @@ export function StructureSearchTab() {
           <Typography.Text type="secondary">
             {t("requirements.struct.help", "子结构：筛选材料库中含指定官能团 / 环的材料（SMARTS）。骨架替代：同 Murcko 骨架 = drop-in 候选，侧链差异是主要变点 —— 适合在库材料停产 / 受限时的替换决策。")}
           </Typography.Text>
+          <Button onClick={() => setEditorOpen(true)}>
+            {t("requirements.struct.draw", "绘制结构…")}
+          </Button>
         </Space>
       </ProCard>
+      <StructureEditorModal
+        open={editorOpen}
+        title={t("requirements.struct.draw_title", "绘制分子结构并检索")}
+        actions={[
+          { key: "scaffold", label: t("requirements.struct.scaffold", "骨架替代"), primary: true },
+          { key: "substructure", label: t("requirements.struct.search", "结构检索") },
+        ]}
+        onApply={(s, actionKey) => {
+          // 画布绘制的 SMILES 走骨架替代；SMARTS 走子结构检索，均复用已有后端接口。
+          setSearch(actionKey === "substructure" ? { mode: "substructure", query: s.smarts } : { mode: "scaffold", query: s.smiles });
+          setEditorOpen(false);
+        }}
+        onClose={() => setEditorOpen(false)}
+      />
       <ErrorAlert error={q.error} />
       {search && (
         <ProTable<ChemicalHit & { _k: string }>

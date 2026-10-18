@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -33,6 +33,9 @@
     "echarts-for-react": "^3.0.6",
     "i18next": "^26.4.7",
     "katex": "^0.17.0",
+    "ketcher-core": "^3.18.0",
+    "ketcher-react": "^3.18.0",
+    "ketcher-standalone": "^3.18.0",
     "konva": "^9.3.22",
     "mermaid": "^11.17.2",
     "openapi-fetch": "^0.17.0",
@@ -51,6 +54,7 @@
   "devDependencies": {
     "@playwright/test": "^1.56.1",
     "@tauri-apps/cli": "^2.12.3",
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
