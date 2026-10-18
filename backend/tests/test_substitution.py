@@ -955,3 +955,133 @@ def test_substitutes_endpoint_default_include_surechembl_true(monkeypatch):
     assert "surechembl" in body
     assert "surechembl_meta" in body
     assert body["surechembl_meta"]["provider"] == "surechembl_api"
+
+
+def test_2_6_compare_classifications():
+    """补齐计划 2-6/2-7 共用：信号词升级 / 新增危害 = 升级；危害减少 = 变化非升级；相同 = 无变化。"""
+    from app.services.substitution import compare_classifications
+
+    base = {"signal_word": "警告", "h_codes": ["H226"]}
+    assert compare_classifications(base, base) == {
+        "changed": False, "upgraded": False, "added_h_codes": [], "removed_h_codes": [],
+        "signal_before": "警告", "signal_after": "警告",
+    }
+    up = compare_classifications(base, {"signal_word": "危险", "h_codes": ["H226", "H314"]})
+    assert up["upgraded"] and up["changed"] and up["added_h_codes"] == ["H314"]
+    # 仅新增危害（信号词不变）同样是升级
+    up2 = compare_classifications(base, {"signal_word": "警告", "h_codes": ["H226", "H302"]})
+    assert up2["upgraded"] and up2["added_h_codes"] == ["H302"]
+    # 危害减少：变化但非升级
+    down = compare_classifications(base, {"signal_word": None, "h_codes": []})
+    assert down["changed"] and not down["upgraded"] and down["removed_h_codes"] == ["H226"]
+
+
+def test_2_6_triggers_supply_and_over_cost(material_store):
+    """补齐计划 2-6：断供 + 超成本（配方成本超上限 / 单材料价格超阈值）触发。"""
+    from app.services.substitution import scan_substitution_triggers
+
+    genome = _genome()
+    first = genome.slots[0].material
+    material_store.upsert(first, {"availability": "discontinued"}, origin="seed", overwrite=True)
+    knowledge.RAW_MATERIALS.refresh()
+    out = scan_substitution_triggers(
+        {"baseline": genome}, _req(), cost_limit_per_kg=0.0,
+        material_price_limits={first: 0.01},
+    )
+    by_type = {}
+    for t in out["triggers"]:
+        by_type.setdefault(t["type"], []).append(t)
+    assert any(t["material"] == first and t["availability"] == "discontinued" for t in by_type["supply"])
+    assert any(t["reason"] == "formulation_cost" for t in by_type["over_cost"])
+    assert any(t["reason"] == "material_price" and t["material"] == first for t in by_type["over_cost"])
+    assert out["counts"]["supply"] >= 1 and out["counts"]["over_cost"] >= 2
+    # 无阈值参数 → 不扫超成本；无断供 → 不扫断供
+    out2 = scan_substitution_triggers({"baseline": genome}, _req())
+    assert all(t["type"] == "supply" for t in out2["triggers"])
+
+
+def test_2_6_triggers_redline_and_classification_upgrade(tmp_path, monkeypatch):
+    """补齐计划 2-6：命中红线 + 分类升级触发（需 session；无 session 时跳过这两类）。"""
+    from types import SimpleNamespace
+
+    from app.db.database import Base, make_engine, make_session_factory
+    from app.db.models import ProjectRow
+    from app.services.substitution import scan_substitution_triggers
+
+    engine = make_engine(f"sqlite:///{tmp_path}/trig.db")
+    Base.metadata.create_all(engine)
+    session = make_session_factory(engine)()
+    genome = _genome()
+    first_cas = None
+    for slot in genome.slots:
+        spec = knowledge.RAW_MATERIALS.get(slot.material) or {}
+        if spec.get("cas_no"):
+            first_cas = spec["cas_no"]
+            break
+    assert first_cas, "基线配方应有带 CAS 的材料"
+    pid = "proj-trig"
+    session.add(ProjectRow(id=pid, title="T", domain="anticorrosion_coating", payload={
+        "workspace": {"spec_contract": {"red_lines": [
+            {"cas": first_cas, "max_pct": 0, "reason": "测试禁用"}]}}}))
+    session.commit()
+    req = _req()
+    req.project_id = pid
+
+    def _fake_classify(session_, items, **kw):
+        return SimpleNamespace(signal_word="危险", h_codes=["H226", "H314"], pictograms=[]), {}
+
+    monkeypatch.setattr("app.services.plm.ghs.service.build_and_classify", _fake_classify)
+    out = scan_substitution_triggers(
+        {"baseline": genome}, req, session=session,
+        baseline_classifications={"baseline": {"signal_word": "警告", "h_codes": ["H226"]}},
+    )
+    by_type = {}
+    for t in out["triggers"]:
+        by_type.setdefault(t["type"], []).append(t)
+    assert any(t["code"] == "red_line" or "红线" in (t.get("detail") or "") for t in by_type.get("redline", [])), by_type
+    assert len(by_type.get("classification_upgrade", [])) == 1
+    up = by_type["classification_upgrade"][0]
+    assert up["added_h_codes"] == ["H314"]
+    # 无 session → 红线与分类升级两类被跳过（不报错）
+    out2 = scan_substitution_triggers({"baseline": genome}, req,
+                                       baseline_classifications={"baseline": {"signal_word": "警告", "h_codes": ["H226"]}})
+    assert "redline" not in out2["counts"] and "classification_upgrade" not in out2["counts"]
+
+
+def test_2_7_classification_preview_on_candidates(monkeypatch):
+    """补齐计划 2-7：候选带替换后分类预览（before/after/changed/upgraded）；失败 fail-open。"""
+    from types import SimpleNamespace
+
+    from app.services.substitution import find_substitutes
+
+    calls = {"n": 0}
+
+    def _fake_classify(session_, items, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return SimpleNamespace(signal_word="警告", h_codes=["H226"], pictograms=[]), {}
+        return SimpleNamespace(signal_word="危险", h_codes=["H226", "H314"], pictograms=[]), {}
+
+    monkeypatch.setattr("app.services.plm.ghs.service.build_and_classify", _fake_classify)
+    genome = _genome()
+    report = find_substitutes(
+        genome, _slot_of(genome, "hardener"), _req(), include_external=False,
+        include_literature=False, include_surechembl=False, include_llm=False,
+        session=object(), classification_preview_limit=2,
+    )
+    assert report["candidates"]
+    previewed = [c for c in report["candidates"][:2] if "classification_after" in c]
+    assert len(previewed) == len(report["candidates"][:2]), "前 N 个库内候选应有分类预览"
+    for c in previewed:
+        assert c["classification_before"] == {"signal_word": "警告", "h_codes": ["H226"], "pictograms": []}
+        assert c["classification_after"]["signal_word"] == "危险"
+        assert c["classification_changed"] is True and c["classification_upgraded"] is True
+
+
+def test_2_6_substitution_triggers_endpoint():
+    """补齐计划 2-6：POST /api/materials/substitution-triggers 端点可达，超成本触发生效。"""
+    resp = client.post("/api/materials/substitution-triggers", json={"cost_limit_per_kg": 0.0})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["counts"].get("over_cost", 0) >= 1
+    assert all(t["type"] == "over_cost" for t in data["triggers"])

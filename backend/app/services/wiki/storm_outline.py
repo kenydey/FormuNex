@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any, Callable
 
 from ...config import get_settings
@@ -267,12 +268,9 @@ def generate_outline(
         return base
 
 
-def persist_outline_sidecar(project_id: str, outline: ReportOutline) -> str:
-    """Write outline JSON next to reports/ (App-maintained; not wiki_pages SSOT)."""
-    from pathlib import Path
-
+def _wiki_root() -> Path:
+    """Wiki root (same resolution ``persist_outline_sidecar`` has always used)."""
     from ...config import get_settings
-    from .schema import project_report_path
 
     settings = get_settings()
     root = Path(getattr(settings, "wiki_root", None) or "data/wiki")
@@ -287,11 +285,44 @@ def persist_outline_sidecar(project_id: str, outline: ReportOutline) -> str:
             root = Path(root_fn)
     except Exception:
         pass
-    rel = project_report_path(project_id, "storm").replace(".md", ".outline.json")
-    path = root / rel
+    return root
+
+
+def _sidecar_rel(project_id: str) -> str:
+    from .schema import project_report_path
+
+    return project_report_path(project_id, "storm").replace(".md", ".outline.json")
+
+
+def _sidecar_path(project_id: str) -> Path:
+    """Sidecar path shared by persist / load (plan 2-5).
+
+    Same location ``persist_outline_sidecar`` has always written:
+    ``reports/project-{id}-storm.outline.json`` under the wiki root.
+    """
+    return _wiki_root() / _sidecar_rel(project_id)
+
+
+def load_outline_sidecar(project_id: str) -> ReportOutline | None:
+    """Load a previously saved STORM outline, or None (missing / malformed)."""
+    path = _sidecar_path(project_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        outline = ReportOutline.model_validate(data)
+    except Exception as exc:
+        logger.warning("STORM: ignoring malformed outline sidecar for %s: %s", project_id, exc)
+        return None
+    return outline if outline.project_id == project_id else None
+
+
+def persist_outline_sidecar(project_id: str, outline: ReportOutline) -> str:
+    """Write outline JSON next to reports/ (App-maintained; not wiki_pages SSOT)."""
+    path = _sidecar_path(project_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(outline.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    return str(rel).replace("\\", "/")
+    return _sidecar_rel(project_id).replace("\\", "/")

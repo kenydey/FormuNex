@@ -1,4 +1,9 @@
-"""P2-7: 下载成功率趋势告警 —— 运营可观测性。
+"""P2-7: KB 文献获取（acquisition）成功率趋势告警 —— 运营可观测性。
+
+术语区分：这里的 acquisition = 文献下载获取（KB ingest），与优化器的
+采集函数（acquisition function，见 services/optimizer_acquisition.py）是两个
+完全不同的概念。旧模块名 acquisition_trend.py 易与优化器采集函数混淆，
+故重命名为 kb_acquisition_trend.py。
 
 设计：
 - 每次调用 snapshot() 记录当前 acquisition 分布 + 成功率。

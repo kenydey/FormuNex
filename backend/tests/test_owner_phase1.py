@@ -54,14 +54,14 @@ def test_get_current_owner_default(monkeypatch):
 def test_campaign_owner_persisted(tmp_path, monkeypatch):
     """create_from_plan 写入 owner_id（非 default 时）。"""
     from app.db.database import make_engine, make_session_factory
-    from app.db.campaign_store import SqliteCampaignStore
+    from app.db.campaign_store import LocalCampaignStore
     from app.domain.schemas import ProductDomain, Requirement
     import asyncio
 
     db_path = tmp_path / "owner.db"
     engine = make_engine(f"sqlite:///{db_path}")
     factory = make_session_factory(engine)
-    store = SqliteCampaignStore(factory)
+    store = LocalCampaignStore(factory)
 
     async def _run():
         from app.domain.schemas import DOEFactor, DOEPlan

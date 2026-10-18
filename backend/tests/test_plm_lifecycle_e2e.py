@@ -363,8 +363,11 @@ def test_plm_lifecycle_end_to_end(stack, signed_off_ruleset):
         assert cls_row.formulation_version_id == win["fv"] and cls_row.rule_set_version == ruleset
         assert s.get(ClassificationResultRow, classification["classification_id"]).inputs_hash == cls_row.inputs_hash
         edges = {(e.from_type, e.from_id, e.relation) for e in s.query(LineageEdgeRow).filter_by(to_id=rid)}
+    # Phase 2D (2-22): create_revision also links product -> revision (has_revision),
+    # so the revision's incoming edges are the winning pair plus the product edge.
     assert edges == {("experiment", str(win["best"]["experiment_id"]), "selected_as_winning"),
-                     ("formulation_version", win["fv"], "frozen_as")}
+                     ("formulation_version", win["fv"], "frozen_as"),
+                     ("product", product_id, "has_revision")}
 
     # ---- the whole chain is in the hash-chained audit log, intact
     audit = _ok(c.get("/api/plm/audit", headers=h["rm"], params={"limit": 1000}))

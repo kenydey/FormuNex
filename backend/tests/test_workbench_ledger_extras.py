@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
 from app.domain.schemas import DOEPlan, DOERun, ObjectiveSpec, ProductDomain, Requirement
 
 
@@ -38,7 +38,7 @@ def client(tmp_path, monkeypatch):
     from app.db.database import default_session_factory
     from app.main import app
 
-    reset_campaign_store(SqliteCampaignStore(default_session_factory()))
+    reset_campaign_store(LocalCampaignStore(default_session_factory()))
     # get_measurement_store() caches a store bound to whichever database an earlier test used.
     monkeypatch.setattr("app.db.measurement_store._store", None)
     yield TestClient(app)

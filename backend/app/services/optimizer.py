@@ -49,12 +49,23 @@ class _ObservedHistoryMixin:
         order = np.argsort(self._y)[::-1][:top_n]
         return [(self._X[i], self._y[i]) for i in order]
 
-    def should_stop_early(self, patience: int = 5, min_delta: float = 1e-4) -> bool:
+    def should_stop_early(self, patience: int | None = None, min_delta: float | None = None) -> bool:
         """早停检查：连续 patience 轮无显著提升时返回 True。
 
         用于节约实验成本。fail-open：数据不足时返回 False。
+        默认值来自寻优规则（Settings optimizer_early_stop_*，可经
+        /api/cockpit/optimizer-rules 调整），未配置时为 5 / 1e-4。
         """
         try:
+            if patience is None or min_delta is None:
+                from ..config import get_settings
+                from .runtime_secrets import effective_setting
+
+                s = get_settings()
+                if patience is None:
+                    patience = int(effective_setting(s, "optimizer_early_stop_patience") or 5)
+                if min_delta is None:
+                    min_delta = float(effective_setting(s, "optimizer_early_stop_min_delta") or 1e-4)
             if len(self._y) < patience + 1:
                 return False
             # 比较最近 patience 轮的最佳 vs 之前最佳
@@ -89,6 +100,11 @@ class BayesianOptimizer(_ObservedHistoryMixin):
     _X: list[list[float]] = field(default_factory=list)
     _y: list[float] = field(default_factory=list)
     _rng: np.random.Generator = field(default=None)  # type: ignore
+    # 补齐 2-16: the maximised UCB value of the last suggest() call
+    # (None for warm-up random draws). BoTorch/Optuna expose the same
+    # attributes (None + their acquisition name) so callers need no per-engine branch.
+    last_acquisition: float | None = None
+    acquisition_name: str = "UCB"
 
     def __post_init__(self) -> None:
         self._rng = np.random.default_rng(self.seed)
@@ -112,9 +128,19 @@ class BayesianOptimizer(_ObservedHistoryMixin):
         uncertainty = (var**0.5) + 1.0 / (1.0 + w.sum())
         return mean, uncertainty
 
-    def suggest(self, n_candidates: int = 64, kappa: float = 1.5) -> list[float]:
-        """Suggest the next experiment by maximising the UCB acquisition."""
+    def suggest(self, n_candidates: int = 64, kappa: float | None = None) -> list[float]:
+        """Suggest the next experiment by maximising the UCB acquisition.
+
+        kappa 默认来自寻优规则（Settings optimizer_ucb_kappa，可经
+        /api/cockpit/optimizer-rules 调整），未配置时为 1.5。
+        """
+        if kappa is None:
+            from ..config import get_settings
+            from .runtime_secrets import effective_setting
+
+            kappa = float(effective_setting(get_settings(), "optimizer_ucb_kappa") or 1.5)
         if len(self._X) < max(4, len(self.factors) + 1):
+            self.last_acquisition = None  # warm-up random draw: no acquisition value
             return self._random_point()
         best_x, best_acq = None, -np.inf
         for _ in range(n_candidates):
@@ -123,7 +149,13 @@ class BayesianOptimizer(_ObservedHistoryMixin):
             acq = mean + kappa * unc
             if acq > best_acq:
                 best_acq, best_x = acq, cand
+        self.last_acquisition = float(best_acq)
         return [self.factors[i].clip(v) for i, v in enumerate(best_x)]
+
+    def suggest_with_acquisition(self, n_candidates: int = 64, kappa: float | None = None) -> tuple[list[float], float | None]:
+        """suggest() plus the maximised UCB value of the returned point."""
+        x = self.suggest(n_candidates=n_candidates, kappa=kappa)
+        return x, self.last_acquisition
 
     def observe(self, x: list[float], y: float) -> None:
         self._X.append(list(x))
@@ -179,6 +211,11 @@ class OptunaOptimizer(_ObservedHistoryMixin):
     seed: int = 0
     _X: list[list[float]] = field(default_factory=list)
     _y: list[float] = field(default_factory=list)
+
+    # 补齐 2-16: TPE has no scalar acquisition — always None; name recorded so
+    # the trend UI can say why instead of showing a fabricated number.
+    last_acquisition: float | None = None
+    acquisition_name: str = "TPE"
 
     def __post_init__(self) -> None:
         import optuna
@@ -250,6 +287,11 @@ class BotorchOptimizer(_ObservedHistoryMixin):
     seed: int = 0
     _X: list[list[float]] = field(default_factory=list)
     _y: list[float] = field(default_factory=list)
+
+    # 补齐 2-16: LogEI is maximised inside optimize_acqf and not exposed
+    # per-point without refitting the GP — None rather than a proxy number.
+    last_acquisition: float | None = None
+    acquisition_name: str = "LogEI"
 
     def __post_init__(self) -> None:
         import torch

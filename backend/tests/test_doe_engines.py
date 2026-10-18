@@ -121,3 +121,48 @@ def test_kg_gate_applies_to_native_engine(monkeypatch):
     assert len(plan.runs) == 4
     assert all(r.infeasible for r in plan.runs), "native 引擎也应标记 infeasible"
     assert all("不相容" in (r.infeasible_reason or "") for r in plan.runs)
+
+
+def test_simplex_centroid_design_has_subset_centroids():
+    """补齐计划 2-12：单纯形重心设计 = 全部非空子集的重心点（3 组分 → 7 runs）。
+
+    此前 simplex_centroid 在 _MIXTURE_DESIGNS 中却无生成分支，请求直接报错。
+    """
+    import numpy as np
+
+    from app.services.engines.pydoe_engine import _simplex_centroid_matrix
+
+    m = _simplex_centroid_matrix(3)
+    assert m.shape == (7, 3)
+    assert all(abs(row.sum() - 1.0) < 1e-9 for row in m)
+    # 纯组分 + 50/50 二元 + 1/3 三元 + 总重心
+    rows = {tuple(np.round(r, 6)) for r in m}
+    assert (1.0, 0.0, 0.0) in rows and (0.0, 1.0, 0.0) in rows and (0.0, 0.0, 1.0) in rows
+    assert (0.5, 0.5, 0.0) in rows and (0.5, 0.0, 0.5) in rows and (0.0, 0.5, 0.5) in rows
+    assert (round(1 / 3, 6), round(1 / 3, 6), round(1 / 3, 6)) in rows
+
+
+def test_simplex_centroid_plan_via_registry():
+    """补齐计划 2-12：经 registry 可生成单纯形重心计划，每 run 组分和 = 基线总量且在界内。"""
+    factors = [
+        DOEFactor(name="A", low=0.0, high=40.0, unit="wt%"),
+        DOEFactor(name="B", low=0.0, high=30.0, unit="wt%"),
+        DOEFactor(name="C", low=0.0, high=30.0, unit="wt%"),
+    ]
+    plan = build_doe_plan(factors, "simplex_centroid", engine="auto")
+    assert len(plan.runs) == 7
+    total = sum((f.low + f.high) / 2 for f in factors)
+    for run in plan.runs:
+        assert sum(run.natural.values()) == pytest.approx(total, abs=1e-3)
+        assert all(f.low - 1e-6 <= run.natural[f.name] <= f.high + 1e-6 for f in factors)
+
+
+def test_simplex_centroid_plan_without_pydoe(monkeypatch):
+    """补齐计划 2-12：重心生成是纯 Python，不依赖 pyDOE 是否安装。"""
+    monkeypatch.setattr("app.services.engines.pydoe_engine.pydoe_available", lambda: False)
+    factors = [
+        DOEFactor(name="A", low=0.0, high=40.0, unit="wt%"),
+        DOEFactor(name="B", low=0.0, high=30.0, unit="wt%"),
+    ]
+    plan = build_doe_plan(factors, "simplex_centroid", engine="auto")
+    assert len(plan.runs) == 3  # 2**2 - 1

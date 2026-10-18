@@ -211,6 +211,17 @@ class FormulationHistoryStore:
             )
             session.add(row)
             session.flush()
+            # Phase 2D (2-22): formulation lineage edges (same transaction, fail-open).
+            from .provenance import link_many_in_session
+
+            edges: list[tuple[str, str, str, str, str]] = [
+                ("formulation", lineage, "formulation_version", row.id, "has_version"),
+            ]
+            if parent is not None:
+                edges.append(("formulation_version", parent.id, "formulation_version", row.id, "versioned_to"))
+            if project_id:
+                edges.append(("project", project_id, "formulation_version", row.id, "has_formulation"))
+            link_many_in_session(session, edges, created_by=created_by or None)
             session.expunge(row)
             return row
 

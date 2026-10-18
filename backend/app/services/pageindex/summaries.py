@@ -1,4 +1,4 @@
-"""PageIndex ToC-tree node summaries, generated in the background.
+"""PageIndex ToC-tree node summaries, generated in the background (plan §5.1.1: Celery low-priority).
 
 The tree builder (``tree_builder.py``) is synchronous and leaves every node's
 ``summary`` empty; ``DocumentTocTreeRow.summaries_status`` tracks the state
@@ -6,11 +6,12 @@ machine::
 
     none -> pending -> done | partial
 
-Summaries are **only** generated for a document the user explicitly triggers
-(``POST /kb/sources/{id}/toc-tree/summarize``) — never a full-library sweep,
-so LLM cost stays bounded by what the user asked for. A node whose LLM call
-fails keeps ``summary=None`` and the document lands in ``partial`` instead of
-failing the whole job; re-triggering retries just the missing nodes.
+Summaries are generated lazily, not at ingest — the full tree walk (LLM over
+every node) costs too much for every upload. Generation is scheduled only for
+documents that were actually visited by Stage 2, or that a user opens at
+≥20 pages (the Stage-2 page threshold), plus the explicit trigger
+(``POST /kb/sources/{id}/toc-tree/summarize``). While the summary status is
+"pending" or "generating", the navigator still works — it reads node text directly.
 """
 from __future__ import annotations
 
@@ -77,6 +78,45 @@ def _count_summaries(tree: dict[str, Any]) -> tuple[int, int]:
         if node.get("summary"):
             done += 1
     return done, total
+
+
+def maybe_schedule_summaries(source_id: str, *, visited_by_stage2: bool = False) -> bool:
+    """Schedule node summaries for one document, if it qualifies (plan §5.1.1).
+
+    Triggers: Stage-2-visited documents, or documents with ≥20 pages (the
+    Stage-2 page threshold). Not at ingest — ingest only builds the tree, and
+    a full-library sweep would pay the LLM cost for documents nobody reads.
+    Only fires when the current status is "none" (idempotent: a document is
+    scheduled at most once). A broker failure only logs: the status stays
+    "none" and the next qualifying visit retries.
+    """
+    from ...config import get_settings
+    from ...db.toc_tree_store import get_toc_tree_store
+
+    if not get_settings().pageindex_enabled:
+        return False
+    store = get_toc_tree_store()
+    row = store.get(source_id)
+    if row is None:
+        return False
+    if (row.summaries_status or STATUS_NONE) != STATUS_NONE:
+        return False
+    if not visited_by_stage2 and (row.page_count or 0) < 20:
+        return False
+    store.set_summaries_status(source_id, STATUS_PENDING)
+    try:
+        # Same task the explicit endpoint uses (formunex.toc_summaries).
+        # No dedicated "low" queue exists in celery_app.py (only default /
+        # ingest / optimize / render / regulatory / molscribe), so the task
+        # stays on default — inventing a queue no worker consumes would
+        # silently drop it. Async execution is what keeps it off the request.
+        from ...worker.tasks import run_toc_summaries_task
+        from ...api import _dispatch
+
+        _dispatch.submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries")
+    except Exception as exc:  # broker down (503) etc: keep "pending", retry on next visit
+        log.warning("pageindex: summary dispatch failed for %s: %s", source_id, exc)
+    return True
 
 
 def generate_summaries(source_id: str, *, summarizer: Summarizer | None = None) -> dict[str, Any]:

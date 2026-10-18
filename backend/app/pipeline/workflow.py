@@ -512,6 +512,11 @@ def run_optimization(
     process = process_for(req)
     history: list[float] = []
     best_so_far = float("-inf")
+    # 补齐 2-16: per-iteration acquisition values (may be None per point
+    # when the engine has no scalar acquisition function).
+    from ..services.optimizer_acquisition import AcquisitionHistory, AcquisitionPoint
+
+    acq_history = AcquisitionHistory()
     # Bounds seeded from objective ref ranges (or sensible defaults), not from a
     # single formulation's predicted values (which would collapse scores to ~0.5).
     bounds = predictor.default_bounds(objectives, base)
@@ -528,8 +533,11 @@ def run_optimization(
             # A measured value beats the model's guess; metrics the experiment did
             # not measure keep their prediction (a missing one would score as 0).
             props = {**props, **measured}
-        # Expand running bounds.
+        # Expand running bounds (None = predictor could not compute this metric
+        # for this formulation; skip it instead of crashing min/max on None).
         for metric, val in props.items():
+            if val is None:
+                continue
             lo, hi = bounds.get(metric, (val, val))
             bounds[metric] = (min(lo, val), max(hi, val))
         # props is passed through: re-predicting the same formulation doubled the
@@ -583,6 +591,15 @@ def run_optimization(
         opt.observe(x, score)
         best_so_far = max(best_so_far, score)
         history.append(round(best_so_far, 3))
+        # 补齐 2-16: record the acquisition value behind this suggestion
+        # (None for engines without a scalar acquisition — see optimizer_acquisition).
+        acq_history.append(AcquisitionPoint(
+            iteration=it + 1,
+            acquisition=getattr(opt, "last_acquisition", None),
+            acquisition_name=getattr(opt, "acquisition_name", "unknown"),
+            best_score=round(best_so_far, 3),
+            engine=getattr(opt, "engine", "numpy-ucb"),
+        ))
         if progress_cb:
             progress_cb((it + 1) / iterations, f"iter {it + 1}/{iterations}: best={best_so_far:.3f}")
 
@@ -626,4 +643,7 @@ def run_optimization(
         # caller passed none and the registry supplied it.
         measurement_source="lab" if lab_used else lab_measurement_source(lab_records or []),
         lab_points_used=lab_used,
+        # 补齐 2-16: per-iteration acquisition values; empty for engines
+        # (BayBE) that do not report a scalar acquisition.
+        acquisition_history=acq_history.series(),
     )

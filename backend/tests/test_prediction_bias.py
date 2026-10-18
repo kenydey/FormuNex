@@ -20,13 +20,13 @@ def _reset(monkeypatch):
 
 
 def test_bias_empty_when_no_model(monkeypatch, tmp_path):
-    from app.db.store import SqlExperimentStore
+    from app.db.store import LocalExperimentStore
     from app.services.training import ModelRegistry
 
     db_path = tmp_path / "bias-empty.db"
     engine = make_engine(f"sqlite:///{db_path}")
     factory = make_session_factory(engine)
-    store = SqlExperimentStore(factory)
+    store = LocalExperimentStore(factory)
     reg = ModelRegistry(store=store)
     monkeypatch.setattr(training_mod, "registry", reg)
 
@@ -46,13 +46,13 @@ def test_bias_empty_when_no_model(monkeypatch, tmp_path):
 
 
 def test_bias_computed_before_retrain(monkeypatch, tmp_path):
-    from app.db.store import SqlExperimentStore
+    from app.db.store import LocalExperimentStore
     from app.services.training import ModelRegistry
 
     db_path = tmp_path / "bias-before.db"
     engine = make_engine(f"sqlite:///{db_path}")
     factory = make_session_factory(engine)
-    store = SqlExperimentStore(factory)
+    store = LocalExperimentStore(factory)
     reg = ModelRegistry(store=store)
     monkeypatch.setattr(training_mod, "registry", reg)
 
@@ -92,16 +92,16 @@ def test_bias_computed_before_retrain(monkeypatch, tmp_path):
 
 
 def test_ingest_writes_loop_history_when_bias(tmp_path, monkeypatch):
-    from app.db.store import SqlExperimentStore
+    from app.db.store import LocalExperimentStore
     from app.services.training import ModelRegistry
 
     db_path = tmp_path / "bias-history.db"
     engine = make_engine(f"sqlite:///{db_path}")
     factory = make_session_factory(engine)
-    from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store, get_campaign_store
+    from app.db.campaign_store import LocalCampaignStore, reset_campaign_store, get_campaign_store
 
-    reset_campaign_store(SqliteCampaignStore(factory))
-    store = SqlExperimentStore(factory)
+    reset_campaign_store(LocalCampaignStore(factory))
+    store = LocalExperimentStore(factory)
     reg = ModelRegistry(store=store)
     monkeypatch.setattr(training_mod, "registry", reg)
 

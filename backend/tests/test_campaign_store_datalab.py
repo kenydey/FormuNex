@@ -267,7 +267,7 @@ async def test_batch_sync_survives_item_deleted_from_datalab(tmp_path):
 @pytest.mark.asyncio
 async def test_batch_sync_persists_note_and_tags(tmp_path):
     """note/tags must round-trip through the Datalab backend the same way
-    they do through SqliteCampaignStore, not silently drop on every sync."""
+    they do through LocalCampaignStore, not silently drop on every sync."""
     state = MockDatalabState()
     store = await _store_with_mock(tmp_path, state)
     try:

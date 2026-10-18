@@ -359,3 +359,16 @@ def test_template_upload_is_used_for_word(api):
 
     word = docx.Document(io.BytesIO(client.get(f"/api/plm/documents/{doc['id']}/file/docx").content))
     assert word.paragraphs[0].text == "企业模板：FX-100 环氧底漆"
+
+
+def test_2_8_coa_prefers_test_method_standard():
+    """补齐计划 2-8：COA 检验方法列优先显示 test_method_standard，空则回退 method（老数据）。"""
+    specs = [SpecItem("solids", "固含量", "%", "老方法", 55, 60, test_method_standard="GB/T 1725"),
+             SpecItem("visc", "黏度", "s", "GB/T 1723", max=90)]
+    doc = build_coa(CoaContext(PRODUCT, COMPANY, {"batch_no": "B1"}, specs,
+                               [ResultItem("solids", 57.2), ResultItem("visc", 80)]))
+    tables = doc["sections"][1]["tables"]
+    results = next(t for t in tables if t["key"] == "results")["rows"]
+    by_label = {r[0]: r for r in results}
+    assert by_label["固含量"][5] == "GB/T 1725"
+    assert by_label["黏度"][5] == "GB/T 1723"

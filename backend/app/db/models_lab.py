@@ -152,6 +152,27 @@ class MeasurementPickRow(Base):
     picked_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class LabTaskAttachmentRow(Base):
+    """补齐计划 2-14: 任务单附件（原始记录 / 图谱 / 现场照片等），alembic 0063。
+
+    文件落盘 ``backend/data/attachments/lab_tasks/<task_id>/``（与实验附件同根），
+    DB 只存元数据 + 相对路径；删除时尽力删文件（失败不阻断行删除，记日志）。
+    """
+
+    __tablename__ = "lab_task_attachments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("lab_tasks.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(128), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    storage_path: Mapped[str] = mapped_column(String(500))  # 相对于 attachments 根
+    uploaded_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class ElnSyncConflictRow(Base):
     """A record changed on both sides since the last sync (alembic 0061): queued for a person."""
 

@@ -7,9 +7,6 @@ the global bearer-token middleware, same as the other routers.
 """
 from __future__ import annotations
 
-import sqlite3
-import time
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -26,37 +23,11 @@ class DecideRequest(BaseModel):
 @router.get("/pending", response_model=dict)
 def list_pending() -> dict:
     """Return currently pending MCP tool approval requests, with their (redacted) tool-call arguments."""
-    db = mcp_approval.ensure_store()
-    now = time.monotonic()
-    items: list[dict] = []
-    with sqlite3.connect(db) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT id, server_id, tool_name, session_id, project_id, requested_at, arguments_json "
-            "FROM mcp_approval_requests WHERE status = 'pending' "
-            "ORDER BY requested_at ASC"
-        ).fetchall()
-    for r in rows:
-        age = now - float(r["requested_at"])
-        if age >= mcp_approval.ASK_TIMEOUT_S:
-            continue  # will be expired by the next evaluate_call; not shown as actionable
-        items.append(
-            {
-                "request_id": r["id"],
-                "server_id": r["server_id"],
-                "tool_name": r["tool_name"],
-                "session_id": r["session_id"],
-                "project_id": r["project_id"],
-                "age_s": round(age, 1),
-                # Tool-call arguments (secret-looking keys redacted); None when the call recorded none.
-                "arguments": mcp_approval.load_arguments(r["arguments_json"]),
-            }
-        )
-    return {"items": items, "total": len(items)}
+    return mcp_approval.list_pending()
 
 
 @router.post("/{request_id}/decide", response_model=dict)
-def decide(request_id: int, req: DecideRequest) -> dict:
+def decide(request_id: str, req: DecideRequest) -> dict:
     """Submit an allow/deny decision for a pending approval request."""
     try:
         result = mcp_approval.decide_approval(

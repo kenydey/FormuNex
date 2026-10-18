@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
 from app.db.database import Base, make_engine, make_session_factory
 from app.domain.schemas import DOEPlan, DOERun, ProductDomain, Requirement, ObjectiveSpec
 from app.main import app
@@ -26,7 +26,7 @@ def test_bias_trend_returns_entries_and_alert(tmp_path, monkeypatch):
     engine = make_engine(f"sqlite:///{tmp_path}/bias.db")
     Base.metadata.create_all(engine)
     factory = make_session_factory(engine)
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     client = TestClient(app)
     plan = DOEPlan(design="lhs", factors=[], runs=[DOERun(run_id=1, coded={}, natural={"Zinc phosphate": 9.0, "cure_temperature_c": 82.0})], notes="t", plan_id="b1", domain=ProductDomain.anticorrosion_coating)
     req = Requirement(domain=ProductDomain.anticorrosion_coating, objectives=[ObjectiveSpec(metric="salt_spray_hours", weight=1.0, direction="maximize")])
@@ -71,7 +71,7 @@ def test_bias_trend_empty_when_no_bias(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/bias2.db")
     Base.metadata.create_all(engine)
     factory = make_session_factory(engine)
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     client = TestClient(app)
     plan = DOEPlan(design="lhs", factors=[], runs=[DOERun(run_id=1, coded={}, natural={"Zinc phosphate": 9.0})], notes="t", plan_id="b2", domain=ProductDomain.anticorrosion_coating)
     req = Requirement(domain=ProductDomain.anticorrosion_coating, objectives=[ObjectiveSpec(metric="salt_spray_hours", weight=1.0, direction="maximize")])

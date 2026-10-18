@@ -6,7 +6,7 @@ Closes the DOE loop: measured lab results are stored via a pluggable
 empirical surrogate inside ``predictor.predict``.
 
 Persistence follows the adapter+fallback pattern:
-* :class:`~app.db.store.SqlExperimentStore` (SQLAlchemy, SQLite by default) —
+* :class:`~app.db.store.LocalExperimentStore` (SQLAlchemy, main-database backed) —
   transactional, concurrency-safe, Postgres-ready — is the production default.
 * :class:`~app.db.store.JsonExperimentStore` — the v0.1 JSON file store,
   retained for isolated unit tests (pass ``path=`` to ``ModelRegistry``).
@@ -625,7 +625,7 @@ class ModelRegistry:
             return [t.info for t in self._models.values()]
 
 
-# Global registry — uses configured ExperimentStore (Datalab or SQLite).
+# Global registry — uses configured ExperimentStore (Datalab or local main-DB).
 # On startup, migrate legacy experiments.json and inline SQL rows if needed.
 def _build_registry() -> ModelRegistry:
     from ..db.migrate import migrate_experiments_if_needed

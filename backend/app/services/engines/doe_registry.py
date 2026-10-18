@@ -118,6 +118,7 @@ def build_doe_plan(
             "plackett_burman",
             "ccd",
             "simplex_lattice",
+            "simplex_centroid",
         }
     )
 

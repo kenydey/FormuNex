@@ -13,6 +13,8 @@ from ..domain.project_workspace import (
     ProjectDetail,
     ProjectSummary,
     ProjectUpdateRequest,
+    diff_spec_contract,
+    record_contract_change,
 )
 from ..services import project_exports as exports_svc
 from ._uploads import read_upload_capped
@@ -59,6 +61,27 @@ def update_project(
         False, description="Explicitly allow an empty ``sources`` list to replace a non-empty one (same as clear_sources)"
     ),
 ) -> ProjectDetail:
+    # 补齐计划 2-9: 契约变更通知下游 —— 更新前取旧 spec_contract，与请求中的新
+    # spec_contract 对比；有变化则把通知注入本次请求（随合并一起落盘），下游
+    # DOE/门禁看到未确认通知应重新评估。无 spec_contract 的请求不记通知。
+    ws_req = req.workspace if isinstance(req.workspace, dict) else {}
+    new_contract = ws_req.get("spec_contract")
+    if isinstance(new_contract, dict):
+        old_detail = get_project_store().get(project_id)
+        old_contract = None
+        if old_detail is not None and old_detail.workspace is not None:
+            old_contract = old_detail.workspace.spec_contract or None
+        changed = diff_spec_contract(old_contract, new_contract)
+        if changed:
+            old_notices = list((old_detail.workspace.contract_change_notices if old_detail is not None else []) or [])
+            workspace_copy = dict(ws_req)
+            workspace_copy["contract_change_notices"] = old_notices
+            record_contract_change(workspace_copy, changed)
+            req = ProjectUpdateRequest(
+                workspace={**ws_req, "contract_change_notices": workspace_copy["contract_change_notices"]},
+                title=req.title,
+                clear_sources=req.clear_sources,
+            )
     detail = get_project_store().update(
         project_id, req.workspace, title=req.title, allow_empty_sources=req.clear_sources or allow_empty_sources
     )
@@ -84,6 +107,40 @@ def update_project(
     except Exception:
         pass
     return detail
+
+
+class AcknowledgeContractChangesBody(BaseModel):
+    """确认契约变更通知：at 为空 → 确认全部未确认通知；否则只确认该 at 的一条。"""
+    at: str | None = None
+
+
+@router.post("/{project_id}/contract-change-notices/acknowledge")
+def acknowledge_contract_changes(project_id: str, body: AcknowledgeContractChangesBody) -> dict:
+    """补齐计划 2-9: 下游（DOE/门禁）确认已看到契约变更并重新评估。
+
+    通知本身不删除（审计留痕），只置 acknowledged=true + acknowledged_at。
+    """
+    from ..clock import utcnow
+
+    detail = get_project_store().get(project_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    notices = [dict(n) for n in (detail.workspace.contract_change_notices or [])]
+    acknowledged = 0
+    now = utcnow().isoformat()
+    for n in notices:
+        if n.get("acknowledged"):
+            continue
+        if body.at is not None and str(n.get("at")) != body.at:
+            continue
+        n["acknowledged"] = True
+        n["acknowledged_at"] = now
+        acknowledged += 1
+    if acknowledged:
+        updated = get_project_store().update(project_id, {"contract_change_notices": notices})
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+    return {"ok": True, "acknowledged": acknowledged, "pending": sum(1 for n in notices if not n.get("acknowledged"))}
 
 
 @router.delete("/{project_id}")

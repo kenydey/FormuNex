@@ -197,7 +197,8 @@ class DeepResearchEngine:
             from ...db.source_store import get_source_store
             from ..pageindex.two_stage import navigation_evidence, two_stage_retrieve
 
-            result = two_stage_retrieve(query, project_id=project_id)
+            # Deep research is a known PageIndex scenario: bypass the query classifier.
+            result = two_stage_retrieve(query, project_id=project_id, query_kind="deep_research")
             store = get_source_store()
             titles = {}
             for d in result.documents:

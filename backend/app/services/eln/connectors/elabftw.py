@@ -54,26 +54,29 @@ class ElabftwConnector(ElnConnector):
     def link(self, external_id: str) -> str:
         return f"{self.base}/experiments.php?mode=view&id={external_id}"
 
-    def push_task(self, task: dict[str, Any]) -> RemoteRecord:
+    def push_plan(self, plan: dict[str, Any]) -> RemoteRecord:
         resp = self._call("POST", "/experiments", json={
-            "title": f"{task['task_no']} · {task.get('sample_no') or ''}".strip(" ·"),
-            "tags": ["FormuNex", task.get("doe_plan_id") or "manual"]})
+            "title": f"{plan['task_no']} · {plan.get('sample_no') or ''}".strip(" ·"),
+            "tags": ["FormuNex", plan.get("doe_plan_id") or "manual"]})
         location = resp.headers.get("Location") or resp.headers.get("location") or ""
         ext_id = location.rstrip("/").rsplit("/", 1)[-1]
         if not ext_id.isdigit():
             raise ConnectorError("eLabFTW 未返回新实验的编号（Location 头）")
-        factors = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in (task.get("factors") or {}).items())
+        factors = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in (plan.get("factors") or {}).items())
         extra = {}
-        for pos, r in enumerate(task.get("requested_metrics") or []):
+        for pos, r in enumerate(plan.get("requested_metrics") or []):
             extra[r["metric"]] = {"type": "number", "value": "", "unit": r.get("unit", ""),
                                   "description": r.get("method_code", ""), "position": pos}
         self._call("PATCH", f"/experiments/{ext_id}", json={
-            "body": f"<p>FormuNex 任务单 {task['task_no']}，样品 {task.get('sample_no')}</p>"
+            "body": f"<p>FormuNex 任务单 {plan['task_no']}，样品 {plan.get('sample_no')}</p>"
                     f"<table><tr><th>因子</th><th>设定</th></tr>{factors}</table>",
             "metadata": json.dumps({"extra_fields": extra}, ensure_ascii=False)})
         return RemoteRecord(ext_id, self.link(ext_id))
 
-    def pull_measurements(self, external_id: str) -> list[RemoteValue]:
+    def pull_measurements(self, external_id: str, *, since: str | None = None) -> list[RemoteValue]:
+        # 补齐计划 2-15: eLabFTW extra_fields 无逐字段时间戳，since 无法在服务端过滤 —— 忽略，
+        # 由 sync.py 的 content_hash 去重兜底。
+        _ = since
         body = self._call("GET", f"/experiments/{external_id}").json()
         meta = body.get("metadata") or "{}"
         try:

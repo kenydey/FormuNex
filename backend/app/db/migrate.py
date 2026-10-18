@@ -167,14 +167,14 @@ def migrate_experiments_if_needed() -> int:
     try:
         from ..config import get_settings
         from .database import default_session_factory
-        from .store import SqlExperimentStore, get_experiment_store
+        from .store import LocalExperimentStore, get_experiment_store
 
         settings = get_settings()
         target = get_experiment_store()
         total += migrate_from_stores(settings.experiments_path, target)
 
         if settings.experiment_backend == "datalab":
-            legacy = SqlExperimentStore(default_session_factory())
+            legacy = LocalExperimentStore(default_session_factory())
             total += migrate_inline_sql_to_datalab(legacy, target)
 
         # 历史脏数据：清洗 factors 里残留的 _doe_metadata 等非数值 blob（幂等）

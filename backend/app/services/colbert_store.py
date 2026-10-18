@@ -475,3 +475,67 @@ def bootstrap_seed_corpus(settings: Settings | None = None) -> int:
     count = index_evidence(evidence, settings=settings)
     logger.info("Bootstrapped seed corpus: %s documents", count)
     return count
+
+
+def rerank_candidates(
+    query: str,
+    candidates: list[Evidence],
+    *,
+    settings: Settings | None = None,
+) -> tuple[list[Evidence], dict]:
+    """Candidate-scoped rerank through the colbert_store stack (plan §5.1.1 stage 1).
+
+    Unlike :func:`search`, which ranks the whole persisted registry, this
+    reorders exactly the ``candidates`` given — the PageIndex stage-1 chunks
+    for one query. In-memory only: no registry writes, no temp collections.
+
+    Backend: the same ``rag.build_store()`` machinery :func:`search` falls
+    back to when ragatouille is absent (the operative path in this repo —
+    ragatouille is an optional dependency). When ragatouille *is* installed,
+    the persistent ColBERT index remains available via :func:`search`; this
+    function still uses the in-memory store so a per-query rerank stays
+    side-effect-free. Returns ``(reordered, meta)`` with ``meta["applied"]``
+    False (and the input order) on any failure — never raises.
+    """
+    meta: dict = {"applied": False, "backend": active_backend(settings), "reason": ""}
+    if not candidates:
+        meta["reason"] = "empty"
+        return [], meta
+    if len(candidates) <= 1:
+        meta["reason"] = "single"
+        return list(candidates), meta
+    try:
+        store = rag.build_store()
+        store.ingest(list(candidates))
+        scored = store.query_scored(query, k=len(candidates))
+    except Exception as exc:
+        logger.warning("colbert rerank_candidates failed (%s); keeping input order", exc)
+        meta["reason"] = f"failed: {exc}"
+        return list(candidates), meta
+    by_id = {id(c): c for c in candidates}
+    by_identifier: dict[str, list] = {}
+    for c in candidates:
+        by_identifier.setdefault(c.identifier or "", []).append(c)
+    order: list[Evidence] = []
+    seen: set[int] = set()
+
+    def _match(ev: Evidence) -> Evidence | None:
+        orig = by_id.get(id(ev))
+        if orig is not None and id(orig) not in seen:
+            return orig
+        # Some stores copy Evidence on ingest; fall back to identifier match.
+        for cand in by_identifier.get(ev.identifier or "", []):
+            if id(cand) not in seen:
+                return cand
+        return None
+
+    for _score, ev in scored:
+        orig = _match(ev)
+        if orig is not None:
+            seen.add(id(orig))
+            order.append(orig)
+    # query_scored may drop zero-score docs; keep them at the tail in input order.
+    order.extend(c for c in candidates if id(c) not in seen)
+    meta["applied"] = True
+    meta["reason"] = "ok"
+    return order, meta

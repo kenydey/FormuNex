@@ -26,6 +26,7 @@ from ....db.models_plm import (
     RegulatoryDocumentRow,
 )
 from ....db.models_regulatory import SubstanceOELRow, SubstanceRow
+from ...provenance import link_many_in_session
 from .. import storage
 from ..diff import diff_documents
 from ..ghs import service as ghs_service
@@ -86,6 +87,9 @@ def create_revision(session: Session, product_id: str, *, formulation_version_id
                              state="draft", created_by=created_by)
     session.add(row)
     session.flush()
+    # Phase 2D (2-22): product -> revision edge (same transaction, fail-open).
+    link_many_in_session(session, [("product", product_id, "product_revision", row.id, "has_revision")],
+                         created_by=created_by)
     return row
 
 
@@ -349,6 +353,9 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     )
     session.add(row)
     session.flush()
+    # Phase 2D (2-22): revision -> document edge (same transaction, fail-open).
+    link_many_in_session(session, [("product_revision", rev.id, "document", row.id, "documented_as")],
+                         created_by=created_by)
     return row
 
 

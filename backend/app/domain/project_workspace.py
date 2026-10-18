@@ -14,10 +14,94 @@ from .schemas import (
     Formulation,
     LoopReport,
     ModelInfo,
+    ObjectiveSpec,
     ProductDomain,
     Requirement,
     ResearchResult,
 )
+
+
+def derive_release_specs(
+    objectives: list[ObjectiveSpec | dict[str, Any]] | None,
+    explicit: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """补齐计划 2-8: 从标为出厂指标的目标派生 release_specs（COA 出厂检验项）。
+
+    派生规则：目标的 ref_min/ref_max/target_value → spec 的 min/max/target；
+    display_name（无则 metric）→ label；unit 照搬；method 留空（出厂页可填标准号）。
+    显式 release_specs 按 metric 优先（同 metric 不重复派生）；显式条目原样保留在前。
+    目标为 dict 或 ObjectiveSpec 均可（调用方可能传 workspace 原始 JSON）。
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for s in explicit or []:
+        item = dict(s)
+        metric = str(item.get("metric") or "")
+        if metric and metric in seen:
+            continue  # 同 metric 显式重复：先到的优先（调用方/沿用 > 契约）
+        if metric:
+            seen.add(metric)
+        out.append(item)
+    for obj in objectives or []:
+        data = obj.model_dump() if isinstance(obj, ObjectiveSpec) else (obj if isinstance(obj, dict) else {})
+        if not data.get("is_release_indicator") or not data.get("metric"):
+            continue
+        metric = str(data["metric"])
+        if metric in seen:
+            continue
+        seen.add(metric)
+        out.append({
+            "metric": metric,
+            "label": str(data.get("display_name") or metric),
+            "unit": str(data.get("unit") or ""),
+            "min": data.get("ref_min"),
+            "max": data.get("ref_max"),
+            "target": data.get("target_value"),
+            "method": "",
+        })
+    return out
+
+
+def diff_spec_contract(
+    old: dict[str, Any] | None,
+    new: dict[str, Any] | None,
+) -> list[str]:
+    """补齐计划 2-9: 对比新旧 spec_contract，返回变化的顶层键。
+
+    red_lines / release_specs / acceptance 等深层结构按值比较（!=），浅层键
+    （voc_limit_g_l / forbidden_signal_word / process_window）同样按值比较。
+    两边都缺失 / 均为空 → 无变化。
+    """
+    old = old or {}
+    new = new or {}
+    return sorted({k for k in set(old) | set(new) if old.get(k) != new.get(k)})
+
+
+def record_contract_change(
+    workspace: dict[str, Any],
+    changed_keys: list[str],
+) -> dict[str, Any] | None:
+    """补齐计划 2-9: 向 workspace.contract_change_notices 追加一条未确认通知。
+
+    通知目标为 DOE 与门禁（targets: ["doe", "gate"]），由下游确认后 acknowledged=true。
+    changed_keys 为空 → 不记通知，返回 None。返回追加的通知条目。
+    """
+    if not changed_keys:
+        return None
+    from ..clock import utcnow
+
+    notice = {
+        "at": utcnow().isoformat(),
+        "changed_keys": sorted(changed_keys),
+        "targets": ["doe", "gate"],
+        "acknowledged": False,
+    }
+    notices = workspace.setdefault("contract_change_notices", [])
+    if isinstance(notices, list):
+        notices.append(notice)
+    else:
+        workspace["contract_change_notices"] = [notice]
+    return notice
 
 
 class ProjectWorkspace(BaseModel):
@@ -72,6 +156,10 @@ class ProjectWorkspace(BaseModel):
     # release specs (COA) and acceptance targets (release gate). Copied into a product revision's
     # ``spec_snapshot`` when a formulation is frozen.
     spec_contract: dict[str, Any] = Field(default_factory=dict)
+
+    # 补齐计划 2-9: 契约变更通知（下游 DOE/门禁重新评估）。由 update_project 在
+    # spec_contract 变化时追加；下游确认后 acknowledged=true。存 workspace JSON，无需迁移。
+    contract_change_notices: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ProjectSummary(BaseModel):

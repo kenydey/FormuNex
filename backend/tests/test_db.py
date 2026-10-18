@@ -8,7 +8,7 @@ import httpx
 
 from app.db.database import make_engine, make_session_factory
 from app.db.migrate import migrate_from_stores, migrate_inline_sql_to_datalab
-from app.db.store import DatalabExperimentStore, JsonExperimentStore, SqlExperimentStore
+from app.db.store import DatalabExperimentStore, JsonExperimentStore, LocalExperimentStore
 from app.domain.schemas import ExperimentRecord, ProductDomain
 from app.services.training import ModelRegistry
 from tests.test_experiment_store_datalab import MockDatalabState, _mock_handler
@@ -17,7 +17,7 @@ from tests.test_experiment_store_datalab import MockDatalabState, _mock_handler
 def _sql_store(engine=None):
     if engine is None:
         engine = make_engine("sqlite:///:memory:")
-    return SqlExperimentStore(make_session_factory(engine))
+    return LocalExperimentStore(make_session_factory(engine))
 
 
 def _record(zinc: float = 8.0, salt_spray: float = 840.0) -> ExperimentRecord:
@@ -30,7 +30,7 @@ def _record(zinc: float = 8.0, salt_spray: float = 840.0) -> ExperimentRecord:
     )
 
 
-# ── SqlExperimentStore ────────────────────────────────────────────────────────
+# ── LocalExperimentStore ────────────────────────────────────────────────────────
 
 def test_sql_store_add_and_all():
     store = _sql_store()
@@ -114,14 +114,14 @@ def test_registry_reset_with_persist_wipes_sql_store():
 def test_registry_load_reloads_from_sql_store():
     engine = make_engine("sqlite:///:memory:")
     factory = make_session_factory(engine)
-    store1 = SqlExperimentStore(factory)
+    store1 = LocalExperimentStore(factory)
 
     reg1 = ModelRegistry(store=store1)
     reg1.add([_record(zinc=float(z), salt_spray=200.0 + 80.0 * z) for z in range(2, 14)])
     assert reg1.total_records == 12
 
     # Second registry against the same engine re-loads from the DB.
-    store2 = SqlExperimentStore(factory)
+    store2 = LocalExperimentStore(factory)
     reg2 = ModelRegistry(store=store2)
     assert reg2.total_records == 12
     assert any(i.metric == "salt_spray_hours" for i in reg2.info())
@@ -144,7 +144,7 @@ def test_migrate_json_to_sql(tmp_path):
     json_path.write_text(json.dumps(records_data), encoding="utf-8")
 
     engine = make_engine("sqlite:///:memory:")
-    sql_store = SqlExperimentStore(make_session_factory(engine))
+    sql_store = LocalExperimentStore(make_session_factory(engine))
 
     migrated = migrate_from_stores(str(json_path), sql_store)
     assert migrated == 1
@@ -162,7 +162,7 @@ def test_migrate_skips_when_db_not_empty(tmp_path):
     }]), encoding="utf-8")
 
     engine = make_engine("sqlite:///:memory:")
-    sql_store = SqlExperimentStore(make_session_factory(engine))
+    sql_store = LocalExperimentStore(make_session_factory(engine))
     sql_store.add([_record()])  # pre-populate → migration must skip
 
     migrated = migrate_from_stores(str(json_path), sql_store)
@@ -173,7 +173,7 @@ def test_migrate_skips_when_db_not_empty(tmp_path):
 def test_migrate_inline_sql_to_datalab(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/migrate.db")
     factory = make_session_factory(engine)
-    legacy = SqlExperimentStore(factory)
+    legacy = LocalExperimentStore(factory)
     legacy.add([_record()])
 
     state = MockDatalabState()
@@ -195,7 +195,7 @@ def test_migrate_inline_sql_to_datalab(tmp_path):
 
 def test_migrate_skips_when_json_absent(tmp_path):
     engine = make_engine("sqlite:///:memory:")
-    sql_store = SqlExperimentStore(make_session_factory(engine))
+    sql_store = LocalExperimentStore(make_session_factory(engine))
     migrated = migrate_from_stores(str(tmp_path / "no_such_file.json"), sql_store)
     assert migrated == 0
 

@@ -12,6 +12,7 @@ chunks unchanged, so turning PageIndex on can only add evidence.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +21,59 @@ from .navigator import LLMJson, NavigationResult, navigate
 from .tree_builder import BUILDER_VERSION, build_toc_tree
 
 log = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- query-type gate (plan §5.1.1 限定场景)
+
+
+# 实施例萃取：问“某个实施例/配方的组成、对应性能、配对关系”。
+_EXTRACTION_RE = re.compile(
+    r"实施例|对比例|embodiment|example|权利要求|claim|配方表|性能表|配对|对比|对应|组成|盐雾|"
+    r"formulation|composition|performance|salt.?spray",
+    re.I,
+)
+# 深度研究：问“全面/系统/综述/机制”类长问题。
+_DEEP_RE = re.compile(
+    r"深度|全面|系统|综述|调研|分析|机制|影响因素|研究进展|发展趋势|"
+    r"review|survey|analysis|mechanism|systematic",
+    re.I,
+)
+# 事实型短查询：定义、查值、查身份——普通检索即可，Stage 2 不划算。
+_FACTOID_RE = re.compile(r"是什么|定义|含义|指什么|多少钱|价格|供应商|哪家|CAS ?号|电话|地址", re.I)
+
+#: Known caller contexts that bypass the query classifier (the caller already
+#: knows the query belongs to a PageIndex scenario).
+QUERY_KINDS = ("auto", "extraction", "deep_research", "explicit")
+
+
+def classify_pageindex_query(query: str) -> tuple[bool, str]:
+    """Plan §5.1.1 限定场景：Stage 2 只对实施例萃取 / 深度研究类查询触发。
+
+    短查询 / 事实型查询返回 False——它们用 Stage 1 普通检索即可，逐文档
+    LLM 遍历（3~8 次调用、5~20 s）不划算。``deep=True``（用户显式开启）
+    与已知挂载点（``query_kind``）不走此分类器。
+    """
+    q = (query or "").strip()
+    if not q:
+        return False, "empty query"
+    # Short keyword queries ("前体A 盐雾") are lookups, not extraction —
+    # unless they carry a strong extraction/deep marker (实施例/配对/对应…).
+    _STRONG_RE = re.compile(
+        r"实施例|对比例|embodiment|权利要求|claim|配对|对比|对应|组成|结果|"
+        r"深度|综述|调研|分析|机制",
+        re.I,
+    )
+    if len(q) <= 8 and not _STRONG_RE.search(q):
+        return False, "short query (factoid lookup)"
+    if _DEEP_RE.search(q):
+        return True, "deep research query"
+    if _EXTRACTION_RE.search(q):
+        return True, "extraction query"
+    if len(q) <= 8:
+        return False, "short query (factoid lookup)"
+    if _FACTOID_RE.search(q):
+        return False, "factoid query"
+    return False, "generic query (not a PageIndex scenario)"
 
 
 # --------------------------------------------------------------------------- build / store
@@ -108,12 +162,17 @@ class DocumentDepth:
     reason: str
     stage1_chunk_ids: list[str] = field(default_factory=list)
     navigation: NavigationResult | None = None
+    # Plan §5.1.1 降级：无树或预算耗尽时回退 children_retrieval；这里是
+    # children 重排后的 stage-1 chunk id（按重排后顺序），供调用方追加证据。
+    fallback: str | None = None
+    fallback_chunk_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source_id": self.source_id, "mode": self.mode, "reason": self.reason,
             "stage1_chunk_ids": self.stage1_chunk_ids,
             "navigation": self.navigation.to_dict() if self.navigation else None,
+            "fallback": self.fallback, "fallback_chunk_ids": self.fallback_chunk_ids,
         }
 
 
@@ -122,12 +181,19 @@ class TwoStageResult:
     query: str
     stage1: list[Any] = field(default_factory=list)  # DocumentChunkResponse
     documents: list[DocumentDepth] = field(default_factory=list)
+    # Plan §5.1.1 output: the best stage-2 answer across documents (None when
+    # no document navigated). Per-document answers live in documents[].navigation.
+    answer: str | None = None
+    answer_source: str = "none"
+    stage1_reranked: bool = False  # ColBERT rerank applied to stage 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
             "stage1": [c.model_dump() if hasattr(c, "model_dump") else c for c in self.stage1],
             "documents": [d.to_dict() for d in self.documents],
+            "answer": self.answer, "answer_source": self.answer_source,
+            "stage1_reranked": self.stage1_reranked,
         }
 
 
@@ -140,6 +206,87 @@ def _default_llm() -> LLMJson | None:
     return complete_json
 
 
+# --------------------------------------------------------------------------- fallback / summaries / rerank
+
+
+@dataclass
+class _SimpleScored:
+    """Stage-1 chunk adapted to ``children_rerank``'s scored-chunk protocol."""
+    id: str
+    text: str
+    source_id: str
+    page: int | None = None
+    heading_path: list[str] = field(default_factory=list)
+    relevance: float = 0.0
+    chunk: Any = None  # original stage-1 chunk
+
+
+def _children_fallback(query: str, stage1: list[Any]) -> list[str]:
+    """Plan §5.1.1 降级：对 stage-1 chunk 做 children_retrieval 子块重排，返回 chunk id 顺序。
+
+    children_retrieval 会切分长 chunk 并打分，只对最相关的子块投票；
+    fail-open：任何异常 → 返回 []，调用方只用 stage-1 结果。
+    """
+    if not stage1:
+        return []
+    try:
+        from ..children_retrieval import children_rerank
+
+        scored = [_SimpleScored(id=c.id, text=c.text or "", source_id=c.source_id,
+                                page=getattr(c, "page", None),
+                                heading_path=list(getattr(c, "heading_path", None) or []),
+                                relevance=getattr(c, "relevance", 0.0) or 0.0, chunk=c)
+                   for c in stage1]
+        ranked = children_rerank(query, scored)
+        return [s.chunk.id for s in ranked]
+    except Exception as exc:
+        log.warning("pageindex: children fallback failed: %s", exc)
+        return []
+
+
+def _schedule_summaries_if_eligible(source_id: str) -> None:
+    """Schedule node summaries for a Stage-2-visited document (fail-open)."""
+    try:
+        from .summaries import maybe_schedule_summaries
+
+        maybe_schedule_summaries(source_id, visited_by_stage2=True)
+    except Exception as exc:
+        log.warning("pageindex: summary scheduling failed for %s: %s", source_id, exc)
+
+
+def _colbert_rerank_stage1(query: str, stage1: list[Any]) -> tuple[list[Any], bool]:
+    """Plan §5.1.1 stage 1 = hybrid_search + ColBERT rerank (existing colbert_store stack).
+
+    Fail-open: rerank off / empty / failure → original order, applied=False.
+    """
+    settings = get_settings()
+    if not settings.pageindex_colbert_rerank or not stage1:
+        return stage1, False
+    try:
+        from ...domain.schemas import Evidence
+        from ..colbert_store import rerank_candidates
+
+        candidates = [
+            Evidence(
+                source="kb", identifier=c.id, title="",
+                snippet=(c.text or "")[:2000],
+                relevance=getattr(c, "relevance", 0.0) or 0.0,
+            )
+            for c in stage1
+        ]
+        reordered, meta = rerank_candidates(query, candidates)
+        if not meta.get("applied"):
+            return stage1, False
+        order = [e.identifier for e in reordered]
+        by_id = {c.id: c for c in stage1}
+        ranked = [by_id[i] for i in order if i in by_id]
+        ranked.extend(c for c in stage1 if c not in ranked)
+        return ranked, True
+    except Exception as exc:
+        log.warning("pageindex: ColBERT stage-1 rerank failed: %s", exc)
+        return stage1, False
+
+
 def deepen_documents(
     query: str,
     source_ids: list[str],
@@ -148,8 +295,18 @@ def deepen_documents(
     llm: LLMJson | None = None,
     use_llm: bool = True,
     stage1_chunks: dict[str, list[str]] | None = None,
+    stage1: list[Any] | None = None,
+    query_kind: str = "auto",
 ) -> list[DocumentDepth]:
-    """Stage 2 over already-chosen documents (also used by embodiment drafts / deep research)."""
+    """Stage 2 over already-chosen documents (also used by embodiment drafts / deep research).
+
+    Gating (plan §5.1.1 限定场景): Stage 2 fires only when the document has
+    ≥ ``pageindex_min_pages`` pages **and** the query is a PageIndex scenario
+    (extraction / deep-research) — unless ``deep is True`` (explicit opt-in)
+    or ``query_kind`` is a known caller context (``deep_research`` /
+    ``extraction`` / ``explicit``), which bypass the classifier. The fallback
+    for gated / tree-less / budget-exhausted documents is children_retrieval.
+    """
     from ...db.toc_tree_store import get_toc_tree_store
 
     settings = get_settings()
@@ -163,16 +320,32 @@ def deepen_documents(
             out.append(DocumentDepth(sid, "stage1", "deep=false", ids))
             continue
         if row is None:
-            out.append(DocumentDepth(sid, "stage1", "no toc tree", ids))
+            fb = _children_fallback(query, [c for c in (stage1 or []) if c.source_id == sid])
+            out.append(DocumentDepth(sid, "stage1", "no toc tree", ids,
+                                     fallback="children_retrieval", fallback_chunk_ids=fb))
             continue
         if deep is None and row.page_count < settings.pageindex_min_pages:
             out.append(DocumentDepth(sid, "stage1", f"{row.page_count} pages < {settings.pageindex_min_pages}", ids))
             continue
+        if deep is None and query_kind == "auto":
+            eligible, why = classify_pageindex_query(query)
+            if not eligible:
+                out.append(DocumentDepth(sid, "stage1", f"not eligible: {why}", ids))
+                continue
         nav = navigate(
             sid, row.tree, query, _NodeText(sid), llm=model,
             max_hops=settings.pageindex_max_hops, max_chars=settings.pageindex_max_input_chars,
+            max_tokens=settings.pageindex_max_input_tokens,
         )
-        out.append(DocumentDepth(sid, "pageindex", "deep=true" if deep else f"{row.page_count} pages", ids, nav))
+        depth = DocumentDepth(sid, "pageindex", "deep=true" if deep else f"{row.page_count} pages", ids, nav)
+        if nav.stopped == "budget":
+            # Budget-exhausted navigation may have missed the best section:
+            # children rerank over stage-1 chunks is the supplementary signal.
+            fb = _children_fallback(query, [c for c in (stage1 or []) if c.source_id == sid])
+            depth.fallback = "children_retrieval"
+            depth.fallback_chunk_ids = fb
+        out.append(depth)
+        _schedule_summaries_if_eligible(sid)
     return out
 
 
@@ -186,21 +359,29 @@ def two_stage_retrieve(
     deep: bool | None = None,
     llm: LLMJson | None = None,
     use_llm: bool = True,
+    query_kind: str = "auto",
 ) -> TwoStageResult:
-    """Stage 1 ``hybrid_search`` → stage 2 PageIndex navigation on the top documents.
+    """Stage 1 ``hybrid_search`` (+ ColBERT rerank) → stage 2 PageIndex navigation on the top documents.
 
     ``deep``: ``None`` = automatic (documents with at least ``pageindex_min_pages`` pages),
     ``True`` = every top document that has a tree, ``False`` = stage 1 only.
+    ``query_kind``: ``"auto"`` = classify the query; a known context
+    (``extraction`` / ``deep_research`` / ``explicit``) bypasses the classifier.
     """
     from ..hybrid_search import hybrid_search
 
     stage1 = hybrid_search(query, top_k=top_k, project_id=project_id, include_global=include_global)
+    stage1, reranked = _colbert_rerank_stage1(query, stage1)
     by_doc: dict[str, list[str]] = {}
     for c in stage1:
         by_doc.setdefault(c.source_id, []).append(c.id)
     top_docs = list(by_doc)[:max_docs]
-    docs = deepen_documents(query, top_docs, deep=deep, llm=llm, use_llm=use_llm, stage1_chunks=by_doc)
-    return TwoStageResult(query=query, stage1=stage1, documents=docs)
+    docs = deepen_documents(query, top_docs, deep=deep, llm=llm, use_llm=use_llm,
+                            stage1_chunks=by_doc, stage1=stage1, query_kind=query_kind)
+    answer = next((d.navigation.answer for d in docs if d.navigation and d.navigation.answer), None)
+    source = next((d.navigation.answer_source for d in docs if d.navigation and d.navigation.answer), "none")
+    return TwoStageResult(query=query, stage1=stage1, documents=docs,
+                          answer=answer, answer_source=source, stage1_reranked=reranked)
 
 
 def navigation_evidence(depths: list[DocumentDepth], *, titles: dict[str, str] | None = None,

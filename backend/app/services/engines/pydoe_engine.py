@@ -11,7 +11,7 @@ from .native_doe_engine import build_native_plan
 
 logger = logging.getLogger(__name__)
 
-PYDOE_DESIGNS = frozenset({"lhs", "ccd", "bbdesign", "simplex_lattice", "sobol"})
+PYDOE_DESIGNS = frozenset({"lhs", "ccd", "bbdesign", "simplex_lattice", "simplex_centroid", "sobol"})
 # 2026-09-04 (P0): 混料设计的前提是"各成分和=100%", 无约束 LHS 兜底会
 # 静默生成总量偏离 100% 的配方 —— 混料失败必须显式报错, 不允许降级。
 _MIXTURE_DESIGNS = frozenset({"simplex_lattice", "simplex_centroid"})
@@ -31,9 +31,29 @@ def _default_n(k: int, n: int | None) -> int:
     return n or max(2 * k + 1, 8)
 
 
+def _simplex_centroid_matrix(k: int) -> np.ndarray:
+    """Simplex-centroid design (补齐计划 2-12): centroids of every non-empty
+    subset of the q components — pure components, all 50/50 binaries, all
+    1/3 ternaries, …, the overall centroid. 2**q − 1 runs, no pyDOE needed
+    (pyDOE ships no centroid design, which is why this design previously had
+    no handling branch and ``build_plan_with_fallback`` raised for it).
+    """
+    import itertools
+
+    rows: list[list[float]] = []
+    for size in range(1, k + 1):
+        for subset in itertools.combinations(range(k), size):
+            rows.append([1.0 / size if j in subset else 0.0 for j in range(k)])
+    return np.asarray(rows, dtype=float)
+
+
 def _generate_matrix(
     design: str, k: int, n: int, seed: int | None = None
 ) -> np.ndarray:
+    if design == "simplex_centroid":
+        # Pure-python generation: must not require pyDOE (see above).
+        matrix = _simplex_centroid_matrix(k)
+        return matrix
     import pydoe
 
     if design == "lhs":
@@ -89,7 +109,11 @@ def build_pydoe_plan(
     requirement: "Requirement | None" = None,
     seed: int | None = None,
 ) -> DOEPlan:
-    if not pydoe_available():
+    if design == "simplex_centroid":
+        # 2-12: centroid generation is pure-python (see _simplex_centroid_matrix) —
+        # do not require pyDOE for it.
+        pass
+    elif not pydoe_available():
         raise RuntimeError("pydoe is not installed")
 
     # C-4a: pydoe designs sample a continuous space (LHS etc.) — a discrete
@@ -118,7 +142,7 @@ def build_pydoe_plan(
             )
 
     # Designs with fixed run counts ignore n
-    if design in ("ccd", "bbdesign", "simplex_lattice"):
+    if design in ("ccd", "bbdesign", "simplex_lattice", "simplex_centroid"):
         matrix = _generate_matrix(design, k, n or 0, seed=seed)
     else:
         matrix = _generate_matrix(design, k, _default_n(k, n), seed=seed)

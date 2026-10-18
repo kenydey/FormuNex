@@ -20,6 +20,9 @@ class TwoStageSearchRequest(BaseModel):
     # None = automatic (long documents only); True = every top document with a tree; False = stage 1 only.
     deep: bool | None = None
     use_llm: bool = True
+    # Caller context for the Stage-2 gate (plan §5.1.1 限定场景): "auto" = classify
+    # the query; "extraction" / "deep_research" / "explicit" bypass the classifier.
+    query_kind: str = Field(default="auto", pattern="^(auto|extraction|deep_research|explicit)$")
 
 
 @router.get("/sources/{source_id}/toc-tree")
@@ -29,6 +32,15 @@ def get_toc_tree(source_id: str) -> dict[str, Any]:
     row = get_toc_tree_store().get(source_id)
     if row is None:
         raise HTTPException(status_code=404, detail="该文档尚无目录树（未入库或未构建）")
+    # Viewing a long document's tree is a summary trigger (plan §5.1.1):
+    # ≥20 pages + never summarised → schedule node summaries (fail-open).
+    try:
+        from ..services.pageindex.summaries import maybe_schedule_summaries
+
+        maybe_schedule_summaries(source_id)
+    except Exception:
+        pass  # scheduling must never break a read
+    row = get_toc_tree_store().get(source_id) or row
     return {
         "source_id": row.source_id, "doc_kind": row.doc_kind, "builder_version": row.builder_version,
         "node_count": row.node_count, "max_depth": row.max_depth, "page_count": row.page_count,
@@ -79,4 +91,5 @@ def pageindex_search(body: TwoStageSearchRequest) -> dict[str, Any]:
     return two_stage_retrieve(
         body.query, top_k=body.top_k, max_docs=body.max_docs, project_id=body.project_id,
         include_global=body.include_global, deep=body.deep, use_llm=body.use_llm,
+        query_kind=body.query_kind,
     ).to_dict()

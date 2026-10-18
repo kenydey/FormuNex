@@ -1,8 +1,19 @@
 """ProjectSpec helpers — normalize free-text requirements and derive DOE levers."""
 from __future__ import annotations
 
+from typing import Any
+
 from .levers import substrate_default_levers
-from .schemas import DOEFactor, Formulation, LeverSpec, ObjectiveSpec, ProductDomain, Requirement, Substrate
+from .schemas import (
+    DOEFactor,
+    Formulation,
+    LeverSpec,
+    ObjectiveSpec,
+    ProductDomain,
+    Requirement,
+    Substrate,
+    substrate_value,
+)
 
 # Roles typically held fixed (solvent fills to 100%).
 _FIXED_ROLES = frozenset({"solvent", "pigment", "filler", "additive"})
@@ -79,7 +90,7 @@ def normalize_requirement(req: Requirement) -> Requirement:
     if not data.get("product_type"):
         data["product_type"] = _DOMAIN_LABELS.get(req.domain, req.domain.value)
     if not data.get("application"):
-        data["application"] = req.substrate.value
+        data["application"] = substrate_value(req.substrate)
     if not data.get("project_id"):
         data["project_id"] = effective_project_id(req)
     return Requirement(**data)
@@ -157,8 +168,29 @@ def derive_levers_from_formulation(
 
 
 def derive_process_levers(req: Requirement) -> list[LeverSpec]:
+    """Process levers from the requirement's cure temperature.
+
+    补齐计划 2-10: 契约工艺窗口（process_window.cure_temp_c）优先于单值
+    cure_temperature_c —— 规格契约是 DOE 的共同依据。
+    窗口形状：前端存为 [lo, hi] 区间（Slider range）→ 杠杆即该区间；
+    若为单个数字（API/旧数据）→ 按单值逻辑展开 [cure-30, cure]。
+    """
     levers: list[LeverSpec] = []
     cure = req.cure_temperature_c
+    pw = req.process_window or {}
+    window_cure = pw.get("cure_temp_c")
+    if isinstance(window_cure, (list, tuple)) and len(window_cure) == 2:
+        try:
+            lo, hi = float(window_cure[0]), float(window_cure[1])
+        except (TypeError, ValueError):
+            lo = hi = None
+        if lo is not None and req.domain == ProductDomain.anticorrosion_coating and lo < hi:
+            return [LeverSpec(name="cure_temperature_c", low=lo, high=hi, unit="C")]
+    elif window_cure is not None:
+        try:
+            cure = float(window_cure)
+        except (TypeError, ValueError):
+            pass
     if cure is not None and req.domain == ProductDomain.anticorrosion_coating:
         high = float(cure)
         low = max(20.0, cure - 30)
@@ -170,9 +202,79 @@ def derive_process_levers(req: Requirement) -> list[LeverSpec]:
     return levers
 
 
+# 补齐计划 2-10: 工艺参数名 → 工艺窗口键的别名。DOE/任务因子名可能是英文
+# 杠杆名（cure_temperature_c）或中文名（固化温度），统一映射到窗口键。
+_PROCESS_WINDOW_ALIASES: dict[str, str] = {
+    "cure_temperature_c": "cure_temp_c",
+    "cure_temp_c": "cure_temp_c",
+    "cure_temp": "cure_temp_c",
+    "固化温度": "cure_temp_c",
+    "cure_time_min": "cure_time_min",
+    "cure_time": "cure_time_min",
+    "固化时间": "cure_time_min",
+    "film_thickness_um": "film_thickness_um",
+    "film_thickness": "film_thickness_um",
+    "干膜厚度": "film_thickness_um",
+    "application_method": "application_method",
+    "施工方式": "application_method",
+}
+
+
+def check_process_window(
+    process_params: dict[str, Any] | None,
+    process_window: dict[str, Any] | None,
+) -> list[str]:
+    """Warn (never block) when process params deviate from the contract window.
+
+    窗口形状（与前端 SpecStudioPage 一致）：数值窗口为 [lo, hi] 区间或单个定点；
+    application_method 为允许列表。参数落入区间 / 在列表中 → 无警告；否则警告。
+    窗口为空 / 参数为空 → 无警告。数值容差 1e-6。
+    """
+    if not process_params or not process_window:
+        return []
+    labels = {"cure_temp_c": "固化温度", "cure_time_min": "固化时间", "film_thickness_um": "干膜厚度"}
+    units = {"cure_temp_c": "°C", "cure_time_min": "min", "film_thickness_um": "μm"}
+    warnings: list[str] = []
+    for name, value in process_params.items():
+        key = _PROCESS_WINDOW_ALIASES.get(str(name))
+        if key is None or key not in process_window:
+            continue
+        window_value = process_window.get(key)
+        if window_value is None:
+            continue
+        if key == "application_method":
+            allowed = window_value if isinstance(window_value, (list, tuple)) else [window_value]
+            if str(value) not in [str(a) for a in allowed]:
+                warnings.append(f"施工方式超出工艺窗口：窗口允许 {', '.join(str(a) for a in allowed)}，实际 {value}")
+            continue
+        try:
+            actual = float(value)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(window_value, (list, tuple)) and len(window_value) == 2:
+            try:
+                lo, hi = float(window_value[0]), float(window_value[1])
+            except (TypeError, ValueError):
+                continue
+            if actual < lo - 1e-6 or actual > hi + 1e-6:
+                warnings.append(
+                    f"{labels.get(key, key)}超出工艺窗口：窗口允许 {lo:g}~{hi:g}{units.get(key, '')}，实际 {actual:g}{units.get(key, '')}"
+                )
+        else:
+            try:
+                expected = float(window_value)
+            except (TypeError, ValueError):
+                continue
+            if abs(actual - expected) > 1e-6:
+                warnings.append(
+                    f"{labels.get(key, key)}超出工艺窗口：窗口要求 {expected:g}{units.get(key, '')}，实际 {actual:g}{units.get(key, '')}"
+                )
+    return warnings
+
+
 def default_levers_for(
     domain: ProductDomain,
-    substrate: Substrate = Substrate.carbon_steel,
+    substrate: Substrate | str = Substrate.carbon_steel,
     *,
     cure_temperature_c: float | None = None,
 ) -> list[LeverSpec]:

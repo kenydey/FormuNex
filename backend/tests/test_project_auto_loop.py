@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db.campaign_store import SqliteCampaignStore, get_campaign_store, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, get_campaign_store, reset_campaign_store
 from app.db.database import Base, make_engine, make_session_factory
 from app.db.project_store import ProjectStore
 from app.db.store import JsonExperimentStore
@@ -39,7 +39,7 @@ def _sqlite_backend(monkeypatch, tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
     factory = make_session_factory(engine)
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     store = JsonExperimentStore(str(tmp_path / "exp.json"))
     registry._store = store  # noqa: SLF001
     registry.load()

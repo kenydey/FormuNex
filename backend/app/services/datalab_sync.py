@@ -106,7 +106,7 @@ def apply_lab_measurements(
     """P0-2: store -> optimizer 链路。写入明细并回写父表 measured。
 
     ``MeasurementStore.add_in()`` 只插 ``measurements`` 明细表, 但训练
-    registry (``SqlExperimentStore.all()``) 只读 ``experiments.measured``
+    registry (``LocalExperimentStore.all()``) 只读 ``experiments.measured``
     JSON —— 不回写, 同步来的 lab 数据对 ``load_prior_measurements()`` 和
     优化器永远不可见。这是 ELN -> store -> 优化器链路断掉的第二环。
 

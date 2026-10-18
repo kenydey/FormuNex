@@ -991,9 +991,9 @@ _SNAPSHOT_FIELDS = ("status", "planned_params", "actual_params", "measurements",
 
 
 def _is_native_store(store: Any) -> bool:
-    from ..db.campaign_store import SqliteCampaignStore
+    from ..db.campaign_store import LocalCampaignStore
 
-    return isinstance(store, SqliteCampaignStore)
+    return isinstance(store, LocalCampaignStore)
 
 
 def _row_snapshot(row: WorkbenchRow) -> dict:
@@ -1964,7 +1964,7 @@ class SyncDatalabRequest(BaseModel):
 
     ``datalab_item_id``: 本次同步要拉取的 Datalab item。行保持本地训练记录
     身份 (``item_id`` 不被改写), 因此同步到的 lab 测量对
-    ``SqlExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的
+    ``LocalExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的
     ``load_prior_measurements()`` 能吃到 lab 实测。若省略, 则回退使用行上
     已绑定的 ``item_id`` (若行上也没有 -> 409)。
     """
@@ -1987,7 +1987,7 @@ def sync_experiment_from_datalab(
     成功后刷新训练 registry。
 
     可见性语义: 行的 ``item_id`` 不被改写。本地训练记录
-    (``item_id IS NULL``) 同步后仍对 ``SqlExperimentStore`` 可见, 下一轮
+    (``item_id IS NULL``) 同步后仍对 ``LocalExperimentStore`` 可见, 下一轮
     DOE 的 ``load_prior_measurements()`` 可见 lab 实测; 已绑定 Datalab 的行
     仍归 Datalab store 管 (Datalab 可达时 live 读)。
 
@@ -2041,7 +2041,7 @@ def sync_experiment_from_datalab(
     )
     if report.get("synced"):
         # 注意: 不回写 row.item_id。行的本地训练记录身份保持不变,
-        # SqlExperimentStore 的 item_id IS NULL 过滤语义不受影响,
+        # LocalExperimentStore 的 item_id IS NULL 过滤语义不受影响,
         # 这正是同步到的 lab 数据对优化器可见的前提。
         try:
             registry.load()

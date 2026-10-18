@@ -540,6 +540,18 @@ class StormReportRequest(BaseModel):
     ensure_dossier: bool = True
     persist: bool = True
     campaign_id: str | None = None
+    # Plan 2-5: edited outline (as validated by ReportOutline) — generate from
+    # the outline instead of generating one. Kept as raw dict: the worker
+    # validates it and falls back to generation when invalid.
+    outline: dict | None = None
+
+
+class StormOutlineRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    topic: str = ""
+    max_sections: int | None = Field(default=None, ge=3, le=12)
+    perspectives: list[str] = Field(default_factory=list)
+    use_llm: bool = False
 
 
 @router.post("/storm/report", status_code=202)
@@ -573,6 +585,7 @@ def start_storm_report_endpoint(body: StormReportRequest, request: Request):
         "ensure_dossier": bool(body.ensure_dossier),
         "persist": bool(body.persist),
         "campaign_id": body.campaign_id,
+        "outline": body.outline,
     }
     resp = submit(
         run_wiki_storm_report_task,
@@ -583,6 +596,66 @@ def start_storm_report_endpoint(body: StormReportRequest, request: Request):
     content = _json.loads(resp.body)
     content["disclaimer"] = "draft_not_claims"
     return JSONResponse(status_code=202, content=content)
+
+
+@router.post("/storm/outline")
+def generate_storm_outline_endpoint(body: StormOutlineRequest) -> dict:
+    """Plan 2-5 step 1: generate + persist a STORM outline for the frontend editor.
+
+    Returns the outline flat (ReportOutline JSON). Always regenerates — the
+    frontend's "重新生成" re-calls this; edited outlines are saved via PUT.
+    """
+    _require_wiki()
+    from ..services.wiki.dossier import get_dossier_pack
+    from ..services.wiki.storm_outline import generate_outline, persist_outline_sidecar
+
+    settings = get_settings()
+    if not settings.wiki_storm_report_enabled:
+        raise HTTPException(status_code=409, detail="wiki_storm_report_enabled is false")
+    try:
+        pack = get_dossier_pack(body.project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    outline = generate_outline(
+        pack, project_id=body.project_id, topic=body.topic or "",
+        max_sections=body.max_sections or 6,
+        perspectives=list(body.perspectives or []) or None, use_llm=body.use_llm,
+    )
+    persist_outline_sidecar(body.project_id, outline)
+    return outline.model_dump(mode="json")
+
+
+@router.get("/storm/outline/{project_id}")
+def get_storm_outline_endpoint(project_id: str) -> dict:
+    """Read a persisted STORM outline (404 when none). Returns the outline flat."""
+    _require_wiki()
+    from ..services.wiki.storm_outline import load_outline_sidecar
+
+    outline = load_outline_sidecar(project_id)
+    if outline is None:
+        raise HTTPException(status_code=404, detail="storm outline not found")
+    return outline.model_dump(mode="json")
+
+
+@router.put("/storm/outline/{project_id}")
+def save_storm_outline_endpoint(project_id: str, body: dict) -> dict:
+    """Plan 2-5 step 1: save an edited outline (frontend outline editor).
+
+    Accepts the flat outline JSON (or ``{"outline": {...}}``). Returns the
+    saved outline flat.
+    """
+    _require_wiki()
+    from ..services.wiki.storm_outline import persist_outline_sidecar
+    from ..services.wiki.storm_schema import ReportOutline
+
+    try:
+        outline = ReportOutline.model_validate(body.get("outline") or body)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid outline: {exc}") from exc
+    if outline.project_id != project_id:
+        raise HTTPException(status_code=400, detail="outline.project_id must match the URL project_id")
+    persist_outline_sidecar(project_id, outline)
+    return outline.model_dump(mode="json")
 
 
 @router.get("/storm/report/{project_id}")

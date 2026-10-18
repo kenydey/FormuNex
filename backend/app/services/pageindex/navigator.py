@@ -31,6 +31,38 @@ LLMJson = Callable[[str], dict | None]
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:[.\-][a-z0-9]+)*|[一-鿿]", re.I)
 
 
+def estimate_tokens(text: str) -> int:
+    """Heuristic token count for budget enforcement (plan §5.1.1: 16k input tokens).
+
+    ~1 token per CJK char, ~1 token per 4 non-CJK chars. A heuristic, not a
+    tokenizer — it only gates how much node text the navigator may read, so
+    over-estimating is safe (stops early) and under-estimating is bounded by
+    the parallel ``max_chars`` cap.
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if "\u3040" <= ch <= "\u30ff" or "\u3400" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7af")
+    return cjk + (len(text) - cjk + 3) // 4
+
+
+def _truncate_to_tokens(text: str, budget: int) -> str:
+    """Largest prefix of ``text`` whose estimate_tokens() fits ``budget`` (exact scan)."""
+    if budget <= 0:
+        return ""
+    if estimate_tokens(text) <= budget:
+        return text
+    # Track cost in quarter-tokens: CJK = 4 quarters, other = 1 quarter.
+    used = 0
+    out: list[str] = []
+    for ch in text:
+        cost = 4 if "\u3040" <= ch <= "\u30ff" or "\u3400" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7af" else 1
+        if used + cost > budget * 4:
+            break
+        used += cost
+        out.append(ch)
+    return "".join(out)
+
+
 @dataclass
 class NavigationResult:
     source_id: str
@@ -40,13 +72,20 @@ class NavigationResult:
     evidence: list[dict[str, Any]] = field(default_factory=list)
     hops: int = 0
     chars_read: int = 0
+    tokens_read: int = 0  # estimate_tokens() over the node text actually read
     stopped: str = ""  # answered | budget | exhausted | error
+    # Plan §5.1.1 output: an answer composed from the evidence actually read.
+    # "llm" = model-composed; "extractive" = quoted snippets (no model);
+    # "none" = no evidence to answer from.
+    answer: str | None = None
+    answer_source: str = "none"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source_id": self.source_id, "mode": self.mode, "node_path": self.node_path,
             "reasoning_trace": self.reasoning_trace, "evidence": self.evidence, "hops": self.hops,
-            "chars_read": self.chars_read, "stopped": self.stopped,
+            "chars_read": self.chars_read, "tokens_read": self.tokens_read, "stopped": self.stopped,
+            "answer": self.answer, "answer_source": self.answer_source,
         }
 
 
@@ -65,12 +104,13 @@ def _pages(node: dict[str, Any]) -> list[int | None]:
 
 class _Walk:
     def __init__(self, source_id: str, tree: dict, load_text: TextLoader, max_hops: int, max_chars: int,
-                 mode: str) -> None:
+                 mode: str, max_tokens: int = 16000) -> None:
         self.nodes = index_nodes(tree)
         self.parents = parent_map(tree)
         self.load_text = load_text
         self.max_hops = max_hops
         self.max_chars = max_chars
+        self.max_tokens = max_tokens
         self.result = NavigationResult(source_id=source_id, mode=mode)
         self.read: set[str] = set()
 
@@ -82,7 +122,8 @@ class _Walk:
         return cur
 
     def budget_left(self) -> bool:
-        return self.result.hops < self.max_hops and self.result.chars_read < self.max_chars
+        return (self.result.hops < self.max_hops and self.result.chars_read < self.max_chars
+                and self.result.tokens_read < self.max_tokens)
 
     def visit(self, node_id: str, action: str, reason: str) -> str | None:
         node = self.nodes.get(node_id)
@@ -91,9 +132,15 @@ class _Walk:
         text = self.load_text(node) or ""
         remaining = self.max_chars - self.result.chars_read
         text = text[:remaining]
+        # Token budget is enforced alongside the char budget (exact prefix
+        # truncation — proportional shrinking can overshoot when the prefix
+        # is denser in CJK than the whole text).
+        token_remaining = self.max_tokens - self.result.tokens_read
+        text = _truncate_to_tokens(text, token_remaining)
         self.read.add(node_id)
         self.result.hops += 1
         self.result.chars_read += len(text)
+        self.result.tokens_read += estimate_tokens(text)
         self.result.node_path.append(node_id)
         self.result.reasoning_trace.append({
             "step": self.result.hops, "action": action, "node_id": node_id, "title": node.get("title"),
@@ -114,6 +161,53 @@ class _Walk:
         """Nodes whose text cites *node_id* (e.g. the results table that cites 实施例 3)."""
         return [nid for nid, n in self.nodes.items()
                 if nid not in self.read and any(r["to"] == node_id for r in n.get("refs") or [])]
+
+
+def _extractive_answer(result: NavigationResult, query: str) -> None:
+    """Fail-open answer: quote the top evidence with page refs, labelled extractive.
+
+    Used when no LLM is available (heuristic mode) or the LLM answer call
+    failed. Quotes only — no generated claims, so nothing can be hallucinated.
+    """
+    if not result.evidence:
+        result.answer = None
+        result.answer_source = "none"
+        return
+    parts = []
+    for ev in result.evidence[:2]:
+        pr = ev.get("page_range") or [None, None]
+        page = f"p.{pr[0]}" if pr[0] else ""
+        snippet = (ev.get("text") or "").strip().replace("\n", " ")[:400]
+        if snippet:
+            parts.append(f"[{ev.get('title') or ev['node_id']}{f' {page}' if page else ''}] {snippet}")
+    result.answer = "\n".join(parts) if parts else None
+    result.answer_source = "extractive" if parts else "none"
+
+
+_ANSWER_PROMPT = """根据下面从长文档中读到的证据回答问题。只使用证据中的内容，不要编造；证据不足时明说哪部分缺失。只输出 JSON：{{"answer": "..."}}。
+
+问题：{query}
+
+证据：
+{evidence}"""
+
+
+def _llm_answer(result: NavigationResult, query: str, llm: LLMJson) -> bool:
+    """Ask the model to compose an answer from the evidence actually read. False on any failure."""
+    try:
+        ev_text = "\n".join(
+            f"[{e.get('title') or e['node_id']} p.{(e.get('page_range') or [None])[0]}] "
+            f"{(e.get('text') or '')[:2000]}"
+            for e in result.evidence
+        )
+        out = llm(_ANSWER_PROMPT.format(query=query, evidence=ev_text))
+        if isinstance(out, dict) and isinstance(out.get("answer"), str) and out["answer"].strip():
+            result.answer = out["answer"].strip()
+            result.answer_source = "llm"
+            return True
+    except Exception:
+        pass
+    return False
 
 
 # --------------------------------------------------------------------------- heuristic
@@ -166,8 +260,9 @@ def _score_nodes(walk: _Walk, query: str) -> list[tuple[float, str]]:
 
 
 def navigate_heuristic(source_id: str, tree: dict, query: str, load_text: TextLoader, *,
-                       max_hops: int = 6, max_chars: int = 48000, seeds: int = 2) -> NavigationResult:
-    walk = _Walk(source_id, tree, load_text, max_hops, max_chars, "heuristic")
+                       max_hops: int = 6, max_chars: int = 48000, max_tokens: int = 16000,
+                       seeds: int = 2) -> NavigationResult:
+    walk = _Walk(source_id, tree, load_text, max_hops, max_chars, "heuristic", max_tokens)
     queue: list[tuple[str, str, str]] = []
     ranked = _score_nodes(walk, query)
     # Seeds from different top-level sections first: a question that spans a definition
@@ -195,6 +290,7 @@ def navigate_heuristic(source_id: str, tree: dict, query: str, load_text: TextLo
             queue.append((cited_by, "follow_backref",
                           f"{walk.nodes[cited_by].get('title')} cites {walk.nodes[nid].get('title')}"))
     walk.result.stopped = "budget" if queue else "exhausted"
+    _extractive_answer(walk.result, query)
     return walk.result
 
 
@@ -227,8 +323,8 @@ _STEP_PROMPT = """问题：{query}
 
 
 def navigate_llm(source_id: str, tree: dict, query: str, load_text: TextLoader, llm: LLMJson, *,
-                 max_hops: int = 6, max_chars: int = 48000) -> NavigationResult:
-    walk = _Walk(source_id, tree, load_text, max_hops, max_chars, "llm")
+                 max_hops: int = 6, max_chars: int = 48000, max_tokens: int = 16000) -> NavigationResult:
+    walk = _Walk(source_id, tree, load_text, max_hops, max_chars, "llm", max_tokens)
     toc = outline(tree)
     first = llm(_SELECT_PROMPT.format(query=query, outline=toc))
     if not isinstance(first, dict) or not first.get("select"):
@@ -255,22 +351,29 @@ def navigate_llm(source_id: str, tree: dict, query: str, load_text: TextLoader, 
         if step.get("done"):
             walk.result.stopped = "answered"
             walk.result.reasoning_trace[-1]["conclusion"] = str(step.get("reason") or "")
+            if not _llm_answer(walk.result, query, llm):
+                _extractive_answer(walk.result, query)
             return walk.result
         for n in step.get("next") or []:
             if str(n) in walk.nodes and str(n) not in walk.read:
                 queue.append((str(n), "follow", str(step.get("reason") or "")))
     walk.result.stopped = "budget" if queue or not walk.budget_left() else "exhausted"
+    if not _llm_answer(walk.result, query, llm):
+        _extractive_answer(walk.result, query)
     return walk.result
 
 
 def navigate(source_id: str, tree: dict, query: str, load_text: TextLoader, *, llm: LLMJson | None = None,
-             max_hops: int = 6, max_chars: int = 48000) -> NavigationResult:
+             max_hops: int = 6, max_chars: int = 48000, max_tokens: int = 16000) -> NavigationResult:
     """LLM navigation when a model is available, heuristic otherwise or on model failure."""
     if llm is not None:
         try:
-            return navigate_llm(source_id, tree, query, load_text, llm, max_hops=max_hops, max_chars=max_chars)
+            return navigate_llm(source_id, tree, query, load_text, llm, max_hops=max_hops,
+                                max_chars=max_chars, max_tokens=max_tokens)
         except Exception as exc:  # model down, malformed JSON, unknown ids: fall back, never fail retrieval
-            result = navigate_heuristic(source_id, tree, query, load_text, max_hops=max_hops, max_chars=max_chars)
+            result = navigate_heuristic(source_id, tree, query, load_text, max_hops=max_hops,
+                                        max_chars=max_chars, max_tokens=max_tokens)
             result.reasoning_trace.insert(0, {"step": 0, "action": "fallback", "reason": f"llm navigation failed: {exc}"})
             return result
-    return navigate_heuristic(source_id, tree, query, load_text, max_hops=max_hops, max_chars=max_chars)
+    return navigate_heuristic(source_id, tree, query, load_text, max_hops=max_hops,
+                              max_chars=max_chars, max_tokens=max_tokens)

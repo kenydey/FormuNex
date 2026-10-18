@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
 from app.db.database import Base, make_engine, make_session_factory
 from app.db.entity_store import EntityStore
 from app.main import app
@@ -30,7 +30,7 @@ def test_feedback_report_recent_bias_from_prediction_bias(tmp_path, monkeypatch)
     import app.db.entity_store as es_mod
 
     monkeypatch.setattr(es_mod, "_store", ent)
-    store = SqliteCampaignStore(factory)
+    store = LocalCampaignStore(factory)
     reset_campaign_store(store)
 
     from app.db.models import Campaign

@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
 from app.db.database import Base, make_engine, make_session_factory
 from app.db.models import ExperimentRow
 from app.db.project_store import ProjectStore
@@ -55,7 +55,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(wiki_store_mod, "_store", wiki)
     monkeypatch.setattr(ps_mod, "_store", projects)
     monkeypatch.setattr(db_mod, "default_session_factory", lambda: factory)
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     store = JsonExperimentStore(str(tmp_path / "exp.json"))
     registry._store = store  # noqa: SLF001
     registry.load()

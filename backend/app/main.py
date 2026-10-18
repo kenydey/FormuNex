@@ -296,6 +296,11 @@ app.add_middleware(
     # diagnostics from response headers (Content-Disposition, X-Label-Overflow, X-Font-Embedded, …).
     expose_headers=["*"],
 )
+# Phase 2D (2-25): HTTP audit is outermost so it also sees requests rejected by auth (401) / rate limiting
+# (429). It skips OPTIONS itself, so CORS preflight passes through untouched.
+from .middleware.audit import AuditMiddleware
+
+app.add_middleware(AuditMiddleware)
 
 app.include_router(research.router)
 app.include_router(doe.router)

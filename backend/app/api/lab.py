@@ -184,7 +184,9 @@ def dispatch_plan(body: DispatchIn, user: CurrentUser = Depends(current_user)) -
                     domain=body.domain, project_id=body.project_id, predictions=body.predictions,
                     assignee_id=body.assignee_id, include_infeasible=body.include_infeasible, due_at=body.due_at)
         session.commit()
-        return {"created": [tasks.task_dict(session, t) for t in out["created"]], "skipped": out["skipped"]}
+        return {"created": [tasks.task_dict(session, t) for t in out["created"]], "skipped": out["skipped"],
+                # 补齐计划 2-10: 下发任务因子 vs 契约工艺窗口的偏离警告（只警告，不拦截）。
+                "process_window_warnings": out.get("process_window_warnings", [])}
 
 
 @router.post("/tasks", status_code=201)
@@ -196,8 +198,13 @@ def create_task(body: TaskIn, user: CurrentUser = Depends(current_user)) -> dict
         t = _call(session, tasks.create_task, factors=body.factors, metrics=body.metrics, domain=body.domain,
                   user_id=user.id, project_id=body.project_id, formulation_version_id=body.formulation_version_id,
                   assignee_id=body.assignee_id, due_at=body.due_at, notes=body.notes, substrate=body.substrate)
+        # 补齐计划 2-10: 单任务创建同样做工艺窗口偏离警告（只警告，不拦截）。
+        warnings = tasks.task_process_window_warnings(session, body.project_id, body.factors)
         session.commit()
-        return tasks.task_dict(session, t)
+        out = tasks.task_dict(session, t)
+        if warnings:
+            out["process_window_warnings"] = warnings
+        return out
 
 
 @router.get("/tasks")
@@ -258,6 +265,111 @@ def cancel_task(task_id: str, body: ReasonIn, user: CurrentUser = Depends(curren
         t = _call(session, tasks.cancel, task_id, user.id, body.reason)
         session.commit()
         return tasks.task_dict(session, t)
+
+
+# --------------------------------------------------------------------------- task attachments (补齐计划 2-14)
+
+
+def _task_attachments_base() -> Any:
+    """Attachments root: <db-dir>/attachments/lab_tasks (与实验附件同根)."""
+    from pathlib import Path
+
+    from ..config import get_settings
+
+    base = Path(get_settings().db_url.replace("sqlite:///", "")).parent / "attachments" / "lab_tasks"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _attachment_dict(row) -> dict[str, Any]:
+    return {"id": row.id, "task_id": row.task_id, "filename": row.filename,
+            "content_type": row.content_type, "size_bytes": row.size_bytes, "sha256": row.sha256,
+            "uploaded_by": row.uploaded_by,
+            "created_at": row.created_at.isoformat() if row.created_at else None}
+
+
+@router.get("/tasks/{task_id}/attachments")
+def list_task_attachments(task_id: str) -> list[dict[str, Any]]:
+    from sqlalchemy import select
+
+    from ..db.models_lab import LabTaskAttachmentRow, LabTaskRow
+
+    with _session() as session:
+        if session.get(LabTaskRow, task_id) is None:
+            raise HTTPException(status_code=404, detail="任务单不存在")
+        rows = session.execute(select(LabTaskAttachmentRow).where(
+            LabTaskAttachmentRow.task_id == task_id).order_by(LabTaskAttachmentRow.created_at)).scalars().all()
+        return [_attachment_dict(r) for r in rows]
+
+
+@router.post("/tasks/{task_id}/attachments", status_code=201)
+async def upload_task_attachment(task_id: str, file: UploadFile = File(...),
+                                 user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """上传任务附件（原始记录 / 图谱 / 现场照片）。大小上限走 ingest_max_upload_bytes。"""
+    import hashlib
+    import uuid
+
+    from ..db.models_lab import LabTaskAttachmentRow, LabTaskRow
+    from ._uploads import read_upload_capped
+
+    user.require("lab.execute")
+    filename = (file.filename or "attachment").rsplit("/", 1)[-1].rsplit("\\", 1)[-1][:255] or "attachment"
+    content = await read_upload_capped(file, filename)
+    digest = hashlib.sha256(content).hexdigest()
+    with _session() as session:
+        if session.get(LabTaskRow, task_id) is None:
+            raise HTTPException(status_code=404, detail="任务单不存在")
+        base = _task_attachments_base()
+        dest = base / task_id / f"{uuid.uuid4().hex[:12]}-{filename}"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+        row = LabTaskAttachmentRow(
+            id=str(uuid.uuid4()), task_id=task_id, filename=filename,
+            content_type=file.content_type or "", size_bytes=len(content), sha256=digest,
+            storage_path=str(dest.relative_to(base)), uploaded_by=user.id)
+        session.add(row)
+        session.commit()
+        return _attachment_dict(row)
+
+
+@router.get("/tasks/{task_id}/attachments/{attachment_id}/download")
+def download_task_attachment(task_id: str, attachment_id: str):
+    from fastapi.responses import FileResponse
+
+    from ..db.models_lab import LabTaskAttachmentRow
+
+    with _session() as session:
+        row = session.get(LabTaskAttachmentRow, attachment_id)
+        if row is None or row.task_id != task_id:
+            raise HTTPException(status_code=404, detail="附件不存在")
+        path = _task_attachments_base() / row.storage_path
+        if not path.is_file():
+            raise HTTPException(status_code=410, detail="附件文件已丢失")
+        return FileResponse(path, filename=row.filename,
+                            media_type=row.content_type or "application/octet-stream")
+
+
+@router.delete("/tasks/{task_id}/attachments/{attachment_id}")
+def delete_task_attachment(task_id: str, attachment_id: str,
+                           user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    import logging
+
+    from ..db.models_lab import LabTaskAttachmentRow
+
+    user.require("doe.write")
+    with _session() as session:
+        row = session.get(LabTaskAttachmentRow, attachment_id)
+        if row is None or row.task_id != task_id:
+            raise HTTPException(status_code=404, detail="附件不存在")
+        path = _task_attachments_base() / row.storage_path
+        session.delete(row)
+        session.commit()
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError as exc:
+            logging.getLogger(__name__).warning("task attachment file delete failed (%s)", exc)
+        return {"ok": True, "id": attachment_id}
 
 
 @router.get("/samples/{sample_no}")
@@ -462,6 +574,8 @@ class PushIn(BaseModel):
 
 class PullIn(BaseModel):
     task_ids: list[str] | None = None
+    # 补齐计划 2-15: 只拉取该 ISO 时间之后变更的值（服务端无法过滤的连接器忽略，content_hash 兜底）。
+    since: str | None = None
 
 
 class ResolveIn(BaseModel):
@@ -497,7 +611,7 @@ def eln_pull(connector: str, body: PullIn, user: CurrentUser = Depends(current_u
     user.require("lab.review")
     with _session() as session:
         conn = _call(session, lambda _s: sync.get_connector(connector))
-        out = _call(session, sync.pull, conn, task_ids=body.task_ids)
+        out = _call(session, sync.pull, conn, task_ids=body.task_ids, since=body.since)
         session.commit()
         return out
 

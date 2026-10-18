@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.db.campaign_store import SqliteCampaignStore
+from app.db.campaign_store import LocalCampaignStore
 from app.db.database import make_engine, make_session_factory
 from app.domain.schemas import DOEPlan, DOERun, ProductDomain, Requirement
 
@@ -25,7 +25,7 @@ def _plan() -> DOEPlan:
 def test_sqlite_sync_methods_skip_asyncio_run():
     engine = make_engine("sqlite:///:memory:")
     factory = make_session_factory(engine)
-    store = SqliteCampaignStore(factory)
+    store = LocalCampaignStore(factory)
     campaign = asyncio.run(store.create_from_plan(_plan()))
     with patch("app.db.campaign_store.asyncio.run", side_effect=AssertionError("asyncio.run called")):
         rows = store.list_rows_sync(campaign.id)
@@ -37,7 +37,7 @@ def test_sqlite_sync_methods_skip_asyncio_run():
 def test_sqlite_sync_under_running_event_loop():
     engine = make_engine("sqlite:///:memory:")
     factory = make_session_factory(engine)
-    store = SqliteCampaignStore(factory)
+    store = LocalCampaignStore(factory)
 
     async def _run() -> None:
         campaign = await store.create_from_plan(_plan())
@@ -65,7 +65,7 @@ def test_fetch_campaign_data_uses_sqlite_sync_path():
 
     engine = make_engine("sqlite:///:memory:")
     factory = make_session_factory(engine)
-    store = SqliteCampaignStore(factory)
+    store = LocalCampaignStore(factory)
     req = Requirement(domain=ProductDomain.anticorrosion_coating)
     campaign = asyncio.run(store.create_from_plan(_plan(), req=req))
     rows = store.list_rows_sync(campaign.id)

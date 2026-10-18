@@ -65,6 +65,10 @@ def _instrument(session: Session, instrument_id: str | None, warnings: list[str]
     if not instrument_id:
         return None
     instr = session.get(InstrumentRow, instrument_id)
+    if instr is None:
+        # 补齐计划 2-14: 批量录入网格里填的是资产编号（非 UUID），回退按 asset_no 解析。
+        instr = session.execute(select(InstrumentRow).where(
+            InstrumentRow.asset_no == instrument_id, InstrumentRow.active.is_(True))).scalars().first()
     if instr is None or not instr.active:
         raise LabError("仪器不存在或已停用")
     cal = calibration(instr)

@@ -11,7 +11,7 @@ from .schema import dump_page, project_report_path, safe_key
 from .storm_draft import draft_all_sections
 from .storm_outline import generate_outline, persist_outline_sidecar
 from .storm_polish import stitch_and_polish
-from .storm_schema import StormReportState
+from .storm_schema import ReportOutline, StormReportState
 
 logger = logging.getLogger(__name__)
 
@@ -231,8 +231,13 @@ def run_storm_report(
     campaign_id: str | None = None,
     task_id: str = "",
     progress_cb: ProgressCb | None = None,
+    outline: ReportOutline | None = None,
 ) -> dict[str, Any]:
-    """Full Pre-writing → Writing → Polish pipeline."""
+    """Full Pre-writing → Writing → Polish pipeline.
+
+    ``outline`` (plan 2-5): when the caller supplies an edited outline, skip
+    generation and draft from it — the frontend's "generate from outline" step.
+    """
     _require_storm_enabled()
     pid = (project_id or "").strip()
     if not pid:
@@ -266,15 +271,16 @@ def run_storm_report(
             logger.debug("storm ensure dossier soft-failed: %s", exc)
 
     pack = get_dossier_pack(pid, campaign_id=campaign_id)
-    outline = generate_outline(
-        pack,
-        project_id=pid,
-        topic=topic,
-        max_sections=max_sec,
-        perspectives=perspectives,
-        use_llm=use_llm,
-        progress_cb=progress_cb,
-    )
+    if outline is None:
+        outline = generate_outline(
+            pack,
+            project_id=pid,
+            topic=topic,
+            max_sections=max_sec,
+            perspectives=perspectives,
+            use_llm=use_llm,
+            progress_cb=progress_cb,
+        )
     state.outline = outline
     outline_rel = ""
     try:

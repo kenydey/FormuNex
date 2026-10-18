@@ -1831,6 +1831,18 @@ def run_wiki_storm_report_task(self, payload: dict) -> dict:
         )
 
     try:
+        # Plan 2-5: an edited outline travels in the payload; invalid payloads
+        # fall back to generated outline (never fail the report for it).
+        outline = None
+        raw_outline = payload.get("outline")
+        if isinstance(raw_outline, dict):
+            try:
+                from ..services.wiki.storm_schema import ReportOutline
+
+                outline = ReportOutline.model_validate(raw_outline)
+            except Exception as exc:
+                logger.warning("STORM: ignoring invalid outline in payload: %s", exc)
+                outline = None
         result = run_storm_report(
             str(payload.get("project_id") or ""),
             topic=str(payload.get("topic") or ""),
@@ -1844,6 +1856,7 @@ def run_wiki_storm_report_task(self, payload: dict) -> dict:
             campaign_id=payload.get("campaign_id"),
             task_id=task_id,
             progress_cb=progress_cb,
+            outline=outline,
         )
         # Drop heavy markdown from terminal snapshot if enormous; keep path.
         slim = {

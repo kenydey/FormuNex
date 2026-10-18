@@ -124,7 +124,7 @@ def test_grayscale_dossier_report_and_kg_stats(env):
 
 def test_sync_kg_written_bumps_measured_material(env, monkeypatch):
     """G5 code-side: workbench sync returns kg_written and stats.material grows."""
-    from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+    from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
     from app.domain.schemas import DOEPlan, DOERun, ObjectiveSpec
 
     entities: EntityStore = env["entities"]
@@ -135,7 +135,7 @@ def test_sync_kg_written_bumps_measured_material(env, monkeypatch):
         )
 
     monkeypatch.setenv("FORMUNEX_CAMPAIGN_BACKEND", "sqlite")
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     get_settings.cache_clear()
     try:
         before = TestClient(app).get("/api/kg/feedback/stats").json()["measured_material"]

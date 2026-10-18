@@ -54,6 +54,8 @@ _INFRA_ENV_KEYS = frozenset({
     # used to reject a documented override with "Unknown FORMUNEX_* ...":
     "FORMUNEX_DATA_DIR",    # services/tech_report.py data root (default ./data)
     "FORMUNEX_RULES_DIR",   # services/rule_loader.py editable rules directory
+    # 2-11：基材配置扩展，domain/schemas.py 的 extra_substrates() 直接读环境变量。
+    "FORMUNEX_EXTRA_SUBSTRATES",
     "FORMUNEX_DEEPEVAL",    # scripts/deepeval_gate.py on/off switch (CI)
     "FORMUNEX_RIGOR_GATE",  # scripts/rigor_gate.py skip switch (CI)
     # Deployment knobs read by compose / shell scripts, never by the app. They live in the
@@ -139,6 +141,12 @@ class Settings(BaseSettings):
     # Optimization loop defaults.
     optimize_iterations: int = 24
     top_n_formulas: int = 5
+    # 补齐 2-17: optimizer tuning rules (edited via /api/cockpit/optimizer-rules).
+    # Only the numpy-UCB engine + early-stop mixin read these; BoTorch LogEI,
+    # Optuna TPE and BayBE ignore them.
+    optimizer_ucb_kappa: float = 1.5
+    optimizer_early_stop_patience: int = 5
+    optimizer_early_stop_min_delta: float = 1e-4
 
     # Multi-formulation recommend P1 — Top-N diversity + trade-off analysis.
     recommend_default_n: int = 6
@@ -955,6 +963,8 @@ class Settings(BaseSettings):
     # 每篇文档的寻址预算：最多跳数，以及交给 LLM 的节点正文总字符数（约 16k token）。
     pageindex_max_hops: int = 6
     pageindex_max_input_chars: int = 48000
+    pageindex_max_input_tokens: int = 16000  # plan §5.1.1 budget: 16k input tokens per document walk
+    pageindex_colbert_rerank: bool = True  # plan §5.1.1: stage 1 = hybrid_search + ColBERT rerank
     # PLM documents (方案 §5.5.4-5.5.9): rendered PDF / Word files and uploaded templates.
     plm_storage_dir: str = "./data/plm"
     # TrueType CJK font embedded in generated PDFs; empty = search system fonts (see render/fonts.py).
@@ -1080,12 +1090,12 @@ class Settings(BaseSettings):
     # DOE workbench / campaign persistence (Headless ELN).
     # Top-5″ #2（2026-09-25）：产品默认 soft-degrade —
     # ``auto`` 探测 Datalab，可达则以其为 SSOT；不可达且 ``datalab_required=false``
-    # 时回退 sqlite「本地台账」。Docker ELN 栈仍显式 ``datalab`` + REQUIRED=true。
-    # 显式 ``sqlite`` 仍主要用于 CI/单测隔离。
+    # 时回退到本地台账（主数据库，与 db_url 同方言，非 SQLite 专属）。Docker ELN 栈仍显式 ``datalab`` + REQUIRED=true。
+    # 显式 ``sqlite`` 是 ``native`` 的已弃用别名（Phase 2D 2-24 起，仍接受并警告）。
     # FormuNex M7 (方案 v1.1 §5.3.1): ``native`` is the default — FormuNex's own database is the system of record
-    # for experiments (``sqlite`` is the older name of the same local store). ``datalab`` / ``auto`` keep Datalab
+    # for experiments. ``datalab`` / ``auto`` keep Datalab
     # as an external store for existing installations; new ones sync external ELNs through connectors instead.
-    campaign_backend: str = "native"  # native | datalab | auto | sqlite
+    campaign_backend: str = "native"  # native | datalab | auto | sqlite (deprecated alias of native)
     datalab_api_url: str = "http://localhost:5001"
     datalab_api_token: str = ""  # DATALAB-API-KEY header（平台非 TESTING 模式必需）
     datalab_timeout_seconds: float = 30.0

@@ -1045,6 +1045,42 @@ class AcquisitionSnapshot(Base):
     success_rate: Mapped[float] = mapped_column(Float, default=1.0)
 
 
+class McpToolPolicyRow(Base):
+    """MCP 逐工具审批策略（Phase 2D 2-24：从独立 SQLite 文件迁入主库）。
+
+    One row per (server_id, tool_name, scope); decision is allow / ask / block.
+    """
+
+    __tablename__ = "mcp_tool_policies"
+
+    server_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tool_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(16), primary_key=True)
+    decision: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class McpApprovalRequestRow(Base):
+    """MCP 逐工具审批挂起请求（Phase 2D 2-24：从独立 SQLite 文件迁入主库）。
+
+    ``requested_at`` / ``decided_at`` are monotonic-clock seconds (the ask
+    timeout is measured on the monotonic clock, not wall time).
+    """
+
+    __tablename__ = "mcp_approval_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    server_id: Mapped[str] = mapped_column(String(128), index=True)
+    tool_name: Mapped[str] = mapped_column(String(128), index=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    requested_at: Mapped[float] = mapped_column(Float)
+    decided_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    arguments_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 # FormuNex domain tables live in sibling modules; importing them here registers
 # them on ``Base.metadata`` so create_all / alembic baseline see every table.
 from . import models_identity, models_lab, models_plm, models_regulatory  # noqa: E402,F401

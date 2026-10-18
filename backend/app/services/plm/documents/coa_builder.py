@@ -47,6 +47,11 @@ class SpecItem:
     text: str | None = None  # qualitative requirement, e.g. "均匀无结块"
     comparison: str = "full"  # full | rounded
     decimals: int | None = None  # rounded comparison precision (default: precision of the limits)
+    # 补齐计划 2-8: 检验方法标准号（与 ReleaseSpec.test_method_standard 同名字段）。
+    # 渲染时优先用它；为空则回退 method（老快照/老调用只有 method）。
+    # 注意：必须放在字段列表末尾——位置参数构造 SpecItem(metric, label, unit, method, min, max, ...)
+    # 是既有调用约定，中间插入会错位。
+    test_method_standard: str = ""
 
 
 @dataclass
@@ -125,7 +130,9 @@ def build_coa(ctx: CoaContext) -> dict:
         verdicts.append(verdict)
         rows.append([spec.label or spec.metric, spec.unit, _requirement(spec, lang), shown,
                      {"PASS": t(lang, "合格", "PASS"), "FAIL": t(lang, "不合格", "FAIL"),
-                      "NO_DATA": t(lang, "未检", "NOT TESTED")}[verdict], spec.method])
+                      "NO_DATA": t(lang, "未检", "NOT TESTED")}[verdict],
+                     # 补齐计划 2-8: 优先显示 test_method_standard，老数据回退 method。
+                     spec.test_method_standard or spec.method])
     r = doc.section(2, "results", t(lang, "检验结果", "Test results"))
     r.table("results", [t(lang, "检验项目", "Item"), t(lang, "单位", "Unit"), t(lang, "技术要求", "Specification"),
                         t(lang, "检验结果", "Result"), t(lang, "单项判定", "Verdict"), t(lang, "检验方法", "Method")],

@@ -1,22 +1,32 @@
 """MCP 逐工具审批三态（W2-7 / P1-3）。
 
 Allow / Ask / Block 按工具粒度门禁，决策按 once / session / project / global
-作用域持久化到独立 SQLite（``mcp_tool_policies``），默认全部 ask。
+作用域持久化到主数据库（Phase 2D 2-24 起：``mcp_tool_policies`` /
+``mcp_approval_requests``，alembic 0062 建表；旧的独立 ``mcp_approval.db``
+SQLite 文件不再使用），默认全部 ask。
 
 仓库内无现成的 approval card / 审批机制（2026-09-27 核查结论），因此：
-ask 无决策时后端默认 deny 并写审计日志，request_id 留给未来的前端审批 UI；
+ask 无决策时后端默认 deny 并写审计日志，request_id 留给前端审批 UI；
 审批模块自身异常时按 ask(deny) 处理，绝不静默放行。
+
+All functions take a ``session_factory`` (default: the app's main-DB
+factory) instead of a SQLite file path. ``evaluate_call`` / ``decide_approval``
+each run in ONE ``commit_session`` transaction.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
-import sqlite3
-import threading
 import time
-from pathlib import Path
+import uuid
 from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
+from ..db.models import McpApprovalRequestRow, McpToolPolicyRow
+from ..db.session_utils import commit_session
 
 logger = logging.getLogger(__name__)
 
@@ -26,62 +36,17 @@ SCOPES = ("once", "session", "project", "global")
 # ask 挂起超时：5 分钟无决策自动 deny。用单调时钟，不起常驻线程。
 ASK_TIMEOUT_S = 300.0
 
-_LOCK = threading.Lock()
-
-
-def _default_db_path() -> Path:
-    path = Path("./data").resolve() / "mcp_approval.db"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def ensure_store(path: str | Path | None = None) -> Path:
-    """建表（独立 ensure，不动 alembic），幂等。返回 db 路径。"""
-    db = Path(path) if path else _default_db_path()
-    db.parent.mkdir(parents=True, exist_ok=True)
-    with _LOCK, sqlite3.connect(db) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS mcp_tool_policies (
-                server_id  TEXT NOT NULL,
-                tool_name  TEXT NOT NULL,
-                scope      TEXT NOT NULL,
-                decision   TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                PRIMARY KEY (server_id, tool_name, scope)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS mcp_approval_requests (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                server_id    TEXT NOT NULL,
-                tool_name    TEXT NOT NULL,
-                session_id   TEXT,
-                project_id   TEXT,
-                status       TEXT NOT NULL DEFAULT 'pending',
-                requested_at REAL NOT NULL,
-                decided_at   REAL
-            )
-            """
-        )
-        # Tool-call arguments shown to the approver (redacted JSON). Added after the table shipped, so older
-        # stores get the column here (this store is outside Alembic; ``ensure_store`` is its migration).
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(mcp_approval_requests)").fetchall()}
-        if "arguments_json" not in cols:
-            conn.execute("ALTER TABLE mcp_approval_requests ADD COLUMN arguments_json TEXT")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mcp_approval_req_tool "
-            "ON mcp_approval_requests (server_id, tool_name, status)"
-        )
-    return db
-
-
 _SECRET_KEY_RE = re.compile(r"token|key|password|passwd|secret|authorization|credential|cookie", re.IGNORECASE)
 REDACTED = "***"
 _MAX_ARGS_JSON = 20_000
+
+
+def _session_factory(session_factory: sessionmaker[Session] | None) -> sessionmaker[Session]:
+    if session_factory is not None:
+        return session_factory
+    from ..db.database import default_session_factory
+
+    return default_session_factory()
 
 
 def redact_arguments(value: Any, _depth: int = 0) -> Any:
@@ -128,13 +93,29 @@ def _norm(server_id: str, tool_name: str) -> tuple[str, str]:
     return str(server_id or "").strip(), str(tool_name or "").strip()
 
 
+def _set_policy_in_session(
+    session: Session, server_id: str, tool_name: str, decision: str, scope: str, *, now: float
+) -> None:
+    row = session.get(McpToolPolicyRow, (server_id, tool_name, scope))
+    if row is None:
+        session.add(
+            McpToolPolicyRow(
+                server_id=server_id, tool_name=tool_name, scope=scope,
+                decision=decision, created_at=now, updated_at=now,
+            )
+        )
+    else:
+        row.decision = decision
+        row.updated_at = now
+
+
 def set_policy(
     server_id: str,
     tool_name: str,
     decision: str,
     scope: str = "global",
     *,
-    path: str | Path | None = None,
+    session_factory: sessionmaker[Session] | None = None,
 ) -> dict[str, Any]:
     """写入一条策略。decision 非法或 scope 非法时抛 ValueError。"""
     if decision not in DECISIONS:
@@ -144,17 +125,8 @@ def set_policy(
     sid, tool = _norm(server_id, tool_name)
     if not sid or not tool:
         raise ValueError("server_id / tool_name 不能为空")
-    db = ensure_store(path)
-    now = time.time()
-    with _LOCK, sqlite3.connect(db) as conn:
-        conn.execute(
-            "INSERT INTO mcp_tool_policies "
-            "(server_id, tool_name, scope, decision, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (server_id, tool_name, scope) DO UPDATE SET "
-            "decision = excluded.decision, updated_at = excluded.updated_at",
-            (sid, tool, scope, decision, now, now),
-        )
+    with commit_session(_session_factory(session_factory)) as session:
+        _set_policy_in_session(session, sid, tool, decision, scope, now=time.time())
     return {"ok": True, "server_id": sid, "tool_name": tool, "scope": scope, "decision": decision}
 
 
@@ -162,17 +134,17 @@ def get_policies(
     server_id: str,
     tool_name: str,
     *,
-    path: str | Path | None = None,
+    session_factory: sessionmaker[Session] | None = None,
 ) -> dict[str, str]:
     """返回 {scope: decision}；无策略时返回 {}（调用方按默认 ask 处理）。"""
     sid, tool = _norm(server_id, tool_name)
-    db = ensure_store(path)
-    with _LOCK, sqlite3.connect(db) as conn:
-        rows = conn.execute(
-            "SELECT scope, decision FROM mcp_tool_policies WHERE server_id = ? AND tool_name = ?",
-            (sid, tool),
-        ).fetchall()
-    return {scope: decision for scope, decision in rows}
+    with _session_factory(session_factory)() as session:
+        rows = session.execute(
+            select(McpToolPolicyRow).where(
+                McpToolPolicyRow.server_id == sid, McpToolPolicyRow.tool_name == tool
+            )
+        ).scalars()
+        return {row.scope: row.decision for row in rows}
 
 
 def effective_decision(policies: dict[str, str]) -> str:
@@ -187,23 +159,31 @@ def effective_decision(policies: dict[str, str]) -> str:
     return "ask"
 
 
-def _pending_request(
-    conn: sqlite3.Connection, sid: str, tool: str
-) -> dict[str, Any] | None:
-    row = conn.execute(
-        "SELECT id, requested_at FROM mcp_approval_requests "
-        "WHERE server_id = ? AND tool_name = ? AND status = 'pending' "
-        "ORDER BY id DESC LIMIT 1",
-        (sid, tool),
-    ).fetchone()
-    if not row:
-        return None
-    return {"id": row[0], "requested_at": row[1]}
-
-
 def _audit(event: str, sid: str, tool: str, **fields: Any) -> None:
     detail = " ".join(f"{k}={v}" for k, v in fields.items())
     logger.warning("MCP 审批审计 event=%s server=%s tool=%s %s", event, sid, tool, detail)
+
+
+def _policies_in_session(session: Session, sid: str, tool: str) -> dict[str, str]:
+    rows = session.execute(
+        select(McpToolPolicyRow).where(
+            McpToolPolicyRow.server_id == sid, McpToolPolicyRow.tool_name == tool
+        )
+    ).scalars()
+    return {row.scope: row.decision for row in rows}
+
+
+def _pending_in_session(session: Session, sid: str, tool: str) -> McpApprovalRequestRow | None:
+    return session.execute(
+        select(McpApprovalRequestRow)
+        .where(
+            McpApprovalRequestRow.server_id == sid,
+            McpApprovalRequestRow.tool_name == tool,
+            McpApprovalRequestRow.status == "pending",
+        )
+        .order_by(McpApprovalRequestRow.requested_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
 
 
 def evaluate_call(
@@ -212,7 +192,7 @@ def evaluate_call(
     *,
     session_id: str | None = None,
     project_id: str | None = None,
-    path: str | Path | None = None,
+    session_factory: sessionmaker[Session] | None = None,
     now: float | None = None,
     arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -230,54 +210,48 @@ def evaluate_call(
     if not sid or not tool:
         return {"verdict": "deny", "reason": "invalid_tool_identity"}
     mono = time.monotonic() if now is None else now
-    db = ensure_store(path)
+    with commit_session(_session_factory(session_factory)) as session:
+        eff = effective_decision(_policies_in_session(session, sid, tool))
+        if eff == "allow":
+            return {"verdict": "allow"}
+        if eff == "block":
+            _audit("policy_block", sid, tool)
+            return {"verdict": "deny", "reason": "policy_block"}
 
-    eff = effective_decision(get_policies(sid, tool, path=db))
-    if eff == "allow":
-        return {"verdict": "allow"}
-    if eff == "block":
-        _audit("policy_block", sid, tool)
-        return {"verdict": "deny", "reason": "policy_block"}
-
-    # eff == "ask"：查挂起的审批请求
-    with _LOCK, sqlite3.connect(db) as conn:
-        pending = _pending_request(conn, sid, tool)
+        # eff == "ask"：查挂起的审批请求
+        pending = _pending_in_session(session, sid, tool)
         if pending is None:
-            cur = conn.execute(
-                "INSERT INTO mcp_approval_requests "
-                "(server_id, tool_name, session_id, project_id, status, requested_at, arguments_json) "
-                "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
-                (sid, tool, session_id, project_id, mono, _arguments_json(arguments)),
+            request_id = str(uuid.uuid4())
+            session.add(
+                McpApprovalRequestRow(
+                    id=request_id, server_id=sid, tool_name=tool, session_id=session_id,
+                    project_id=project_id, status="pending", requested_at=mono,
+                    arguments_json=_arguments_json(arguments),
+                )
             )
-            request_id = cur.lastrowid
             _audit("approval_required", sid, tool, request_id=request_id)
             return {"verdict": "deny", "reason": "approval_required", "request_id": request_id}
-        age = mono - float(pending["requested_at"])
+        age = mono - float(pending.requested_at)
         if age >= ASK_TIMEOUT_S:
-            conn.execute(
-                "UPDATE mcp_approval_requests SET status = 'expired', decided_at = ? WHERE id = ?",
-                (mono, pending["id"]),
-            )
-            _audit("approval_timeout", sid, tool, request_id=pending["id"], age_s=round(age, 1))
-            return {"verdict": "deny", "reason": "approval_timeout", "request_id": pending["id"]}
+            pending.status = "expired"
+            pending.decided_at = mono
+            _audit("approval_timeout", sid, tool, request_id=pending.id, age_s=round(age, 1))
+            return {"verdict": "deny", "reason": "approval_timeout", "request_id": pending.id}
         if arguments is not None:
-            conn.execute(
-                "UPDATE mcp_approval_requests SET arguments_json = ? WHERE id = ?",
-                (_arguments_json(arguments), pending["id"]),
-            )
-        _audit("approval_pending", sid, tool, request_id=pending["id"], age_s=round(age, 1))
-        return {"verdict": "deny", "reason": "approval_pending", "request_id": pending["id"]}
+            pending.arguments_json = _arguments_json(arguments)
+        _audit("approval_pending", sid, tool, request_id=pending.id, age_s=round(age, 1))
+        return {"verdict": "deny", "reason": "approval_pending", "request_id": pending.id}
 
 
 def decide_approval(
-    request_id: int,
+    request_id: str,
     decision: str,
     *,
     scope: str = "once",
-    path: str | Path | None = None,
+    session_factory: sessionmaker[Session] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """对挂起的审批请求做决策（供未来前端审批 UI 调用）。
+    """对挂起的审批请求做决策（供前端审批 UI 调用）。
 
     allow → 按 scope 落一条 allow 策略；deny → 仅标记请求，不持久化拒绝。
     """
@@ -286,22 +260,52 @@ def decide_approval(
     if scope not in SCOPES:
         raise ValueError(f"scope 必须是 {SCOPES} 之一，得到 {scope!r}")
     mono = time.monotonic() if now is None else now
-    db = ensure_store(path)
-    with _LOCK, sqlite3.connect(db) as conn:
-        row = conn.execute(
-            "SELECT server_id, tool_name, status FROM mcp_approval_requests WHERE id = ?",
-            (request_id,),
-        ).fetchone()
-        if not row:
+    with commit_session(_session_factory(session_factory)) as session:
+        row = session.get(McpApprovalRequestRow, request_id)
+        if row is None:
             return {"ok": False, "error": "request_not_found"}
-        sid, tool, status = row
-        if status != "pending":
-            return {"ok": False, "error": f"request_not_pending: {status}"}
-        conn.execute(
-            "UPDATE mcp_approval_requests SET status = ?, decided_at = ? WHERE id = ?",
-            ("approved" if decision == "allow" else "denied", mono, request_id),
-        )
-    if decision == "allow":
-        set_policy(sid, tool, "allow", scope, path=db)
-    _audit("approval_decided", sid, tool, request_id=request_id, decision=decision, scope=scope)
+        if row.status != "pending":
+            return {"ok": False, "error": f"request_not_pending: {row.status}"}
+        row.status = "approved" if decision == "allow" else "denied"
+        row.decided_at = mono
+        if decision == "allow":
+            _set_policy_in_session(session, row.server_id, row.tool_name, "allow", scope, now=time.time())
+    _audit("approval_decided", row.server_id, row.tool_name, request_id=request_id, decision=decision, scope=scope)
     return {"ok": True, "request_id": request_id, "decision": decision, "scope": scope}
+
+
+def list_pending(
+    *,
+    session_factory: sessionmaker[Session] | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Return currently pending MCP tool approval requests, with their (redacted) tool-call arguments.
+
+    Requests older than ``ASK_TIMEOUT_S`` are not actionable (the next
+    ``evaluate_call`` expires them) and are excluded.
+    """
+    mono = time.monotonic() if now is None else now
+    with _session_factory(session_factory)() as session:
+        rows = session.execute(
+            select(McpApprovalRequestRow)
+            .where(McpApprovalRequestRow.status == "pending")
+            .order_by(McpApprovalRequestRow.requested_at.asc())
+        ).scalars()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            age = mono - float(row.requested_at)
+            if age >= ASK_TIMEOUT_S:
+                continue
+            items.append(
+                {
+                    "request_id": row.id,
+                    "server_id": row.server_id,
+                    "tool_name": row.tool_name,
+                    "session_id": row.session_id,
+                    "project_id": row.project_id,
+                    "age_s": round(age, 1),
+                    # Tool-call arguments (secret-looking keys redacted); None when the call recorded none.
+                    "arguments": load_arguments(row.arguments_json),
+                }
+            )
+    return {"items": items, "total": len(items)}

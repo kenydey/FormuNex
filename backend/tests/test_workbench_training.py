@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
 from app.db.database import make_engine, make_session_factory
 from app.db.store import JsonExperimentStore
 from app.domain.schemas import DOEPlan, DOERun, ProductDomain, Requirement, ObjectiveSpec
@@ -35,7 +35,7 @@ def _sqlite_backend(monkeypatch, tmp_path):
     db_path = tmp_path / "wb_train.db"
     engine = make_engine(f"sqlite:///{db_path}")
     factory = make_session_factory(engine)
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     store = JsonExperimentStore(str(tmp_path / "exp.json"))
     registry._store = store  # noqa: SLF001
     registry.load()

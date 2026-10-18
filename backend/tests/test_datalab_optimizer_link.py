@@ -2,7 +2,7 @@
 
 覆盖:
 1. apply_lab_measurements: 明细行 + 父 ExperimentRow.measured 回写。
-2. sync 后 SqlExperimentStore 可见 lab 数据 (优化器消费点)。
+2. sync 后 LocalExperimentStore 可见 lab 数据 (优化器消费点)。
 3. lab_measurement_source: 有 lab 实测 -> "lab", 否则 "predictor_virtual"。
 4. block_experiment_id 冲突检测。
 5. POST /api/experiments/{id}/sync-datalab: 404 / 409(无item_id) /
@@ -134,9 +134,9 @@ def test_sync_end_to_end_visible_to_registry(factory, monkeypatch):
     assert report["validated"] is None
 
     # 模拟 load_prior_measurements 的 registry 路径
-    from app.db.store import SqlExperimentStore
+    from app.db.store import LocalExperimentStore
 
-    store = SqlExperimentStore(factory)
+    store = LocalExperimentStore(factory)
     recs = store.all()
     assert len(recs) == 1
     assert recs[0].source == "lab"
@@ -242,7 +242,7 @@ def test_sync_endpoint_409_on_block_conflict(tmp_path, monkeypatch, _fresh_regis
 def test_sync_endpoint_happy_path(tmp_path, monkeypatch, _fresh_registry):
     """mock Datalab: 行已绑定 item_id 时仍可用行上绑定同步 -> measured 回写。
 
-    注意: 绑定行同步后保持绑定身份, SqlExperimentStore 仍过滤该行
+    注意: 绑定行同步后保持绑定身份, LocalExperimentStore 仍过滤该行
     (Datalab store 的管辖范围); 本测试不断言 registry 可见性。
     """
     import app.services.datalab_sync as dl_mod
@@ -273,14 +273,14 @@ def test_sync_endpoint_happy_path(tmp_path, monkeypatch, _fresh_registry):
 
 def test_sync_endpoint_body_item_id_visible_to_optimizer(tmp_path, monkeypatch, _fresh_registry):
     """P0-2 可见性修复的核心回归测试: 本地行(item_id=None) + 请求体传
-    datalab_item_id -> 同步后行保持本地身份 -> SqlExperimentStore 可见 ->
+    datalab_item_id -> 同步后行保持本地身份 -> LocalExperimentStore 可见 ->
     load_prior_measurements() 能吃到 lab 实测 (优化器消费点)。
 
     这正是旧实现缺失的断言: 旧测试只断言了 row.measured 回写, 没走 API
     路径验证 registry 可见性。
     """
     import app.services.datalab_sync as dl_mod
-    from app.db.store import SqlExperimentStore
+    from app.db.store import LocalExperimentStore
 
     client = _app_client(tmp_path, monkeypatch)
     with client:
@@ -306,8 +306,8 @@ def test_sync_endpoint_body_item_id_visible_to_optimizer(tmp_path, monkeypatch, 
         assert row.measured == {"salt_spray_hours": 720.0}
         assert row.item_id is None  # 不回写绑定, 保持本地训练记录身份
 
-    # API 路径的真实可见性: 优化器经 SqlExperimentStore 看到 lab 数据
-    recs = SqlExperimentStore(fac).all()
+    # API 路径的真实可见性: 优化器经 LocalExperimentStore 看到 lab 数据
+    recs = LocalExperimentStore(fac).all()
     assert len(recs) == 1
     assert recs[0].source == "lab"
     assert recs[0].measured == {"salt_spray_hours": 720.0}

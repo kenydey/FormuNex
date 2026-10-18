@@ -1,4 +1,4 @@
-"""Campaign workbench repository — Datalab Headless ELN (SSOT) with sqlite JSON fallback."""
+"""Campaign workbench repository — Datalab Headless ELN (SSOT) with local main-DB fallback."""
 from __future__ import annotations
 
 import asyncio
@@ -153,13 +153,13 @@ class CampaignStoreInterface(ABC):
     async def set_row_tags(
         self, campaign_id: int, row_id: int, tags: list[str]
     ) -> WorkbenchRow | None:
-        """只更新单行 tags（默认实现返回 None；子类覆盖为字段级更新）。"""
+        """只更新单行 tags(默认实现返回 None；子类覆盖为字段级更新)。"""
         return None
 
     async def set_row_note(
         self, campaign_id: int, row_id: int, note: str | None
     ) -> WorkbenchRow | None:
-        """只更新单行 note（默认实现返回 None；子类覆盖为字段级更新）。"""
+        """只更新单行 note(默认实现返回 None；子类覆盖为字段级更新)。"""
         return None
 
     @abstractmethod
@@ -201,12 +201,12 @@ class CampaignStoreInterface(ABC):
         return _run_async(self.get_campaign(campaign_id))
 
     async def close(self) -> None:
-        """Release external resources (no-op for sqlite fallback)."""
+        """Release external resources (no-op for the local main-DB store)."""
         return None
 
 
 class _CampaignMetaMixin:
-    """Shared Campaign metadata writes (SQLite — not experiment measurements)."""
+    """Shared Campaign metadata writes (main database — not experiment measurements)."""
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -279,7 +279,7 @@ class _CampaignMetaMixin:
         self._append_loop_history(campaign_id, entry)
 
     def clear_loop_history_sync(self, campaign_id: int) -> bool:
-        """清空 campaign 的 loop_history（收敛后手动重启）。返回 False 表示 campaign 不存在。"""
+        """清空 campaign 的 loop_history(收敛后手动重启)。返回 False 表示 campaign 不存在。"""
         with self._write_lock:
             with commit_session(self._session_factory) as session:
                 campaign = session.get(Campaign, campaign_id)
@@ -290,7 +290,7 @@ class _CampaignMetaMixin:
                 return True
 
     def update_last_loop_entry_sync(self, campaign_id: int, updates: dict) -> bool:
-        """原地更新 loop_history 最后一个 entry（用于 running → 终态）。
+        """原地更新 loop_history 最后一个 entry(用于 running → 终态)。
 
         G-1: 保留原 entry 的 round —— 调用方传的 updates 里 "round": 0
         只是占位，不能覆盖 running entry 已分配的 round 号。
@@ -352,8 +352,8 @@ class DatalabCampaignStore(_CampaignMetaMixin, CampaignStoreInterface):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # 无运行事件循环（同步/线程上下文）：回退到默认策略 loop，
-            # 避免 get_running_loop 抛 RuntimeError 使整个 store 不可用（C17 加固）。
+            # 无运行事件循环(同步/线程上下文)：回退到默认策略 loop，
+            # 避免 get_running_loop 抛 RuntimeError 使整个 store 不可用(C17 加固)。
             loop = asyncio.new_event_loop()
         if self._client is not None and self._client_loop is None:
             # Client injected externally (e.g. tests) — bind to current loop.
@@ -393,10 +393,10 @@ class DatalabCampaignStore(_CampaignMetaMixin, CampaignStoreInterface):
         try:
             sample = parse_create_sample_response(resp.json(), expected_id)
         except Exception as exc:
-            # C16 补充：创建请求已成功（200）但响应校验失败（如 item_id
-            # mismatch）时，sample 在 Datalab 端已真实创建，本地却无从记录
-            # —— 不补偿删除会留下真孤儿。用响应中的实际 id 删除（回退
-            # expected_id），再抛原始异常，避免吞掉真实失败原因。
+            # C16 补充：创建请求已成功(200)但响应校验失败(如 item_id
+            # mismatch)时，sample 在 Datalab 端已真实创建，本地却无从记录
+            # —— 不补偿删除会留下真孤儿。用响应中的实际 id 删除(回退
+            # expected_id)，再抛原始异常，避免吞掉真实失败原因。
             logger.error(
                 "Datalab sample created but response invalid (item_id=%s): %s",
                 expected_id,
@@ -513,7 +513,7 @@ class DatalabCampaignStore(_CampaignMetaMixin, CampaignStoreInterface):
                     "display_order": [_PARAMS_BLOCK, _MEASUREMENTS_BLOCK],
                 }
                 # 仅在实际创建成功后才记录，避免回滚时尝试删除从未创建的 item
-                # 从而产生无意义的清理错误或掩盖真实失败原因（C16）。
+                # 从而产生无意义的清理错误或掩盖真实失败原因(C16)。
                 await self._create_sample(sample_data)
                 created_item_ids.append(item_id)
                 refs.append({"id": idx, "item_id": item_id})
@@ -796,10 +796,10 @@ class DatalabCampaignStore(_CampaignMetaMixin, CampaignStoreInterface):
             updated += 1
 
         if total_rows > 0 and failed == total_rows:
-            # 整批全部失败（疑似 Datalab 不可达），不再静默返回 0 让上游误判成功
+            # 整批全部失败(疑似 Datalab 不可达)，不再静默返回 0 让上游误判成功
             raise DatalabUnavailableError(
                 self._api_url,
-                f"batch_sync 全部 {total_rows} 行失败（疑似 Datalab 不可达）",
+                f"batch_sync 全部 {total_rows} 行失败(疑似 Datalab 不可达)",
             )
         refreshed = await self.list_rows(campaign_id)
         self._update_campaign_status(campaign_id, refreshed)
@@ -871,7 +871,7 @@ class DatalabCampaignStore(_CampaignMetaMixin, CampaignStoreInterface):
         return [r for r in rows if r.status == "Completed"]
 
 
-class SqliteCampaignStore(_CampaignMetaMixin, CampaignStoreInterface):
+class LocalCampaignStore(_CampaignMetaMixin, CampaignStoreInterface):
     """Local JSON-in-Campaign fallback when Datalab is unreachable (tests / offline)."""
 
     async def create_from_plan(
@@ -1063,7 +1063,11 @@ def get_campaign_store(settings: Settings | None = None) -> CampaignStoreInterfa
     from .database import default_session_factory
 
     factory = default_session_factory()
-    backend = (s.campaign_backend or "sqlite").lower()
+    backend = (s.campaign_backend or "native").lower()
+    if backend == "sqlite":
+        # Phase 2D (2-24): "sqlite" is a deprecated alias of "native" (same store, same dialect as db_url).
+        logger.warning("campaign_backend 'sqlite' is a deprecated alias of 'native'")
+        backend = "native"
 
     if backend == "datalab" or (backend == "auto" and _datalab_required(s)):
         _ensure_datalab_or_raise(s)
@@ -1092,25 +1096,25 @@ def get_campaign_store(settings: Settings | None = None) -> CampaignStoreInterfa
             )
             logger.info("Campaign store: Datalab (auto, %s)", s.datalab_api_url)
             return _store
-        # Soft-degrade (Top-5″ #2): when REQUIRED=false, fall back to local sqlite
+        # Soft-degrade (Top-5″ #2): when REQUIRED=false, fall back to the local main-DB
         # ledger. REQUIRED=true (ELN-mandatory / compose) still hard-fails.
         if s.datalab_required:
             raise DatalabUnavailableError(
                 s.datalab_api_url,
-                f"auto 探测失败（{reason}）且 Datalab 为必需",
+                f"auto 探测失败({reason})且 Datalab 为必需",
             )
         logger.warning(
-            "Campaign store: sqlite local ledger soft-degrade "
+            "Campaign store: local main-DB ledger soft-degrade "
             "(Datalab unreachable at %s; DATALAB_REQUIRED=false)",
             s.datalab_api_url,
         )
-        _store = SqliteCampaignStore(factory)
+        _store = LocalCampaignStore(factory)
         return _store
 
-    # native (default) / sqlite: FormuNex's own database is the system of record (方案 v1.1 §5.3.1).
-    if backend not in ("native", "sqlite"):
+    # native (default): FormuNex's own database is the system of record (方案 v1.1 §5.3.1).
+    if backend not in ("native",):
         logger.warning("Unknown campaign_backend %r; using the native store", backend)
-    _store = SqliteCampaignStore(factory)
+    _store = LocalCampaignStore(factory)
     return _store
 
 

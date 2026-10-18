@@ -43,6 +43,7 @@ from ..domain.schemas import (
     ObjectiveSpec,
     RecommendedFormulaListResponse,
     Requirement,
+    substrate_value,
 )
 from .http_safe import make_client
 
@@ -1454,7 +1455,7 @@ def _recommend_user_prompt(
         modify_block = f"\n\n<user_modify_request>\n{modify_prompt.strip()}\n</user_modify_request>"
     return (
         f"Domain: {req.domain.value}\n"
-        f"Substrate: {req.substrate.value}\n"
+        f"Substrate: {substrate_value(req.substrate)}\n"
         f"Headline: {req.headline()}\n"
         f"Salt spray target (h): {req.salt_spray_hours}\n"
         f"Cleaning target (%): {req.cleaning_efficiency}\n"
@@ -1575,7 +1576,7 @@ def _evidence_prompt(req: Requirement, evidence: list[Evidence], recommended: li
     )
     return (
         f"You are a formulation chemist specializing in metal surface treatment.\n"
-        f"Domain: {req.domain.value}\nSubstrate: {req.substrate.value}\n"
+        f"Domain: {req.domain.value}\nSubstrate: {substrate_value(req.substrate)}\n"
         f"Cure temperature ≤ {req.cure_temperature_c}°C, VOC ≤ {req.voc_limit_gpl} g/L\n\n"
         f"Evidence from patents/literature:\n{citations}\n\n"
         f"Candidate formulations:\n{recs}\n\n"

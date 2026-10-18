@@ -44,6 +44,94 @@ class Substrate(str, Enum):
     aluminum = "aluminum"
     stainless_steel = "stainless_steel"
     magnesium_alloy = "magnesium_alloy"
+    # 补齐计划 2-11: 铸造/压铸铝合金与冷轧钢（汽车/家电常见基材）。
+    a356 = "a356"  # A356 铸造铝合金
+    adc12 = "adc12"  # ADC12 压铸铝合金
+    cold_rolled_steel = "cold_rolled_steel"  # 冷轧钢
+
+
+# 补齐计划 2-11: 配置化新增基材 —— 环境变量 FORMUNEX_EXTRA_SUBSTRATES
+# 为 JSON 数组 [{"value": "titanium", "label_zh": "钛合金", "label_en": "Titanium alloy"}]。
+# 内置基材走 Substrate 枚举；配置的基材以原字符串流通（Requirement.substrate
+# 为 Substrate | str），不改枚举。解析失败时 fail-open 为空列表（配置错误不阻断启动；
+# /api/meta/substrates 只返回解析出的条目，管理员可据此发现配置未生效）。
+EXTRA_SUBSTRATES_ENV = "FORMUNEX_EXTRA_SUBSTRATES"
+
+_BUILTIN_SUBSTRATE_LABELS: dict[str, tuple[str, str]] = {
+    "carbon_steel": ("碳钢", "Carbon steel"),
+    "galvanized_steel": ("镀锌钢", "Galvanized steel"),
+    "aluminum": ("铝合金", "Aluminium"),
+    "stainless_steel": ("不锈钢", "Stainless steel"),
+    "magnesium_alloy": ("镁合金", "Magnesium alloy"),
+    "a356": ("A356 铸造铝合金", "A356 cast aluminium alloy"),
+    "adc12": ("ADC12 压铸铝合金", "ADC12 die-cast aluminium alloy"),
+    "cold_rolled_steel": ("冷轧钢", "Cold-rolled steel"),
+}
+
+
+def extra_substrates() -> list[dict[str, str]]:
+    """Parse configured extra substrates from the environment (see above)."""
+    import json
+    import os
+
+    raw = os.environ.get(EXTRA_SUBSTRATES_ENV, "").strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    out: list[dict[str, str]] = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or "").strip()
+            if not value or value in _BUILTIN_SUBSTRATE_LABELS:
+                continue
+            out.append({
+                "value": value,
+                "label_zh": str(item.get("label_zh") or value),
+                "label_en": str(item.get("label_en") or value),
+            })
+    return out
+
+
+def substrate_options() -> list[dict[str, str]]:
+    """All substrate options: builtins + configured extras (meta endpoint / UI)."""
+    opts = [
+        {"value": v, "label_zh": zh, "label_en": en}
+        for v, (zh, en) in _BUILTIN_SUBSTRATE_LABELS.items()
+    ]
+    return opts + extra_substrates()
+
+
+def coerce_substrate(value: Any) -> Substrate | str:
+    """Validate a substrate value: builtin → Substrate member, configured extra → raw str.
+
+    Unknown values raise ValueError (fail-closed: a typo'd substrate must not
+    silently become a different material's process route).
+    """
+    if isinstance(value, Substrate):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("基材不能为空")
+    try:
+        return Substrate(text)
+    except ValueError:
+        pass
+    if any(e["value"] == text for e in extra_substrates()):
+        return text
+    allowed = [s.value for s in Substrate] + [e["value"] for e in extra_substrates()]
+    raise ValueError(f"未知基材 {text!r}，可选：{', '.join(allowed)}")
+
+
+def substrate_value(substrate: Any) -> str:
+    """Plain-string value of a substrate (enum member or configured-extra str)."""
+    if isinstance(substrate, Substrate):
+        return substrate.value
+    return str(substrate or "")
 
 
 class ObjectiveDirection(str, Enum):
@@ -58,6 +146,9 @@ class ObjectiveSpec(BaseModel):
     id: str = ""
     metric: str  # machine key, e.g. salt_spray_hours
     display_name: str = ""
+    # 补齐计划 2-8: 出厂指标标志 —— 勾选的目标在定型/冻结时自动派生为 release_specs
+    # （COA 出厂检验项），不再重复录入；显式 release_specs 按 metric 优先。
+    is_release_indicator: bool = False
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
     direction: str = Field(default="maximize")
     ref_min: float | None = None
@@ -135,7 +226,7 @@ class Requirement(BaseModel):
     product_type: str = ""
     application: str = ""
     domain: ProductDomain
-    substrate: Substrate = Substrate.carbon_steel
+    substrate: Substrate | str = Substrate.carbon_steel
     # Anti-corrosion targets
     salt_spray_hours: float = Field(0, ge=0, description="Target neutral salt spray resistance (h)")
     film_weight_gsm: float = Field(0, ge=0, description="Target dry film weight / coating weight (g/m^2)")
@@ -144,6 +235,10 @@ class Requirement(BaseModel):
     cleaning_efficiency: float = Field(0, ge=0, le=100, description="Target soil removal (%)")
     # Common constraints
     voc_limit_gpl: float | None = Field(420, ge=0, description="Max VOC (g/L); None disables VOC limit checks")
+    # 补齐计划 2-10: 规格契约工艺窗口（cure_temp_c / cure_time_min / film_thickness_um /
+    # application_method / notes）。derive_process_levers / check_process_window 读取；
+    # 前端 useRequirement 从 spec_contract.process_window 合并进来。
+    process_window: dict[str, Any] | None = Field(default=None, description="工艺窗口（规格契约）")
     ph_target: float | None = Field(None, ge=0, le=14)
     notes: str = ""
     objectives: list[ObjectiveSpec] = Field(default_factory=list)
@@ -172,9 +267,17 @@ class Requirement(BaseModel):
         data["constraint_values"] = cv
         return data
 
+    @field_validator("substrate", mode="before")
+    @classmethod
+    def _coerce_substrate_field(cls, v: Any) -> Substrate | str:
+        # 补齐计划 2-11: 内置基材 → 枚举；配置基材 → 原字符串；未知 → 报错。
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return Substrate.carbon_steel
+        return coerce_substrate(v)
+
     def headline(self) -> str:
         label = self.product_type or self.domain.value
-        app = self.application or self.substrate.value
+        app = self.application or substrate_value(self.substrate)
         bits = [label, f"on {app}"]
         if self.salt_spray_hours:
             bits.append(f"{self.salt_spray_hours:.0f}h salt spray")
@@ -698,6 +801,12 @@ class OptimizationResult(BaseModel):
     # How many measured lab experiments were shown to the optimizer (0 for a
     # purely virtual run). Lets the UI say "吸收了 N 条实验数据".
     lab_points_used: int = 0
+    # 补齐 2-16: per-iteration acquisition values of this run:
+    # [{iteration, acquisition (None when the engine has no scalar acquisition),
+    # acquisition_name, best_score, engine}]. Empty for engines (BayBE) that do
+    # not report a scalar acquisition. Persisted with the task result, so the
+    # cockpit trend page reads it via GET /api/tasks/{task_id}.
+    acquisition_history: list[dict] = Field(default_factory=list)
 
 
 class TaskState(str, Enum):

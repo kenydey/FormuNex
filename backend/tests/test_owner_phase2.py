@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
 from app.db.database import make_engine, make_session_factory
 from app.domain.schemas import DOEPlan, DOERun, ProductDomain, Requirement, ObjectiveSpec
 from app.main import app
@@ -41,7 +41,7 @@ def _client(tmp_path):
     db = tmp_path / "owner2.db"
     engine = make_engine(f"sqlite:///{db}")
     factory = make_session_factory(engine)
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     return TestClient(app)
 
 

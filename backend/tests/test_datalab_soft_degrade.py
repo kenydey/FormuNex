@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 from app.config import Settings, get_settings
 from app.db import campaign_store as cs_mod
 from app.db import store as store_mod
-from app.db.campaign_store import SqliteCampaignStore, get_campaign_store, reset_campaign_store
-from app.db.store import SqlExperimentStore, get_experiment_store, reset_experiment_store
+from app.db.campaign_store import LocalCampaignStore, get_campaign_store, reset_campaign_store
+from app.db.store import LocalExperimentStore, get_experiment_store, reset_experiment_store
 from app.main import app
 from app.services.env_flags import FLAG_REGISTRY
 
@@ -49,7 +49,7 @@ def test_campaign_auto_unreachable_soft_falls_back_sqlite(monkeypatch):
         cs_mod, "check_datalab_reachable", lambda url, timeout=2.0: (False, "down")
     )
     store = get_campaign_store()
-    assert isinstance(store, SqliteCampaignStore)
+    assert isinstance(store, LocalCampaignStore)
 
 
 def test_experiment_auto_unreachable_soft_falls_back_sqlite(monkeypatch):
@@ -65,7 +65,7 @@ def test_experiment_auto_unreachable_soft_falls_back_sqlite(monkeypatch):
         store_mod, "check_datalab_reachable", lambda url, timeout=2.0: (False, "down")
     )
     store = get_experiment_store(s)
-    assert isinstance(store, SqlExperimentStore)
+    assert isinstance(store, LocalExperimentStore)
 
 
 def test_health_soft_local_ledger_when_optional_down(monkeypatch):

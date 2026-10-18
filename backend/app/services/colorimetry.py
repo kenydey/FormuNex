@@ -1,10 +1,15 @@
 """Colorimetry service — CIELAB color estimate and CIEDE2000 color difference.
 
-Uses ``colour-science`` for the standards-grade ΔE₀₀ computation when installed;
-otherwise falls back to the CIE76 Euclidean distance in L*a*b* so the metric is
-always available offline. The formulation color is estimated as the
-pigment-volume-weighted mean of the particulate pigments' tabulated CIELAB
-values (a screening-level approximation, not a spectral simulation).
+补齐 2-21（口径统一）：ΔE 有两个独立口径，绝不静默混用——
+  - ``delta_e_2000``: CIEDE2000，colour-science 未安装时返回 None
+    （旧行为静默 fallback 到 CIE76，造成同一调用在不同机器返回不同口径）；
+  - ``delta_e_ab``: CIE76 欧氏距离，始终可用；
+  - ``delta_e``: 统一口径选择器（见下），非法 method → ValueError。
+``color_metrics`` 返回全部口径键 + ``delta_e_method`` 注明实际口径，
+legacy ``delta_e`` 兼容键恒为 float（= delta_e_00 若有，否则 delta_e_ab）。
+The formulation color is estimated as the pigment-volume-weighted mean of
+the particulate pigments' tabulated CIELAB values (a screening-level
+approximation, not a spectral simulation).
 """
 from __future__ import annotations
 
@@ -35,10 +40,13 @@ def _colour_available() -> bool:
 
 def delta_e_2000(
     lab1: tuple[float, float, float], lab2: tuple[float, float, float]
-) -> float:
+) -> float | None:
     """CIEDE2000 color difference ΔE₀₀ between two CIELAB triples.
 
-    Falls back to the CIE76 Euclidean distance when ``colour-science`` is absent.
+    Returns None when ``colour-science`` is absent — never silently falls
+    back to CIE76 (the old behaviour made the same call return different
+    metrics on different machines). Use ``delta_e_ab`` for the always-available
+    CIE76 distance, or ``delta_e`` to pick explicitly.
     """
     if _colour_available():
         try:  # pragma: no cover - requires colour-science
@@ -48,7 +56,35 @@ def delta_e_2000(
             return round(float(delta_E_CIE2000(np.array(lab1), np.array(lab2))), 3)
         except Exception as exc:
             log_handled_exception(logger, exc, "handled exception")
+    return None
+
+
+def delta_e_ab(
+    lab1: tuple[float, float, float], lab2: tuple[float, float, float]
+) -> float:
+    """CIE76 ΔE*ab: Euclidean distance in L*a*b*. Always available."""
     return round(sum((a - b) ** 2 for a, b in zip(lab1, lab2)) ** 0.5, 3)
+
+
+def delta_e(
+    lab1: tuple[float, float, float], lab2: tuple[float, float, float],
+    method: str = "cie2000",
+) -> float:
+    """ΔE with an explicit metric: ``method="cie2000"`` or ``"cie76"``.
+
+    cie2000 without colour-science → CIE76 fallback is NOT silent here:
+    the caller asked for cie2000 explicitly, so the absence raises through
+    delta_e_2000's None — callers that need a guaranteed float should pass
+    method="cie76" or use ``delta_e_ab`` directly.
+    """
+    if method == "cie2000":
+        out = delta_e_2000(lab1, lab2)
+        if out is None:
+            raise ValueError("colour-science 未安装，无法计算 CIEDE2000；改用 method='cie76'")
+        return out
+    if method == "cie76":
+        return delta_e_ab(lab1, lab2)
+    raise ValueError(f"未知 ΔE 口径 {method!r}，可选 cie2000/cie76")
 
 
 def mixture_lab(form: Formulation) -> tuple[float, float, float] | None:
@@ -76,18 +112,28 @@ def mixture_lab(form: Formulation) -> tuple[float, float, float] | None:
     return (round(L / vol_total, 2), round(a / vol_total, 2), round(b / vol_total, 2))
 
 
-def color_metrics(form: Formulation) -> dict[str, float]:
-    """Color descriptors for a formulation: ``lab_L/a/b`` and ΔE₀₀ vs white.
+def color_metrics(form: Formulation) -> dict[str, float | str | None]:
+    """Color descriptors for a formulation: ``lab_L/a/b`` and ΔE vs white.
 
     Returns an empty dict when the formulation has no color-bearing pigment,
-    leaving the predictor output unchanged.
+    leaving the predictor output unchanged. Keys: L/a/b (aliases of lab_L/a/b),
+    delta_e_00 (None without colour-science), delta_e_ab (always a float),
+    delta_e (compat: delta_e_00 if available else delta_e_ab), delta_e_method.
     """
     lab = mixture_lab(form)
     if lab is None:
         return {}
+    de00 = delta_e_2000(lab, WHITE_LAB)
+    deab = delta_e_ab(lab, WHITE_LAB)
     return {
         "lab_L": lab[0],
         "lab_a": lab[1],
         "lab_b": lab[2],
-        "delta_e": delta_e_2000(lab, WHITE_LAB),
+        "L": lab[0],
+        "a": lab[1],
+        "b": lab[2],
+        "delta_e_00": de00,
+        "delta_e_ab": deab,
+        "delta_e": de00 if de00 is not None else deab,
+        "delta_e_method": "cie2000" if de00 is not None else "cie76",
     }

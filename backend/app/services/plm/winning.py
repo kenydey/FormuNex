@@ -8,16 +8,17 @@ revision to *candidate*, ready for documents and the release gate (W5).
 """
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ...db.models import ExperimentRow, FormulationVersion, MeasurementRow
-from ...db.models_plm import LineageEdgeRow, ProductRevisionRow, ProductRow
+from ...db.models import ExperimentRow, FormulationVersion, MeasurementRow, ProjectRow
+from ...db.models_plm import ProductRevisionRow, ProductRow
+from ...domain.project_workspace import derive_release_specs
 from ..audit import hash_chain
 from ..identity.rbac import Principal
+from ..provenance import link_many_in_session
 from .documents import service as docs
 from .release import signoff
 
@@ -54,15 +55,27 @@ def select_winning(session: Session, *, product_id: str, formulation_version_id:
                                .order_by(ProductRevisionRow.created_at.desc()).limit(1)).scalar_one_or_none()
         if prev is not None:
             spec = {k: v for k, v in (prev.spec_snapshot or {}).items() if k in CARRIED_SPEC_KEYS}
+    # 补齐计划 2-8: 标为出厂指标的目标自动派生 release_specs 进冻结快照
+    # （显式 release_specs 按 metric 优先：调用方/沿用 > 契约显式 > 派生）。
+    if product.project_id:
+        proj = session.get(ProjectRow, product.project_id)
+        if proj is not None:
+            ws = (proj.payload or {}).get("workspace", {}) or {}
+            objectives = ((ws.get("requirement") or {}).get("objectives") or [])
+            contract_specs = ((ws.get("spec_contract") or {}).get("release_specs") or [])
+            spec["release_specs"] = derive_release_specs(
+                objectives, [*(spec.get("release_specs") or []), *contract_specs])
     spec["winning"] = {"experiment_id": experiment_id, "measured": exp.measured or {}, "note": note}
 
     rev = docs.create_revision(session, product.id, formulation_version_id=formulation_version_id,
                                spec_snapshot=spec, created_by=user_id)
     rev.winning_experiment_id = experiment_id
-    for from_type, from_id, relation in (("experiment", str(experiment_id), "selected_as_winning"),
-                                         ("formulation_version", formulation_version_id, "frozen_as")):
-        session.add(LineageEdgeRow(id=str(uuid.uuid4()), from_type=from_type, from_id=from_id,
-                                   to_type="product_revision", to_id=rev.id, relation=relation, created_by=user_id))
+    # Phase 2D (2-22): chain edges go through the unified provenance service
+    # (same session → the edges roll back with the business write).
+    link_many_in_session(session, [
+        ("experiment", str(experiment_id), "product_revision", rev.id, "selected_as_winning"),
+        ("formulation_version", formulation_version_id, "product_revision", rev.id, "frozen_as"),
+    ])
     session.flush()
     hash_chain.append(session, actor=user_id, action="revision.winning", entity_type="product_revision",
                       entity_id=rev.id, detail={"experiment_id": experiment_id,

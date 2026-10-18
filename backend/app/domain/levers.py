@@ -23,16 +23,25 @@ _STEEL_ST_LEVERS: list[tuple[str, float, float, str]] = [
 SUBSTRATE_SURFACE_TREATMENT_LEVERS: dict[Substrate, list[tuple[str, float, float, str]]] = {
     Substrate.magnesium_alloy: _LIGHT_METAL_ST_LEVERS,
     Substrate.aluminum: _LIGHT_METAL_ST_LEVERS,
+    # 补齐计划 2-11: 铸造/压铸铝合金走轻金属（锆系/硅烷）工艺杠杆。
+    Substrate.a356: _LIGHT_METAL_ST_LEVERS,
+    Substrate.adc12: _LIGHT_METAL_ST_LEVERS,
     Substrate.carbon_steel: _STEEL_ST_LEVERS,
     Substrate.galvanized_steel: _STEEL_ST_LEVERS,
     Substrate.stainless_steel: _STEEL_ST_LEVERS,
+    # 补齐计划 2-11: 冷轧钢走钢组（磷化）工艺杠杆。
+    Substrate.cold_rolled_steel: _STEEL_ST_LEVERS,
 }
 
 _PROCESS_LEVER_NAMES = frozenset({"immersion_time_min", "bath_temperature_c", "cure_temperature_c"})
 
 
 def substrate_default_levers(req: Requirement) -> list[LeverSpec] | None:
-    """Return substrate-specific DOE levers when defined for this domain."""
+    """Return substrate-specific DOE levers when defined for this domain.
+
+    Configured extra substrates (raw str, not a Substrate member) have no
+    known process family → None (caller falls back to generic levers).
+    """
     if req.domain != ProductDomain.surface_treatment:
         return None
     raw = SUBSTRATE_SURFACE_TREATMENT_LEVERS.get(req.substrate)

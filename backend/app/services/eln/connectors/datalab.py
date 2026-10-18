@@ -42,14 +42,17 @@ class DatalabConnector(ElnConnector):
         self._get("/info/")
         return {"ok": True}
 
-    def push_task(self, task: dict[str, Any]) -> RemoteRecord:
+    def push_plan(self, plan: dict[str, Any]) -> RemoteRecord:
         raise ConnectorError("Datalab 连接器只读：请把数据迁移到 FormuNex（scripts/migrate_datalab_to_native.py）")
 
     def item(self, item_id: str) -> dict[str, Any]:
         body = self._get(f"/get-item-data/{item_id}")
         return body.get("item_data") or body
 
-    def pull_measurements(self, external_id: str) -> list[RemoteValue]:
+    def pull_measurements(self, external_id: str, *, since: str | None = None) -> list[RemoteValue]:
+        # 补齐计划 2-15: Datalab 训练项块无逐指标时间戳，since 无法在服务端过滤 —— 忽略，
+        # 由 sync.py 的 content_hash 去重兜底。
+        _ = since
         data = (self.item(external_id).get("blocks_obj") or {}).get(TRAINING_BLOCK, {}).get("data") or {}
         out = []
         for metric, value in (data.get("measured") or {}).items():

@@ -113,7 +113,7 @@ def acquisition_trend(
     window: int = Query(default=10, description="近期快照窗口"),
 ) -> dict:
     """P2-7: 下载成功率趋势告警 —— 近期 vs 基期成功率变化，跌幅超 15% 告警。"""
-    from ..services import acquisition_trend as at
+    from ..services import kb_acquisition_trend as at
     snap = at.snapshot(project_id=project_id)
     t = at.trend(window=window)
     return {"snapshot": snap, "trend": t}

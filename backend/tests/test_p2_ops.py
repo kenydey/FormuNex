@@ -16,14 +16,14 @@ def _fresh(monkeypatch):
 
 class TestAcquisitionTrend:
     def test_trend_insufficient_data(self):
-        from app.services import acquisition_trend as at
+        from app.services import kb_acquisition_trend as at
         at.clear()
         t = at.trend()
         assert t["trend"] == "stable"
         assert t["alert"] is False
 
     def test_trend_detects_drop(self):
-        from app.services import acquisition_trend as at
+        from app.services import kb_acquisition_trend as at
         at.clear()
         # 基线：高成功率
         for _ in range(5):
@@ -42,7 +42,7 @@ class TestAcquisitionTrend:
         at.clear()
 
     def test_trend_stable(self):
-        from app.services import acquisition_trend as at
+        from app.services import kb_acquisition_trend as at
         at.clear()
         for _ in range(6):
             at._snapshots.append({

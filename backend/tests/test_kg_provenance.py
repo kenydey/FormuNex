@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
 from app.db.database import Base, make_engine, make_session_factory
 from app.db.entity_store import EntityStore
 from app.domain.schemas import DOEPlan, DOERun, ProductDomain, Requirement, ObjectiveSpec
@@ -89,7 +89,7 @@ def test_sync_returns_kg_written(tmp_path, monkeypatch):
     monkeypatch.setattr(es_mod, "_store", store_ent)
     with store_ent._session_factory() as s:
         store_ent.upsert_entity(s, id="dom", canonical_name="anticorrosion_coating", kind="domain")
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     client = TestClient(app)
     plan = DOEPlan(design="lhs", factors=[], runs=[DOERun(run_id=1, coded={}, natural={"Zinc phosphate": 9.0, "cure_temperature_c": 82.0})], notes="t", plan_id="kgw", domain=ProductDomain.anticorrosion_coating)
     req = Requirement(domain=ProductDomain.anticorrosion_coating, objectives=[ObjectiveSpec(metric="salt_spray_hours", weight=1.0, direction="maximize")])

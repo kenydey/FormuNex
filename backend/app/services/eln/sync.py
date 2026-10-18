@@ -83,7 +83,7 @@ def push_tasks(session: Session, connector: ElnConnector, task_ids: list[str], *
             reqs.append(r)
         payload["requested_metrics"] = reqs
         try:
-            rec = connector.push_task(payload)
+            rec = connector.push_plan(payload)  # 补齐计划 2-15: 规范方法 push_plan
         except ConnectorError as exc:
             errors.append({"task_id": tid, "error": str(exc)})
             continue
@@ -111,7 +111,10 @@ def _apply(session: Session, link: ElnLinkRow, task: LabTaskRow, remote: dict[st
     return len(rows), errors
 
 
-def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | None = None) -> dict[str, Any]:
+def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | None = None,
+         since: str | None = None) -> dict[str, Any]:
+    """Pull measurements. ``since`` (ISO timestamp) 透传给连接器；无法服务端过滤的
+    连接器忽略它，content_hash 去重兜底（见 connectors/base.py）。"""
     q = select(ElnLinkRow).where(ElnLinkRow.connector == connector.name, ElnLinkRow.local_type == "lab_task")
     if task_ids:
         q = q.where(ElnLinkRow.local_id.in_(task_ids))
@@ -122,7 +125,7 @@ def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | Non
         if task is None or task.status == "cancelled":
             continue
         try:
-            remote = {v.metric: v.value for v in connector.pull_measurements(link.external_id)}
+            remote = {v.metric: v.value for v in connector.pull_measurements(link.external_id, since=since)}
         except ConnectorError as exc:
             link.sync_state = "error"
             report["errors"].append({"task_no": task.task_no, "error": str(exc)})

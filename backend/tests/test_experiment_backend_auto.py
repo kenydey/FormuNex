@@ -6,7 +6,7 @@ import pytest
 
 from app.config import get_settings
 from app.db import store as store_mod
-from app.db.store import DatalabExperimentStore, SqlExperimentStore
+from app.db.store import DatalabExperimentStore, LocalExperimentStore
 from app.db.datalab_client import DatalabUnavailableError
 
 
@@ -61,7 +61,7 @@ def test_auto_unreachable_campaign_datalab_raises(monkeypatch):
 
 
 def test_auto_unreachable_optional_falls_back_sqlite(monkeypatch):
-    """auto + unreachable + REQUIRED=false + campaign=sqlite → SqlExperimentStore.
+    """auto + unreachable + REQUIRED=false + campaign=sqlite → LocalExperimentStore.
 
     Soft-degrade / CI path — product default is campaign=auto too.
     """
@@ -73,11 +73,11 @@ def test_auto_unreachable_optional_falls_back_sqlite(monkeypatch):
     )
     monkeypatch.setattr(store_mod, "check_datalab_reachable", lambda url, timeout: (False, "down"))
     store = store_mod.get_experiment_store(s)
-    assert isinstance(store, SqlExperimentStore)
+    assert isinstance(store, LocalExperimentStore)
 
 
 def test_explicit_sqlite_never_probes(monkeypatch):
-    """显式 sqlite → 不探测直接落 SqlExperimentStore。"""
+    """显式 sqlite → 不探测直接落 LocalExperimentStore。"""
     s = _settings(
         experiment_backend="sqlite",
         datalab_api_url="http://datalab.test:5001",
@@ -91,5 +91,5 @@ def test_explicit_sqlite_never_probes(monkeypatch):
 
     monkeypatch.setattr(store_mod, "check_datalab_reachable", _fail)
     store = store_mod.get_experiment_store(s)
-    assert isinstance(store, SqlExperimentStore)
+    assert isinstance(store, LocalExperimentStore)
     assert called is False

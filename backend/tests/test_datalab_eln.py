@@ -134,12 +134,12 @@ def test_sqlite_campaign_still_works_in_dev(monkeypatch, tmp_path):
     monkeypatch.setenv("FORMUNEX_CAMPAIGN_BACKEND", "sqlite")
     monkeypatch.setenv("FORMUNEX_DB_URL", f"sqlite:///{tmp_path / 'dev.db'}")
     from app.db import database as db_mod
-    from app.db.campaign_store import SqliteCampaignStore
+    from app.db.campaign_store import LocalCampaignStore
     from app.db.database import make_engine, make_session_factory
 
     db_mod._default.clear()
     factory = make_session_factory(make_engine(f"sqlite:///{tmp_path / 'dev.db'}"))
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     client = TestClient(app)
     res = client.post(
         "/api/experiments/workbench/campaigns",

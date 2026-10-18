@@ -177,11 +177,16 @@ def _delta_confidence(a: dict, b: dict) -> str:
 def _metric_deltas(before: dict, after: dict) -> dict[str, dict]:
     """Per-metric change. Metrics present on only one side are reported as
     appearing/disappearing rather than as a delta from zero — the predictor's
-    key set is domain-dependent and conditionally sparse."""
+    key set is domain-dependent and conditionally sparse. Non-numeric values
+    (string metadata such as ``delta_e_method``) carry no delta."""
     out: dict[str, dict] = {}
     for metric in sorted(set(before) | set(after)):
         old, new = before.get(metric), after.get(metric)
         if old is None or new is None:
+            out[metric] = {"before": old, "after": new, "delta": None, "pct": None}
+            continue
+        if not isinstance(old, (int, float)) or not isinstance(new, (int, float)) \
+                or isinstance(old, bool) or isinstance(new, bool):
             out[metric] = {"before": old, "after": new, "delta": None, "pct": None}
             continue
         delta = new - old
@@ -305,6 +310,7 @@ def find_substitutes(
     include_llm: bool | None = None,
     llm_limit: int = 5,
     session: Session | None = None,
+    classification_preview_limit: int = 5,
 ) -> dict:
     """Rank replacements for one slot, each with its predicted property delta.
 
@@ -314,6 +320,11 @@ def find_substitutes(
     - L3 PubChem structure similars (``include_external``)
     - SureChEMBL structure similars + patent docs (``include_surechembl``)
     - L4 rules/LLM when L1 < 3 or ``include_llm`` forced (``include_llm``)
+
+    补齐计划 2-7: ``classification_preview_limit`` > 0 且传入 session 时，对排序后
+    前 N 个库内候选做替换后配方 GHS 重分类预览（``classification_before`` /
+    ``classification_after`` / ``classification_changed`` / ``classification_upgraded``）。
+    分类失败 fail-open（不附加预览键，候选照常返回）。
     """
     from ..domain import knowledge
     from ..pipeline import reconstruct
@@ -467,6 +478,34 @@ def find_substitutes(
             c["material"],
         )
     )
+
+    # 补齐计划 2-7: 替换后分类预览 —— 对排序后前 N 个库内候选，用替换后配方重算
+    # GHS 分类并与替换前对比。仅 session 提供时做（build_and_classify 需要 session）；
+    # 分类失败 fail-open（该候选无预览键）。外部/文献候选不在库内配方中，不做预览。
+    if session is not None and classification_preview_limit and classification_preview_limit > 0:
+        try:
+            from .plm.ghs.service import build_and_classify
+            from .project_redlines import formulation_to_items
+
+            form_by_cand = {id(c): f for c, f in scored_forms}
+            base_result, _ = build_and_classify(session, formulation_to_items(base_form))
+            base_summary = _classification_summary(base_result)
+            for cand in candidates[:classification_preview_limit]:
+                form = form_by_cand.get(id(cand))
+                if form is None:
+                    continue
+                try:
+                    after_result, _ = build_and_classify(session, formulation_to_items(form))
+                    after_summary = _classification_summary(after_result)
+                    cmp = compare_classifications(base_summary, after_summary)
+                    cand["classification_before"] = base_summary
+                    cand["classification_after"] = after_summary
+                    cand["classification_changed"] = cmp["changed"]
+                    cand["classification_upgraded"] = cmp["upgraded"]
+                except Exception as exc:
+                    logger.debug("substitution classification preview failed for {} ({})", cand.get("material"), exc)
+        except Exception as exc:
+            logger.debug("substitution classification preview skipped ({})", exc)
 
     identity: dict
     external: list[dict] = []
@@ -655,7 +694,9 @@ def find_substitutes(
         "slot_index": slot_index,
         "role": role,
         "substitute_group": group,
-        "base_metrics": {k: round(v, 4) for k, v in base_metrics.items()},
+        # predicted 含字符串/None 元数据指标（如 delta_e_method / 暂无值的色差），只对数值做 round。
+        "base_metrics": {k: (round(v, 4) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+                         for k, v in base_metrics.items()},
         "candidates": candidates[:limit],
         "total_considered": len(pool),
         "identity": identity,
@@ -669,6 +710,186 @@ def find_substitutes(
         "llm_meta": llm_meta,
         "layers_used": layers_used,
     }
+
+
+# 补齐计划 2-6/2-7: GHS 分类严重度比较（信号词 + 新增危害类别）。
+# 信号词：危险 > 警告 > 无。新增 H 代码 = 新增危害 = 升级。
+_SIGNAL_SEVERITY = {"危险": 2, "警告": 1, None: 0, "": 0}
+
+
+def _classification_summary(result: object) -> dict:
+    """Minimal classification fingerprint for before/after comparison."""
+    return {
+        "signal_word": getattr(result, "signal_word", None),
+        "h_codes": sorted(getattr(result, "h_codes", None) or []),
+        "pictograms": sorted(p.get("code") for p in (getattr(result, "pictograms", None) or []) if p.get("code")),
+    }
+
+
+def compare_classifications(before: dict, after: dict) -> dict:
+    """Compare two classification summaries (2-6 classification_upgrade / 2-7 preview 共用).
+
+    upgraded = 信号词升级，或出现新增危害类别（H 代码）。changed = 任何差异
+    （含危害减少 / 信号词降级 —— 降级也是变化，但不是升级）。
+    """
+    before = before or {}
+    after = after or {}
+    sig_before = _SIGNAL_SEVERITY.get(before.get("signal_word"), 0)
+    sig_after = _SIGNAL_SEVERITY.get(after.get("signal_word"), 0)
+    h_before = set(before.get("h_codes") or [])
+    h_after = set(after.get("h_codes") or [])
+    added = sorted(h_after - h_before)
+    removed = sorted(h_before - h_after)
+    upgraded = sig_after > sig_before or bool(added)
+    changed = upgraded or bool(removed) or sig_before != sig_after
+    return {
+        "changed": changed,
+        "upgraded": upgraded,
+        "added_h_codes": added,
+        "removed_h_codes": removed,
+        "signal_before": before.get("signal_word"),
+        "signal_after": after.get("signal_word"),
+    }
+
+
+def _formulation_cost_per_kg(form: object, knowledge_mod: object) -> tuple[float, list[str]]:
+    """配方成本估算（元/kg）= Σ weight_pct/100 × price_cny_per_kg。
+
+    无价材料按 0 计并列入 unknown（成本为下限估算，调用方须在 detail 中声明）。
+    """
+    materials = getattr(knowledge_mod, "RAW_MATERIALS", {}) or {}
+    total = 0.0
+    unknown: list[str] = []
+    for ing in getattr(form, "ingredients", None) or []:
+        name = getattr(ing, "name", "") or ""
+        pct = float(getattr(ing, "weight_pct", 0) or 0)
+        price = (materials.get(name) or {}).get("price_cny_per_kg")
+        if price is None:
+            unknown.append(name)
+            continue
+        total += pct / 100.0 * float(price)
+    return total, unknown
+
+
+def scan_substitution_triggers(
+    genomes: dict[str, FormulationGenome] | None = None,
+    req: Requirement | None = None,
+    *,
+    session: Session | None = None,
+    baseline_classifications: dict[str, dict] | None = None,
+    cost_limit_per_kg: float | None = None,
+    material_price_limits: dict[str, float] | None = None,
+) -> dict:
+    """补齐计划 2-6: 替换触发扫描 —— 断供之外再补超成本、命中红线、分类升级三类。
+
+    - supply: 材料 availability 为 discontinued / restricted（与 scan_supply_risk 同口径，
+      此处不展开替代建议；要建议调 scan_supply_risk）。
+    - over_cost: 配方预测成本（下限估算）超 cost_limit_per_kg，或单材料价格超
+      material_price_limits 中的阈值。两参数均为空 → 不扫此类。
+    - redline: 配方命中项目红线（需 session + req.project_id，复用 Phase 1
+      check_formulation_redlines；无 session/无项目 → 跳过此类）。
+    - classification_upgrade: 当前重分类比调用方传入的基线分类更严重（需 session +
+      baseline_classifications；基线缺失的配方跳过）。
+
+    全部 fail-open：单个配方检查失败只记日志，不阻断其余配方。
+    """
+    from ..domain import knowledge
+    from ..pipeline import reconstruct
+
+    triggers: list[dict] = []
+    at_risk = {
+        name: spec.get("availability")
+        for name, spec in knowledge.RAW_MATERIALS.items()
+        if spec.get("availability") in ("discontinued", "restricted")
+    }
+    constraints = None
+    if session is not None and req is not None and getattr(req, "project_id", None):
+        try:
+            from .project_redlines import load_project_constraints
+
+            constraints = load_project_constraints(session, req.project_id)
+        except Exception as exc:
+            logger.debug("substitution triggers: load constraints failed ({})", exc)
+    for label, genome in (genomes or {}).items():
+        # supply: 逐槽位
+        for i, slot in enumerate(genome.slots):
+            if slot.material in at_risk:
+                triggers.append({
+                    "type": "supply", "formulation": label, "slot_index": i,
+                    "material": slot.material, "availability": at_risk[slot.material],
+                })
+        # 其余三类需要配方实体；失败则跳过该配方（fail-open）
+        try:
+            form = reconstruct.formulation_from_genome(
+                req if req is not None else genome.domain, genome, strict=False)
+        except Exception as exc:
+            logger.debug("substitution triggers: {} formulation build failed ({})", label, exc)
+            continue
+        # over_cost
+        if cost_limit_per_kg is not None or material_price_limits:
+            try:
+                cost, unknown = _formulation_cost_per_kg(form, knowledge)
+                if cost_limit_per_kg is not None and cost > float(cost_limit_per_kg):
+                    triggers.append({
+                        "type": "over_cost", "formulation": label, "reason": "formulation_cost",
+                        "cost_per_kg": round(cost, 4), "limit": float(cost_limit_per_kg),
+                        "cost_unknown_materials": unknown,
+                        "detail": f"配方成本估算 {cost:.2f} 元/kg 超上限 {float(cost_limit_per_kg):.2f} 元/kg（无价材料按 0 计，成本为下限）",
+                    })
+                for ing in getattr(form, "ingredients", None) or []:
+                    name = getattr(ing, "name", "") or ""
+                    limit = (material_price_limits or {}).get(name)
+                    if limit is None:
+                        continue
+                    price = (knowledge.RAW_MATERIALS.get(name) or {}).get("price_cny_per_kg")
+                    if price is not None and float(price) > float(limit):
+                        triggers.append({
+                            "type": "over_cost", "formulation": label, "reason": "material_price",
+                            "material": name, "price_cny_per_kg": float(price), "limit": float(limit),
+                            "detail": f"材料 {name} 价格 {float(price):.2f} 元/kg 超阈值 {float(limit):.2f} 元/kg",
+                        })
+            except Exception as exc:
+                logger.debug("substitution triggers: {} cost check failed ({})", label, exc)
+        # redline
+        if constraints is not None:
+            try:
+                from .project_redlines import check_formulation_redlines, formulation_to_items
+
+                hits, _ = check_formulation_redlines(
+                    session, formulation_to_items(form), constraints,
+                    voc_gpl=(getattr(form, "predicted", None) or {}).get("voc_gpl"))
+                for h in hits:
+                    triggers.append({
+                        "type": "redline", "formulation": label, "code": h.code, "message": h.message,
+                        "detail": f"命中红线 {h.code}：{h.message}",
+                    })
+            except Exception as exc:
+                logger.debug("substitution triggers: {} redline check failed ({})", label, exc)
+        # classification_upgrade
+        baseline = (baseline_classifications or {}).get(label)
+        if session is not None and baseline:
+            try:
+                from .plm.ghs.service import build_and_classify
+                from .project_redlines import formulation_to_items
+
+                current, _ = build_and_classify(session, formulation_to_items(form))
+                cmp = compare_classifications(baseline, _classification_summary(current))
+                if cmp["upgraded"]:
+                    triggers.append({
+                        "type": "classification_upgrade", "formulation": label,
+                        "classification_before": {"signal_word": baseline.get("signal_word"),
+                                                  "h_codes": sorted(baseline.get("h_codes") or [])},
+                        "classification_after": _classification_summary(current),
+                        "added_h_codes": cmp["added_h_codes"],
+                        "detail": f"分类升级：信号词 {baseline.get('signal_word')} → {current.signal_word}"
+                                  + (f"，新增危害 {', '.join(cmp['added_h_codes'])}" if cmp["added_h_codes"] else ""),
+                    })
+            except Exception as exc:
+                logger.debug("substitution triggers: {} classification check failed ({})", label, exc)
+    counts: dict[str, int] = {}
+    for t in triggers:
+        counts[t["type"]] = counts.get(t["type"], 0) + 1
+    return {"triggers": triggers, "counts": counts}
 
 
 def scan_supply_risk(

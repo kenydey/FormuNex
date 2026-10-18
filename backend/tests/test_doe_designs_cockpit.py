@@ -330,5 +330,6 @@ def test_winning_formulation_becomes_a_candidate_revision(api):
 
     with default_session_factory()() as s:
         edges = {(e.from_type, e.relation) for e in s.query(LineageEdgeRow).filter_by(to_id=out["revision_id"])}
-    assert edges == {("experiment", "selected_as_winning"), ("formulation_version", "frozen_as")}
+    assert edges == {("experiment", "selected_as_winning"), ("formulation_version", "frozen_as"),
+                       ("product", "has_revision")}  # 2-22: winning also links product→revision
     assert client.post("/api/cockpit/winning", json={**body, "experiment_id": 999999}, headers=h["lead"]).status_code == 422

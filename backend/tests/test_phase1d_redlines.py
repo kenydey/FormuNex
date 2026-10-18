@@ -421,3 +421,82 @@ def test_winning_carries_ghs_fields(tmp_path, monkeypatch):
     assert spec["forbidden_pictograms"] == ["GHS02"]
     assert spec["forbidden_signal_word"] == "危险"
     assert "unrelated" not in spec
+
+
+def test_2_8_winning_derives_release_specs_from_flagged_objectives(tmp_path, monkeypatch):
+    """补齐计划 2-8：定型时标出厂指标的目标自动派生 release_specs 进冻结快照。
+
+    契约显式 release_specs 保留；派生项追加；显式同 metric 优先（不重复、不覆盖显式值）。
+    """
+    monkeypatch.setenv("FORMUNEX_DB_URL", f"sqlite:///{tmp_path / 'winning28.db'}")
+    monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "false")
+    monkeypatch.setenv("FORMUNEX_AUTH_JWT_SECRET", "test-secret-" + "x" * 40)
+    get_settings.cache_clear()
+    from app.db.database import default_session_factory
+    from app.db.models import ExperimentRow, FormulationVersion, ProjectRow
+    from app.db.models_plm import ProductRow
+    from app.services.identity.rbac import build_principal
+    from app.services.plm import winning as winning_mod
+
+    payload = {"workspace": {
+        "requirement": {"objectives": [
+            {"metric": "salt_spray_hours", "display_name": "耐盐雾", "is_release_indicator": True,
+             "ref_min": 500, "unit": "h"},
+            {"metric": "adhesion", "display_name": "附着力", "is_release_indicator": False},
+        ]},
+        "spec_contract": {"release_specs": [{"metric": "gloss", "label": "光泽", "unit": "GU"}]},
+    }}
+    with default_session_factory()() as s:
+        s.add(ProjectRow(id="proj-28", title="W", domain="coating", payload=payload))
+        s.add(ProductRow(id="prod-28", code="FX-28", name_zh="W", project_id="proj-28"))
+        s.add(FormulationVersion(id="fv-28", lineage_id="l", version=1, domain="coating", name="v1",
+                                 created_at=datetime(2026, 10, 1),
+                                 snapshot={"ingredients": [{"name": "水", "weight_pct": 100}]}))
+        s.add(ExperimentRow(id=1, project_id="proj-28", domain="coating", measured={}))
+        s.commit()
+    principal = build_principal("u1", ["project_lead"], {})
+    with default_session_factory()() as s:
+        rev, _ = winning_mod.select_winning(
+            s, product_id="prod-28", formulation_version_id="fv-28", experiment_id=1,
+            user_id="u1", principal=principal)
+        spec = rev.spec_snapshot or {}
+    by_metric = {r["metric"]: r for r in spec.get("release_specs", [])}
+    assert by_metric["gloss"]["label"] == "光泽"  # 契约显式保留
+    assert by_metric["salt_spray_hours"]["label"] == "耐盐雾"  # 派生
+    assert by_metric["salt_spray_hours"]["min"] == 500
+    assert "adhesion" not in by_metric  # 未勾选出厂指标不派生
+
+
+def test_2_8_winning_explicit_release_spec_beats_derived(tmp_path, monkeypatch):
+    """补齐计划 2-8：调用方显式 release_specs 与派生同 metric 时，显式优先且不重复。"""
+    monkeypatch.setenv("FORMUNEX_DB_URL", f"sqlite:///{tmp_path / 'winning28b.db'}")
+    monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "false")
+    monkeypatch.setenv("FORMUNEX_AUTH_JWT_SECRET", "test-secret-" + "x" * 40)
+    get_settings.cache_clear()
+    from app.db.database import default_session_factory
+    from app.db.models import ExperimentRow, FormulationVersion, ProjectRow
+    from app.db.models_plm import ProductRow
+    from app.services.identity.rbac import build_principal
+    from app.services.plm import winning as winning_mod
+
+    payload = {"workspace": {"requirement": {"objectives": [
+        {"metric": "salt_spray_hours", "display_name": "耐盐雾", "is_release_indicator": True,
+         "ref_min": 500, "unit": "h"},
+    ]}}}
+    with default_session_factory()() as s:
+        s.add(ProjectRow(id="proj-28b", title="W", domain="coating", payload=payload))
+        s.add(ProductRow(id="prod-28b", code="FX-28b", name_zh="W", project_id="proj-28b"))
+        s.add(FormulationVersion(id="fv-28b", lineage_id="l", version=1, domain="coating", name="v1",
+                                 created_at=datetime(2026, 10, 1),
+                                 snapshot={"ingredients": [{"name": "水", "weight_pct": 100}]}))
+        s.add(ExperimentRow(id=1, project_id="proj-28b", domain="coating", measured={}))
+        s.commit()
+    principal = build_principal("u1", ["project_lead"], {})
+    with default_session_factory()() as s:
+        rev, _ = winning_mod.select_winning(
+            s, product_id="prod-28b", formulation_version_id="fv-28b", experiment_id=1,
+            user_id="u1", principal=principal,
+            spec_snapshot={"release_specs": [{"metric": "salt_spray_hours", "label": "显式盐雾", "min": 600}]})
+        spec = rev.spec_snapshot or {}
+    specs = [r for r in spec.get("release_specs", []) if r["metric"] == "salt_spray_hours"]
+    assert len(specs) == 1 and specs[0]["label"] == "显式盐雾" and specs[0]["min"] == 600

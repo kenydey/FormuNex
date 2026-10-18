@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from app.db.campaign_store import SqliteCampaignStore
+from app.db.campaign_store import LocalCampaignStore
 from app.db.database import make_engine, make_session_factory
 from app.domain.objective_contract import objective_metrics
 from app.domain.schemas import DOEPlan, DOERun, ObjectiveSpec, ProductDomain, Requirement
@@ -28,7 +28,7 @@ def _plan() -> DOEPlan:
 def test_resolve_campaign_objectives_from_snapshot():
     engine = make_engine("sqlite:///:memory:")
     factory = make_session_factory(engine)
-    store = SqliteCampaignStore(factory)
+    store = LocalCampaignStore(factory)
     req = Requirement(
         domain=ProductDomain.anticorrosion_coating,
         objectives=[ObjectiveSpec(metric="voc_gpl", weight=1.0, direction="minimize")],
@@ -69,7 +69,7 @@ def test_fetch_columns_match_snapshot_metrics():
 
     engine = make_engine("sqlite:///:memory:")
     factory = make_session_factory(engine)
-    store = SqliteCampaignStore(factory)
+    store = LocalCampaignStore(factory)
     req = Requirement(
         domain=ProductDomain.anticorrosion_coating,
         objectives=[

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine, inspect, text
 
-from app.db.campaign_store import SqliteCampaignStore, reset_campaign_store
+from app.db.campaign_store import LocalCampaignStore, reset_campaign_store
 from app.db.database import make_engine, make_session_factory
 from app.domain.schemas import DOEPlan, DOERun, ProductDomain
 from app.main import app
@@ -51,7 +51,7 @@ def test_legacy_campaigns_table_gets_sample_refs_column(tmp_path, monkeypatch):
     assert "loop_history" in cols
 
     factory = make_session_factory(legacy_engine)
-    reset_campaign_store(SqliteCampaignStore(factory))
+    reset_campaign_store(LocalCampaignStore(factory))
     client = TestClient(app)
     plan = DOEPlan(
         design="lhs",

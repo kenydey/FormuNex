@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from app.db.campaign_store import SqliteCampaignStore
+from app.db.campaign_store import LocalCampaignStore
 from app.db.database import make_engine, make_session_factory
 from app.domain.schemas import (
     DOEPlan,
@@ -65,7 +65,7 @@ def test_baybe_recommend_with_workbench_multi_metric():
     baybe = BaybeCampaignEngine()
     db_engine = make_engine("sqlite:///:memory:")
     factory = make_session_factory(db_engine)
-    store = SqliteCampaignStore(factory)
+    store = LocalCampaignStore(factory)
     req = Requirement(
         domain=ProductDomain.anticorrosion_coating,
         objectives=[

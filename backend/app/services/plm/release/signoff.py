@@ -36,6 +36,7 @@ from ....db.models_plm import (
 )
 from ...audit import hash_chain
 from ...connectors.base import DeliveryPackage, configured_connectors
+from ...provenance import link_many_in_session
 from ...identity.rbac import RELEASE_SIGNOFF_ROLES, Principal
 from .. import storage
 from . import esign, gate, package
@@ -180,6 +181,9 @@ def submit(session: Session, revision_id: str, *, user_id: str, principal: Princ
         session.add(ApprovalStepRow(id=str(uuid.uuid4()), flow_id=flow.id, seq=seq, role_code=role))
     rev.state = "under_review"
     session.flush()
+    # Phase 2D (2-22): revision -> release_package edge (same transaction, fail-open).
+    link_many_in_session(session, [("product_revision", rev.id, "release_package", pkg.id, "released_as")],
+                         created_by=user_id)
     _audit(session, user_id, "release.submit", "release_package", pkg.id, revision_id=rev.id, package_hash=phash)
     return pkg
 

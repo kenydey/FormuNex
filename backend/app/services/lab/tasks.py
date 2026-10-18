@@ -20,13 +20,34 @@ from sqlalchemy.orm import Session
 
 from ...clock import utcnow
 from ...db import doe_plan_store
-from ...db.models import ExperimentRow, MeasurementRow
+from ...db.models import ExperimentRow, MeasurementRow, ProjectRow
 from ...db.models_lab import LabTaskRow, SampleRow
+from ...domain.project_spec import check_process_window
 from ...domain.schemas import ProductDomain
 from ..audit import hash_chain
 from .methods import LabError, LabForbidden
 
 ACTIVE = ("open", "in_progress", "pending_review")
+
+
+def project_process_window(session: Session, project_id: str | None) -> dict[str, Any] | None:
+    """补齐计划 2-10: 读项目的规格契约工艺窗口（workspace.spec_contract.process_window）。
+
+    找不到项目 / 无契约 / 无窗口 → None（调用方按无窗口处理，不报错）。
+    """
+    if not project_id:
+        return None
+    row = session.get(ProjectRow, project_id)
+    if row is None:
+        return None
+    spec = (row.payload or {}).get("workspace", {}).get("spec_contract") or {}
+    window = spec.get("process_window")
+    return dict(window) if isinstance(window, dict) and window else None
+
+
+def task_process_window_warnings(session: Session, project_id: str | None, factors: dict[str, Any]) -> list[str]:
+    """补齐计划 2-10: 任务因子 vs 契约工艺窗口的偏离警告（只警告，不拦截）。"""
+    return check_process_window(factors, project_process_window(session, project_id))
 
 
 def _next_task_no(session: Session) -> str:
@@ -87,6 +108,9 @@ def dispatch_plan(session: Session, plan_id: str, *, metrics: list[Any], user_id
     existing = {r for (r,) in session.execute(select(LabTaskRow.run_index).where(
         LabTaskRow.doe_plan_id == plan_id, LabTaskRow.status != "cancelled")).all()}
     created, skipped = [], []
+    warnings: list[dict[str, Any]] = []
+    # 补齐计划 2-10: 契约工艺窗口只读一次，逐 run 比对因子，偏离只警告不拦截。
+    window = project_process_window(session, project_id)
     for run in plan.runs:
         if run.run_id in existing:
             skipped.append({"run": run.run_id, "reason": "已有任务单"})
@@ -94,6 +118,9 @@ def dispatch_plan(session: Session, plan_id: str, *, metrics: list[Any], user_id
         if run.infeasible and not include_infeasible:
             skipped.append({"run": run.run_id, "reason": run.infeasible_reason or "不可行"})
             continue
+        run_warnings = check_process_window(dict(run.natural), window)
+        if run_warnings:
+            warnings.append({"run": run.run_id, "warnings": run_warnings})
         pred = (predictions or {}).get(run.run_id) or {}
         reqs = []
         for m in _requested(metrics):
@@ -112,7 +139,7 @@ def dispatch_plan(session: Session, plan_id: str, *, metrics: list[Any], user_id
             doe_plan_store.set_status(session, plan_id, "active")
     except (LookupError, ValueError):
         pass
-    return {"created": created, "skipped": skipped}
+    return {"created": created, "skipped": skipped, "process_window_warnings": warnings}
 
 
 def task_sample(session: Session, task: LabTaskRow) -> SampleRow:

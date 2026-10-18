@@ -76,3 +76,63 @@ def test_build_research_query_injects_magnesium_terms():
 def test_substrate_default_levers_only_surface_treatment():
     req = Requirement(domain=ProductDomain.degreaser, substrate=Substrate.magnesium_alloy)
     assert substrate_default_levers(req) is None
+
+
+def test_2_11_new_builtin_substrates_use_family_levers():
+    """补齐计划 2-11：A356/ADC12 走轻金属杠杆，冷轧钢走钢组杠杆。"""
+    for sub in (Substrate.a356, Substrate.adc12):
+        req = Requirement(domain=ProductDomain.surface_treatment, substrate=sub)
+        names = [lev.name for lev in resolve_levers(req)]
+        assert "Hexafluorozirconic acid" in names, sub
+        assert "Phosphoric acid" not in names, sub
+    req = Requirement(domain=ProductDomain.surface_treatment, substrate=Substrate.cold_rolled_steel)
+    names = [lev.name for lev in resolve_levers(req)]
+    assert "Phosphoric acid" in names
+    assert "Hexafluorozirconic acid" not in names
+
+
+def test_2_11_requirement_accepts_configured_substrate(monkeypatch):
+    """补齐计划 2-11：FORMUNEX_EXTRA_SUBSTRATES 配置的基材可进 Requirement，原字符串流通。"""
+    import json
+
+    monkeypatch.setenv(
+        "FORMUNEX_EXTRA_SUBSTRATES",
+        json.dumps([{"value": "titanium", "label_zh": "钛合金", "label_en": "Titanium alloy"}]),
+    )
+    req = Requirement(domain=ProductDomain.anticorrosion_coating, substrate="titanium")
+    assert req.substrate == "titanium"
+    assert req.headline().endswith("on titanium")
+    # 配置基材无已知工艺家族 → 无基材专属杠杆（不报错、不编造）。
+    st_req = Requirement(domain=ProductDomain.surface_treatment, substrate="titanium")
+    assert substrate_default_levers(st_req) is None
+
+
+def test_2_11_unknown_substrate_rejected():
+    """补齐计划 2-11：拼错的基材 fail-closed，不静默成别的基材。"""
+    with pytest.raises(Exception, match="未知基材"):
+        Requirement(domain=ProductDomain.anticorrosion_coating, substrate="titanuim")
+
+
+def test_2_11_meta_substrates_endpoint(monkeypatch):
+    """补齐计划 2-11：GET /api/meta/substrates 返回内置 + 配置扩展。"""
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    monkeypatch.setenv(
+        "FORMUNEX_EXTRA_SUBSTRATES",
+        json.dumps([{"value": "titanium", "label_zh": "钛合金", "label_en": "Titanium alloy"}]),
+    )
+    client = TestClient(app)
+    resp = client.get("/api/meta/substrates")
+    assert resp.status_code == 200
+    values = [o["value"] for o in resp.json()]
+    assert {"a356", "adc12", "cold_rolled_steel", "titanium"} <= set(values)
+    # default-levers 接受配置基材（无专属杠杆 → 通用杠杆，不 422/500）。
+    resp2 = client.get("/api/meta/default-levers", params={"domain": "surface_treatment", "substrate": "titanium"})
+    assert resp2.status_code == 200
+    # 未知基材 → 400。
+    resp3 = client.get("/api/meta/default-levers", params={"domain": "surface_treatment", "substrate": "titanuim"})
+    assert resp3.status_code == 400

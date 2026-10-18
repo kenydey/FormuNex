@@ -63,6 +63,12 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
     # Cockpit — pure compute, except winning which freezes a formulation.
     (re.compile(r"^/api/cockpit/winning$"), "formulation.freeze"),
     (re.compile(r"^/api/cockpit/(conformal|pareto)"), "formulation.read"),
+    # Phase 2C cockpit compute (acid/color/rheology/sensitivity are pure compute).
+    (re.compile(r"^/api/cockpit/(acid-stability/trend|color|rheology/fit|sensitivity)$"), "formulation.read"),
+    # Phase 2C point review writes review state.
+    (re.compile(r"^/api/cockpit/doe/[^/]+/points/review$"), "doe.write"),
+    # Phase 2C optimizer rules write .env operational config (platform-admin).
+    (re.compile(r"^/api/cockpit/optimizer-rules$"), "admin.llm"),
     # Ingest / KB — read-only compute endpoints need read; the rest is a write.
     (re.compile(r"^/api/ingest(/|$)"), "knowledge.write"),
     (re.compile(r"^/api/kb/(hybrid-search|query-test|golden-eval/run|pageindex/search|sources/resolve|chunk-quality-sample)$"),
@@ -141,6 +147,8 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/lab/tasks/[^/]+/claim$"), "lab.execute"),
     (re.compile(r"^/api/lab/tasks/[^/]+/measurements$"), "lab.execute"),
     (re.compile(r"^/api/lab/tasks/[^/]+/submit$"), "lab.execute"),
+    # Phase 2B lab task attachments (upload / delete).
+    (re.compile(r"^/api/lab/tasks/[^/]+/attachments(/[^/]+)?$"), "doe.write"),
     # Signoff — per-endpoint / OR-logic permissions.
     (re.compile(r"^/api/plm/documents/[^/]+/approve$"), "coa.sign OR plm.document.review"),
     (re.compile(r"^/api/plm/packages/[^/]+/publish$"), "release.publish"),

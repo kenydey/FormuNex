@@ -4,8 +4,8 @@ Three interchangeable backends implement the same small interface so the
 ``ModelRegistry`` is agnostic to where data lives:
 
 * :class:`DatalabExperimentStore` — Datalab Headless ELN SSOT (``formumind_training``
-  block) with SQLite index rows (production default when ``experiment_backend=datalab``).
-* :class:`SqlExperimentStore` — SQLAlchemy-backed inline JSON (sqlite fallback / tests).
+  block) with main-DB index rows (production default when ``experiment_backend=datalab``).
+* :class:`LocalExperimentStore` — SQLAlchemy-backed inline JSON (local main-DB store / tests).
 * :class:`JsonExperimentStore` — single-file JSON store for lightweight tests and migration.
 
 Interface: ``all() -> list[ExperimentRecord]``, ``add(records)``, ``clear()``.
@@ -190,8 +190,8 @@ def _record_to_row(rec: ExperimentRecord) -> ExperimentRow:
     )
 
 
-class SqlExperimentStore:
-    """SQLAlchemy-backed experiment store (SQLite default, Postgres-ready)."""
+class LocalExperimentStore:
+    """SQLAlchemy-backed experiment store (main database, whatever dialect is configured)."""
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -409,7 +409,11 @@ def get_experiment_store(settings: Settings | None = None) -> ExperimentStore:
     from .database import default_session_factory
 
     factory = default_session_factory()
-    backend = (s.experiment_backend or "sqlite").lower()
+    backend = (s.experiment_backend or "native").lower()
+    if backend == "sqlite":
+        # Phase 2D (2-24): "sqlite" is a deprecated alias of "native" (same as campaign_backend).
+        logger.warning("experiment_backend 'sqlite' is a deprecated alias of 'native'")
+        backend = "native"
     if backend == "datalab":
         ok, reason = check_datalab_reachable(
             s.datalab_api_url,
@@ -427,7 +431,7 @@ def get_experiment_store(settings: Settings | None = None) -> ExperimentStore:
         logger.info("Experiment store: Datalab SSOT (%s)", s.datalab_api_url)
     elif backend == "auto":
         # auto 语义与 campaign_store 对齐（config 注释承诺）：探测 Datalab →
-        # 可达即以其为 SSOT；不可达时 REQUIRED 则硬失败，否则回退 sqlite。
+        # 可达即以其为 SSOT；不可达时 REQUIRED 则硬失败，否则回退本地台账。
         ok, reason = check_datalab_reachable(
             s.datalab_api_url,
             timeout=min(2.0, s.datalab_timeout_seconds),
@@ -449,16 +453,16 @@ def get_experiment_store(settings: Settings | None = None) -> ExperimentStore:
         else:
             # Soft-degrade (Top-5″ #2): DATALAB_REQUIRED=false + campaign≠datalab.
             logger.warning(
-                "Datalab 不可达（%s），训练记录后端回退 SqlExperimentStore"
+                "Datalab 不可达（%s），训练记录后端回退 LocalExperimentStore"
                 "（auto + DATALAB_REQUIRED=false · 本地台账软降级）",
                 reason,
             )
-            _store = SqlExperimentStore(factory)
+            _store = LocalExperimentStore(factory)
     else:
-        # native (default) / sqlite: FormuNex's own database is the system of record (方案 v1.1 §5.3.1).
-        if backend not in ("native", "sqlite"):
+        # native (default): FormuNex's own database is the system of record (方案 v1.1 §5.3.1).
+        if backend not in ("native",):
             logger.warning("Unknown experiment_backend %r; using the native store", backend)
-        _store = SqlExperimentStore(factory)
+        _store = LocalExperimentStore(factory)
     return _store
 
 

@@ -145,10 +145,17 @@ def _pvc_metrics(form: Formulation) -> dict[str, float]:
 
 
 def _color_metrics(form: Formulation) -> dict[str, float]:
-    """CIELAB + ΔE₀₀ color descriptors; empty when no color-bearing pigment."""
+    """CIELAB + ΔE₀₀ color descriptors; empty when no color-bearing pigment.
+
+    ``Formulation.predicted`` is ``dict[str, float]``: only numeric values may
+    flow in. ``color_metrics`` also returns metadata (``delta_e_method``) and
+    ``None`` for unavailable ΔE₀₀ — those stay out of ``predicted`` (the cockpit
+    color API returns them directly) instead of breaking downstream validation.
+    """
     from .colorimetry import color_metrics
 
-    return color_metrics(form)
+    return {k: v for k, v in color_metrics(form).items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)}
 
 
 def _rheology_metrics(form: Formulation) -> dict[str, float]:

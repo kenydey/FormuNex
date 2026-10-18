@@ -265,6 +265,18 @@ class SubstituteRequest(BaseModel):
     surechembl_limit: int = Field(default=8, ge=1, le=25)
     include_llm: bool | None = None
     llm_limit: int = Field(default=5, ge=1, le=15)
+    # 补齐计划 2-7: 替换后分类预览条数（0 = 关闭；需 session，API 端始终提供）。
+    classification_preview_limit: int = Field(default=5, ge=0, le=10)
+
+
+class SubstitutionTriggersRequest(BaseModel):
+    """补齐计划 2-6: 替换触发扫描参数（基线配方按 domain 生成，与 supply-risk 同口径）。"""
+    domain: str = ""
+    project_id: str | None = None
+    cost_limit_per_kg: float | None = Field(default=None, ge=0)
+    material_price_limits: dict[str, float] | None = None
+    # 基线分类 {formulation_label: {signal_word, h_codes}}，用于分类升级对比。
+    baseline_classifications: dict[str, dict] | None = None
 
 
 def _slot_candidates(genome) -> list[str]:
@@ -353,6 +365,8 @@ def substitutes(body: SubstituteRequest) -> dict:
                 include_llm=body.include_llm,
                 llm_limit=body.llm_limit,
                 session=_session,
+                # 补齐计划 2-7: 替换后分类预览
+                classification_preview_limit=body.classification_preview_limit,
             )
     except HTTPException:
         raise
@@ -381,6 +395,45 @@ def supply_risk(domain: str = Query(default="")) -> dict:
         except Exception as exc:
             logger.debug("supply-risk: baseline for %s failed: %s", product, exc)
     return scan_supply_risk(genomes)
+
+
+@router.post("/substitution-triggers")
+def substitution_triggers(body: SubstitutionTriggersRequest) -> dict:
+    """补齐计划 2-6: 替换触发扫描 —— 断供 + 超成本 + 命中红线 + 分类升级。
+
+    基线配方按 domain 生成（与 supply-risk 同口径）；红线取 project_id 对应项目
+    的约束（不传则不扫红线）；分类升级需 baseline_classifications（不传则不扫）。
+    """
+    from ..domain.schemas import ProductDomain
+    from ..pipeline import reconstruct
+    from ..services.substitution import scan_substitution_triggers
+
+    domains = [d for d in ProductDomain if not body.domain or d.value == body.domain]
+    if body.domain and not domains:
+        raise HTTPException(status_code=400, detail=f"未知产品域：{body.domain}")
+    genomes = {}
+    req = None
+    for product in domains:
+        try:
+            req = Requirement(domain=product, project_id=body.project_id or "")
+            genomes[product.value] = reconstruct.genome_from_requirement(req)
+        except Exception as exc:
+            logger.debug("substitution-triggers: baseline for %s failed: %s", product, exc)
+    try:
+        from ..db.database import default_session_factory
+
+        with default_session_factory()() as _session:
+            return scan_substitution_triggers(
+                genomes, req, session=_session,
+                baseline_classifications=body.baseline_classifications,
+                cost_limit_per_kg=body.cost_limit_per_kg,
+                material_price_limits=body.material_price_limits,
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("substitution-triggers failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"替换触发扫描失败：{exc}") from exc
 
 
 @router.post("/availability", response_model=MaterialView)

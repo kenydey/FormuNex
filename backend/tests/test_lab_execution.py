@@ -367,7 +367,7 @@ def test_datalab_is_read_only_and_migration_moves_records(lab):
     from app.services.lab.measurements import sync_mirror
 
     with pytest.raises(ConnectorError):
-        DatalabConnector("http://dl").push_task({})
+        DatalabConnector("http://dl").push_plan({})
     items = {"fm_1": {"blocks_obj": {"formumind_training": {"blockype": "x", "data": {
         "domain": "anticorrosion_coating", "project_id": "p1", "factors": {"T": 150},
         "measured": {"salt_spray_hours": 720, "note": "text"}, "label": "旧实验"}}}}}
@@ -394,14 +394,156 @@ def test_datalab_is_read_only_and_migration_moves_records(lab):
 
 def test_native_backend_is_the_default(monkeypatch):
     from app.config import Settings
-    from app.db.store import SqlExperimentStore, get_experiment_store, reset_experiment_store
+    from app.db.store import LocalExperimentStore, get_experiment_store, reset_experiment_store
 
     assert Settings.model_fields["experiment_backend"].default == "native"
     reset_experiment_store(None)
     try:
         store = get_experiment_store(Settings(experiment_backend="native", campaign_backend="native"))
-        assert isinstance(store, SqlExperimentStore)
+        assert isinstance(store, LocalExperimentStore)
     finally:
         reset_experiment_store(None)
 
 
+
+
+def test_2_15_push_task_alias_calls_push_plan():
+    """补齐计划 2-15：push_task 为 deprecated 别名，行为与 push_plan 一致并告警。"""
+    import warnings
+
+    from app.services.eln.connectors.base import ElnConnector, RemoteRecord
+
+    class Fake(ElnConnector):
+        name = "fake"
+
+        def health(self):
+            return {"ok": True}
+
+        def push_plan(self, plan):
+            return RemoteRecord("ext-1", "http://x/1")
+
+        def pull_measurements(self, external_id, *, since=None):
+            return []
+
+    conn = Fake()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rec = conn.push_task({"task_no": "LT-1"})
+    assert rec.external_id == "ext-1"
+    assert any(issubclass(w.category, DeprecationWarning) and "push_plan" in str(w.message) for w in caught)
+
+
+def test_2_15_legacy_subclass_without_push_plan_fails_loudly():
+    """补齐计划 2-15（子类侧破坏性，标注）：仅实现旧 push_task 的子类实例化时 TypeError 明示。"""
+    from app.services.eln.connectors.base import ElnConnector
+
+    class Legacy(ElnConnector):
+        name = "legacy"
+
+        def health(self):
+            return {"ok": True}
+
+        def push_task(self, task):
+            raise AssertionError("must not be called")
+
+        def pull_measurements(self, external_id, *, since=None):
+            return []
+
+    with pytest.raises(TypeError, match="push_plan"):
+        Legacy()
+
+
+def test_2_15_datalab_push_plan_read_only():
+    """补齐计划 2-15：Datalab push_plan 同样只读报错（别名 push_task 走同一路径）。"""
+    import warnings
+
+    from app.services.eln.connectors.base import ConnectorError
+    from app.services.eln.connectors.datalab import DatalabConnector
+
+    with pytest.raises(ConnectorError, match="只读"):
+        DatalabConnector("http://dl").push_plan({})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with pytest.raises(ConnectorError, match="只读"):
+            DatalabConnector("http://dl").push_task({})
+
+
+def test_2_15_pull_since_passthrough(tmp_path):
+    """补齐计划 2-15：sync.pull 的 since 透传给连接器；不传时为 None（旧调用兼容）。"""
+    from app.db.database import Base, make_engine, make_session_factory
+    from app.db.models_lab import ElnLinkRow, LabTaskRow
+    from app.services.eln import sync
+    from app.services.eln.connectors.base import ElnConnector
+
+    engine = make_engine(f"sqlite:///{tmp_path}/eln.db")
+    Base.metadata.create_all(engine)
+    session = make_session_factory(engine)()
+    task_id = str(uuid.uuid4())
+    session.add(LabTaskRow(id=task_id, task_no="LT-1", status="open"))
+    session.add(ElnLinkRow(id=str(uuid.uuid4()), connector="fake", external_id="ext-1",
+                           local_type="lab_task", local_id=task_id,
+                           content_hash=sync._digest({}) + sync._digest({})))
+    session.commit()
+
+    seen: list = []
+
+    class Fake(ElnConnector):
+        name = "fake"
+
+        def health(self):
+            return {"ok": True}
+
+        def push_plan(self, plan):
+            raise AssertionError("not used")
+
+        def pull_measurements(self, external_id, *, since=None):
+            seen.append((external_id, since))
+            return []  # 空值 → unchanged 分支，不触发 _apply（无需样品/方法行）
+
+    conn = Fake()
+    out = sync.pull(session, conn, since="2026-10-18T00:00:00Z")
+    assert seen == [("ext-1", "2026-10-18T00:00:00Z")]
+    assert out["checked"] == 1 and out["unchanged"] == 1
+    seen.clear()
+    out2 = sync.pull(session, conn)
+    assert seen == [("ext-1", None)]
+    assert out2["checked"] == 1 and out2["unchanged"] == 1
+
+
+def test_2_14_task_attachments_upload_list_download_delete(lab):
+    """补齐计划 2-14：任务附件上传 → 列表 → 下载（内容一致）→ 删除（再下载 404）。"""
+    c, h = lab["c"], lab["h"]
+    tasks = _dispatch(lab, _plan(c), metrics=["density_g_cm3"])
+    tid = tasks[0]["id"]
+    up = c.post(f"/api/lab/tasks/{tid}/attachments", headers=h["lead"],
+                files={"file": ("spectrum.csv", b"a,b\n1,2\n", "text/csv")})
+    assert up.status_code == 201, up.text
+    att = up.json()
+    assert att["filename"] == "spectrum.csv" and att["size_bytes"] == 8
+    assert len(att["sha256"]) == 64
+    lst = c.get(f"/api/lab/tasks/{tid}/attachments").json()
+    assert [a["id"] for a in lst] == [att["id"]]
+    dl = c.get(f"/api/lab/tasks/{tid}/attachments/{att['id']}/download")
+    assert dl.status_code == 200 and dl.content == b"a,b\n1,2\n"
+    # 不存在的任务 / 附件 → 404
+    assert c.get("/api/lab/tasks/nope/attachments").status_code == 404
+    assert c.get(f"/api/lab/tasks/{tid}/attachments/nope/download").status_code == 404
+    rm = c.delete(f"/api/lab/tasks/{tid}/attachments/{att['id']}", headers=h["lead"])
+    assert rm.status_code == 200 and rm.json()["ok"] is True
+    assert c.get(f"/api/lab/tasks/{tid}/attachments").json() == []
+    assert c.get(f"/api/lab/tasks/{tid}/attachments/{att['id']}/download").status_code == 404
+
+
+def test_2_14_record_with_instrument_asset_no(lab):
+    """补齐计划 2-14：批量录入网格填资产编号（非 UUID）也能解析仪器。"""
+    c, h = lab["c"], lab["h"]
+    task = _dispatch(lab, _plan(c))[0]
+    instr = c.post("/api/lab/instruments", headers=h["qa"], json={"asset_no": "BZP-99", "name": "比重瓶"}).json()
+    assert instr["id"] != "BZP-99"
+    r = _record(lab, "tech", task["id"], {**DENSITY, "instrument_id": "BZP-99"})
+    assert r.status_code == 201, r.text
+    assert r.json()["measurements"][0]["instrument_id"] == instr["id"]
+    # 不存在的资产编号 → 422（不静默忽略）
+    task2 = _dispatch(lab, _plan(c))[0]
+    r2 = _record(lab, "tech", task2["id"], {**DENSITY, "instrument_id": "NO-SUCH-ASSET"})
+    assert r2.status_code == 422 and "仪器" in r2.json()["detail"]

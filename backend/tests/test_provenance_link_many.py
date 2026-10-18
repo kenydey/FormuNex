@@ -126,28 +126,26 @@ def test_an_up_to_date_schema_costs_no_write_to_check(factory, commits):
     assert commits["n"] == 0, "reads and re-checks must not open a write transaction"
 
 
-def test_a_stale_schema_is_rebuilt_once(factory, commits):
-    provenance.ensure_provenance(factory)
+def test_a_missing_table_is_created_by_ensure(factory):
+    """The table is alembic-managed, so ``ensure_provenance`` only creates it
+    when it is missing (e.g. a test DB built from ``Base.metadata`` before
+    migration 0062) — and a second call is a no-op."""
+    from app.db.models_plm import LineageEdgeRow
+
     with factory() as session:
-        session.execute(provenance.text("UPDATE provenance_meta SET v = 'old' WHERE k = 'schema'"))
+        LineageEdgeRow.__table__.drop(bind=session.get_bind())
         session.commit()
     provenance.ensure_provenance(factory)
-    commits["n"] = 0
     provenance.ensure_provenance(factory)
-    assert commits["n"] == 0
-    with factory() as session:
-        assert session.execute(provenance.text("SELECT v FROM provenance_meta WHERE k = 'schema'")).scalar() == provenance._PROV_SCHEMA
+    assert provenance.link_many(_runs(1, 1), session_factory=factory) is True
+    assert provenance.count_edges(session_factory=factory) == 1
 
 
-def test_a_dropped_index_is_noticed_and_recreated(factory):
+def test_ensure_leaves_an_existing_table_and_its_edges_alone(factory):
     provenance.ensure_provenance(factory)
-    with factory() as session:
-        session.execute(provenance.text("DROP INDEX idx_prov_to"))
-        session.commit()
+    assert provenance.link_many(_runs(1, 2), session_factory=factory) is True
     provenance.ensure_provenance(factory)
-    with factory() as session:
-        names = {r[0] for r in session.execute(provenance.text("SELECT name FROM sqlite_master WHERE type = 'index'"))}
-    assert {"idx_prov_from", "idx_prov_to"} <= names
+    assert provenance.count_edges(session_factory=factory) == 2
 
 
 def test_the_doe_cycle_links_all_runs_in_one_batch(factory, commits, monkeypatch):
@@ -212,9 +210,9 @@ def test_concurrent_processes_neither_fail_nor_lose_edges(tmp_path, monkeypatch)
 
     con = sqlite3.connect(tmp_path / "race.db")
     try:
-        total = con.execute("SELECT COUNT(*) FROM provenance_edges").fetchone()[0]
-        runs = con.execute("SELECT COUNT(*) FROM provenance_edges WHERE from_type = 'run'").fetchone()[0]
-        shared = con.execute("SELECT COUNT(*) FROM provenance_edges WHERE to_id = 'shared-claim'").fetchone()[0]
+        total = con.execute("SELECT COUNT(*) FROM lineage_edges").fetchone()[0]
+        runs = con.execute("SELECT COUNT(*) FROM lineage_edges WHERE from_type = 'run'").fetchone()[0]
+        shared = con.execute("SELECT COUNT(*) FROM lineage_edges WHERE to_id = 'shared-claim'").fetchone()[0]
     finally:
         con.close()
     assert runs == writers * batches * (size + 1)
