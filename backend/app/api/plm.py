@@ -376,7 +376,7 @@ class QcResultsIn(BaseModel):
 
 
 class DocumentIn(BaseModel):
-    doc_type: Literal["sds", "tds", "coa", "label"]
+    doc_type: Literal["sds", "tds", "coa", "label", "ts"]
     lang: Literal["zh-CN", "en-US"] = "zh-CN"
     properties: PropertiesIn | None = None  # mixture properties for classification (sds / label)
     sds_properties: dict[str, Any] = Field(default_factory=dict)  # section 9 values: key → value or {value, source, method}
@@ -388,6 +388,7 @@ class DocumentIn(BaseModel):
     tds: dict[str, Any] = Field(default_factory=dict)
     coa: dict[str, Any] = Field(default_factory=dict)
     label: dict[str, Any] = Field(default_factory=dict)
+    ts: dict[str, Any] = Field(default_factory=dict)  # 整合方案 §3: indicators / properties / inspection / packaging / template_id
     pdfa: bool = False  # PDF/A-2b 输出（3-13；字体未嵌入时 422）
 
 
@@ -485,7 +486,7 @@ def add_qc_results(batch_id: str, body: QcResultsIn) -> dict[str, Any]:
 @router.post("/revisions/{revision_id}/documents", status_code=201)
 def generate_document(revision_id: str, body: DocumentIn,
                       user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
-    """Generate a new version of an SDS / TDS / COA / label (never edits an existing version)."""
+    """Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version)."""
     from ..services.plm.documents import service as docs
     from ..services.plm.render import MissingRenderDependency, PdfaError
 
@@ -1158,3 +1159,310 @@ def batch_labels(body: LabelBatchIn):
         raise HTTPException(status_code=422, detail=str(exc)) from None
     return Response(buf.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="labels.zip"'})
+
+
+# --------------------------------------------------------------------------- 整合方案 P0: 公司配置 / TS 模板 / 批量导出 / 配方映射
+
+
+class CompanyIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    name_en: str = ""
+    address: str = ""
+    address_en: str = ""
+    phone: str = ""
+    fax: str = ""
+    email: str = ""
+    emergency_phone: str = Field(min_length=1, max_length=64)
+    unified_credit_code: str = ""
+    is_default: bool = False
+
+
+def _company_out(row) -> dict[str, Any]:
+    from ..services.plm.company import company_dict
+
+    return company_dict(row)
+
+
+@router.get("/companies")
+def list_companies() -> list[dict[str, Any]]:
+    """Company configurations (newest default first). Readable by any signed-in caller."""
+    from sqlalchemy import select
+
+    from ..db.models_plm import CompanyRow
+
+    with _session() as session:
+        rows = session.execute(select(CompanyRow).order_by(CompanyRow.is_default.desc(),
+                                                           CompanyRow.updated_at.desc())).scalars().all()
+        return [_company_out(r) for r in rows]
+
+
+@router.post("/companies", status_code=201)
+def create_company(body: CompanyIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Create a company (admin.companies). The first company becomes the default automatically."""
+    from ..services.plm import company as company_svc
+
+    user.require("admin.companies")
+    with _session() as session:
+        try:
+            row = company_svc.create_company(session, body.model_dump(), created_by=user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return _company_out(row)
+
+
+@router.get("/companies/{company_id}")
+def get_company(company_id: str) -> dict[str, Any]:
+    from ..db.models_plm import CompanyRow
+
+    with _session() as session:
+        row = session.get(CompanyRow, company_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="公司不存在")
+        return _company_out(row)
+
+
+@router.put("/companies/{company_id}")
+def update_company(company_id: str, body: CompanyIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm import company as company_svc
+
+    user.require("admin.companies")
+    with _session() as session:
+        try:
+            row = company_svc.update_company(session, company_id, body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return _company_out(row)
+
+
+@router.post("/companies/{company_id}/set-default")
+def set_default_company(company_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Make this company the default (its name / address / emergency phone land on new documents)."""
+    from ..services.plm import company as company_svc
+
+    user.require("admin.companies")
+    with _session() as session:
+        try:
+            row = company_svc.set_default(session, company_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return _company_out(row)
+
+
+@router.post("/companies/{company_id}/logo")
+async def upload_company_logo(company_id: str, file: UploadFile = File(...),
+                              user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Upload a company Logo (PNG / JPEG / GIF / WebP / SVG, ≤2MB; bytes are sniffed, extension is not trusted)."""
+    from ..api._uploads import read_upload_capped
+    from ..services.plm import company as company_svc
+
+    user.require("admin.companies")
+    data = await read_upload_capped(file, file.filename or "logo")
+    with _session() as session:
+        try:
+            row = company_svc.set_logo(session, company_id, data)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return _company_out(row)
+
+
+@router.get("/companies/{company_id}/logo")
+def download_company_logo(company_id: str):
+    """The company Logo bytes (404 when none)."""
+    from fastapi.responses import Response
+
+    from ..db.models_plm import CompanyRow
+    from ..services.plm import storage
+    from ..services.plm.company import validate_logo
+
+    with _session() as session:
+        row = session.get(CompanyRow, company_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="公司不存在")
+        if not row.logo_key or not storage.exists(row.logo_key):
+            raise HTTPException(status_code=404, detail="该公司未上传 Logo")
+        data = storage.get(row.logo_key)
+        _ext, media = validate_logo(data)
+        return Response(data, media_type=media,
+                        headers={"Content-Disposition": f'inline; filename="logo-{company_id[:8]}.{_ext}"'})
+
+
+class TsTemplateIn(BaseModel):
+    category: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    sections: dict[str, Any] = Field(default_factory=dict)
+    indicators: list[dict[str, Any]] = Field(default_factory=list)  # structure only: limits must stay empty
+    is_default: bool = False
+
+
+@router.get("/ts-templates")
+def list_ts_templates(category: str | None = None) -> list[dict[str, Any]]:
+    """TS templates by product category (structure only — templates never carry spec limits)."""
+    from sqlalchemy import select
+
+    from ..db.models_plm import TsTemplateRow
+
+    with _session() as session:
+        q = select(TsTemplateRow)
+        if category:
+            q = q.where(TsTemplateRow.category == category)
+        return [{"id": r.id, "category": r.category, "name": r.name, "version": r.version,
+                 "sections": r.sections_json, "indicators": r.indicators_json, "is_default": r.is_default,
+                 "created_at": r.created_at}
+                for r in session.execute(q.order_by(TsTemplateRow.category, TsTemplateRow.name,
+                                                    TsTemplateRow.version.desc())).scalars()]
+
+
+@router.post("/ts-templates", status_code=201)
+def create_ts_template(body: TsTemplateIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Create a TS template (plm.document.write). A template indicator WITH limits is a 422 —
+    limits are quality-defined per product, never templated."""
+    import uuid
+
+    from sqlalchemy import func, select
+
+    from ..db.models_plm import TsTemplateRow
+    from ..services.plm.documents.ts_builder import clean_indicators
+
+    user.require("plm.document.write")
+    for i in body.indicators:
+        if i.get("spec_min") not in (None, "") or i.get("spec_max") not in (None, "") \
+                or i.get("spec_target") not in (None, ""):
+            raise HTTPException(status_code=422, detail=f"TS 模板指标 {i.get('label') or i.get('key')} 不得带规格限值")
+    _clean, warnings = clean_indicators(body.indicators)
+    if warnings:
+        raise HTTPException(status_code=422, detail="；".join(warnings)) from None
+    with _session() as session:
+        version = (session.execute(select(func.max(TsTemplateRow.version)).where(
+            TsTemplateRow.category == body.category, TsTemplateRow.name == body.name)).scalar() or 0) + 1
+        if body.is_default:
+            for old in session.execute(select(TsTemplateRow).where(
+                    TsTemplateRow.category == body.category, TsTemplateRow.is_default.is_(True))).scalars():
+                old.is_default = False
+        row = TsTemplateRow(id=str(uuid.uuid4()), category=body.category, name=body.name, version=version,
+                            sections_json=body.sections, indicators_json=body.indicators,
+                            is_default=body.is_default, created_by=user.id)
+        session.add(row)
+        session.commit()
+        return {"id": row.id, "category": row.category, "name": row.name, "version": row.version,
+                "is_default": row.is_default}
+
+
+class BatchExportIn(BaseModel):
+    product_ids: list[str] = Field(min_length=1, max_length=20)
+    doc_types: list[Literal["sds", "tds", "coa", "label", "ts"]] = Field(min_length=1, max_length=5)
+    lang: Literal["zh-CN", "en-US"] = "zh-CN"
+    filename_template: str = "{company}_{product}_{doc_type}_{lang}_{version}.{ext}"
+    include_docx: bool = False
+
+
+@router.post("/documents/batch-export", status_code=201)
+def create_batch_export(body: BatchExportIn, user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
+    """Batch-export documents (整合方案 §4): latest revision per product × latest version per
+    doc_type → one ZIP (files grouped per product + manifest.json). Missing documents are
+    reported in ``missing``, never silently skipped."""
+    from ..services.plm.company import default_company
+    from ..services.plm.documents import batch_export as batch
+
+    with _session() as session:
+        company = default_company(session) or {}
+        try:
+            row = batch.run_batch_export(session, product_ids=body.product_ids, doc_types=list(body.doc_types),
+                                         lang=body.lang, filename_template=body.filename_template,
+                                         include_docx=body.include_docx,
+                                         company_name=company.get("name") or "",
+                                         created_by=user.id if user else None)
+        except batch.BatchExportError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return {"id": row.id, "status": row.status, "file_count": row.file_count, "missing": row.missing}
+
+
+@router.get("/documents/batch-export/{export_id}")
+def get_batch_export(export_id: str) -> dict[str, Any]:
+    from ..db.models_plm import BatchExportRow
+
+    with _session() as session:
+        row = session.get(BatchExportRow, export_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="批量导出不存在")
+        return {"id": row.id, "status": row.status, "product_ids": row.product_ids, "doc_types": row.doc_types,
+                "lang": row.lang, "filename_template": row.filename_template, "include_docx": row.include_docx,
+                "file_count": row.file_count, "missing": row.missing, "error": row.error,
+                "created_at": row.created_at, "has_file": bool(row.result_key)}
+
+
+@router.get("/documents/batch-export/{export_id}/download")
+def download_batch_export(export_id: str):
+    """The batch-export ZIP (rendered files + manifest.json)."""
+    from fastapi.responses import Response
+
+    from ..db.models_plm import BatchExportRow
+    from ..services.plm import storage
+
+    with _session() as session:
+        row = session.get(BatchExportRow, export_id)
+        if row is None or row.status != "done" or not row.result_key or not storage.exists(row.result_key):
+            raise HTTPException(status_code=404, detail="批量导出文件尚未生成")
+        return Response(storage.get(row.result_key), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="batch-export-{export_id[:8]}.zip"'})
+
+
+class FormulaImportIn(BaseModel):
+    records: list[dict[str, Any]] = Field(min_length=1)
+    dry_run: bool = False
+
+
+@router.get("/formula-mappings")
+def list_formula_mappings(source: str | None = None, limit: int = Query(200, ge=1, le=1000)) -> list[dict[str, Any]]:
+    """Formula-database mappings (external formula → FormuNex product + formulation version)."""
+    from sqlalchemy import select
+
+    from ..db.models_plm import CompanyRow, FormulaMappingRow, ProductRow
+
+    with _session() as session:
+        q = select(FormulaMappingRow)
+        if source:
+            q = q.where(FormulaMappingRow.source == source)
+        out = []
+        for m in session.execute(q.order_by(FormulaMappingRow.created_at.desc()).limit(limit)).scalars():
+            product = session.get(ProductRow, m.product_id) if m.product_id else None
+            company = session.get(CompanyRow, m.company_id) if m.company_id else None
+            out.append({"id": m.id, "source": m.source, "source_ref": m.source_ref,
+                        "product_id": m.product_id, "product_code": product.code if product else None,
+                        "company_id": m.company_id, "company_name": company.name if company else None,
+                        "formulation_version_id": m.formulation_version_id, "created_at": m.created_at})
+        return out
+
+
+@router.post("/formula-mappings/import")
+def import_formula_mappings(body: FormulaImportIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Import MSDS-Generator formula records (整合方案 §6.3). Duplicates are skipped,
+    never overwritten; ``dry_run`` validates without writing."""
+    from ..services.plm import formula_mapping
+
+    user.require("plm.document.write")
+    with _session() as session:
+        report = formula_mapping.import_formulas(session, body.records, created_by=user.id, dry_run=body.dry_run)
+        if not body.dry_run:
+            session.commit()
+        return report
+
+
+@router.post("/formula-mappings/{mapping_id}/create-revision", status_code=201)
+def create_revision_from_mapping(mapping_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Bind a formula mapping to a new product revision (explicit lifecycle decision)."""
+    from ..services.plm import formula_mapping
+
+    user.require("formulation.freeze")
+    with _session() as session:
+        try:
+            rev = formula_mapping.create_revision_from_mapping(session, mapping_id, created_by=user.id)
+        except formula_mapping.FormulaImportError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return {"id": rev.id, "rev": rev.rev, "state": rev.state,
+                "formulation_version_id": rev.formulation_version_id}

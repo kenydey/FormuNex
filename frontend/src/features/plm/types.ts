@@ -27,5 +27,5 @@ export interface PackageView {
   signatures: { id: string; step: number | null; role: string | null; username: string | null; display_name: string | null; meaning: string; meaning_zh: string; signed_at: string; signed_hash: string }[];
   signatures_valid: boolean; gate: Gate | null;
 }
-export const DOC_TYPES = ["sds", "tds", "label", "coa"] as const;
-export const DOC_NAMES: Record<string, string> = { sds: "SDS", tds: "TDS", label: "标签", coa: "COA" };
+export const DOC_TYPES = ["sds", "tds", "label", "coa", "ts"] as const;
+export const DOC_NAMES: Record<string, string> = { sds: "SDS", tds: "TDS", label: "标签", coa: "COA", ts: "TS" };

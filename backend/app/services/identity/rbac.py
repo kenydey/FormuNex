@@ -41,6 +41,7 @@ PERMISSIONS: dict[str, str] = {
     "release.withdraw": "撤回 / 作废已发布产品",
     "admin.users": "管理用户与角色",
     "admin.templates": "管理文档模板",
+    "admin.companies": "管理公司配置（文档供应商信息与 Logo）",
     "admin.llm": "管理大模型与敏感数据路由",
     "admin.connectors": "管理外部连接器",
     "audit.read": "查看审计日志",
@@ -91,7 +92,7 @@ BUILTIN_ROLES: tuple[RoleDef, ...] = (
         "release.sign", "release.publish", "release.withdraw", "audit.read",
     ]),
     _role("sys_admin", "系统管理员", "System Administrator", [
-        "admin.users", "admin.templates", "admin.llm", "admin.connectors", "audit.read",
+        "admin.users", "admin.templates", "admin.companies", "admin.llm", "admin.connectors", "audit.read",
     ]),
 )
 BUILTIN_BY_CODE: dict[str, RoleDef] = {r.code: r for r in BUILTIN_ROLES}

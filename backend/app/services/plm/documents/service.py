@@ -18,7 +18,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ....clock import utcnow
-from ....config import get_settings
 from ....db.models_plm import (
     BatchQcResultRow,
     BatchRow,
@@ -26,6 +25,7 @@ from ....db.models_plm import (
     ProductRevisionRow,
     ProductRow,
     RegulatoryDocumentRow,
+    TsTemplateRow,
 )
 from ....db.models_regulatory import SubstanceOELRow, SubstanceRow
 from ...provenance import link_many_in_session
@@ -41,8 +41,10 @@ from .confidential_ranges import DEFAULT_EDGES
 from .label_builder import LabelContext, build_label
 from .sds_builder import SdsContext, build_sds
 from .tds_builder import TdsContext, build_tds
+from .ts_builder import TsContext, build_ts, clean_indicators
+from ..company import resolve_company
 
-DOC_TYPES = ("sds", "tds", "coa", "label")
+DOC_TYPES = ("sds", "tds", "coa", "label", "ts")
 
 
 class DocumentError(ValueError):
@@ -151,12 +153,9 @@ def add_qc_results(session: Session, batch_id: str, results: list[dict[str, Any]
 # --------------------------------------------------------------------------- context helpers
 
 
-def _company(override: dict | None) -> dict[str, Any]:
-    s = get_settings()
-    base = {"name": s.plm_company_name, "address": s.plm_company_address, "phone": s.plm_company_phone,
-            "email": s.plm_company_email, "emergency_phone": s.plm_emergency_phone}
-    base.update({k: v for k, v in (override or {}).items() if v not in (None, "")})
-    return base
+def _company(session: Session, override: dict | None) -> dict[str, Any]:
+    """Company for a document: explicit override, else the default company row, else env settings."""
+    return resolve_company(session, override)
 
 
 def _product_dict(product: ProductRow, extra: dict | None) -> dict[str, Any]:
@@ -224,6 +223,50 @@ def _next_version(session: Session, revision_id: str, doc_type: str, lang: str, 
     return (session.execute(q).scalar() or 0) + 1
 
 
+def _ts_factory_specs(session: Session, revision_id: str, lang: str) -> list[dict]:
+    """COA spec fallback (整合方案 §3.4): the latest TS's factory-inspection indicators.
+
+    Order: same-lang TS first, else any lang. Only indicators marked
+    factory-inspection, with at least one limit, become COA specs.
+    """
+    ts = session.execute(
+        select(RegulatoryDocumentRow).where(RegulatoryDocumentRow.revision_id == revision_id,
+                                            RegulatoryDocumentRow.doc_type == "ts")
+        .order_by(RegulatoryDocumentRow.lang != lang, RegulatoryDocumentRow.version_no.desc()).limit(1)
+    ).scalar_one_or_none()
+    if ts is None:
+        return []
+    return [{"metric": i["key"], "label": i.get("label") or i["key"], "unit": i.get("unit") or "",
+             "method": i.get("test_method") or "", "min": i.get("spec_min"), "max": i.get("spec_max"),
+             "text": None, "comparison": "full"}
+            for i in (ts.content.get("meta") or {}).get("indicators") or []
+            if i.get("is_factory_inspection")
+            and (i.get("spec_min") is not None or i.get("spec_max") is not None or i.get("spec_target") is not None)]
+
+
+def _ts_indicators(session: Session, rev: ProductRevisionRow, ts_payload: dict) -> tuple[list[dict], list[str]]:
+    """TS indicator rows: explicit payload > TS template structure > revision release_specs.
+
+    Template rows carry structure only (empty limits); release_specs are
+    contract-defined limits. Nothing is fabricated: no payload / template /
+    spec source means no indicators (the TS reports them missing).
+    """
+    if ts_payload.get("indicators"):
+        return ts_payload["indicators"], []
+    template_id = ts_payload.get("template_id")
+    if template_id:
+        row = session.get(TsTemplateRow, template_id)
+        if row is None:
+            raise DocumentError("TS 模板不存在")
+        seeded = [{**i, "source": "template"} for i in (row.indicators_json or [])]
+        return seeded, []
+    specs = (rev.spec_snapshot or {}).get("release_specs") or []
+    return [{"key": s.get("metric"), "label": s.get("label") or s.get("metric"), "unit": s.get("unit") or "",
+             "spec_min": s.get("min"), "spec_max": s.get("max"), "spec_target": s.get("target"),
+             "test_method": s.get("test_method_standard") or s.get("method") or "",
+             "is_factory_inspection": True, "source": "contract"} for s in specs if s.get("metric")], []
+
+
 def _template(session: Session, doc_type: str, lang: str) -> tuple[str | None, bytes | None]:
     row = session.execute(
         select(DocTemplateRow).where(DocTemplateRow.doc_type == doc_type, DocTemplateRow.lang == lang,
@@ -242,7 +285,7 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
     """Return (content, extra row fields)."""
     product = session.get(ProductRow, rev.product_id)
     prod = _product_dict(product, payload.get("product"))
-    company = _company(payload.get("company"))
+    company = _company(session, payload.get("company"))
     extra: dict[str, Any] = {}
     if doc_type in ("sds", "label"):
         cls, classification_id = _classify_revision(session, rev, payload.get("properties"))
@@ -281,14 +324,31 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
             product={**prod, **(tds.get("product") or {})}, company=company, properties=tds.get("properties") or [],
             performance=tds.get("performance") or [], application=tds.get("application") or {},
             storage=tds.get("storage") or {}, revision=_revision_meta(session, rev, doc_type, lang, None), lang=lang))
+    elif doc_type == "ts":
+        ts = payload.get("ts") or {}
+        raw_indicators, _seed_warnings = _ts_indicators(session, rev, ts)
+        indicators, warnings = clean_indicators(raw_indicators)
+        content = build_ts(TsContext(
+            product={**prod, "category": ts.get("category") or (payload.get("product") or {}).get("category")},
+            company=company, indicators=indicators,
+            properties=ts.get("properties") or [], inspection=ts.get("inspection") or {},
+            packaging=ts.get("packaging") or {},
+            revision={**_revision_meta(session, rev, doc_type, lang, None),
+                      "change_summary": payload.get("change_summary")}, lang=lang))
+        for w in warnings:
+            content["validation"]["warnings"].append(w)
+        content["meta"]["ts_template_id"] = ts.get("template_id")
     elif doc_type == "coa":
         coa = payload.get("coa") or {}
         batch = session.get(BatchRow, coa.get("batch_id") or "")
         if batch is None or batch.product_id != rev.product_id:
             raise DocumentError("COA 需要本产品的批次（coa.batch_id）")
+        # 整合方案 §3.4: COA specs = explicit > revision release_specs > latest TS factory indicators.
         specs_raw = coa.get("specs") or (rev.spec_snapshot or {}).get("release_specs") or []
         if not specs_raw:
-            raise DocumentError("COA 需要出厂规格（coa.specs 或修订版 spec_snapshot.release_specs）")
+            specs_raw = _ts_factory_specs(session, rev.id, lang)
+        if not specs_raw:
+            raise DocumentError("COA 需要出厂规格（coa.specs、修订版 spec_snapshot.release_specs 或 TS 出厂检验指标）")
         qc = session.execute(select(BatchQcResultRow).where(BatchQcResultRow.batch_id == batch.id)).scalars().all()
         n = _next_version(session, rev.id, "coa", lang, batch.id)
         content = build_coa(CoaContext(

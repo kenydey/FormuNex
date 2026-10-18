@@ -12,6 +12,7 @@ import { loadLocks } from "./fieldLocks";
 interface Candidates { sds_properties: Record<string, { value: number; method: string; source: string }>; notes?: string[] }
 interface Secret { cas: string; generic: string }
 interface TdsProp { key: string; label?: string; value: number | null; unit?: string; method?: string }
+interface TsIndicator { key: string; label?: string; unit?: string; spec_min?: number | null; spec_max?: number | null; spec_target?: number | null; test_method?: string; is_factory_inspection?: boolean }
 
 const LABEL_SIZES: [number, number][] = [[50, 75], [75, 100], [100, 150], [150, 200], [200, 300]];
 
@@ -24,10 +25,13 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
   const docType = Form.useWatch("doc_type", form) as string | undefined;
   const [secrets, setSecrets] = useState<Secret[]>([]);
   const [tdsProps, setTdsProps] = useState<TdsProp[]>([]);
+  const [tsIndicators, setTsIndicators] = useState<TsIndicator[]>([]);
   const product = useQuery({ queryKey: ["plm", "product", revision.product.id], enabled: open,
     queryFn: () => call<ProductDetail>("GET", `/api/plm/products/${revision.product.id}`) });
   const templates = useQuery({ queryKey: ["plm", "label-templates"], enabled: open && docType === "label",
     queryFn: () => call<{ id: string; name: string; lang: string; is_default: boolean }[]>("GET", "/api/plm/label-templates") });
+  const tsTemplates = useQuery({ queryKey: ["plm", "ts-templates"], enabled: open && docType === "ts",
+    queryFn: () => call<{ id: string; category: string; name: string; version: number; indicators: TsIndicator[] }[]>("GET", "/api/plm/ts-templates") });
   const candidates = useMutation({
     mutationFn: () => call<Candidates>("GET", `/api/plm/revisions/${revision.id}/property-candidates`),
     onSuccess: (c) => {
@@ -58,6 +62,9 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
         coa: { batch_id: v.batch_id, expiry: v.expiry },
         label: { template_id: v.template_id, container_volume_l: v.container_volume_l, size_mm: v.size ? JSON.parse(v.size) : undefined,
           qr_payload: v.qr_payload, variables: { batch_no: v.var_batch, production_date: v.var_date, net_content: v.var_net } },
+        ts: { template_id: v.ts_template_id, indicators: tsIndicators.filter((i) => i.key),
+          properties: tdsProps.filter((p) => p.key).map((p) => ({ key: p.key, label: p.label, value: p.value, unit: p.unit, method: p.method })),
+          inspection: { sampling: v.ts_sampling } },
       });
     },
     onSuccess: (d) => {
@@ -90,9 +97,10 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
             </Space>} />
         )}        <Space>
           <Form.Item name="doc_type" label={t("doc.type", "类型")}><Select style={{ width: 140 }} options={[
-            { value: "sds", label: "SDS" }, { value: "tds", label: "TDS" }, { value: "label", label: t("doc.label", "标签") }, { value: "coa", label: "COA" }]} /></Form.Item>
+            { value: "sds", label: "SDS" }, { value: "tds", label: "TDS" }, { value: "label", label: t("doc.label", "标签") }, { value: "coa", label: "COA" },
+            { value: "ts", label: "TS" }]} /></Form.Item>
           <Form.Item name="lang" label={t("doc.lang", "语言")}><Select style={{ width: 120 }} options={[{ value: "zh-CN", label: "中文" }, { value: "en-US", label: "English" }]} /></Form.Item>
-          {(docType === "sds" || docType === "tds") && <Button style={{ marginTop: 8 }} loading={candidates.isPending} onClick={() => candidates.mutate()}>{t("doc.load_measured", "带入复核实测值")}</Button>}
+          {(docType === "sds" || docType === "tds" || docType === "ts") && <Button style={{ marginTop: 8 }} loading={candidates.isPending} onClick={() => candidates.mutate()}>{t("doc.load_measured", "带入复核实测值")}</Button>}
         </Space>
         {sds && <>
           <Divider orientation="left" plain>{t("doc.classification_inputs", "分类输入（实测物性）")}</Divider>
@@ -134,6 +142,25 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
             <Form.Item name="storage_conditions" label={t("doc.storage", "储存条件")}><Input /></Form.Item>
             <Form.Item name="packaging" label={t("doc.packaging", "包装规格")}><Input /></Form.Item>
           </Space>
+        </>}
+        {docType === "ts" && <>
+          <Divider orientation="left" plain>TS 质量指标（限值由质量部门填写，模板只提供结构）</Divider>
+          <Space wrap>
+            <Form.Item name="ts_template_id" label="TS 模板">
+              <Select allowClear style={{ width: 260 }} placeholder="不使用模板" options={(tsTemplates.data ?? []).map((x) => ({ value: x.id, label: `${x.category} · ${x.name} v${x.version}` }))}
+                onChange={(id) => { const tpl = (tsTemplates.data ?? []).find((x) => x.id === id); setTsIndicators(tpl ? tpl.indicators : []); }} />
+            </Form.Item>
+            <Form.Item name="ts_sampling" label="出厂检验抽样规则"><Input style={{ width: 260 }} placeholder="如：每批抽检 1 件" /></Form.Item>
+          </Space>
+          <EditableRows<TsIndicator> value={tsIndicators} onChange={setTsIndicators} newRow={() => ({ key: "" })} columns={[
+            { title: "key", dataIndex: "key" }, { title: "指标", dataIndex: "label" }, { title: "单位", dataIndex: "unit" },
+            { title: "下限", dataIndex: "spec_min", valueType: "digit" }, { title: "上限", dataIndex: "spec_max", valueType: "digit" },
+            { title: "目标值", dataIndex: "spec_target", valueType: "digit" }, { title: "检验方法", dataIndex: "test_method" },
+            { title: "出厂检验", dataIndex: "is_factory_inspection", valueType: "checkbox" }]} />
+          <Typography.Text strong style={{ display: "block", marginTop: 12 }}>理化特性（复核实测值带入）</Typography.Text>
+          <EditableRows<TdsProp> value={tdsProps} onChange={setTdsProps} newRow={() => ({ key: "", value: null })} columns={[
+            { title: "key", dataIndex: "key" }, { title: "项目", dataIndex: "label" }, { title: "数值", dataIndex: "value", valueType: "digit" },
+            { title: "单位", dataIndex: "unit" }, { title: "方法", dataIndex: "method" }]} />
         </>}
         {docType === "coa" && <Space wrap>
           <Form.Item name="batch_id" label={t("plm.batch_no", "批号")} rules={[{ required: true }]}>

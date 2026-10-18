@@ -118,6 +118,8 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
     # Phase 3B: template preview / label batch are pure renders (nothing saved) → read, like label-templates/preview.
     (re.compile(r"^/api/plm/templates/preview$"), "plm.document.read"),
     (re.compile(r"^/api/plm/labels/batch$"), "plm.document.read"),
+    # 整合方案 §4: batch export persists an export row (not document content) → document write.
+    (re.compile(r"^/api/plm/documents/batch-export$"), "plm.document.write"),
     (re.compile(r"^/api/plm/substances(/|$)"), "knowledge.write"),
     (re.compile(r"^/api/plm/regulatory/ask$"), "knowledge.read"),
     # Wiki — report / export / lint / preflight-review generate a view;
@@ -168,6 +170,12 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/identity/users/[^/]+/roles$"), "admin.users"),
     # PLM label-templates — plm.document.write OR admin.templates (OR logic).
     (re.compile(r"^/api/plm/label-templates$"), "plm.document.write OR admin.templates"),
+    # 整合方案 P0 — endpoint-enforced (the endpoint itself calls require()):
+    # companies (admin.companies), TS templates (plm.document.write),
+    # formula mappings (plm.document.write for import, formulation.freeze for create-revision).
+    (re.compile(r"^/api/plm/companies(/|$)"), "admin.companies"),
+    (re.compile(r"^/api/plm/ts-templates$"), "plm.document.write"),
+    (re.compile(r"^/api/plm/formula-mappings(/|$)"), "plm.document.write (import) OR formulation.freeze (create-revision)"),
     # Task cancel — ownership (assert_owner), not a permission.
     (re.compile(r"^/api/tasks/[^/]+/cancel$"), "ownership (assert_owner)"),
 ]

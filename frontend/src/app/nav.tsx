@@ -46,6 +46,7 @@ const BASE_NAV: NavItem[] = [
   ] },
   { path: "/plm", key: "nav.plm", zh: "⑤ PLM 文档与发布", icon: <FileProtectOutlined />, children: [
     { path: "/plm/products", key: "nav.plm.products", zh: "产品与修订" },
+    { path: "/plm/formula-mappings", key: "nav.plm.formula_mappings", zh: "配方数据库映射" },
     { path: "/plm/label-designer", key: "nav.plm.labels", zh: "标签设计器" },
     { path: "/plm/regulatory", key: "nav.plm.regulatory", zh: "法规助手" },
   ] },
@@ -55,6 +56,7 @@ const BASE_NAV: NavItem[] = [
   ] },
   { path: "/admin", key: "nav.admin", zh: "系统管理", icon: <SettingOutlined />, children: [
     { path: "/admin/users", key: "nav.admin.users", zh: "用户与角色", permission: "admin.users" },
+    { path: "/admin/companies", key: "nav.admin.companies", zh: "公司配置", permission: "admin.companies" },
     { path: "/admin/audit", key: "nav.admin.audit", zh: "审计日志", permission: "audit.read" },
     { path: "/admin/connectors", key: "nav.admin.connectors", zh: "连接器" },
   ] },

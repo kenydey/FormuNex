@@ -290,3 +290,110 @@ class DocumentTocTreeRow(Base):
     # none | pending | partial | done
     summaries_status: Mapped[str] = mapped_column(String(16), default="none")
     built_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+# --------------------------------------------------------------------------- 整合方案 P0 (alembic 0064)
+
+
+class CompanyRow(Base):
+    """One legal entity whose name / address / emergency phone lands on SDS §1, TDS and labels.
+
+    Documents read the *default* company at generation time; a generated
+    document keeps the company it was built with (its content is immutable).
+    Companies are never deleted — supersede by creating a new default — so
+    issued documents always resolve to a real record.
+    """
+
+    __tablename__ = "companies"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    name_en: Mapped[str] = mapped_column(String(200), default="")
+    address: Mapped[str] = mapped_column(String(300), default="")
+    address_en: Mapped[str] = mapped_column(String(300), default="")
+    phone: Mapped[str] = mapped_column(String(64), default="")
+    fax: Mapped[str] = mapped_column(String(64), default="")
+    email: Mapped[str] = mapped_column(String(120), default="")
+    emergency_phone: Mapped[str] = mapped_column(String(64))  # 24h 应急电话，SDS 强制非空
+    unified_credit_code: Mapped[str] = mapped_column(String(32), default="")
+    logo_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    is_default: Mapped[bool] = mapped_column(default=False, index=True)
+    created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class TsTemplateRow(Base):
+    """A TS template by product category (e.g. 涂料、清洗剂、转化膜).
+
+    Seeds the indicator rows of a generated TS; the template itself carries
+    NO spec limits — ``indicators_json`` holds indicator *structure*
+    (name / unit / test method / factory-inspection flag) with empty limits,
+    which quality fills in per product. Never fabricate limits.
+    """
+
+    __tablename__ = "ts_templates"
+    __table_args__ = (UniqueConstraint("category", "name", "version", name="uq_ts_template"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    category: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    sections_json: Mapped[dict] = mapped_column(_json, default=dict)  # chapter structure (titles / notes)
+    indicators_json: Mapped[list] = mapped_column(_json, default=list)  # default indicator rows (limits empty)
+    is_default: Mapped[bool] = mapped_column(default=False)
+    created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class BatchExportRow(Base):
+    """One batch document export: multi-product × multi-doc-type → one ZIP.
+
+    The ZIP (rendered files + manifest.json) is stored under ``result_key``;
+    the row records what was requested and what was missing, so a partial
+    export is visible instead of silently short.
+    """
+
+    __tablename__ = "batch_exports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # pending | done | failed
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    product_ids: Mapped[list] = mapped_column(_json, default=list)
+    doc_types: Mapped[list] = mapped_column(_json, default=list)
+    lang: Mapped[str] = mapped_column(String(8), default="zh-CN")
+    filename_template: Mapped[str] = mapped_column(String(300), default="")
+    include_docx: Mapped[bool] = mapped_column(default=False)
+    result_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    missing: Mapped[list] = mapped_column(_json, default=list)  # [{product_code, doc_type, reason}]
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class FormulaMappingRow(Base):
+    """Mapping between an MSDS-Generator formula record and FormuNex entities.
+
+    The external record (company + product + formula) maps to a
+    ``FormulationVersion`` (snapshot carries ``source: "msds_generator"``)
+    and, when a FormuNex product exists for it, to that product. The mapping
+    itself is the association — it never rewrites ``FormulationVersion``
+    semantics; a ``ProductRevision`` is created on demand from a mapping.
+    """
+
+    __tablename__ = "formula_mappings"
+    __table_args__ = (Index("ix_formula_mappings_lookup", "product_id", "source", "source_ref"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str | None] = mapped_column(ForeignKey("companies.id", ondelete="SET NULL"), nullable=True,
+                                                  index=True)
+    product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"), nullable=True,
+                                                  index=True)
+    formulation_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("formulation_versions.id", ondelete="SET NULL"), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(32), default="msds_generator", index=True)
+    source_ref: Mapped[str] = mapped_column(String(200), default="")  # external record key
+    source_payload: Mapped[dict] = mapped_column(_json, default=dict)  # the external record, verbatim
+    created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

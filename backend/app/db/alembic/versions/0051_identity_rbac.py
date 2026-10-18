@@ -59,7 +59,7 @@ _ROLES: list[tuple[str, str, str, list[str]]] = [
         "release.sign", "release.publish", "release.withdraw", "audit.read",
     ]),
     ("sys_admin", "系统管理员", "System Administrator", [
-        "admin.users", "admin.templates", "admin.llm", "admin.connectors", "audit.read",
+        "admin.users", "admin.templates", "admin.companies", "admin.llm", "admin.connectors", "audit.read",
     ]),
 ]
 

@@ -69,8 +69,10 @@ def test_no_content_mutation_routes():
         assert not (methods & mutating), (route.path, methods)
     posts = sorted(r.path for r in router.routes
                    if "POST" in (getattr(r, "methods", set()) or set()) and "documents" in r.path)
-    # 生成 / 上传 / 预览 / 签批：没有一条是“修改已有文档内容”。
-    assert posts == ["/plm/documents/{document_id}/approve",
+    # 生成 / 上传 / 预览 / 签批 / 批量导出：没有一条是“修改已有文档内容”
+    # （批量导出只新建导出记录，文档内容只读）。
+    assert posts == ["/plm/documents/batch-export",
+                     "/plm/documents/{document_id}/approve",
                      "/plm/revisions/{revision_id}/documents"], posts
 
 

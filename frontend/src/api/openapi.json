@@ -6252,7 +6252,7 @@
      "plm"
     ],
     "summary": "Generate Document",
-    "description": "Generate a new version of an SDS / TDS / COA / label (never edits an existing version).",
+    "description": "Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).",
     "operationId": "generate_document_api_plm_revisions__revision_id__documents_post",
     "parameters": [
      {
@@ -7717,6 +7717,692 @@
       "content": {
        "application/json": {
         "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/companies": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Companies",
+    "description": "Company configurations (newest default first). Readable by any signed-in caller.",
+    "operationId": "list_companies_api_plm_companies_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array",
+         "title": "Response List Companies Api Plm Companies Get"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Create Company",
+    "description": "Create a company (admin.companies). The first company becomes the default automatically.",
+    "operationId": "create_company_api_plm_companies_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CompanyIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Create Company Api Plm Companies Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/companies/{company_id}": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Get Company",
+    "operationId": "get_company_api_plm_companies__company_id__get",
+    "parameters": [
+     {
+      "name": "company_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Company Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Company Api Plm Companies  Company Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Update Company",
+    "operationId": "update_company_api_plm_companies__company_id__put",
+    "parameters": [
+     {
+      "name": "company_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Company Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CompanyIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Update Company Api Plm Companies  Company Id  Put"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/companies/{company_id}/set-default": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Set Default Company",
+    "description": "Make this company the default (its name / address / emergency phone land on new documents).",
+    "operationId": "set_default_company_api_plm_companies__company_id__set_default_post",
+    "parameters": [
+     {
+      "name": "company_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Company Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Set Default Company Api Plm Companies  Company Id  Set Default Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/companies/{company_id}/logo": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Upload Company Logo",
+    "description": "Upload a company Logo (PNG / JPEG / GIF / WebP / SVG, ≤2MB; bytes are sniffed, extension is not trusted).",
+    "operationId": "upload_company_logo_api_plm_companies__company_id__logo_post",
+    "parameters": [
+     {
+      "name": "company_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Company Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_upload_company_logo_api_plm_companies__company_id__logo_post"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Upload Company Logo Api Plm Companies  Company Id  Logo Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Download Company Logo",
+    "description": "The company Logo bytes (404 when none).",
+    "operationId": "download_company_logo_api_plm_companies__company_id__logo_get",
+    "parameters": [
+     {
+      "name": "company_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Company Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/ts-templates": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Ts Templates",
+    "description": "TS templates by product category (structure only — templates never carry spec limits).",
+    "operationId": "list_ts_templates_api_plm_ts_templates_get",
+    "parameters": [
+     {
+      "name": "category",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Category"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response List Ts Templates Api Plm Ts Templates Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Create Ts Template",
+    "description": "Create a TS template (plm.document.write). A template indicator WITH limits is a 422 —\nlimits are quality-defined per product, never templated.",
+    "operationId": "create_ts_template_api_plm_ts_templates_post",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TsTemplateIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Create Ts Template Api Plm Ts Templates Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/documents/batch-export": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Create Batch Export",
+    "description": "Batch-export documents (整合方案 §4): latest revision per product × latest version per\ndoc_type → one ZIP (files grouped per product + manifest.json). Missing documents are\nreported in ``missing``, never silently skipped.",
+    "operationId": "create_batch_export_api_plm_documents_batch_export_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BatchExportIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Create Batch Export Api Plm Documents Batch Export Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/documents/batch-export/{export_id}": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Get Batch Export",
+    "operationId": "get_batch_export_api_plm_documents_batch_export__export_id__get",
+    "parameters": [
+     {
+      "name": "export_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Export Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Batch Export Api Plm Documents Batch Export  Export Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/documents/batch-export/{export_id}/download": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Download Batch Export",
+    "description": "The batch-export ZIP (rendered files + manifest.json).",
+    "operationId": "download_batch_export_api_plm_documents_batch_export__export_id__download_get",
+    "parameters": [
+     {
+      "name": "export_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Export Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/formula-mappings": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Formula Mappings",
+    "description": "Formula-database mappings (external formula → FormuNex product + formulation version).",
+    "operationId": "list_formula_mappings_api_plm_formula_mappings_get",
+    "parameters": [
+     {
+      "name": "source",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Source"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 1000,
+       "minimum": 1,
+       "default": 200,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response List Formula Mappings Api Plm Formula Mappings Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/formula-mappings/import": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Import Formula Mappings",
+    "description": "Import MSDS-Generator formula records (整合方案 §6.3). Duplicates are skipped,\nnever overwritten; ``dry_run`` validates without writing.",
+    "operationId": "import_formula_mappings_api_plm_formula_mappings_import_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FormulaImportIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Import Formula Mappings Api Plm Formula Mappings Import Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/formula-mappings/{mapping_id}/create-revision": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Create Revision From Mapping",
+    "description": "Bind a formula mapping to a new product revision (explicit lifecycle decision).",
+    "operationId": "create_revision_from_mapping_api_plm_formula_mappings__mapping_id__create_revision_post",
+    "parameters": [
+     {
+      "name": "mapping_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Mapping Id"
+      }
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Create Revision From Mapping Api Plm Formula Mappings  Mapping Id  Create Revision Post"
+        }
        }
       }
      },
@@ -22228,6 +22914,60 @@
     ],
     "title": "AvailabilityRequest"
    },
+   "BatchExportIn": {
+    "properties": {
+     "product_ids": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 20,
+      "minItems": 1,
+      "title": "Product Ids"
+     },
+     "doc_types": {
+      "items": {
+       "type": "string",
+       "enum": [
+        "sds",
+        "tds",
+        "coa",
+        "label",
+        "ts"
+       ]
+      },
+      "type": "array",
+      "maxItems": 5,
+      "minItems": 1,
+      "title": "Doc Types"
+     },
+     "lang": {
+      "type": "string",
+      "enum": [
+       "zh-CN",
+       "en-US"
+      ],
+      "title": "Lang",
+      "default": "zh-CN"
+     },
+     "filename_template": {
+      "type": "string",
+      "title": "Filename Template",
+      "default": "{company}_{product}_{doc_type}_{lang}_{version}.{ext}"
+     },
+     "include_docx": {
+      "type": "boolean",
+      "title": "Include Docx",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "product_ids",
+     "doc_types"
+    ],
+    "title": "BatchExportIn"
+   },
    "BatchIn": {
     "properties": {
      "batch_no": {
@@ -22642,6 +23382,20 @@
      "image"
     ],
     "title": "Body_structure_image_endpoint_api_chemical_structure_post"
+   },
+   "Body_upload_company_logo_api_plm_companies__company_id__logo_post": {
+    "properties": {
+     "file": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "File"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ],
+    "title": "Body_upload_company_logo_api_plm_companies__company_id__logo_post"
    },
    "Body_upload_experiment_attachment_api_experiments__experiment_id__attachments_post": {
     "properties": {
@@ -23632,6 +24386,68 @@
      "formulations"
     ],
     "title": "ColorIn"
+   },
+   "CompanyIn": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Name"
+     },
+     "name_en": {
+      "type": "string",
+      "title": "Name En",
+      "default": ""
+     },
+     "address": {
+      "type": "string",
+      "title": "Address",
+      "default": ""
+     },
+     "address_en": {
+      "type": "string",
+      "title": "Address En",
+      "default": ""
+     },
+     "phone": {
+      "type": "string",
+      "title": "Phone",
+      "default": ""
+     },
+     "fax": {
+      "type": "string",
+      "title": "Fax",
+      "default": ""
+     },
+     "email": {
+      "type": "string",
+      "title": "Email",
+      "default": ""
+     },
+     "emergency_phone": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Emergency Phone"
+     },
+     "unified_credit_code": {
+      "type": "string",
+      "title": "Unified Credit Code",
+      "default": ""
+     },
+     "is_default": {
+      "type": "boolean",
+      "title": "Is Default",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "emergency_phone"
+    ],
+    "title": "CompanyIn"
    },
    "CompositionItem": {
     "properties": {
@@ -24939,7 +25755,8 @@
        "sds",
        "tds",
        "coa",
-       "label"
+       "label",
+       "ts"
       ],
       "title": "Doc Type"
      },
@@ -25023,6 +25840,11 @@
       "additionalProperties": true,
       "type": "object",
       "title": "Label"
+     },
+     "ts": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Ts"
      },
      "pdfa": {
       "type": "boolean",
@@ -26560,6 +27382,29 @@
      "pct"
     ],
     "title": "FixedIngredientIn"
+   },
+   "FormulaImportIn": {
+    "properties": {
+     "records": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Records"
+     },
+     "dry_run": {
+      "type": "boolean",
+      "title": "Dry Run",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "records"
+    ],
+    "title": "FormulaImportIn"
    },
    "Formulation": {
     "properties": {
@@ -38754,6 +39599,46 @@
     ],
     "title": "TrainingStatus",
     "description": "B: 训练数据就绪度总览 — 让「寻优是预测器回声」透明化。"
+   },
+   "TsTemplateIn": {
+    "properties": {
+     "category": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Category"
+     },
+     "name": {
+      "type": "string",
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Name"
+     },
+     "sections": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Sections"
+     },
+     "indicators": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Indicators"
+     },
+     "is_default": {
+      "type": "boolean",
+      "title": "Is Default",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "category",
+     "name"
+    ],
+    "title": "TsTemplateIn"
    },
    "TwoStageSearchRequest": {
     "properties": {

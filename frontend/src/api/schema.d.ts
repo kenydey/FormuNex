@@ -2616,7 +2616,7 @@ export interface paths {
         put?: never;
         /**
          * Generate Document
-         * @description Generate a new version of an SDS / TDS / COA / label (never edits an existing version).
+         * @description Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).
          */
         post: operations["generate_document_api_plm_revisions__revision_id__documents_post"];
         delete?: never;
@@ -3120,6 +3120,237 @@ export interface paths {
          *     ``pdfa=True`` post-processes each PDF to PDF/A-2b.
          */
         post: operations["batch_labels_api_plm_labels_batch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Companies
+         * @description Company configurations (newest default first). Readable by any signed-in caller.
+         */
+        get: operations["list_companies_api_plm_companies_get"];
+        put?: never;
+        /**
+         * Create Company
+         * @description Create a company (admin.companies). The first company becomes the default automatically.
+         */
+        post: operations["create_company_api_plm_companies_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/companies/{company_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Company */
+        get: operations["get_company_api_plm_companies__company_id__get"];
+        /** Update Company */
+        put: operations["update_company_api_plm_companies__company_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/companies/{company_id}/set-default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Default Company
+         * @description Make this company the default (its name / address / emergency phone land on new documents).
+         */
+        post: operations["set_default_company_api_plm_companies__company_id__set_default_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/companies/{company_id}/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Company Logo
+         * @description The company Logo bytes (404 when none).
+         */
+        get: operations["download_company_logo_api_plm_companies__company_id__logo_get"];
+        put?: never;
+        /**
+         * Upload Company Logo
+         * @description Upload a company Logo (PNG / JPEG / GIF / WebP / SVG, ≤2MB; bytes are sniffed, extension is not trusted).
+         */
+        post: operations["upload_company_logo_api_plm_companies__company_id__logo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/ts-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Ts Templates
+         * @description TS templates by product category (structure only — templates never carry spec limits).
+         */
+        get: operations["list_ts_templates_api_plm_ts_templates_get"];
+        put?: never;
+        /**
+         * Create Ts Template
+         * @description Create a TS template (plm.document.write). A template indicator WITH limits is a 422 —
+         *     limits are quality-defined per product, never templated.
+         */
+        post: operations["create_ts_template_api_plm_ts_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/documents/batch-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Batch Export
+         * @description Batch-export documents (整合方案 §4): latest revision per product × latest version per
+         *     doc_type → one ZIP (files grouped per product + manifest.json). Missing documents are
+         *     reported in ``missing``, never silently skipped.
+         */
+        post: operations["create_batch_export_api_plm_documents_batch_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/documents/batch-export/{export_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Batch Export */
+        get: operations["get_batch_export_api_plm_documents_batch_export__export_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/documents/batch-export/{export_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Batch Export
+         * @description The batch-export ZIP (rendered files + manifest.json).
+         */
+        get: operations["download_batch_export_api_plm_documents_batch_export__export_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/formula-mappings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Formula Mappings
+         * @description Formula-database mappings (external formula → FormuNex product + formulation version).
+         */
+        get: operations["list_formula_mappings_api_plm_formula_mappings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/formula-mappings/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Formula Mappings
+         * @description Import MSDS-Generator formula records (整合方案 §6.3). Duplicates are skipped,
+         *     never overwritten; ``dry_run`` validates without writing.
+         */
+        post: operations["import_formula_mappings_api_plm_formula_mappings_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/formula-mappings/{mapping_id}/create-revision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Revision From Mapping
+         * @description Bind a formula mapping to a new product revision (explicit lifecycle decision).
+         */
+        post: operations["create_revision_from_mapping_api_plm_formula_mappings__mapping_id__create_revision_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8718,6 +8949,29 @@ export interface components {
             /** Availability */
             availability: string;
         };
+        /** BatchExportIn */
+        BatchExportIn: {
+            /** Product Ids */
+            product_ids: string[];
+            /** Doc Types */
+            doc_types: ("sds" | "tds" | "coa" | "label" | "ts")[];
+            /**
+             * Lang
+             * @default zh-CN
+             * @enum {string}
+             */
+            lang: "zh-CN" | "en-US";
+            /**
+             * Filename Template
+             * @default {company}_{product}_{doc_type}_{lang}_{version}.{ext}
+             */
+            filename_template: string;
+            /**
+             * Include Docx
+             * @default false
+             */
+            include_docx: boolean;
+        };
         /** BatchIn */
         BatchIn: {
             /** Batch No */
@@ -8871,6 +9125,11 @@ export interface components {
              * @default 5
              */
             top_k: number;
+        };
+        /** Body_upload_company_logo_api_plm_companies__company_id__logo_post */
+        Body_upload_company_logo_api_plm_companies__company_id__logo_post: {
+            /** File */
+            file: string;
         };
         /** Body_upload_experiment_attachment_api_experiments__experiment_id__attachments_post */
         Body_upload_experiment_attachment_api_experiments__experiment_id__attachments_post: {
@@ -9201,6 +9460,53 @@ export interface components {
                 number,
                 number
             ] | null;
+        };
+        /** CompanyIn */
+        CompanyIn: {
+            /** Name */
+            name: string;
+            /**
+             * Name En
+             * @default
+             */
+            name_en: string;
+            /**
+             * Address
+             * @default
+             */
+            address: string;
+            /**
+             * Address En
+             * @default
+             */
+            address_en: string;
+            /**
+             * Phone
+             * @default
+             */
+            phone: string;
+            /**
+             * Fax
+             * @default
+             */
+            fax: string;
+            /**
+             * Email
+             * @default
+             */
+            email: string;
+            /** Emergency Phone */
+            emergency_phone: string;
+            /**
+             * Unified Credit Code
+             * @default
+             */
+            unified_credit_code: string;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
         };
         /** CompositionItem */
         CompositionItem: {
@@ -9722,7 +10028,7 @@ export interface components {
              * Doc Type
              * @enum {string}
              */
-            doc_type: "sds" | "tds" | "coa" | "label";
+            doc_type: "sds" | "tds" | "coa" | "label" | "ts";
             /**
              * Lang
              * @default zh-CN
@@ -9760,6 +10066,10 @@ export interface components {
             };
             /** Label */
             label?: {
+                [key: string]: unknown;
+            };
+            /** Ts */
+            ts?: {
                 [key: string]: unknown;
             };
             /**
@@ -10407,6 +10717,18 @@ export interface components {
             material_id?: string | null;
             /** Substance Id */
             substance_id?: string | null;
+        };
+        /** FormulaImportIn */
+        FormulaImportIn: {
+            /** Records */
+            records: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
         };
         /** Formulation */
         Formulation: {
@@ -15609,6 +15931,26 @@ export interface components {
              * @default
              */
             message: string;
+        };
+        /** TsTemplateIn */
+        TsTemplateIn: {
+            /** Category */
+            category: string;
+            /** Name */
+            name: string;
+            /** Sections */
+            sections?: {
+                [key: string]: unknown;
+            };
+            /** Indicators */
+            indicators?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
         };
         /** TwoStageSearchRequest */
         TwoStageSearchRequest: {
@@ -21709,6 +22051,503 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_companies_api_plm_companies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    create_company_api_plm_companies_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_company_api_plm_companies__company_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_company_api_plm_companies__company_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_default_company_api_plm_companies__company_id__set_default_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_company_logo_api_plm_companies__company_id__logo_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_company_logo_api_plm_companies__company_id__logo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_company_logo_api_plm_companies__company_id__logo_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_ts_templates_api_plm_ts_templates_get: {
+        parameters: {
+            query?: {
+                category?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_ts_template_api_plm_ts_templates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TsTemplateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_batch_export_api_plm_documents_batch_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchExportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_batch_export_api_plm_documents_batch_export__export_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_batch_export_api_plm_documents_batch_export__export_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_formula_mappings_api_plm_formula_mappings_get: {
+        parameters: {
+            query?: {
+                source?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_formula_mappings_api_plm_formula_mappings_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FormulaImportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_revision_from_mapping_api_plm_formula_mappings__mapping_id__create_revision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mapping_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
