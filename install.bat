@@ -1,7 +1,12 @@
 @echo off
 REM FormuNex one-click installer (Windows).
 REM Double-click to run; bypasses the PowerShell execution policy for this script only.
-REM Switches are forwarded as given, e.g.: install.bat -Minimal / -Full / -SkipFrontend
+REM
+REM Default: Docker mode (PostgreSQL + Redis + Neo4j + backend + frontend via Docker).
+REM   Requires Docker Desktop. No Python / Node.js needed.
+REM Native mode (dev only, venv + npm + SQLite): install.bat -Native
+REM   Switches are forwarded as given, e.g.: install.bat -Native -Minimal / -Native -Full / -Native -SkipFrontend
+REM
 REM Keep this file ASCII: cmd.exe decodes it with the OEM code page (GBK on a Chinese Windows),
 REM where the bytes of a UTF-8 character can swallow the line break after it.
 setlocal
