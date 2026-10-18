@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.request
 
-BASE = "http://localhost:5173"
+BASE = "http://localhost:5174"
 FAILURES: list[str] = []
 
 

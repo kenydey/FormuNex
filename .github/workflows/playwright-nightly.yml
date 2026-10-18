@@ -1,6 +1,6 @@
 name: Playwright E2E (nightly)
 
-# Full browser suite (frontend-next/e2e): smoke + PLM publish lifecycle +
+# Full browser suite (frontend/e2e): smoke + PLM publish lifecycle +
 # lab measurement → review → winning. Needs a running stack, so it runs
 # nightly (and on demand) rather than on every PR. The extended lifecycle
 # steps were written against the UI code; the first nightly run is their
@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: frontend-next
+        working-directory: frontend
     env:
       FORMUNEX_DB_URL: sqlite:////tmp/fx-e2e.db
       FORMUNEX_API_AUTH_ENABLED: "false"
@@ -39,7 +39,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend-next/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install backend dependencies
         working-directory: backend
@@ -56,7 +56,7 @@ jobs:
       - name: Seed throw-away database
         run: |
           rm -f /tmp/fx-e2e.db
-          (cd ../backend && python ../frontend-next/e2e/seed.py)
+          (cd ../backend && python ../frontend/e2e/seed.py)
 
       - name: Start backend + frontend
         run: |
@@ -77,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-screenshots
-          path: frontend-next/e2e/screenshots
+          path: frontend/e2e/screenshots
           if-no-files-found: ignore
 
       - name: Backend log on failure

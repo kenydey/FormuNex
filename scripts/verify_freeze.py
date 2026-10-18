@@ -80,7 +80,7 @@ log(f"共 {len(checks)} 项 失败 {len(failed)}")
 if failed: log("失败: "+", ".join(failed))
 # tsc
 import subprocess as sp
-res=sp.run(["npx","tsc","--noEmit"],cwd="/root/FormuNex/frontend",capture_output=True,text=True,timeout=30)
+res=sp.run(["npx","tsc","--noEmit"],cwd=str(Path(__file__).resolve().parent.parent / "frontend"),capture_output=True,text=True,timeout=30)
 ck("tsc PASS", res.returncode==0, (res.stdout+res.stderr)[:500])
 client.close(); proc.terminate()
 try: proc.wait(timeout=5)

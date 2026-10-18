@@ -2303,6 +2303,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/kb/sources/{source_id}/toc-tree/summarize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Summarize Toc Tree
+         * @description Trigger background LLM summaries for one document's ToC nodes.
+         *
+         *     Cost guard: only the explicitly requested document is summarised, never a
+         *     full-library sweep. The row moves to ``pending`` now; the Celery job flips
+         *     it to ``done`` / ``partial``. Poll ``GET .../toc-tree`` for the result.
+         */
+        post: operations["summarize_toc_tree_api_kb_sources__source_id__toc_tree_summarize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/kb/pageindex/search": {
         parameters: {
             query?: never;
@@ -2391,6 +2415,27 @@ export interface paths {
         get: operations["search_substances_api_plm_substances_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Regulatory Ask
+         * @description Read-only regulatory agent: substance lookup, classification explanation, hazard-reduction
+         *     suggestions, GB / national-standard Q&A. Never writes anything.
+         */
+        post: operations["regulatory_ask_api_plm_regulatory_ask_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2528,7 +2573,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Download Document */
+        /**
+         * Download Document
+         * @description Download a document file. ``png`` is label-only: the stored label PDF rasterised on demand.
+         */
         get: operations["download_document_api_plm_documents__document_id__file__fmt__get"];
         put?: never;
         post?: never;
@@ -6437,6 +6485,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/api-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Api Token Status
+         * @description 平台自身的 bearer token 状态（供脚本 / API 客户端用，非第三方密钥）。
+         *
+         *     UI 会话走 JWT，不用它；它只给脚本调用方做 ``Authorization: Bearer``。
+         */
+        get: operations["get_api_token_status_api_settings_api_token_get"];
+        put?: never;
+        /**
+         * Post Api Token Update
+         * @description 设置（token 给出）或清除（token 为 null）平台 bearer token。
+         *
+         *     写服务器 .env（FORMUNEX_API_TOKEN）+ 运行时 overlay，立即生效无需重启。
+         *     token 必须是单个无空白字符串——Bearer 解析按空白切分，含空格会在静默中破坏鉴权。
+         */
+        post: operations["post_api_token_update_api_settings_api_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/env-flags": {
         parameters: {
             query?: never;
@@ -8018,6 +8095,11 @@ export interface components {
             /** Actual */
             actual?: number | null;
         };
+        /** ApiTokenUpdate */
+        ApiTokenUpdate: {
+            /** Token */
+            token?: string | null;
+        };
         /** ArchiveRequest */
         ArchiveRequest: {
             /** Name */
@@ -8230,6 +8312,33 @@ export interface components {
             /** File */
             file: string;
         };
+        /** BridgingIn */
+        BridgingIn: {
+            /**
+             * Principle
+             * @enum {string}
+             */
+            principle: "dilution" | "batching" | "concentration" | "interpolation" | "substantially_similar";
+            /** References */
+            references?: components["schemas"]["BridgingReferenceIn"][];
+        };
+        /** BridgingReferenceIn */
+        BridgingReferenceIn: {
+            /**
+             * Ref Id
+             * @default
+             */
+            ref_id: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /** Components */
+            components?: components["schemas"]["app__api__plm__ComponentIn"][];
+            /** Hazards */
+            hazards?: components["schemas"]["HazardIn"][];
+        };
         /** CampaignRoundsResponse */
         CampaignRoundsResponse: {
             /** Rounds */
@@ -8428,6 +8537,7 @@ export interface components {
             include_transport: boolean;
             /** Formulation Version Id */
             formulation_version_id?: string | null;
+            bridging?: components["schemas"]["BridgingIn"] | null;
         };
         /** ClassifyVersionRequest */
         ClassifyVersionRequest: {
@@ -8448,6 +8558,7 @@ export interface components {
              * @default true
              */
             persist: boolean;
+            bridging?: components["schemas"]["BridgingIn"] | null;
         };
         /** CollectionCreate */
         CollectionCreate: {
@@ -10291,6 +10402,10 @@ export interface components {
             after_pct?: number | null;
             /** Delta Pct */
             delta_pct?: number | null;
+            /** Before Pct Band */
+            before_pct_band?: string | null;
+            /** After Pct Band */
+            after_pct_band?: string | null;
         };
         /** InstrumentIn */
         InstrumentIn: {
@@ -12752,6 +12867,14 @@ export interface components {
             inhalation_form?: ("gas" | "vapour" | "dust_mist") | null;
             /** Product Category */
             product_category?: string | null;
+            /** Heat Of Combustion Kj G */
+            heat_of_combustion_kj_g?: number | null;
+            /** Ignition Distance Cm */
+            ignition_distance_cm?: number | null;
+            /** Foam Test Result */
+            foam_test_result?: {
+                [key: string]: number;
+            } | null;
             /** Sources */
             sources?: {
                 [key: string]: string;
@@ -13206,6 +13329,27 @@ export interface components {
              * @default true
              */
             check_rohs: boolean;
+        };
+        /** RegulatoryAskIn */
+        RegulatoryAskIn: {
+            /** Question */
+            question: string;
+            /**
+             * Intent
+             * @default auto
+             * @enum {string}
+             */
+            intent: "auto" | "substance" | "explain" | "substitute" | "standard";
+            /** Components */
+            components?: {
+                [key: string]: unknown;
+            }[] | null;
+            properties?: components["schemas"]["PropertiesIn"] | null;
+            /**
+             * Limit
+             * @default 5
+             */
+            limit: number;
         };
         /** ReindexResult */
         ReindexResult: {
@@ -19198,6 +19342,37 @@ export interface operations {
             };
         };
     };
+    summarize_toc_tree_api_kb_sources__source_id__toc_tree_summarize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     pageindex_search_api_kb_pageindex_search_post: {
         parameters: {
             query?: never;
@@ -19348,6 +19523,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    regulatory_ask_api_plm_regulatory_ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegulatoryAskIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -19679,11 +19889,13 @@ export interface operations {
     };
     download_document_api_plm_documents__document_id__file__fmt__get: {
         parameters: {
-            query?: never;
+            query?: {
+                dpi?: number;
+            };
             header?: never;
             path: {
                 document_id: string;
-                fmt: "pdf" | "docx";
+                fmt: "pdf" | "docx" | "png";
             };
             cookie?: never;
         };
@@ -27051,6 +27263,59 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SecretTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_token_status_api_settings_api_token_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    post_api_token_update_api_settings_api_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiTokenUpdate"];
             };
         };
         responses: {

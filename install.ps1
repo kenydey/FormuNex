@@ -339,17 +339,15 @@ function Install-Native {
     }
   }
 
-  # ---- [3/5] 前端依赖（frontend-next 新前端 + legacy frontend） ----
+  # ---- [3/5] 前端依赖 ----
   Write-Step "Native 3/5 安装前端依赖"
   if ($SkipFrontend) {
     Write-Warn "已跳过（-SkipFrontend）"
   } elseif ($npmCmd) {
-    Push-Location (Join-Path $Root "frontend-next")
-    try { Invoke-Step "npm install (frontend-next)" { & npm install --legacy-peer-deps --no-audit --no-fund } } finally { Pop-Location }
     Push-Location (Join-Path $Root "frontend")
     try { Invoke-Step "npm install (frontend)" { & npm install --legacy-peer-deps --no-audit --no-fund } } finally { Pop-Location }
   } else {
-    Write-Warn "跳过：未找到 npm，稍后手动执行 cd frontend-next && npm install"
+    Write-Warn "跳过：未找到 npm，稍后手动执行 cd frontend && npm install"
   }
 
   # ---- [4/5] .env 与数据库迁移 ----
@@ -410,9 +408,7 @@ function Install-Native {
   Write-Host "    # Celery worker（Windows 必须 --pool=solo）"
   Write-Host "    cd $BackendDir; .\.venv\Scripts\python.exe -m celery -A app.worker.celery_app worker --pool=solo --loglevel=info"
   Write-Host ""
-  Write-Host "    # 前端-新 (:5173)"
-  Write-Host "    cd $(Join-Path $Root "frontend-next"); npm run dev"
-  Write-Host "    # 前端-旧 (:5173)"
+  Write-Host "    # 前端 (:5174)"
   Write-Host "    cd $(Join-Path $Root "frontend"); npm run dev"
   Write-Host ""
   Write-Host "  健康检查： curl http://localhost:8000/health"

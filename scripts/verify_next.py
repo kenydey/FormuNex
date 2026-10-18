@@ -77,7 +77,7 @@ r=client.get(f"{URL}/api/kg/feedback/report",headers=h("tok_alice"))
 ck("report alert none or string", r.status_code==200 and "alert" in r.json(), r.text[:300])
 # tsc
 import subprocess as sp
-res=sp.run(["npx","tsc","--noEmit"],cwd="/root/FormuNex/frontend",capture_output=True,text=True,timeout=30)
+res=sp.run(["npx","tsc","--noEmit"],cwd=str(Path(__file__).resolve().parent.parent / "frontend"),capture_output=True,text=True,timeout=30)
 ck("tsc PASS", res.returncode==0, (res.stdout+res.stderr)[:300])
 log("\n=== 汇总 ===")
 for n,ok in checks: log(f"{'✅' if ok else '❌'} {n}")

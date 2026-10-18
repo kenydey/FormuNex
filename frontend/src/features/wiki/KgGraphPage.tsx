@@ -45,7 +45,8 @@ export default function KgGraphPage() {
   });
   const kgOff = isFlagGateError(graph.error || stats.error, "kg_enabled", "知识图谱未启用");
   const m = graph.data?.meta;
-  const nodes = graph.data?.nodes ?? [];
+  // useMemo：?? [] 每渲染新建数组，裸放在下面 useMemo 依赖里会让 byId 每轮重算。
+  const nodes = useMemo(() => graph.data?.nodes ?? [], [graph.data]);
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   const commit = () => setTypes(typesDraft.trim() || DEFAULT_TYPES);
   const refetch = () => void (tab === "canvas" ? graph.refetch() : Promise.all([stats.refetch(), neo.refetch()]));

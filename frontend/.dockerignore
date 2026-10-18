@@ -1,0 +1,8 @@
+# Build context exclusions. Without this, a `docker build` from a dev checkout
+# would COPY the host's node_modules over the freshly installed Linux ones
+# (possibly macOS/Windows binaries) and drag in Tauri build artifacts.
+node_modules
+dist
+.git
+src-tauri/target
+e2e/screenshots

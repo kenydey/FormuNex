@@ -2,7 +2,7 @@
 import asyncio
 from playwright.async_api import async_playwright
 
-BASE = "http://localhost:5173"
+BASE = "http://localhost:5174"
 
 async def main():
     async with async_playwright() as p:

@@ -30,7 +30,8 @@ export default function DeepResearchTab() {
   const { query, sources, report, setReport, addSources, setTurns } = useResearch();
   // A chat playbook hands its question over as ``?q=`` or location state ``{ question }``.
   const [params] = useSearchParams();
-  const handed = params.get("q") || (useLocation().state as { question?: string } | null)?.question || "";
+  const location = useLocation();
+  const handed = params.get("q") || (location.state as { question?: string } | null)?.question || "";
   const [topic, setTopic] = useState(handed || query);
   const [domain, setDomain] = useState(projectDomain);
   useEffect(() => setDomain(projectDomain), [projectDomain]);

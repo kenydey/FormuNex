@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _ui import click_if_present, close_modal, in_modal, open_modal  # noqa: E402
 
 IMAGES = Path(__file__).parent.parent / "docs" / "images"
-BASE = "http://localhost:5173"
+BASE = "http://localhost:5174"
 
 
 async def shot(page, path: str):

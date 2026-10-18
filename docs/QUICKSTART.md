@@ -30,10 +30,10 @@ FORMUNEX_CELERY_EAGER=false uvicorn app.main:app --reload --reload-exclude .venv
 FORMUNEX_CELERY_EAGER=false celery -A app.worker.celery_app worker --loglevel=info
 
 # Frontend (terminal 3)
-cd frontend && npm run dev                        # http://localhost:5173
+cd frontend && npm run dev                        # http://localhost:5174
 ```
 
-Open **http://localhost:5173**. LLM API keys are optional for offline rule-based paths.
+Open **http://localhost:5174**. LLM API keys are optional for offline rule-based paths.
 **Datalab ELN (:5001) is required** for recommend / experiments / workbench / optimize.
 If platform bearer auth is enabled, enter the **API access token** in Settings first
 (matching `FORMUNEX_API_TOKEN`), or set `FORMUNEX_API_AUTH_ENABLED=false`.

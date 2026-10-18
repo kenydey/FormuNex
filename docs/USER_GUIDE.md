@@ -1163,7 +1163,7 @@ uvicorn app.main:app --reload --reload-exclude .venv  # http://localhost:8000/do
 # Frontend (separate shell)
 cd frontend
 npm install
-npm run dev                        # http://localhost:5173
+npm run dev                        # http://localhost:5174
 ```
 
 For production or Docker deployments, use the locked runtime deps:
@@ -1526,4 +1526,4 @@ which also proves the broker connection. If you still see it, rebuild.
 > intervals, DOE import/export, SQL persistence, convergence chart, model
 > dashboard and session history.
 >
-> Verified at **1040+ backend tests** and **106 frontend tests**, all offline.
+> Verified at **1040+ backend tests** and frontend vitest, all offline.

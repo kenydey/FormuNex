@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install locked frontend deps (required after git pull — includes ag-grid for LabWorkbench).
+# Install locked frontend deps (required after git pull).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/frontend"

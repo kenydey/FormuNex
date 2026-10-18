@@ -19,7 +19,17 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 FRONTEND_SRC = REPO / "frontend" / "src"
 
-pytestmark = pytest.mark.skipif(not FRONTEND_SRC.is_dir(), reason="frontend sources not present")
+pytestmark = [
+    pytest.mark.skipif(not FRONTEND_SRC.is_dir(), reason="frontend sources not present"),
+    # 旧前端已删除（frontend/ 现为新前端，无 api/methods.ts）。本测试只对
+    # 旧前端的 methods.ts API 层有意义；切到新前端后等价门禁是
+    # scripts/verify_frontend_api.py（CI api-contract 作业）。本文件保留为
+    # 旧门禁的历史记录，不删除，以便 API_ONLY_ROUTES 账本可查。
+    pytest.mark.skipif(
+        not (FRONTEND_SRC / "api" / "methods.ts").is_file(),
+        reason="legacy frontend api/methods.ts gone (frontend/ is the new frontend now)",
+    ),
+]
 
 # Wrappers deliberately kept without a caller: name → reason. Prefer deleting the wrapper.
 UNCALLED_WRAPPERS: dict[str, str] = {}
@@ -58,8 +68,8 @@ _LAB = (
 )
 
 _NEXT = (
-    "called by the Ant Design rewrite in frontend-next/ (plan §3.4, F2–F5); this test scans the legacy frontend "
-    "until the one-shot cut-over"
+    "called by the Ant Design rewrite in frontend/ (plan §3.4, F2–F5); this test scanned the legacy frontend "
+    "until the one-shot cut-over (done: the legacy frontend is deleted, this test now skips)"
 )
 
 # Documented backend routes the frontend does not call, and why that is fine.

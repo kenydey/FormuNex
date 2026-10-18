@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _ui import in_any_modal  # noqa: E402
 
 IMAGES = Path(__file__).parent.parent / "docs" / "images"
-BASE = "http://localhost:5173"
+BASE = "http://localhost:5174"
 API = "http://localhost:8000"
 VIEWPORT = {"width": 1440, "height": 900}
 

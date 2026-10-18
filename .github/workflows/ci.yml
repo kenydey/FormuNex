@@ -433,6 +433,9 @@ jobs:
       - name: Golden retrieval gate
         run: bash scripts/ci_golden_gate.sh
 
+  # FormuNex Ant Design frontend (plan §3.4, F1–F5); the one-shot cut-over renamed
+  # frontend-next/ -> frontend/ and deleted the legacy frontend/.
+  # The Playwright smoke test needs a running stack and is run by hand (frontend/e2e/README.md).
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -444,48 +447,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Matches frontend/Dockerfile:1.
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        # Regenerated package-lock (2026-09-05) keeps platform optional deps
-        # correctly marked. Fall back to npm install if npm ci hits an
-        # optional-platform EBADPLATFORM quirk on the runner.
-        run: npm ci || npm install --no-audit --no-fund
-
-      - name: Typecheck
-        run: npx tsc --noEmit
-
-      - name: Lint (React hooks rules)
-        # react-hooks/rules-of-hooks + exhaustive-deps only; --max-warnings 0 (see eslint.config.js).
-        run: npm run lint
-
-      - name: Unit tests
-        run: npx vitest run
-
-      - name: Build
-        # A project can typecheck and still fail to bundle, so the build is
-        # its own gate rather than an assumed consequence of the two above.
-        run: npm run build
-
-  # FormuNex Ant Design rewrite (plan §3.4, F1–F4); lives beside frontend/ until the one-shot cut-over.
-  # The Playwright smoke test needs a running stack and is run by hand (frontend-next/e2e/README.md).
-  frontend-next:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: frontend-next
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend-next/package-lock.json
 
       - name: Install dependencies
         env:
@@ -494,6 +458,10 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Lint (React hooks rules)
+        # react-hooks/rules-of-hooks + exhaustive-deps only; --max-warnings 0 (see frontend/eslint.config.js).
+        run: npm run lint
 
       - name: Unit tests
         run: npm test
@@ -508,7 +476,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: frontend-next/src-tauri
+        working-directory: frontend/src-tauri
     steps:
       - uses: actions/checkout@v4
 
@@ -524,10 +492,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: frontend-next/src-tauri
+          workspaces: frontend/src-tauri
 
       - name: Placeholder frontend bundle
-        # tauri::generate_context! embeds ../dist at compile time; the real UI is built by the frontend-next job.
+        # tauri::generate_context! embeds ../dist at compile time; the real UI is built by the frontend job.
         run: mkdir -p ../dist && echo '<!doctype html><title>FormuNex</title>' > ../dist/index.html
 
       - name: rustfmt

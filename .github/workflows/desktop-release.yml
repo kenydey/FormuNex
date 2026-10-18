@@ -47,7 +47,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend-next/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -55,10 +55,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: frontend-next/src-tauri
+          workspaces: frontend/src-tauri
 
       - name: Install frontend dependencies
-        working-directory: frontend-next
+        working-directory: frontend
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: npm ci
@@ -80,7 +80,7 @@ jobs:
             if (process.env.WINDOWS_SIGN_COMMAND && process.platform === "win32") {
               c.bundle = { ...(c.bundle || {}), windows: { signCommand: process.env.WINDOWS_SIGN_COMMAND } };
             }
-            require("fs").writeFileSync("frontend-next/src-tauri/tauri.release.conf.json", JSON.stringify(c, null, 1));
+            require("fs").writeFileSync("frontend/src-tauri/tauri.release.conf.json", JSON.stringify(c, null, 1));
           '
 
       - uses: tauri-apps/tauri-action@v0
@@ -95,7 +95,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          projectPath: frontend-next
+          projectPath: frontend
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: "FormuNex ${{ github.ref_name }}"
           releaseDraft: true

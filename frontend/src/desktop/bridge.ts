@@ -1,5 +1,5 @@
 /**
- * Bridge to the Tauri shell (frontend-next/src-tauri, 方案 §3.5). Everything here is a no-op / unavailable in
+ * Bridge to the Tauri shell (frontend/src-tauri, 方案 §3.5). Everything here is a no-op / unavailable in
  * the browser build; Tauri modules are imported lazily so the web bundle does not need them at start-up.
  */
 export function isDesktop(): boolean {

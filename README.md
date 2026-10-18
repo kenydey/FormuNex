@@ -59,7 +59,7 @@ dependencies or Docker images and can auto-upgrade with the ecosystem.
 
 | Layer | Tech | In this repo |
 |-------|------|--------------|
-| Frontend | Vite + React + TypeScript + Tailwind + Zustand | 3-pane dark industrial UI (`frontend/`) |
+| Frontend | Vite + React 18 + TypeScript + Ant Design 5 / ProComponents + TanStack Query + Zustand | `frontend/`（React + Ant Design，Tauri 桌面端同源） |
 | Gateway | FastAPI | research / DOE / optimize / tasks routers (`backend/app/api`) |
 | Async | Celery + Redis | optimization & ingestion tasks, in-process fallback (`backend/app/worker`) |
 | Domain | Pure Python | schemas, knowledge base, **real DOE engine**, stoichiometry (`backend/app/domain`) |
@@ -136,7 +136,7 @@ uvicorn app.main:app --reload --reload-exclude .venv  # http://localhost:8000/do
 # Frontend (separate shell)
 cd frontend
 npm install
-npm run dev                        # http://localhost:5173
+npm run dev                        # http://localhost:5174
 ```
 
 > **第三方库补丁**:`pymupdf4llm==1.28.0` 的 RapidOCR 检测器属性名有 bug

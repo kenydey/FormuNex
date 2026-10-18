@@ -1,6 +1,6 @@
 # FormuNex 桌面端（Tauri 2，方案 §2.2 / §3.5）
 
-桌面端与 Web 版使用同一套前端（`frontend-next/`），外壳在 `frontend-next/src-tauri/`。两种连接方式：
+桌面端与 Web 版使用同一套前端（`frontend/`），外壳在 `frontend/src-tauri/`。两种连接方式：
 
 | 方式 | 说明 |
 |------|------|
@@ -41,7 +41,7 @@
 ## 构建
 
 ```bash
-cd frontend-next
+cd frontend
 npm ci
 npm run tauri dev          # 开发：Vite 开发服务器 + 外壳
 npm run tauri build        # 安装包：Windows .msi/.exe，macOS .dmg/.app，Linux .deb/.AppImage
@@ -49,8 +49,8 @@ npm run tauri build        # 安装包：Windows .msi/.exe，macOS .dmg/.app，L
 
 Linux 需要 `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev`。
 
-外壳单元测试：`cd frontend-next/src-tauri && cargo test`（CI 作业 `desktop-shell` 同时跑 rustfmt 与 clippy）。
-桌面冒烟测试（Linux，WebKitWebDriver + tauri-driver，需 Xvfb）：见 `frontend-next/e2e-desktop/README.md`。
+外壳单元测试：`cd frontend/src-tauri && cargo test`（CI 作业 `desktop-shell` 同时跑 rustfmt 与 clippy）。
+桌面冒烟测试（Linux，WebKitWebDriver + tauri-driver，需 Xvfb）：见 `frontend/e2e-desktop/README.md`。
 
 ## 发布
 

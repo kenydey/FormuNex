@@ -3,7 +3,7 @@ import {
   Alert, App, AutoComplete, Button, Checkbox, Descriptions, Empty, Form, Radio, Segmented, Select, Space, Table, Tag, Tooltip, Typography, theme,
 } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ApiError, call } from "@/api/client";
@@ -47,7 +47,11 @@ export default function SubstitutionPage() {
   const [promoteMsg, setPromoteMsg] = useState<{ type: "success" | "info" | "warning"; text: string } | null>(null);
 
   const risk = useQuery({ queryKey: ["materials", "supply-risk"], queryFn: () => call<SupplyRiskReport>("GET", "/api/materials/supply-risk") });
-  const ingredients = source === "version" ? formulation?.ingredients ?? [] : [];
+  // useMemo：条件表达式每渲染会新建数组，裸放在 useEffect 依赖里会让 effect 每轮重跑。
+  const ingredients = useMemo(
+    () => (source === "version" ? formulation?.ingredients ?? [] : []),
+    [source, formulation],
+  );
   useEffect(() => {
     if (!material && ingredients.length) setMaterial(ingredients[0].name);
   }, [ingredients, material]);

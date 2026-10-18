@@ -5477,6 +5477,48 @@
     }
    }
   },
+  "/api/kb/sources/{source_id}/toc-tree/summarize": {
+   "post": {
+    "tags": [
+     "kb",
+     "pageindex"
+    ],
+    "summary": "Summarize Toc Tree",
+    "description": "Trigger background LLM summaries for one document's ToC nodes.\n\nCost guard: only the explicitly requested document is summarised, never a\nfull-library sweep. The row moves to ``pending`` now; the Celery job flips\nit to ``done`` / ``partial``. Poll ``GET .../toc-tree`` for the result.",
+    "operationId": "summarize_toc_tree_api_kb_sources__source_id__toc_tree_summarize_post",
+    "parameters": [
+     {
+      "name": "source_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Source Id"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/kb/pageindex/search": {
    "post": {
     "tags": [
@@ -5688,6 +5730,50 @@
           "additionalProperties": true
          },
          "title": "Response Search Substances Api Plm Substances Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/ask": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Regulatory Ask",
+    "description": "Read-only regulatory agent: substance lookup, classification explanation, hazard-reduction\nsuggestions, GB / national-standard Q&A. Never writes anything.",
+    "operationId": "regulatory_ask_api_plm_regulatory_ask_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RegulatoryAskIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Regulatory Ask Api Plm Regulatory Ask Post"
         }
        }
       }
@@ -6168,6 +6254,7 @@
      "plm"
     ],
     "summary": "Download Document",
+    "description": "Download a document file. ``png`` is label-only: the stored label PDF rasterised on demand.",
     "operationId": "download_document_api_plm_documents__document_id__file__fmt__get",
     "parameters": [
      {
@@ -6186,10 +6273,23 @@
       "schema": {
        "enum": [
         "pdf",
-        "docx"
+        "docx",
+        "png"
        ],
        "type": "string",
        "title": "Fmt"
+      }
+     },
+     {
+      "name": "dpi",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 600,
+       "minimum": 72,
+       "default": 300,
+       "title": "Dpi"
       }
      }
     ],
@@ -16822,6 +16922,58 @@
     }
    }
   },
+  "/api/settings/api-token": {
+   "get": {
+    "summary": "Get Api Token Status",
+    "description": "平台自身的 bearer token 状态（供脚本 / API 客户端用，非第三方密钥）。\n\nUI 会话走 JWT，不用它；它只给脚本调用方做 ``Authorization: Bearer``。",
+    "operationId": "get_api_token_status_api_settings_api_token_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Post Api Token Update",
+    "description": "设置（token 给出）或清除（token 为 null）平台 bearer token。\n\n写服务器 .env（FORMUNEX_API_TOKEN）+ 运行时 overlay，立即生效无需重启。\ntoken 必须是单个无空白字符串——Bearer 解析按空白切分，含空格会在静默中破坏鉴权。",
+    "operationId": "post_api_token_update_api_settings_api_token_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ApiTokenUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/settings/env-flags": {
    "get": {
     "summary": "Get Env Flags",
@@ -20653,6 +20805,23 @@
     "title": "AnomalyFlag",
     "description": "Flagged historical experiment that may need review or re-test."
    },
+   "ApiTokenUpdate": {
+    "properties": {
+     "token": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Token"
+     }
+    },
+    "type": "object",
+    "title": "ApiTokenUpdate"
+   },
    "ArchiveRequest": {
     "properties": {
      "name": {
@@ -21175,6 +21344,63 @@
      "file"
     ],
     "title": "Body_upload_workbench_row_attachment_api_experiments_workbench__campaign_id__rows__row_id__attachments_post"
+   },
+   "BridgingIn": {
+    "properties": {
+     "principle": {
+      "type": "string",
+      "enum": [
+       "dilution",
+       "batching",
+       "concentration",
+       "interpolation",
+       "substantially_similar"
+      ],
+      "title": "Principle"
+     },
+     "references": {
+      "items": {
+       "$ref": "#/components/schemas/BridgingReferenceIn"
+      },
+      "type": "array",
+      "title": "References"
+     }
+    },
+    "type": "object",
+    "required": [
+     "principle"
+    ],
+    "title": "BridgingIn"
+   },
+   "BridgingReferenceIn": {
+    "properties": {
+     "ref_id": {
+      "type": "string",
+      "title": "Ref Id",
+      "default": ""
+     },
+     "label": {
+      "type": "string",
+      "title": "Label",
+      "default": ""
+     },
+     "components": {
+      "items": {
+       "$ref": "#/components/schemas/app__api__plm__ComponentIn"
+      },
+      "type": "array",
+      "title": "Components"
+     },
+     "hazards": {
+      "items": {
+       "$ref": "#/components/schemas/HazardIn"
+      },
+      "type": "array",
+      "title": "Hazards"
+     }
+    },
+    "type": "object",
+    "title": "BridgingReferenceIn"
    },
    "CampaignRoundsResponse": {
     "properties": {
@@ -21783,6 +22009,16 @@
        }
       ],
       "title": "Formulation Version Id"
+     },
+     "bridging": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/BridgingIn"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -21814,6 +22050,16 @@
       "type": "boolean",
       "title": "Persist",
       "default": true
+     },
+     "bridging": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/BridgingIn"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -26536,6 +26782,28 @@
        }
       ],
       "title": "Delta Pct"
+     },
+     "before_pct_band": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Before Pct Band"
+     },
+     "after_pct_band": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "After Pct Band"
      }
     },
     "type": "object",
@@ -32179,6 +32447,44 @@
       ],
       "title": "Product Category"
      },
+     "heat_of_combustion_kj_g": {
+      "anyOf": [
+       {
+        "type": "number",
+        "minimum": 0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Heat Of Combustion Kj G"
+     },
+     "ignition_distance_cm": {
+      "anyOf": [
+       {
+        "type": "number",
+        "minimum": 0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ignition Distance Cm"
+     },
+     "foam_test_result": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "number"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Foam Test Result"
+     },
      "sources": {
       "additionalProperties": {
        "type": "string"
@@ -33264,6 +33570,65 @@
     },
     "type": "object",
     "title": "RedLinesIn"
+   },
+   "RegulatoryAskIn": {
+    "properties": {
+     "question": {
+      "type": "string",
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Question"
+     },
+     "intent": {
+      "type": "string",
+      "enum": [
+       "auto",
+       "substance",
+       "explain",
+       "substitute",
+       "standard"
+      ],
+      "title": "Intent",
+      "default": "auto"
+     },
+     "components": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Components"
+     },
+     "properties": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/PropertiesIn"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "limit": {
+      "type": "integer",
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Limit",
+      "default": 5
+     }
+    },
+    "type": "object",
+    "required": [
+     "question"
+    ],
+    "title": "RegulatoryAskIn"
    },
    "ReindexResult": {
     "properties": {

@@ -102,7 +102,7 @@ UVICORN_BIN="$ROOT/backend/.venv/bin/uvicorn"
 echo "==> 5/6 前端 vite"
 (
   cd "$ROOT/frontend"
-  nohup npx vite --force --host 0.0.0.0 --port 5173 >>"$LOGS/vite.log" 2>&1 &
+  nohup npx vite --force --host 0.0.0.0 --port 5174 >>"$LOGS/vite.log" 2>&1 &
 )
 
 # 6/6 MolScribe OCSR worker（torch-cpu ~1.9GB）
@@ -126,4 +126,4 @@ echo "✅ 全部启动完成。日志目录：$LOGS/"
 echo "   全栈清单：Redis + Celery worker + Datalab ELN + API + 前端"
 echo "   后端健康检查：curl http://127.0.0.1:8000/health"
 echo "   期望 /health：datalab.required=true 且 datalab.reachable=true；task_broker.reachable=true"
-echo "   前端入口：http://127.0.0.1:5173"
+echo "   前端入口：http://127.0.0.1:5174"

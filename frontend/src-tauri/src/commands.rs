@@ -1,4 +1,4 @@
-//! Commands invoked from the UI (`invoke("…")`, see frontend-next/src/desktop/bridge.ts).
+//! Commands invoked from the UI (`invoke("…")`, see frontend/src/desktop/bridge.ts).
 
 use serde::Serialize;
 use std::path::PathBuf;

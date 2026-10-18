@@ -1,4 +1,4 @@
-# Browser tests (frontend-next)
+# Browser tests (frontend)
 
 `routes.spec.ts` opens every page twice (without and with a project selected) and fails on uncaught errors,
 console errors, the error boundary or 5xx API responses. `smoke.spec.ts` has three tests: the main-path
@@ -16,7 +16,7 @@ export FORMUNEX_AUTH_JWT_SECRET=e2e-secret-0123456789-0123456789-0123456789
 export FORMUNEX_PLM_STORAGE_DIR=/tmp/fx-e2e-plm
 export FORMUNEX_PLM_COMPANY_NAME=方枢示例化工有限公司 FORMUNEX_PLM_EMERGENCY_PHONE=021-0001
 export FORMUNEX_CELERY_EAGER=true
-(cd ../backend && .venv/bin/python ../frontend-next/e2e/seed.py)   # creates the schema on first use
+(cd ../backend && .venv/bin/python ../frontend/e2e/seed.py)   # creates the schema on first use
 
 # 2. stack
 (cd ../backend && .venv/bin/uvicorn app.main:app --port 8000) &

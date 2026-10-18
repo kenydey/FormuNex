@@ -211,14 +211,6 @@ install_native() {
   echo "==> [2/5] 安装后端/前端依赖"
   bash "$ROOT/scripts/install.sh"
 
-  # frontend-next（新前端）—— scripts/install.sh 装的是 legacy frontend，这里补装 frontend-next
-  if command -v npm >/dev/null 2>&1; then
-    echo ""
-    echo "    安装 frontend-next 依赖..."
-    cd "$ROOT/frontend-next" && npm install --legacy-peer-deps --no-audit --no-fund
-    cd "$ROOT"
-  fi
-
   setup_env
 
   echo ""
@@ -277,8 +269,7 @@ print('    下载完成')
   echo ""
   echo "  后端 API:    cd backend && source .venv/bin/activate && uvicorn app.main:app --port 8000"
   echo "  Celery worker: cd backend && celery -A app.worker.celery_app worker --loglevel=info"
-  echo "  前端 (新):    cd frontend-next && npm run dev    # http://localhost:5173"
-  echo "  前端 (旧):    cd frontend && npm run dev"
+  echo "  前端:        cd frontend && npm run dev    # http://localhost:5174"
   echo "  健康检查:    curl -s localhost:8000/health"
   echo ""
   echo "  产品级运行（PostgreSQL + Redis + Neo4j）请用 Docker 模式："
