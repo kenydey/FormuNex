@@ -84,7 +84,7 @@ services:
       - .env
     environment:
       FORMUNEX_REDIS_URL: redis://redis:6379/0
-      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_DB_URL: postgresql://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
       FORMUNEX_CELERY_EAGER: "false"
       FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
       # v29: Embedding 模型选择（5 选 1，见 install.sh / Settings UI）。
@@ -147,7 +147,7 @@ services:
       - .env
     environment:
       FORMUNEX_REDIS_URL: redis://redis:6379/0
-      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_DB_URL: postgresql://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
       FORMUNEX_CELERY_EAGER: "false"
       FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
       FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
@@ -206,7 +206,7 @@ services:
       - .env
     environment:
       FORMUNEX_REDIS_URL: redis://redis:6379/0
-      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_DB_URL: postgresql://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
       FORMUNEX_CELERY_EAGER: "false"
     # Shares the backend image and so its uvicorn HEALTHCHECK, which this container cannot satisfy.
     healthcheck:
@@ -231,7 +231,7 @@ services:
       - .env
     environment:
       FORMUNEX_REDIS_URL: redis://redis:6379/0
-      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_DB_URL: postgresql://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
       FORMUNEX_CELERY_EAGER: "false"
       FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
       FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}

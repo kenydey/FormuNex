@@ -29,7 +29,7 @@ services:
   backend:
     environment:
       FORMUNEX_ENVIRONMENT: production
-      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_DB_URL: postgresql://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
       FORMUNEX_CAMPAIGN_BACKEND: datalab
       FORMUNEX_EXPERIMENT_BACKEND: datalab
       FORMUNEX_DATALAB_REQUIRED: "true"
@@ -49,7 +49,7 @@ services:
   worker:
     environment:
       FORMUNEX_ENVIRONMENT: production
-      FORMUNEX_DB_URL: postgresql+psycopg2://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
+      FORMUNEX_DB_URL: postgresql://${FORMUNEX_PG_USER:-formunex}:${FORMUNEX_PG_PASSWORD:-formunex}@postgres:5432/${FORMUNEX_PG_DB:-formunex}
       FORMUNEX_CAMPAIGN_BACKEND: datalab
       FORMUNEX_EXPERIMENT_BACKEND: datalab
       FORMUNEX_DATALAB_REQUIRED: "true"
