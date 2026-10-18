@@ -12,6 +12,8 @@ import json
 from dataclasses import asdict
 
 from ..transport import derive_transport
+from . import bridging as bridging_mod
+from .bridging import BridgingInput
 from .label_elements import build_label
 from .model import ClassificationResult, Component, DataGap, MixtureProperties, severity
 from .rules import environment, health, physical
@@ -19,12 +21,15 @@ from .rules.common import RuleOutput
 from .ruleset import DEFAULT_RULESET, RuleSet, load_ruleset
 
 
-def inputs_hash(components: list[Component], props: MixtureProperties, rs: RuleSet) -> str:
+def inputs_hash(components: list[Component], props: MixtureProperties, rs: RuleSet,
+                bridging: BridgingInput | None = None) -> str:
     payload = {
         "rule_set": rs.version,
         "components": sorted((asdict(c) for c in components), key=lambda d: (d["cas"] or "", d["name"])),
         "properties": asdict(props),
     }
+    if bridging is not None:
+        payload["bridging"] = bridging.fingerprint()
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 
 
@@ -79,13 +84,19 @@ def classify(
     include_transport: bool = True,
     substance_transport: dict[str, dict] | None = None,
     composition_basis: str = "exact",
+    bridging: BridgingInput | None = None,
 ) -> ClassificationResult:
     """``composition_basis="upper_bound"``: contents are range maxima (raw-material SDS ranges),
-    so a total above 100 % is expected and only a shortfall is reported."""
+    so a total above 100 % is expected and only a shortfall is reported.
+
+    ``bridging``: when given, hazard classes the bridge covers take the reference
+    mixture's classification instead of the calculated one (GB 30000 / GHS 1.3.2.2).
+    """
     rs = ruleset if isinstance(ruleset, RuleSet) else load_ruleset(ruleset)
     props = props or MixtureProperties()
     comps = _merge_duplicates([c for c in components if c.pct > 0])
-    result = ClassificationResult(rule_set_version=rs.version, inputs_hash=inputs_hash(comps, props, rs))
+    result = ClassificationResult(rule_set_version=rs.version,
+                                  inputs_hash=inputs_hash(comps, props, rs, bridging))
 
     total = sum(c.pct for c in comps)
     off = (100.0 - total) if composition_basis == "upper_bound" else abs(total - 100.0)
@@ -114,8 +125,15 @@ def classify(
     out.extend(aquatic)
     out.extend(environment.ozone(comps, props, rs))
     out.extend(physical.flammable_liquid(comps, props, rs))
+    out.extend(physical.aerosol(comps, props, rs))
     out.extend(physical.metal_corrosive(comps, props, rs))
     out.extend(physical.screening(comps, props, rs))
+
+    if bridging is not None:
+        bridged = bridging_mod.apply(comps, out.outcomes, bridging, rs)
+        out.outcomes = bridged.outcomes
+        out.trace.extend(bridged.trace)
+        out.gaps.extend(bridged.gaps)
 
     result.hazards = out.outcomes
     result.trace = out.trace

@@ -104,6 +104,46 @@ physical_screening:
   classes: [explosive, self_reactive, organic_peroxide, oxidizing_liquid, oxidizing_solid,
             pyrophoric_liquid, pyrophoric_solid, self_heating, water_reactive, flammable_solid]
 
+# Bridging principles (GB 30000.18-.28 / GHS 1.3.2.2): a mixture that was
+# not itself tested can take the classification of an established reference
+# mixture when the two are related in one of the five ways below. Bridging
+# applies to health and environmental hazard classes only — physical hazards
+# must be tested. Tolerances are absolute percentage points of composition.
+bridging:
+  batching_tolerance_pct: 1.0      # same product, another batch: per-ingredient content drift
+  content_tolerance_pct: 0.5       # dilution / interpolation / substantially-similar content comparisons
+  principles:
+    dilution: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+               skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+               stot_se, stot_re, aspiration, aquatic_acute, aquatic_chronic, ozone]
+    batching: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+               skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+               stot_se, stot_re, aspiration, aquatic_acute, aquatic_chronic, ozone]
+    concentration: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+                    skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+                    stot_se, stot_re, aspiration, aquatic_acute, aquatic_chronic, ozone]
+    interpolation: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+                    skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+                    stot_se, stot_re, aspiration, aquatic_acute, aquatic_chronic, ozone]
+    substantially_similar: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+                            skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+                            stot_se, stot_re, aspiration, aquatic_acute, aquatic_chronic, ozone]
+
+# Flammable aerosol (GB 30000.4 / GHS Rev.4 2.3): decided by test, not by
+# summation. Category 1 — any of: ≥85 % flammable components with heat of
+# combustion ≥ 30 kJ/g; spray ignition distance ≥ 75 cm; foam flame height
+# ≥ 20 cm with duration ≥ 2 s, or height ≥ 4 cm with duration ≥ 7 s.
+# Category 2 — any of: heat of combustion ≥ 20 kJ/g; ignition distance ≥ 15 cm;
+# foam height ≥ 4 cm with duration ≥ 2 s. Category 3 — ≤ 1 % flammable
+# components with heat of combustion < 20 kJ/g, not in category 1 / 2.
+aerosol:
+  heat_of_combustion_kj_g: {cat1: 30.0, cat2: 20.0}
+  flammable_pct: {cat1_min: 85.0, cat3_max: 1.0}
+  ignition_distance_cm: {cat1_min: 75.0, cat2_min: 15.0}
+  foam:
+    cat1: [{height_cm: 20.0, duration_s: 2.0}, {height_cm: 4.0, duration_s: 7.0}]
+    cat2: {height_cm: 4.0, duration_s: 2.0}
+
 # SDS section 3 disclosure (GB/T 17519): hazardous ingredients at or above
 # these concentrations are listed.
 disclosure:

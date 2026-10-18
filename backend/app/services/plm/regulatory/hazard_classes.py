@@ -31,7 +31,8 @@ HAZARD_CLASSES: tuple[HazardClass, ...] = (
     HazardClass("flammable_gas", "30000.3", "physical", ("易燃气体",), {"1": "H220", "2": "H221"}),
     HazardClass("chemically_unstable_gas", "30000.3", "physical", ("化学不稳定性气体",),
                 {"A": "H230", "B": "H231"}),
-    HazardClass("aerosol", "30000.4", "physical", ("易燃气溶胶", "气溶胶"), {"1": "H222", "2": "H223"}),
+    HazardClass("aerosol", "30000.4", "physical", ("易燃气溶胶", "气溶胶"),
+                {"1": "H222", "2": "H223", "3": "H229"}),
     HazardClass("oxidizing_gas", "30000.5", "physical", ("氧化性气体",), {"1": "H270"}),
     # 压缩 / 液化 / 溶解气体 → H280; 冷冻液化气体 → H281. Catalogue text does not say which.
     HazardClass("gas_under_pressure", "30000.6", "physical", ("加压气体",),

@@ -115,7 +115,10 @@ def _signature(c: Component | None, hazard_class: str) -> str | None:
 
 
 def applicable_classes(rs: RuleSet, principle: str) -> list[str]:
-    return list(rs["bridging"]["principles"].get(principle) or [])
+    section = rs.get("bridging")
+    if not section:
+        raise BridgingError("规则集缺少 bridging 配置，无法使用桥接原则")
+    return list((section.get("principles") or {}).get(principle) or [])
 
 
 # --------------------------------------------------------------------------- per-principle checks
@@ -261,7 +264,10 @@ def apply(target: list[Component], calculated: list[HazardOutcome], bridging: Br
           ) -> BridgingOutput:
     """Replace the calculated outcomes of the hazard classes the bridge covers; keep the rest."""
     bridging.validate()
-    p = rs["bridging"]
+    section = rs.get("bridging")
+    if not section:
+        raise BridgingError("规则集缺少 bridging 配置，无法使用桥接原则")
+    p = section
     classes = applicable_classes(rs, bridging.principle)
     refs = bridging.references
     check = {

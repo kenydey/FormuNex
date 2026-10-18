@@ -87,6 +87,11 @@ class MixtureProperties:
     sustained_combustion: bool | None = None  # UN L.2; False exempts 35 < FP ≤ 60 °C
     inhalation_form: str | None = None  # gas | vapour | dust_mist (default from phys_state)
     product_category: str | None = None  # e.g. "paint" (transport entry selection)
+    # Aerosol tests (GB 30000.4): heat of combustion, spray ignition distance,
+    # foam test outcome as {"flame_height_cm": .., "flame_duration_s": ..}.
+    heat_of_combustion_kj_g: float | None = None
+    ignition_distance_cm: float | None = None
+    foam_test_result: dict[str, float] | None = None
     # Where each value came from (measured / supplier / estimated), echoed into the trace.
     sources: dict[str, str] = field(default_factory=dict)
 

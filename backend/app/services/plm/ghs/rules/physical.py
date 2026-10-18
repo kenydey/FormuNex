@@ -58,6 +58,84 @@ def flammable_liquid(components: list[Component], props: MixtureProperties, rs: 
     return out
 
 
+# GHS 2.3.1.2 flammable components for the aerosol content test.
+_FLAMMABLE_COMPONENT_CLASSES = (
+    "flammable_gas", "flammable_liquid", "flammable_solid", "self_reactive",
+    "pyrophoric_liquid", "pyrophoric_solid", "self_heating", "water_reactive", "organic_peroxide",
+)
+
+
+def aerosol(components: list[Component], props: MixtureProperties, rs: RuleSet) -> RuleOutput:
+    """Flammable aerosol (GB 30000.4): decided by test, never by summation alone.
+
+    Applies only when ``phys_state == "aerosol"``. The most severe category whose
+    criteria are met wins; a product with flammable components but no test data
+    at all raises a blocking data gap instead of a guess.
+    """
+    out = RuleOutput()
+    if props.phys_state != "aerosol":
+        return out
+    p = rs["aerosol"]
+    flammable_pct = sum(c.pct for c in components
+                        if any(c.of(hc) for hc in _FLAMMABLE_COMPONENT_CLASSES))
+    hoc = props.heat_of_combustion_kj_g
+    ign = props.ignition_distance_cm
+    foam = props.foam_test_result or {}
+    fh = foam.get("flame_height_cm")
+    fd = foam.get("flame_duration_s")
+    has_test = hoc is not None or ign is not None or (fh is not None and fd is not None)
+    if not has_test:
+        if flammable_pct > 0:
+            out.gaps.append(DataGap(
+                "aerosol_test_data_missing", "aerosol",
+                f"气溶胶含易燃组分 {fmt(flammable_pct)}%，缺少燃烧热 / 点火距离 / 泡沫试验数据，"
+                "无法按 GB 30000.4 判定易燃气溶胶类别。", "blocking"))
+        else:
+            out.trace.append(TraceEntry("aerosol", None, "not_applicable", "GB 30000.4",
+                                        "气溶胶不含易燃组分 → 不分类为易燃气溶胶"))
+        return out
+    if flammable_pct <= 0:
+        out.trace.append(TraceEntry("aerosol", None, "not_applicable", "GB 30000.4",
+                                    "气溶胶不含易燃组分 → 不分类为易燃气溶胶"))
+        return out
+
+    cat, why = None, ""
+    # Category 1: any one of the three test routes.
+    if hoc is not None and flammable_pct >= float(p["flammable_pct"]["cat1_min"]) \
+            and hoc >= float(p["heat_of_combustion_kj_g"]["cat1"]):
+        cat, why = "1", (f"易燃组分 {fmt(flammable_pct)}% ≥ 85%，燃烧热 {fmt(hoc)} kJ/g ≥ 30 kJ/g")
+    elif ign is not None and ign >= float(p["ignition_distance_cm"]["cat1_min"]):
+        cat, why = "1", f"喷雾点火距离 {fmt(ign)} cm ≥ 75 cm"
+    elif fh is not None and fd is not None and any(
+            fh >= float(r["height_cm"]) and fd >= float(r["duration_s"]) for r in p["foam"]["cat1"]):
+        cat, why = "1", f"泡沫试验火焰高度 {fmt(fh)} cm、持续 {fmt(fd)} s，达到类别 1 判据"
+    # Category 2: any one of the three test routes (only when category 1 is not met).
+    if cat is None:
+        if hoc is not None and hoc >= float(p["heat_of_combustion_kj_g"]["cat2"]):
+            cat, why = "2", f"燃烧热 {fmt(hoc)} kJ/g ≥ 20 kJ/g（未达到类别 1）"
+        elif ign is not None and ign >= float(p["ignition_distance_cm"]["cat2_min"]):
+            cat, why = "2", f"喷雾点火距离 {fmt(ign)} cm ≥ 15 cm（未达到类别 1）"
+        elif fh is not None and fd is not None \
+                and fh >= float(p["foam"]["cat2"]["height_cm"]) and fd >= float(p["foam"]["cat2"]["duration_s"]):
+            cat, why = "2", f"泡沫试验火焰高度 {fmt(fh)} cm、持续 {fmt(fd)} s（未达到类别 1）"
+    # Category 3: ≤ 1 % flammable components with heat of combustion < 20 kJ/g.
+    if cat is None and hoc is not None and flammable_pct <= float(p["flammable_pct"]["cat3_max"]) \
+            and hoc < float(p["heat_of_combustion_kj_g"]["cat2"]):
+        cat, why = "3", (f"易燃组分 {fmt(flammable_pct)}% ≤ 1%，燃烧热 {fmt(hoc)} kJ/g < 20 kJ/g"
+                         "，且未达到类别 1 / 2")
+    out.trace.append(TraceEntry("aerosol", cat, "measured", "GB 30000.4",
+                                (why + f" → 类别 {cat}") if cat else
+                                (why or "未达到类别 1 / 2 / 3 判据") + " → 不分类",
+                                numbers={"flammable_pct": round(flammable_pct, 4),
+                                         "heat_of_combustion_kj_g": hoc,
+                                         "ignition_distance_cm": ign,
+                                         "foam_flame_height_cm": fh,
+                                         "foam_flame_duration_s": fd}))
+    if cat:
+        out.outcomes.append(outcome("aerosol", cat, "measured"))
+    return out
+
+
 def metal_corrosive(components: list[Component], props: MixtureProperties, rs: RuleSet) -> RuleOutput:
     out = RuleOutput()
     limit = float(rs["metal_corrosive"]["corrosion_rate_mm_per_year"])
@@ -94,7 +172,9 @@ def screening(components: list[Component], props: MixtureProperties, rs: RuleSet
         out.trace.append(TraceEntry(hazard_class, None, "requires_test", f"GB {BY_CODE[hazard_class].part}",
                                     f"{name}：不由组成计算，需试验确认",
                                     [contributor(c, c.worst(hazard_class).category) for c in hits]))
-    if props.phys_state in ("gas", "aerosol"):
+    if props.phys_state == "gas":
+        # Gases still need a separate GB 30000.3 / .5 / .6 assessment. Aerosols no
+        # longer hit this gap: aerosol() above classifies them from test data.
         out.gaps.append(DataGap("gas_or_aerosol", None,
-                                "气体 / 气溶胶产品的易燃性、加压气体等分类需按 GB 30000.3/.4/.6 单独评估。", "blocking"))
+                                "气体产品的易燃性、加压气体等分类需按 GB 30000.3/.5/.6 单独评估。", "blocking"))
     return out

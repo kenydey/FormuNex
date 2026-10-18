@@ -11,9 +11,11 @@ from ....clock import utcnow
 from ....db.models import FormulationVersion
 from ....db.models_plm import ClassificationResultRow
 from ....db.models_regulatory import GhsStatementRow, RegulatoryDataRelease
+from ..regulatory.hazard_classes import h_code_for
+from .bridging import BridgingInput, ReferenceMixture
 from .engine import classify
 from .inputs import BuiltInputs, build_components
-from .model import ClassificationResult, MixtureProperties
+from .model import ClassificationResult, Component, ComponentHazard, HazardOutcome, MixtureProperties
 from .ruleset import DEFAULT_RULESET, load_ruleset
 
 _PROPERTY_FIELDS = set(MixtureProperties.__dataclass_fields__)
@@ -24,6 +26,36 @@ def properties_from(data: dict[str, Any] | None) -> MixtureProperties:
     return MixtureProperties(**data)
 
 
+def bridging_from(data: dict[str, Any] | None) -> BridgingInput | None:
+    """API payload → :class:`BridgingInput`. Reference components use their inline
+    hazards as given (no database lookup); reference outcomes get their H codes
+    from the hazard-class table when omitted."""
+    if not data:
+        return None
+    refs = []
+    for r in data.get("references") or []:
+        comps = []
+        for item in r.get("components") or []:
+            hazards = [ComponentHazard(
+                hazard_class=h.get("hazard_class", ""), category=str(h.get("category", "")),
+                h_code=h.get("h_code"), scl=h.get("scl"), m_factor_acute=h.get("m_factor_acute"),
+                m_factor_chronic=h.get("m_factor_chronic"), ate_value=h.get("ate_value"),
+                ate_unit=h.get("ate_unit"), non_additive=bool(h.get("non_additive", False)),
+            ) for h in item.get("hazards") or []]
+            comps.append(Component(name=item.get("name", ""), pct=float(item.get("pct", 0)),
+                                   cas=item.get("cas"), substance_id=item.get("substance_id"),
+                                   hazards=hazards, assessed=bool(item.get("assessed", True)),
+                                   trade_secret=bool(item.get("trade_secret", False))))
+        hazards_out = []
+        for h in r.get("hazards") or []:
+            code = h.get("h_code") or h_code_for(h.get("hazard_class", ""), str(h.get("category", "")))
+            hazards_out.append(HazardOutcome(hazard_class=h.get("hazard_class", ""), category=str(h.get("category", "")),
+                                             h_codes=[code] if code else [], basis="bridging"))
+        refs.append(ReferenceMixture(components=comps, hazards=hazards_out,
+                                     ref_id=r.get("ref_id", ""), label=r.get("label", "")))
+    return BridgingInput(principle=data.get("principle", ""), references=refs)
+
+
 def classify_items(
     session: Session,
     items: list[dict[str, Any]],
@@ -32,9 +64,10 @@ def classify_items(
     ruleset: str = DEFAULT_RULESET,
     mode: str = "max",
     include_transport: bool = True,
+    bridging: dict[str, Any] | None = None,
 ) -> ClassificationResult:
     return build_and_classify(session, items, properties, ruleset=ruleset, mode=mode,
-                              include_transport=include_transport)[0]
+                              include_transport=include_transport, bridging=bridging)[0]
 
 
 def build_and_classify(
@@ -46,6 +79,7 @@ def build_and_classify(
     mode: str = "max",
     include_transport: bool = True,
     cached: bool = False,
+    bridging: dict[str, Any] | None = None,
 ) -> tuple[ClassificationResult, BuiltInputs]:
     """:func:`classify_items` that also returns the exploded components (red-line checks need both).
     ``cached=True`` serves the substance / material reads from the in-process cache (real-time editor)."""
@@ -61,6 +95,7 @@ def build_and_classify(
         built.components, properties_from(properties), ruleset=rs, include_transport=include_transport,
         substance_transport=built.transport_entries,
         composition_basis="upper_bound" if exploded and mode == "max" else "exact",
+        bridging=bridging_from(bridging),
     )
     result.data_gaps = built.gaps + result.data_gaps
     return result, built

@@ -32,7 +32,7 @@ def _pictogram(hazard_class: str, category: str) -> list[str]:
     if hazard_class in ("flammable_gas",) and c == "1":
         return ["GHS02"]
     if hazard_class == "aerosol":
-        return ["GHS02"]
+        return ["GHS02"] if c in ("1", "2") else []  # category 3 carries no pictogram
     if hazard_class == "flammable_liquid":
         return ["GHS02"] if c in ("1", "2", "3") else []
     if hazard_class in ("flammable_solid", "pyrophoric_liquid", "pyrophoric_solid", "self_heating", "water_reactive"):
@@ -83,6 +83,7 @@ _DANGER: dict[str, set[str]] = {
 _NO_SIGNAL: dict[str, set[str]] = {
     "reproductive": {"lact"}, "aquatic_acute": {"2", "3"}, "aquatic_chronic": {"2", "3", "4"},
     "explosive": {"1.6"}, "self_reactive": {"G"}, "organic_peroxide": {"G"},
+    "aerosol": {"3"},
     # Chemically unstable gases add hazard statements only; the flammable-gas class gives the signal word.
     "chemically_unstable_gas": {"A", "B"},
 }
@@ -107,6 +108,7 @@ H_TO_P: dict[str, list[str]] = {
     "H221": ["P210", "P377", "P381", "P403"],
     "H222": ["P210", "P211", "P251", "P410+P412"],
     "H223": ["P210", "P211", "P251", "P410+P412"],
+    "H229": ["P210", "P251", "P410+P412"],
     "H224": ["P210", "P233", "P240", "P241", "P242", "P243", "P280", "P303+P361+P353", "P370+P378",
              "P403+P235", "P501"],
     "H225": ["P210", "P233", "P240", "P241", "P242", "P243", "P280", "P303+P361+P353", "P370+P378",
