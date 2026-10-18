@@ -9,6 +9,7 @@ category carries no H statement (e.g. self-reactive type G).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 
 @dataclass(frozen=True)
@@ -104,3 +105,65 @@ def h_code_for(code: str, category: str) -> str | None:
     if hc is None:
         return None
     return hc.h_codes.get(category)
+
+
+# English GHS class names as reported by PubChem PUG-View ("GHS Hazard
+# Classes") and by English-language supplier SDS section 2, mapped to the
+# stable codes above. Keys are lowercased, punctuation-normalised names.
+ENGLISH_CLASS_NAMES: dict[str, str] = {
+    "explosives": "explosive",
+    "flammable gases": "flammable_gas",
+    "chemically unstable gases": "chemically_unstable_gas",
+    "aerosols": "aerosol",
+    "oxidizing gases": "oxidizing_gas",
+    "gases under pressure": "gas_under_pressure",
+    "flammable liquids": "flammable_liquid",
+    "flammable solids": "flammable_solid",
+    "self-reactive substances and mixtures": "self_reactive",
+    "self-reactive substances": "self_reactive",
+    "pyrophoric liquids": "pyrophoric_liquid",
+    "pyrophoric solids": "pyrophoric_solid",
+    "self-heating substances and mixtures": "self_heating",
+    "self-heating substances": "self_heating",
+    "substances and mixtures which in contact with water emit flammable gases": "water_reactive",
+    "oxidizing liquids": "oxidizing_liquid",
+    "oxidizing solids": "oxidizing_solid",
+    "organic peroxides": "organic_peroxide",
+    "corrosive to metals": "metal_corrosive",
+    "acute toxicity oral": "acute_tox_oral",
+    "acute toxicity dermal": "acute_tox_dermal",
+    "acute toxicity inhalation": "acute_tox_inhal",
+    "skin corrosion/irritation": "skin_corrosion",
+    "skin corrosion": "skin_corrosion",
+    "skin irritation": "skin_corrosion",
+    "serious eye damage/eye irritation": "eye_damage",
+    "serious eye damage": "eye_damage",
+    "eye irritation": "eye_damage",
+    "respiratory sensitization": "resp_sensitizer",
+    "respiratory sensitisation": "resp_sensitizer",
+    "skin sensitization": "skin_sensitizer",
+    "skin sensitisation": "skin_sensitizer",
+    "germ cell mutagenicity": "mutagenicity",
+    "carcinogenicity": "carcinogenicity",
+    "reproductive toxicity": "reproductive",
+    "specific target organ toxicity single exposure": "stot_se",
+    "specific target organ toxicity repeated exposure": "stot_re",
+    "aspiration hazard": "aspiration",
+    "hazardous to the aquatic environment acute hazard": "aquatic_acute",
+    "hazardous to the aquatic environment short-term acute": "aquatic_acute",
+    "hazardous to the aquatic environment long-term hazard": "aquatic_chronic",
+    "hazardous to the aquatic environment chronic hazard": "aquatic_chronic",
+    "hazardous to the ozone layer": "ozone",
+}
+
+
+def english_class_to_code(name: str) -> str | None:
+    """Map a PubChem / English-SDS hazard-class name to a stable code."""
+    key = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+    return _ENGLISH_NORMALIZED.get(key)
+
+
+_ENGLISH_NORMALIZED: dict[str, str] = {
+    re.sub(r"[^a-z0-9]+", " ", k.lower()).strip(): v
+    for k, v in ENGLISH_CLASS_NAMES.items()
+}

@@ -255,7 +255,11 @@ def test_gate_lists_every_check_and_blocks_unapproved_documents(env):
     failed = _failed(gate)
     assert not gate["passed"]
     assert any("未审核" in m for m in failed["documents"])
-    for key in ("formula_total", "substance_data", "red_lines", "classification_current", "consistency",
+    # Plan 1-1: the repo rule set is still draft, so the gate must also fail
+    # classification_current with the "待 EHS 签核" message (no fixture here —
+    # this test verifies the blocking behaviour itself).
+    assert any("待 EHS 签核" in m for m in failed["classification_current"])
+    for key in ("formula_total", "substance_data", "red_lines", "consistency",
                 "sds_label", "required_fields"):
         assert key not in failed, (key, failed.get(key))
     assert next(x for x in gate["checks"] if x["key"] == "objectives")["status"] == "not_applicable"
@@ -333,7 +337,7 @@ def test_waivers_only_for_waivable_items(env):
 # --------------------------------------------------------------------------- sign-off
 
 
-def test_full_release_flow(env):
+def test_full_release_flow(env, signed_off_ruleset):
     c, rid, pid, h = env["client"], env["rid"], env["pid"], env["h"]
     _ready(env)
     assert c.post(f"/api/plm/revisions/{rid}/submit", headers=h["rd"]).status_code == 403
@@ -393,7 +397,7 @@ def test_full_release_flow(env):
     assert c.get(f"/api/plm/products/{pid}").json()["lifecycle_state"] == "withdrawn"
 
 
-def test_rejection_returns_to_candidate_and_tampering_stops_signing(env):
+def test_rejection_returns_to_candidate_and_tampering_stops_signing(env, signed_off_ruleset):
     c, rid, h = env["client"], env["rid"], env["h"]
     _ready(env)
     pkg = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"]).json()
@@ -425,7 +429,7 @@ def test_submit_refused_when_gate_fails(env):
     assert r.status_code == 409 and r.json()["detail"]["gate"]["passed"] is False
 
 
-def test_new_release_supersedes_the_previous_revision(env):
+def test_new_release_supersedes_the_previous_revision(env, signed_off_ruleset):
     c, rid, pid, h = env["client"], env["rid"], env["pid"], env["h"]
     _ready(env)
     pkg = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"]).json()
@@ -481,7 +485,7 @@ def test_webhook_connector_signs_and_retries():
         WebhookConnector("ftp://example.com/x")
 
 
-def test_connector_failures_are_recorded_not_raised(env):
+def test_connector_failures_are_recorded_not_raised(env, signed_off_ruleset):
     c, rid, h = env["client"], env["rid"], env["h"]
     _ready(env)
     pkg = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"]).json()

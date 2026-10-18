@@ -334,22 +334,26 @@ def substitutes(body: SubstituteRequest) -> dict:
         raise HTTPException(status_code=400, detail="slot_index 超出范围")
 
     try:
-        return find_substitutes(
-            genome,
-            index,
-            req,
-            limit=body.limit,
-            include_unavailable=body.include_unavailable,
-            include_external=body.include_external,
-            external_limit=body.external_limit,
-            similarity_threshold=body.similarity_threshold,
-            include_literature=body.include_literature,
-            literature_limit=body.literature_limit,
-            include_surechembl=body.include_surechembl,
-            surechembl_limit=body.surechembl_limit,
-            include_llm=body.include_llm,
-            llm_limit=body.llm_limit,
-        )
+        from ..db.database import default_session_factory
+
+        with default_session_factory()() as _session:
+            return find_substitutes(
+                genome,
+                index,
+                req,
+                limit=body.limit,
+                include_unavailable=body.include_unavailable,
+                include_external=body.include_external,
+                external_limit=body.external_limit,
+                similarity_threshold=body.similarity_threshold,
+                include_literature=body.include_literature,
+                literature_limit=body.literature_limit,
+                include_surechembl=body.include_surechembl,
+                surechembl_limit=body.surechembl_limit,
+                include_llm=body.include_llm,
+                llm_limit=body.llm_limit,
+                session=_session,
+            )
     except HTTPException:
         raise
     except Exception as exc:

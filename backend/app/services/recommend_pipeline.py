@@ -493,6 +493,39 @@ def finalize_recommendation_bundle(
     )
     warnings.extend(dedup_notes)
 
+    # Phase 1D (1-11): project red-line filter — a candidate that violates the
+    # owning project's compliance constraints is dropped (not just warned).
+    # ``scored`` and ``aligned_formulas`` are position-paired here, so both
+    # lists are filtered in sync; the trade-off analysis below runs on the
+    # filtered set. Fail-open: a filter failure never kills the recommendation.
+    if getattr(req, "project_id", None):
+        try:
+            from ..db.database import default_session_factory
+            from ..services.project_redlines import (
+                check_formulation_redlines,
+                formulation_to_items,
+                load_project_constraints,
+            )
+
+            with default_session_factory()() as _session:
+                _constraints = load_project_constraints(_session, req.project_id)
+                if _constraints:
+                    _kept_s, _kept_a, _dropped = [], [], 0
+                    for _f, _r in zip(scored, aligned_formulas):
+                        _hits, _ = check_formulation_redlines(
+                            _session, formulation_to_items(_f), _constraints,
+                            voc_gpl=(_f.predicted or {}).get("voc_gpl"))
+                        if _hits:
+                            _dropped += 1
+                            continue
+                        _kept_s.append(_f)
+                        _kept_a.append(_r)
+                    if _dropped:
+                        warnings.append(f"合规红线过滤：{_dropped} 个候选违反项目红线，已剔除")
+                    scored, aligned_formulas = _kept_s, _kept_a
+        except Exception:
+            logger.warning("red-line filter failed (fail-open)", exc_info=True)
+
     tradeoff = None
     if include_tradeoff and settings.recommend_tradeoff_enabled:
         rec_map = {r.name: r for r in aligned_formulas}

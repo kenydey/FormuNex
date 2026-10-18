@@ -7,6 +7,13 @@ Sources (``app/resources/regulatory``, imported from MSDS-Generator):
   free-text GB 30000 classifications and 剧毒 / 易制毒 / 易制爆 remarks
 * ``oel_gbz2_2019.json`` — GBZ 2.1-2019 occupational exposure limits
 * ``hazard_statements.json`` / ``precaution_statements.json`` — H / P texts (Chinese)
+* ``hpstatements_en.json`` — H / P texts (English), vendored mhchem/hpstatements CLP
+  dataset: extracted from consolidated EU legal texts (Regulation (EC) No 1272/2008,
+  EUR-Lex), CC BY 4.0, sample-verified against legislation.gov.uk Annex III/IV.
+  Six MSDS-Generator hand-added entries are excluded (see that file's ``_formunex``).
+  CLP does not adopt GHS categories 5 / Skin 3 / Eye 2B / Asp. Tox. 2 / Aquatic
+  Acute 3 / Flam. Liq. 4, nor deleted P codes, so those seed codes keep
+  ``text_en`` empty until a UN GHS source is provided.
 * ``gb12268_2025.json`` — GB 12268 dangerous-goods entries (a 10-entry subset for now)
 
 The run is idempotent: a release whose input digest matches an earlier one is
@@ -49,7 +56,7 @@ log = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 # Bump when parsing / mapping logic changes, so an unchanged data set is re-imported.
-IMPORTER_VERSION = "2"  # 2: OCR-repaired statement codes (P211, P411)
+IMPORTER_VERSION = "3"  # 3: fill text_en from hpstatements_en.json (CLP English H/P)
 OEL_STANDARD = "GBZ 2.1-2019"
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
@@ -60,6 +67,7 @@ SEED_REVIEW_KINDS = (
 _FILES = (
     "common_chemicals.json.gz", "hazard_chemical_info.json", "oel_gbz2_2019.json",
     "hazard_statements.json", "precaution_statements.json", "gb12268_2025.json",
+    "hpstatements_en.json",
 )
 _CHUNK = 5000
 
@@ -468,7 +476,8 @@ def _replace_transport(conn: Connection, resources: Path, release_id: str, revie
 
 
 def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:
-    existing = {r.code: r for r in conn.execute(select(GhsStatementRow.code, GhsStatementRow.text_zh))}
+    existing = {r.code: r for r in conn.execute(select(
+        GhsStatementRow.code, GhsStatementRow.text_zh, GhsStatementRow.text_en))}
     fresh: dict[str, dict] = {}
     for kind, fname in (("H", "hazard_statements.json"), ("P", "precaution_statements.json")):
         for s in _load_json(resources / fname)["statements"]:
@@ -482,16 +491,33 @@ def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:
                 "precaution_category": s.get("precaution_category") or "",
                 "usage_condition": s.get("usage_condition") or "",
             }
+    # English texts: mhchem CLP extraction, keyed by the same normalised code.
+    # The file is optional (fixture resource sets omit it) — without it text_en stays "".
+    en_map: dict[str, str] = {}
+    en_path = resources / "hpstatements_en.json"
+    if en_path.exists():
+        raw = _load_json(en_path).get("statements", {})
+        for key, text in raw.items():
+            en_map[_code(key.split("/")[-1])] = re.sub(r"\s+", " ", str(text or "")).strip()
+    for v in fresh.values():
+        v["text_en"] = en_map.get(v["code"], "")
     new = [v for k, v in fresh.items() if k not in existing]
     if new:
         conn.execute(insert(GhsStatementRow), new)
-    filled = 0
+    filled = filled_en = 0
     for code, v in fresh.items():
         row = existing.get(code)
-        if row is not None and not row.text_zh and v["text_zh"]:
+        if row is None:
+            continue
+        if not row.text_zh and v["text_zh"]:
             conn.execute(update(GhsStatementRow).where(GhsStatementRow.code == code).values(text_zh=v["text_zh"]))
             filled += 1
-    stats.update(statements_inserted=len(new), statements_filled=filled)
+        # Never overwrite a human-edited English text; only fill blanks.
+        if not (row.text_en or "") and v["text_en"]:
+            conn.execute(update(GhsStatementRow).where(GhsStatementRow.code == code).values(text_en=v["text_en"]))
+            filled_en += 1
+    stats.update(statements_inserted=len(new), statements_filled=filled,
+                 statements_en_filled=filled_en)
 
 
 def _replace_review_items(conn: Connection, review: _Review, stats: dict) -> None:

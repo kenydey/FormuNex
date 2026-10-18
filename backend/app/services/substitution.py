@@ -25,11 +25,15 @@ is installed; see ``_delta_confidence``.
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from ..domain.genome import FormulationGenome
 from ..domain.schemas import Requirement
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 # Structural score weights. substitute_group is a curated judgement that these
 # materials are interchangeable, so it outranks every inferred signal.
@@ -300,6 +304,7 @@ def find_substitutes(
     surechembl_limit: int = 8,
     include_llm: bool | None = None,
     llm_limit: int = 5,
+    session: Session | None = None,
 ) -> dict:
     """Rank replacements for one slot, each with its predicted property delta.
 
@@ -422,11 +427,39 @@ def find_substitutes(
         for cand, form in scored_forms:
             cand["score_after"] = form.score
 
+    # Phase 1D (1-11): project red-line annotation + demotion. Each swapped
+    # formulation is checked against the owning project's constraints; a hit
+    # annotates the candidate (``redline_hits``) and demotes it in the sort.
+    # Substitution is advisory, so violating candidates are shown, not dropped.
+    # Fail-open: without a session (or on check failure) no annotation is added.
+    if session is not None and req is not None and getattr(req, "project_id", None):
+        try:
+            from .project_redlines import (
+                check_formulation_redlines,
+                formulation_to_items,
+                load_project_constraints,
+            )
+
+            _constraints = load_project_constraints(session, req.project_id)
+            if _constraints:
+                for cand, form in scored_forms:
+                    _hits, _ = check_formulation_redlines(
+                        session, formulation_to_items(form), _constraints,
+                        voc_gpl=(getattr(form, "predicted", None) or {}).get("voc_gpl"))
+                    cand["redline_hits"] = [{"code": h.code, "message": h.message} for h in _hits]
+                    cand["redline_violated"] = bool(_hits)
+        except Exception as exc:
+            logger.warning("substitution red-line check failed (fail-open): {}", exc)
+    for cand, _form in scored_forms:
+        cand.setdefault("redline_hits", [])
+        cand.setdefault("redline_violated", False)
+
     # Feasible first; then requirement-fit; then prefer non-stale; then structural / score.
     candidates.sort(
         key=lambda c: (
             not c["feasible"],
             -float(c.get("requirement_fit") or 0.0),
+            bool(c.get("redline_violated")),
             bool(c.get("stale_price")),
             bool(c.get("missing_price")),
             -c["structural_score"],

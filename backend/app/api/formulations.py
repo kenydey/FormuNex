@@ -668,6 +668,44 @@ def _to_view(row) -> VersionView:
 @router.post("/formulations/versions", response_model=VersionView)
 def save_formulation_version(body: SaveVersionRequest) -> VersionView:
     """Append an immutable revision. Summarises the change when none is given."""
+    # Phase 1D (1-12/1-13): server-side red-line re-check. The frontend checks
+    # too, but a direct API call must not bypass it. ``block`` hits reject the
+    # save (422); ``warn`` hits (VOC estimate only) are appended to the
+    # formulation's warnings so they stay visible in the saved snapshot.
+    # Fail-open on infrastructure errors (missing project / classification
+    # failure): the save must not break because the check could not run.
+    if body.project_id:
+        try:
+            from ..db.database import default_session_factory
+            from ..services.project_redlines import (
+                check_formulation_redlines,
+                formulation_to_items,
+                load_project_constraints,
+            )
+
+            with default_session_factory()() as _session:
+                _constraints = load_project_constraints(_session, body.project_id)
+                if _constraints:
+                    _items = formulation_to_items(body.formulation)
+                    _voc = (body.formulation.predicted or {}).get("voc_gpl")
+                    _hits, _cls_available = check_formulation_redlines(
+                        _session, _items, _constraints, voc_gpl=_voc)
+                    _blocking = [h for h in _hits if h.severity == "block"]
+                    if _blocking:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="配方违反项目合规红线，保存被拒绝："
+                                   + "；".join(h.message for h in _blocking),
+                        )
+                    for _h in _hits:
+                        if _h.severity == "warn":
+                            body.formulation.warnings.append(f"合规红线警告：{_h.message}")
+                    if not _cls_available:
+                        body.formulation.warnings.append("合规红线警告：分类服务不可用，象形图/信号词未复核")
+        except HTTPException:
+            raise
+        except Exception:
+            log.warning("red-line re-check failed (fail-open)", exc_info=True)
     from ..services.formulation_history import get_history_store
 
     try:

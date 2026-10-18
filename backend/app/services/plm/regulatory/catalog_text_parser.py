@@ -2,10 +2,10 @@
 GB 30000 classifications.
 
 The MSDS-Generator copy of the catalogue writes each entry's classification as
-loosely formatted Chinese text — 119 different spellings of hazard classes,
-several classes run together without separators, line breaks inside a class
-name, an asterisk marking a *minimum* category, the STOT SE 3 effect on its own
-line, and conditional classifications that depend on the form of the substance:
+loosely formatted Chinese text — several classes run together without separators,
+line breaks inside a class name, an asterisk marking a *minimum* category, the
+STOT SE 3 effect on its own line, and conditional classifications that depend
+on the form of the substance:
 
     急性毒性-经口,类别 3*急性毒性-吸入,类别 3*致癌性,类别 1A
     特异性靶器官毒性-一次接触,类别 3\\n（呼吸道刺激）

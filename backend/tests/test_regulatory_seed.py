@@ -79,6 +79,11 @@ def resources(tmp_path):
         "1170": {"name_cn": "乙醇", "name_en": "Ethanol", "class": "3", "pg": "II", "marine_pollutant": False},
         "9999": {"name_cn": "不存在的物质", "name_en": "", "class": "9", "pg": None},
     }})
+    _write(res, "hpstatements_en.json", {"statements": {
+        "latest/en/H225": "Highly flammable liquid and vapour.",
+        "latest/en/P210": "Keep away from heat, hot surfaces, sparks, open flames and other ignition sources. No smoking.",
+        "latest/en/P301+P330+P331": "IF SWALLOWED: Rinse mouth. Do NOT induce vomiting.",
+    }})
     return res
 
 
@@ -129,6 +134,11 @@ def test_seed_loads_every_table(engine, resources):
         assert tuple(ammonia_oel) == (20.0, 30.0)  # substance created from the OEL list itself
         codes = set(c.execute(select(GhsStatementRow.code)).scalars())
         assert {"H225", "H300+H310+H330", "P210", "P301+P330+P331"} <= codes
+        en_texts = dict(c.execute(select(GhsStatementRow.code, GhsStatementRow.text_en)).all())
+        assert en_texts["H225"] == "Highly flammable liquid and vapour."
+        assert en_texts["P301+P330+P331"] == "IF SWALLOWED: Rinse mouth. Do NOT induce vomiting."
+        # No English entry in the fixture file -> stays blank, never invented.
+        assert en_texts["H300+H310+H330"] == ""
         linked = c.execute(select(SubstanceTransportRow.un_number, SubstanceTransportRow.substance_id)).all()
         assert {un: sid is not None for un, sid in linked} == {"1170": True, "9999": False}
         generic = c.execute(select(SubstanceGenericEntryRow.name_zh, SubstanceGenericEntryRow.parsed)).one()
@@ -189,7 +199,62 @@ def _row(hazard_class, source, category="1", locked=False):
                            locked_at=datetime(2026, 1, 1) if locked else None)
 
 
-def test_source_priority_is_per_hazard_class():
+def test_reseed_backfills_english_and_never_overwrites_human_text_en(engine, resources):
+    seed_regulatory_db(engine, resources=resources)
+    with engine.begin() as c:
+        # Simulate a human-edited English text and a blank one.
+        c.execute(update(GhsStatementRow).where(GhsStatementRow.code == "H225")
+                  .values(text_en="HUMAN EDIT"))
+        c.execute(update(GhsStatementRow).where(GhsStatementRow.code == "P210").values(text_en=""))
+    seed_regulatory_db(engine, resources=resources, force=True)
+    with engine.connect() as c:
+        texts = dict(c.execute(select(GhsStatementRow.code, GhsStatementRow.text_en)).all())
+    assert texts["H225"] == "HUMAN EDIT"
+    assert texts["P210"] == (
+        "Keep away from heat, hot surfaces, sparks, open flames and other ignition sources. No smoking.")
+
+
+# Codes in the bundled Chinese seed files with no trustworthy English text.
+# All are GHS-only (CLP does not adopt Cat 5 / Skin 3 / Eye 2B / Asp. Tox. 2 /
+# Aquatic Acute 3 / Flam. Liq. 4), deleted P codes, or non-standard codes
+# (H361E is not a GHS code — its Chinese text duplicates H361d). They keep
+# text_en empty until a UN GHS source is provided; this set must be updated
+# deliberately, never by inventing text.
+KNOWN_MISSING_EN = {
+    "H227", "H303", "H303+H313", "H303+H313+H333", "H303+H333", "H305", "H313",
+    "H313+H333", "H315+H320", "H316", "H320", "H333", "H361E", "H401", "H402",
+    "P221", "P224", "P225", "P226", "P235+P410", "P281", "P304+P312", "P335+P334",
+    "P370+P380", "P374", "P411+P235", "P422",
+}
+# MSDS-Generator hand-added entries, excluded from the vendored English file:
+# their provenance is a maintainer edit, not the EUR-Lex extraction.
+EXCLUDED_EN = {"H303", "H313", "H350I", "H360E", "H401", "P281"}
+
+
+def test_english_resource_covers_seed_codes_except_known_gap():
+    from pathlib import Path
+
+    from app.services.plm.regulatory.seed import _code
+
+    res = Path(__file__).resolve().parents[1] / "app" / "resources" / "regulatory"
+    en = json.loads((res / "hpstatements_en.json").read_text(encoding="utf-8"))
+    assert en["_formunex"]["excluded_codes"] == sorted(EXCLUDED_EN)
+    en_codes = {_code(k.split("/")[-1]) for k in en["statements"]}
+    # Hand-added entries (except H350I, which the upstream file already carries as
+    # H350i) must not be in the English file.
+    assert not (en_codes & {"H303", "H313", "H360E", "H401", "P281"})
+    assert "H350I" in en_codes  # from upstream H350i, normalised by _code
+    seed_codes = set()
+    for fname in ("hazard_statements.json", "precaution_statements.json"):
+        for s in json.loads((res / fname).read_text(encoding="utf-8"))["statements"]:
+            seed_codes.add(_code(s.get("code") or ""))
+    assert seed_codes - en_codes == KNOWN_MISSING_EN
+    # Spot pairs, verified against legislation.gov.uk CLP Annex III/IV.
+    texts = {_code(k.split("/")[-1]): v for k, v in en["statements"].items()}
+    assert texts["H200"] == "Unstable explosives."
+    assert texts["H300+H310+H330"] == "Fatal if swallowed, in contact with skin or if inhaled"
+    assert texts["H350I"] == "May cause cancer by inhalation."
+    assert texts["P301+P330+P331"] == "IF SWALLOWED: Rinse mouth. Do NOT induce vomiting."
     rows = [
         _row("acute_tox_oral", "pubchem", "4"),
         _row("acute_tox_oral", "supplier_sds", "3"),

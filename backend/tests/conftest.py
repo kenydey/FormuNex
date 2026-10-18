@@ -175,6 +175,30 @@ def pytest_collection_finish(session):
     _revert_environ_pollution()
 
 
+@pytest.fixture()
+def signed_off_ruleset(monkeypatch):
+    """Simulate an EHS-signed-off rule set (plan 1-1) for release-flow tests.
+
+    The repo rule set is still ``status: draft`` — the real EHS signature is
+    pending. Tests that exercise the release flow end-to-end (gate must pass)
+    use this fixture to simulate the post-sign-off world: same rule-set
+    version and parameters, ``status`` flipped to ``released``, plus a valid
+    sign-off record. Tests that verify the *blocking* behaviour itself
+    (draft → gate fails) must NOT use this fixture.
+    """
+    from app.services.plm.ghs.ruleset import RuleSet, RuleSetSignoff, load_ruleset
+
+    data = load_ruleset().as_dict()
+    data["status"] = "released"
+    monkeypatch.setattr("app.services.plm.release.gate.load_ruleset", lambda *a, **k: RuleSet(data))
+    monkeypatch.setattr(
+        "app.services.plm.release.gate.load_signoff",
+        lambda version: RuleSetSignoff(
+            signer="EHS 专家（测试模拟签核）", signed_at="2026-10-17", version=version,
+            decision="approved", comment="测试模拟：EHS 已签核该版本规则集。"))
+    return data["version"]
+
+
 # pytest keeps the running test's node id in ``os.environ["PYTEST_CURRENT_TEST"]``, and Windows refuses an environment
 # variable longer than 32,767 characters: a parametrized test whose *parameter* is a 40 KB string failed with
 # "ValueError: the environment variable is longer than 32767 characters" at setup - on Windows only, so Linux CI was

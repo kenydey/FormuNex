@@ -56,8 +56,9 @@ from .api import kg as kg_router
 from .api import kg_neo4j as kg_neo4j_router
 from .api import surechembl as surechembl_router
 from .api import org as org_router
-from .api import notebooklm as notebooklm_router
+from .api import compliance as compliance_router
 from .api import meta as meta_router
+from .api import notebooklm as notebooklm_router
 from .api import session_plans as session_plans_router
 from .api import tech_reports as tech_reports_router
 from .api import memories as memories_router
@@ -343,6 +344,7 @@ app.include_router(projects_router.router)
 app.include_router(formulation_skills_router.router)
 app.include_router(skills_router.router)
 app.include_router(connectors_router.router)
+app.include_router(compliance_router.router)
 app.include_router(meta_router.router)
 app.include_router(auth_router.router)
 

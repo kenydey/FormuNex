@@ -1,0 +1,123 @@
+# SDS 人工审定基线框架（计划 1-9）
+#
+# 用途：10 份 SDS 基线框架（中文 5 份 + 英文 5 份），覆盖主要危害类别。
+# 每份基线由引擎生成 16 节完整结构，关键字段（分类、H/P 说明、象形图、
+# 信号词）标注待 EHS / 质量审定；审定通过并签字后，基线成为 SDS 生成的
+# 审定对照（回归测试 test_sds_baselines.py）。
+#
+# 状态：待 EHS / 质量审定。签字前本文件不作为审定基线，仅为待审框架。
+# pending_ehs_review 必须为 true；pending_fields 列出待审定的关键字段。
+# 混合物组成均为示例配方（非真实产品），仅用于结构对照与审定讨论。
+#
+# 字段：
+#   id / lang / title：基线编号、语言、标题。
+#   hazard_profile：覆盖的主要危害类别（审定关注点）。
+#   components：示例组成（name / pct / hazards），合计 100%。
+#   props：混合物实测性质。
+#   pending_ehs_review / pending_fields：待审定标记与待审字段清单。
+
+baselines:
+  - id: B-01
+    lang: zh-CN
+    title: 易燃液体 + 皮肤刺激 SDS 基线（中文）
+    hazard_profile: [flammable_liquid, skin_corrosion]
+    components:
+      - {name: 二甲苯, pct: 25, cas: "1330-20-7", hazards: [{hazard_class: flammable_liquid, category: "3", h_code: H226}, {hazard_class: skin_corrosion, category: "2", h_code: H315}]}
+      - {name: 环氧树脂, pct: 60, cas: "25068-38-6", hazards: [{hazard_class: skin_sensitizer, category: "1", h_code: H317}]}
+      - {name: 水, pct: 15, cas: "7732-18-5"}
+    props: {flash_point_c: 27, initial_boiling_point_c: 138}
+    pending_ehs_review: true
+    pending_fields: [分类, H 说明, P 说明, 象形图, 信号词, 第 3 节成分披露, 第 9 节理化特性]
+  - id: B-02
+    lang: zh-CN
+    title: 皮肤腐蚀 SDS 基线（中文）
+    hazard_profile: [skin_corrosion, eye_damage]
+    components:
+      - {name: 氢氧化钠, pct: 15, cas: "1310-73-2", hazards: [{hazard_class: skin_corrosion, category: "1A", h_code: H314}]}
+      - {name: 水, pct: 85, cas: "7732-18-5"}
+    props: {ph: 13.5}
+    pending_ehs_review: true
+    pending_fields: [分类, H 说明, P 说明, 象形图, 信号词, 第 4 节急救措施, 第 7 节储存]
+  - id: B-03
+    lang: zh-CN
+    title: 急性毒性 SDS 基线（中文）
+    hazard_profile: [acute_tox_oral, acute_tox_dermal]
+    components:
+      - {name: 中毒物 B, pct: 10, hazards: [{hazard_class: acute_tox_oral, category: "3", h_code: H301}, {hazard_class: acute_tox_dermal, category: "2", h_code: H310}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    props: {}
+    pending_ehs_review: true
+    pending_fields: [分类, H 说明, P 说明, 象形图, 信号词, 第 11 节毒理学信息, ATE 计算]
+  - id: B-04
+    lang: zh-CN
+    title: 水生危害 SDS 基线（中文）
+    hazard_profile: [aquatic_acute, aquatic_chronic]
+    components:
+      - {name: 水生剧毒物 Z, pct: 25, hazards: [{hazard_class: aquatic_acute, category: "1", h_code: H400}, {hazard_class: aquatic_chronic, category: "1", h_code: H410}]}
+      - {name: 水, pct: 75, cas: "7732-18-5"}
+    props: {}
+    pending_ehs_review: true
+    pending_fields: [分类, H 说明, P 说明, 象形图, 信号词, 第 12 节生态学信息, 第 13 节废弃处置]
+  - id: B-05
+    lang: zh-CN
+    title: 致癌性 SDS 基线（中文）
+    hazard_profile: [carcinogenicity, mutagenicity]
+    components:
+      - {name: 可疑致癌物 R, pct: 1, hazards: [{hazard_class: carcinogenicity, category: "1B", h_code: H350}]}
+      - {name: 致突变物 Q, pct: 0.5, hazards: [{hazard_class: mutagenicity, category: "1B", h_code: H340}]}
+      - {name: 水, pct: 98.5, cas: "7732-18-5"}
+    props: {}
+    pending_ehs_review: true
+    pending_fields: [分类, H 说明, P 说明, 象形图, 信号词, 第 11 节毒理学信息, 第 15 节法规信息]
+  - id: B-06
+    lang: en-US
+    title: "Flammable liquid + STOT-SE SDS baseline (English)"
+    hazard_profile: [flammable_liquid, stot_se]
+    components:
+      - {name: "Flammable solvent AE", pct: 30, hazards: [{hazard_class: flammable_liquid, category: "2", h_code: H225}, {hazard_class: stot_se, category: "3", h_code: H336}]}
+      - {name: "Water", pct: 70, cas: "7732-18-5"}
+    props: {flash_point_c: 18, initial_boiling_point_c: 80}
+    pending_ehs_review: true
+    pending_fields: [classification, H statements, P statements, pictograms, signal word, Section 9 properties, English statement text]
+  - id: B-07
+    lang: en-US
+    title: "Eye damage + skin sensitization SDS baseline (English)"
+    hazard_profile: [eye_damage, skin_sensitizer]
+    components:
+      - {name: "Eye corrosive J", pct: 5, hazards: [{hazard_class: eye_damage, category: "1", h_code: H318}]}
+      - {name: "Sensitizer M", pct: 2, hazards: [{hazard_class: skin_sensitizer, category: "1", h_code: H317}]}
+      - {name: "Water", pct: 93, cas: "7732-18-5"}
+    props: {}
+    pending_ehs_review: true
+    pending_fields: [classification, H statements, P statements, pictograms, signal word, Section 4 first aid, English statement text]
+  - id: B-08
+    lang: en-US
+    title: "Aspiration + aquatic chronic SDS baseline (English)"
+    hazard_profile: [aspiration, aquatic_chronic]
+    components:
+      - {name: "Aspiration hazard Y", pct: 12, hazards: [{hazard_class: aspiration, category: "1", h_code: H304}, {hazard_class: aquatic_chronic, category: "2", h_code: H411}]}
+      - {name: "Water", pct: 88, cas: "7732-18-5"}
+    props: {kinematic_viscosity_40c: 15}
+    pending_ehs_review: true
+    pending_fields: [classification, H statements, P statements, pictograms, signal word, Section 12 ecological information, viscosity data]
+  - id: B-09
+    lang: en-US
+    title: "Ozone + reproductive toxicity SDS baseline (English)"
+    hazard_profile: [ozone, reproductive]
+    components:
+      - {name: "Ozone depleter AD", pct: 0.5, hazards: [{hazard_class: ozone, category: "1", h_code: H420}]}
+      - {name: "Reproductive toxicant S", pct: 0.5, hazards: [{hazard_class: reproductive, category: "1A", h_code: H360}]}
+      - {name: "Water", pct: 99, cas: "7732-18-5"}
+    props: {}
+    pending_ehs_review: true
+    pending_fields: [classification, H statements, P statements, pictograms, signal word, Section 11 toxicology, English statement text]
+  - id: B-10
+    lang: en-US
+    title: "Metal corrosive + skin irritation SDS baseline (English)"
+    hazard_profile: [metal_corrosive, skin_corrosion]
+    components:
+      - {name: "Corrosive salt AH", pct: 10, hazards: [{hazard_class: skin_corrosion, category: "2", h_code: H315}]}
+      - {name: "Water", pct: 90, cas: "7732-18-5"}
+    props: {metal_corrosion_rate_mm_per_year: 7.0}
+    pending_ehs_review: true
+    pending_fields: [classification, H statements, P statements, pictograms, signal word, UN C.1 test data, Section 14 transport]

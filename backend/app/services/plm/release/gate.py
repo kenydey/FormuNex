@@ -32,7 +32,7 @@ from ....db.models_regulatory import SubstanceClassificationRow
 from ...compliance_rules import rohs_restricted
 from ..ghs import service as ghs_service
 from ..ghs.inputs import build_components
-from ..ghs.ruleset import load_ruleset
+from ..ghs.ruleset import load_ruleset, load_signoff
 from ..regulatory.source_priority import rank
 
 TOTAL_TOLERANCE_PCT = 0.01
@@ -237,7 +237,41 @@ def _check_objectives(session: Session, c: Check, rev: ProductRevisionRow) -> No
         c.evidence[metric] = {"value": m.value, "measurement_id": m.id}
 
 
-def _check_red_lines(c: Check, rev: ProductRevisionRow, fv: FormulationVersion | None, components: list) -> None:
+def _ghs_constraints_for_revision(session: Session, rev: ProductRevisionRow):
+    """GHS constraints for a revision (Phase 1D, 1-14).
+
+    The revision snapshot is the frozen contract and wins per-field, but the
+    GHS fields (``forbidden_pictograms`` / ``forbidden_signal_word`` /
+    ``voc_limit_g_l``) were dropped whenever a spec was copied — so the owning
+    project's spec contract fills any missing field. Substance ``red_lines``
+    are NOT merged: the gate checks the snapshot's own (frozen) red lines.
+    """
+    from ...project_redlines import (
+        GhsConstraints,
+        constraints_from_spec_contract,
+        load_project_constraints,
+    )
+
+    snap = constraints_from_spec_contract(rev.spec_snapshot or {}, source="spec_snapshot")
+    if snap.forbidden_pictograms and snap.forbidden_signal_word and snap.voc_limit_g_l is not None:
+        snap.substances = []
+        return snap
+    proj = GhsConstraints()
+    product = session.get(ProductRow, rev.product_id) if rev.product_id else None
+    if product is not None and product.project_id:
+        proj = load_project_constraints(session, product.project_id)
+    merged = GhsConstraints(
+        substances=[],
+        forbidden_pictograms=snap.forbidden_pictograms or proj.forbidden_pictograms,
+        forbidden_signal_word=snap.forbidden_signal_word or proj.forbidden_signal_word,
+        voc_limit_g_l=(snap.voc_limit_g_l if snap.voc_limit_g_l is not None else proj.voc_limit_g_l),
+        source="spec_snapshot+project",
+    )
+    return merged
+
+
+def _check_red_lines(session: Session, c: Check, rev: ProductRevisionRow, fv: FormulationVersion | None,
+                     components: list, items: list) -> None:
     ingredients = (fv.snapshot or {}).get("ingredients") or [] if fv else []
     for ing in ingredients:
         hit = rohs_restricted(ing.get("name") or "", ing.get("cas_no"))
@@ -252,6 +286,19 @@ def _check_red_lines(c: Check, rev: ProductRevisionRow, fv: FormulationVersion |
         if ing.get("cas_no") and ing["cas_no"] not in pct_by_cas:
             pct_by_cas[ing["cas_no"]] = float(ing.get("weight_pct") or 0)
     for rl in red_lines:
+        # Phase 1D (1-16): list-referenced red lines ({"list_id", "list_entry_id"})
+        # check the CLASS total over all the entry's CAS numbers.
+        if rl.get("list_id") or rl.get("list_entry_id"):
+            from ...compliance_lists import class_total_for_redline
+
+            resolved = class_total_for_redline(pct_by_cas, rl)
+            if resolved is not None:
+                found, label = resolved
+                limit = float(rl.get("max_pct") or 0)
+                if found > limit:
+                    c.fail(item_key("red_line", label), f"{label}：合计含量 {found:g}% 超过红线 {limit:g}%"
+                           + (f"（{rl['reason']}）" if rl.get("reason") else ""), waivable=False)
+            continue
         cas = rl.get("cas")
         limit = float(rl.get("max_pct") or 0)
         found = pct_by_cas.get(cas or "", 0.0)
@@ -259,11 +306,70 @@ def _check_red_lines(c: Check, rev: ProductRevisionRow, fv: FormulationVersion |
             c.fail(item_key("red_line", cas), f"{rl.get('name') or cas}：含量 {found:g}% 超过红线 {limit:g}%"
                    + (f"（{rl['reason']}）" if rl.get("reason") else ""), waivable=False)
     c.evidence["red_lines"] = len(red_lines)
+    # Phase 1D (1-14): GHS constraints — forbidden pictograms / signal word /
+    # VOC limit. Red lines are never waivable, so these fail the gate outright.
+    ghs = _ghs_constraints_for_revision(session, rev)
+    if ghs and (ghs.forbidden_pictograms or ghs.forbidden_signal_word or ghs.voc_limit_g_l is not None):
+        snap_ings = [{"name": i.get("name") or "", "role": i.get("role") or "",
+                      "weight_pct": i.get("weight_pct") or 0} for i in ingredients]
+        try:
+            from ...project_redlines import check_redlines
+
+            result, _built = ghs_service.build_and_classify(session, items)
+            # Fail-closed: a blocking data gap means the pictograms / signal
+            # word cannot be determined — "cannot verify" is not "pass"
+            # (red lines are never waivable). Without blocking gaps the
+            # result's pictograms are authoritative, even when empty.
+            blocking_gaps = [g for g in (result.data_gaps or [])
+                             if getattr(g, "severity", None) == "blocking"]
+            if blocking_gaps and (ghs.forbidden_pictograms or ghs.forbidden_signal_word):
+                gap_msgs = "; ".join(g.message for g in blocking_gaps[:2])
+                c.fail("ghs_classification",
+                       f"无法确认象形图/信号词（分类被数据缺口阻塞：{gap_msgs}），"
+                       f"无法复核禁止的象形图 {ghs.forbidden_pictograms} / 信号词 {ghs.forbidden_signal_word}",
+                       waivable=False)
+            hits = check_redlines(items, ghs, classification=result.to_dict(),
+                                  voc_items=snap_ings, include_rohs=False)
+            for h in hits:
+                c.fail(item_key("ghs", h.code, h.message[:60]), h.message, waivable=False)
+            c.evidence["ghs_constraints"] = {
+                "forbidden_pictograms": ghs.forbidden_pictograms,
+                "forbidden_signal_word": ghs.forbidden_signal_word,
+                "voc_limit_g_l": ghs.voc_limit_g_l,
+                "hits": len(hits),
+            }
+        except Exception as exc:
+            c.fail("ghs_classification", f"无法分类，无法复核象形图/信号词/VOC：{exc}", waivable=False)
+
+
+def check_ruleset_signoff(c: Check, rs) -> None:
+    """Plan 1-1: released documents may only cite classification results from an
+    EHS-signed-off rule set. Both halves are required: the rule-set file's
+    ``status`` must be ``released`` *and* a valid sign-off record for that
+    version must be filed. A draft rule set — or a released one without a
+    record — fails the gate with an explicit "待 EHS 签核" message."""
+    c.evidence["rule_set_status"] = rs.status
+    if rs.status != "released":
+        c.fail("ruleset_status",
+               f"分类规则集 {rs.version} 状态为 {rs.status}，待 EHS 签核后方可用于已发布文档")
+        return
+    signoff = load_signoff(rs.version)
+    if signoff is None:
+        c.fail("ruleset_signoff",
+               f"分类规则集 {rs.version} 已标记 released，但缺少 EHS 签核记录"
+               f"（rulesets/signoffs/{rs.version}.yaml）")
+        return
+    for problem in signoff.problems(rs.version):
+        c.fail("ruleset_signoff", problem)
+    c.evidence["rule_set_signoff"] = {"signer": signoff.signer, "signed_at": signoff.signed_at}
 
 
 def _check_classification(session: Session, c: Check, docs: list[RegulatoryDocumentRow], items: list[dict]) -> dict:
     """Recompute the classification the SDS / label were built from; returns ``{inputs_hash: result}``."""
     rs = load_ruleset()
+    # Only documents that cite classification results are gated on the rule set.
+    if any(d.doc_type in ("sds", "label") for d in docs):
+        check_ruleset_signoff(c, rs)
     latest_release = ghs_service.latest_data_release(session)
     results: dict[str, dict] = {}
     hashes = set()
@@ -390,7 +496,7 @@ def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
     _check_total(checks["formula_total"], fv)
     components = _check_substances(session, checks["substance_data"], items)
     _check_objectives(session, checks["objectives"], rev)
-    _check_red_lines(checks["red_lines"], rev, fv, components)
+    _check_red_lines(session, checks["red_lines"], rev, fv, components, items)
     docs, problems = select_package_documents(session, rev)
     results = _check_classification(session, checks["classification_current"], docs, items)
     _check_documents(checks["documents"], problems)

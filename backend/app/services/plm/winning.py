@@ -21,7 +21,10 @@ from ..identity.rbac import Principal
 from .documents import service as docs
 from .release import signoff
 
-CARRIED_SPEC_KEYS = ("release_specs", "acceptance", "red_lines")
+CARRIED_SPEC_KEYS = ("release_specs", "acceptance", "red_lines",
+                      # Phase 1D (1-14): GHS constraints were dropped on carry-forward —
+                      # the gate could never check them on a carried spec.
+                      "voc_limit_g_l", "forbidden_pictograms", "forbidden_signal_word")
 
 
 def select_winning(session: Session, *, product_id: str, formulation_version_id: str, experiment_id: int,

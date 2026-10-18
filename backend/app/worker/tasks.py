@@ -873,6 +873,29 @@ def run_toc_summaries_task(self, payload: dict) -> dict:
     return generate_summaries(payload["source_id"])
 
 
+# ── PubChem GHS enrichment ─────────────────────────────────────────────────
+# 补齐计划 1-6: per-substance PUG-View fetch → substance_classifications with
+# source='pubchem'. PubChemUnavailable (transport / 5xx) retries with
+# backoff; PubChemNotFound (no CID / no GHS section) is terminal — a
+# definitive answer, not a transient failure.
+
+
+@celery_app.task(bind=True, name="formunex.pubchem_enrich", max_retries=3,
+                 autoretry_for=(ConnectionError, TimeoutError, OSError),
+                 retry_backoff=True, retry_backoff_max=600)
+def run_pubchem_enrich_task(self, payload: dict) -> dict:
+    from ..services.plm.regulatory.pubchem_enrich import (
+        PubChemUnavailable,
+        enrich_substance_by_id,
+    )
+
+    try:
+        return enrich_substance_by_id(payload["substance_id"])
+    except PubChemUnavailable as exc:
+        # Re-raise as ConnectionError so Celery's autoretry picks it up.
+        raise ConnectionError(str(exc)) from exc
+
+
 # ── Async file ingest (upload → 202 → SSE) ───────────────────────────────────
 # Parsing a scanned PDF is minutes of OCR; holding the HTTP request open while
 # that runs is what let an intermediary in front of uvicorn cut the connection

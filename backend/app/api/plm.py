@@ -240,6 +240,60 @@ def search_substances(q: str = Query(..., min_length=1, max_length=200), limit: 
         return reg_agent.lookup_substance(session, q, limit=limit)
 
 
+@router.post("/substances/sds-import", status_code=201)
+async def import_supplier_sds(
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(current_user),
+) -> dict[str, Any]:
+    """Import one supplier SDS file (PDF / DOCX / text) into the substance database.
+
+    补齐计划 1-5: parse → upsert substance by CAS → replace this substance's
+    unlocked ``supplier_sds`` classifications (confidence 0.95). A mixture SDS
+    (several CAS numbers), a missing product name / CAS / classification, or
+    an unparsable file is a 422 with an explicit reason — never a silent skip.
+    """
+    from ..api._uploads import read_upload_capped
+    from ..services.plm.regulatory import supplier_sds
+
+    filename = file.filename or "upload"
+    try:
+        content = await read_upload_capped(file, filename)
+        parsed = supplier_sds.parse_sds_text(supplier_sds.extract_text(content, filename))
+    except supplier_sds.SdsParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    with _session() as session:
+        try:
+            result = supplier_sds.import_sds(
+                session, parsed, filename=filename, digest=supplier_sds.file_digest(content)
+            )
+        except supplier_sds.SdsParseError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return result
+
+
+@router.post("/substances/{substance_id}/pubchem-enrich", status_code=202)
+def enrich_substance_pubchem(
+    substance_id: str, user: CurrentUser = Depends(current_user)
+) -> Any:
+    """Enqueue the PubChem GHS enrichment task (补齐计划 1-6) for one substance.
+
+    The worker resolves the substance to a PubChem CID, fetches its GHS
+    classification from PUG-View, and writes ``source='pubchem'`` rows
+    (confidence 0.6). 404 when the substance does not exist; 503 when the
+    task queue (Redis) is unreachable.
+    """
+    from ..db.models_regulatory import SubstanceRow
+    from ..worker.tasks import run_pubchem_enrich_task
+    from ._dispatch import submit
+
+    with _session() as session:
+        exists = session.query(SubstanceRow.id).filter(SubstanceRow.id == substance_id).first()
+    if not exists:
+        raise HTTPException(status_code=404, detail=f"物质不存在：{substance_id}")
+    return submit(run_pubchem_enrich_task, {"substance_id": substance_id}, kind="pubchem_enrich")
+
+
 class RegulatoryAskIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     intent: Literal["auto", "substance", "explain", "substitute", "standard"] = "auto"

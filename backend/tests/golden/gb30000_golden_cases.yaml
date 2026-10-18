@@ -1,0 +1,643 @@
+# GB 30000 混合物分类黄金案例集（计划 1-8）
+#
+# 用途：发布前由 EHS 专家逐条审定本集的期望分类；审定通过并签字后，
+# 本集成为分类引擎的审定基线（回归测试 test_gb30000_golden_cases.py）。
+#
+# 状态：待 EHS 专家签字确认。签字前本集不作为审定基线，仅为待审草案。
+# 每条案例的期望分类均由 GB 30000 / GHS Rev.4 规则原文手工推导，
+# 推导过程写在 `derivation` 字段；引用引擎行为的案例注明所引用的已有测试。
+# 绝不编造分类结论：与规则原文不符的期望值不得写入本集。
+#
+# 字段：
+#   id / title / source：案例编号、标题、规则出处（GB 30000 条款或已有测试）。
+#   derivation：手工推导（算式 + 阈值），EHS 审定时复核。
+#   components：组分（name / pct / hazards / assessed / cas）。
+#     hazards：hazard_class / category / h_code / ate_value / ate_unit /
+#       m_factor_acute / m_factor_chronic / scl / non_additive。
+#   props：混合物实测性质（flash_point_c / initial_boiling_point_c / ph /
+#     kinematic_viscosity_40c / phys_state / heat_of_combustion_kj_g /
+#     ignition_distance_cm / foam_test_result / sustained_combustion /
+#     metal_corrosion_rate_mm_per_year）。
+#   expected：{危害类别: [期望类别]}，空列表表示该类别应不分类。
+#   absent：[不应出现结果的危害类别]。
+#   组成合计必须为 100%（水作填充组分）。
+
+cases:
+  # ---------------------------------------------------------- 急性毒性（GB 30000.18）
+  - id: G-01
+    title: 经口急性毒性类别 1 组分 10% → 混合物类别 1（边界：ATEmix = 5）
+    source: "GB 30000.18：100/ATEmix = ΣCi/ATEi，类别 1 换算值 0.5 mg/kg"
+    derivation: "100/(10/0.5) = 5.0 ≤ 5 → 类别 1"
+    components:
+      - {name: 剧毒物 A, pct: 10, hazards: [{hazard_class: acute_tox_oral, category: "1", h_code: H300}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {acute_tox_oral: ["1"]}
+  - id: G-02
+    title: 经口急性毒性类别 1 组分 5% → 混合物类别 2
+    source: "GB 30000.18：ATE 加和公式"
+    derivation: "100/(5/0.5) = 10，5 < 10 ≤ 50 → 类别 2"
+    components:
+      - {name: 剧毒物 A, pct: 5, hazards: [{hazard_class: acute_tox_oral, category: "1", h_code: H300}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    expected: {acute_tox_oral: ["2"]}
+  - id: G-03
+    title: 经口急性毒性类别 3 组分 50% → 混合物类别 3
+    source: "GB 30000.18：ATE 加和公式"
+    derivation: "100/(50/100) = 200，50 < 200 ≤ 300 → 类别 3"
+    components:
+      - {name: 中毒物 B, pct: 50, hazards: [{hazard_class: acute_tox_oral, category: "3", h_code: H301}]}
+      - {name: 水, pct: 50, cas: "7732-18-5"}
+    expected: {acute_tox_oral: ["3"]}
+  - id: G-04
+    title: 经口急性毒性类别 4 组分 30% → 混合物类别 4
+    source: "GB 30000.18：ATE 加和公式"
+    derivation: "100/(30/500) = 1666.7，300 < 1666.7 ≤ 2000 → 类别 4"
+    components:
+      - {name: 低毒物 C, pct: 30, hazards: [{hazard_class: acute_tox_oral, category: "4", h_code: H302}]}
+      - {name: 水, pct: 70, cas: "7732-18-5"}
+    expected: {acute_tox_oral: ["4"]}
+  - id: G-05
+    title: 经口急性毒性类别 4 组分 20% → ATEmix = 2500，类别 5 关闭 → 不分类
+    source: "GB 30000.18：ATE 加和公式；规则集 include_category_5=false"
+    derivation: "100/(20/500) = 2500 > 2000，且类别 5 关闭 → 不分类"
+    components:
+      - {name: 低毒物 C, pct: 20, hazards: [{hazard_class: acute_tox_oral, category: "4", h_code: H302}]}
+      - {name: 水, pct: 80, cas: "7732-18-5"}
+    expected: {acute_tox_oral: []}
+  - id: G-06
+    title: 经口急性毒性类别 1 组分 0.9% → 低于 1% 相关截止值 → 不计入
+    source: "GB 30000.18：相关截止值 1%"
+    derivation: "组分含量 0.9% < 1%，不计入加和 → 无分类"
+    components:
+      - {name: 剧毒物 A, pct: 0.9, hazards: [{hazard_class: acute_tox_oral, category: "1", h_code: H300}]}
+      - {name: 水, pct: 99.1, cas: "7732-18-5"}
+    expected: {acute_tox_oral: []}
+  - id: G-07
+    title: 实测 ATE 优先于类别换算值（10% 类别 3，实测 ATE 50 mg/kg → 类别 4）
+    source: "GB 30000.18：有实测 ATE 时用实测值；已有测试 test_measured_ate_beats_category_point_estimate"
+    derivation: "100/(10/50) = 500，300 < 500 ≤ 2000 → 类别 4"
+    components:
+      - {name: 中毒物 B, pct: 10, hazards: [{hazard_class: acute_tox_oral, category: "3", h_code: H301, ate_value: 50, ate_unit: "mg/kg"}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {acute_tox_oral: ["4"]}
+  - id: G-08
+    title: 未知毒性组分 40%（>10%）→ 修正公式（100−未知）/ATEmix
+    source: "GB 30000.18：未知组分超过 10% 时的修正；已有测试 test_unknown_toxicity_correction_above_ten_percent"
+    derivation: "(100−40)/(30/100) = 200 → 类别 3（不修正则为 333 → 类别 4）"
+    components:
+      - {name: 中毒物 B, pct: 30, hazards: [{hazard_class: acute_tox_oral, category: "3", h_code: H301}]}
+      - {name: 未知物, pct: 40, assessed: false}
+      - {name: 水, pct: 30, cas: "7732-18-5"}
+    expected: {acute_tox_oral: ["3"]}
+  - id: G-09
+    title: 经皮急性毒性类别 2 组分 10% → 混合物经皮类别 3
+    source: "GB 30000.18：经皮换算值类别 2 = 50 mg/kg；经皮类别限值 50/200/1000/2000"
+    derivation: "100/(10/50) = 500，200 < 500 ≤ 1000 → 类别 3"
+    components:
+      - {name: 经皮毒物 D, pct: 10, hazards: [{hazard_class: acute_tox_dermal, category: "2", h_code: H310}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {acute_tox_dermal: ["3"]}
+  - id: G-10
+    title: 吸入（蒸气）急性毒性类别 2 组分 5% → 混合物吸入类别 3
+    source: "GB 30000.18：蒸气换算值类别 2 = 0.5 mg/L；蒸气类别限值 0.5/2/10/20"
+    derivation: "100/(5/0.5) = 10，2 < 10 ≤ 10 → 类别 3"
+    components:
+      - {name: 吸入毒物 E, pct: 5, hazards: [{hazard_class: acute_tox_inhal, category: "2", h_code: H330}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    expected: {acute_tox_inhal: ["3"]}
+
+  # ---------------------------------------------------------- 皮肤腐蚀/刺激（GB 30000.19）
+  - id: G-11
+    title: 皮肤腐蚀类别 1 组分 5% → 混合物皮肤类别 1，同时眼类别 1
+    source: "GB 30000.19：Σ类别1 Ci/限值 ≥ 1 → 类别 1；GB 30000.20：皮肤腐蚀类别 1 → 严重眼损伤类别 1"
+    derivation: "Σ = 5/5 = 1 ≥ 1 → 皮肤类别 1；皮肤 1 蕴含眼 1"
+    components:
+      - {name: 腐蚀物 F, pct: 5, hazards: [{hazard_class: skin_corrosion, category: "1", h_code: H314}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    expected: {skin_corrosion: ["1"], eye_damage: ["1"]}
+  - id: G-12
+    title: 皮肤腐蚀类别 1 组分 4.9% → 皮肤类别 2，但眼类别 1（眼限值更严）
+    source: "GB 30000.19：10×Σ类别1 + Σ类别2 = 49 ≥ 10 → 皮肤 2；GB 30000.20：Σ(皮肤1+眼1) = 4.9 ≥ 3 → 眼 1"
+    derivation: "皮肤：4.9/5 = 0.98 < 1，10×4.9 = 49 ≥ 10 → 皮肤 2；眼：4.9 ≥ 3 → 眼 1"
+    components:
+      - {name: 腐蚀物 F, pct: 4.9, hazards: [{hazard_class: skin_corrosion, category: "1", h_code: H314}]}
+      - {name: 水, pct: 95.1, cas: "7732-18-5"}
+    expected: {skin_corrosion: ["2"], eye_damage: ["1"]}
+  - id: G-13
+    title: 皮肤刺激类别 2 组分 10% → 混合物皮肤类别 2，眼不分类
+    source: "GB 30000.19：Σ类别2 = 10 ≥ 10 → 类别 2"
+    derivation: "10×0 + 10 = 10 ≥ 10 → 皮肤 2；无皮肤 1/眼 1/眼 2 组分 → 眼不分类"
+    components:
+      - {name: 刺激物 G, pct: 10, hazards: [{hazard_class: skin_corrosion, category: "2", h_code: H315}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {skin_corrosion: ["2"]}
+    absent: [eye_damage]
+  - id: G-14
+    title: 皮肤刺激类别 2 组分 9% → 低于限值 → 皮肤不分类
+    source: "GB 30000.19：Σ类别2 = 9 < 10 → 不分类"
+    derivation: "9 < 10 → 不分类"
+    components:
+      - {name: 刺激物 G, pct: 9, hazards: [{hazard_class: skin_corrosion, category: "2", h_code: H315}]}
+      - {name: 水, pct: 91, cas: "7732-18-5"}
+    expected: {skin_corrosion: []}
+    absent: [eye_damage]
+  - id: G-15
+    title: 皮肤类别 1 组分 1% + 类别 2 组分 5% → 皮肤类别 2，眼类别 2A
+    source: "GB 30000.19：1/5 < 1，10×1 + 5 = 15 ≥ 10 → 皮肤 2；GB 30000.20：10×1 = 10 ≥ 10 → 眼 2A"
+    derivation: "皮肤：Σ1 = 0.2 < 1，10×1 + 5 = 15 ≥ 10 → 皮肤 2；眼：Σ(皮肤1+眼1) = 1 < 3，10×1 = 10 ≥ 10 → 眼 2A"
+    components:
+      - {name: 腐蚀物 F, pct: 1, hazards: [{hazard_class: skin_corrosion, category: "1", h_code: H314}]}
+      - {name: 刺激物 G, pct: 5, hazards: [{hazard_class: skin_corrosion, category: "2", h_code: H315}]}
+      - {name: 水, pct: 94, cas: "7732-18-5"}
+    expected: {skin_corrosion: ["2"], eye_damage: ["2A"]}
+  - id: G-16
+    title: 混合物 pH 1.5（极端 pH）→ 皮肤类别 1 + 眼类别 1（未考虑酸/碱储备）
+    source: "GB 30000.19/20：pH ≤ 2 或 ≥ 11.5 时判类别 1"
+    derivation: "pH 1.5 ≤ 2 → 皮肤 1 + 眼 1；附数据缺口（酸/碱储备未提供）"
+    components:
+      - {name: 水, pct: 100, cas: "7732-18-5"}
+    props: {ph: 1.5}
+    expected: {skin_corrosion: ["1"], eye_damage: ["1"]}
+  - id: G-17
+    title: 不适用加和法腐蚀组分 1% → 皮肤类别 1（浓度限值法）
+    source: "GB 30000.19 表 3.2.4：不适用加和法的腐蚀组分 ≥ 1% → 类别 1"
+    derivation: "强酸类组分 1% ≥ 1% → 皮肤 1；皮肤 1 蕴含眼 1"
+    components:
+      - {name: 强酸 H, pct: 1, hazards: [{hazard_class: skin_corrosion, category: "1", h_code: H314, non_additive: true}]}
+      - {name: 水, pct: 99, cas: "7732-18-5"}
+    expected: {skin_corrosion: ["1"], eye_damage: ["1"]}
+  - id: G-18
+    title: 不适用加和法刺激组分 3% → 皮肤类别 2（浓度限值法），同时眼类别 2
+    source: "GB 30000.19 表 3.2.4：不适用加和法的刺激组分 ≥ 3% → 皮肤 2；GB 30000.20 非加和表：不适用加和法的皮肤类别 2 组分 ≥ 3% → 眼 2"
+    derivation: "3% ≥ 3% → 皮肤 2；眼按非加和表同样取 3% 限值 → 眼 2"
+    components:
+      - {name: 强刺激物 I, pct: 3, hazards: [{hazard_class: skin_corrosion, category: "2", h_code: H315, non_additive: true}]}
+      - {name: 水, pct: 97, cas: "7732-18-5"}
+    expected: {skin_corrosion: ["2"], eye_damage: ["2"]}
+
+  # ---------------------------------------------------------- 严重眼损伤/眼刺激（GB 30000.20）
+  - id: G-19
+    title: 眼类别 1 组分 3% → 混合物眼类别 1（边界）
+    source: "GB 30000.20：Σ(皮肤1+眼1) = 3 ≥ 3 → 眼 1"
+    derivation: "3/3 = 1 ≥ 1 → 眼 1"
+    components:
+      - {name: 眼腐蚀物 J, pct: 3, hazards: [{hazard_class: eye_damage, category: "1", h_code: H318}]}
+      - {name: 水, pct: 97, cas: "7732-18-5"}
+    expected: {eye_damage: ["1"]}
+    absent: [skin_corrosion]
+  - id: G-20
+    title: 眼类别 1 组分 2.9% → 眼类别 2A（低于类别 1 限值但达到类别 2）
+    source: "GB 30000.20：Σ = 2.9 < 3，10×2.9 = 29 ≥ 10 → 眼 2A"
+    derivation: "2.9/3 < 1，10×2.9 = 29 ≥ 10 → 眼 2A"
+    components:
+      - {name: 眼腐蚀物 J, pct: 2.9, hazards: [{hazard_class: eye_damage, category: "1", h_code: H318}]}
+      - {name: 水, pct: 97.1, cas: "7732-18-5"}
+    expected: {eye_damage: ["2A"]}
+  - id: G-21
+    title: 眼类别 2A 组分 10% → 混合物眼类别 2A（边界）
+    source: "GB 30000.20：Σ眼2 = 10 ≥ 10 → 眼 2A"
+    derivation: "10 ≥ 10 → 眼 2A"
+    components:
+      - {name: 眼刺激物 K, pct: 10, hazards: [{hazard_class: eye_damage, category: "2A", h_code: H319}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {eye_damage: ["2A"]}
+    absent: [skin_corrosion]
+  - id: G-22
+    title: 仅眼类别 2B 组分 10% → 混合物眼类别 2B
+    source: "GB 30000.20：仅 2B 组分达到限值 → 类别 2B"
+    derivation: "Σ眼2 = 10 ≥ 10，且全部为 2B → 眼 2B"
+    components:
+      - {name: 轻眼刺激物 L, pct: 10, hazards: [{hazard_class: eye_damage, category: "2B", h_code: H320}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {eye_damage: ["2B"]}
+  - id: G-23
+    title: 眼类别 2A 5% + 2B 5% → 混合物眼类别 2A（2A 优先于 2B）
+    source: "GB 30000.20：Σ眼2 = 10 ≥ 10，非全部 2B → 类别 2A"
+    derivation: "5 + 5 = 10 ≥ 10，含 2A → 眼 2A"
+    components:
+      - {name: 眼刺激物 K, pct: 5, hazards: [{hazard_class: eye_damage, category: "2A", h_code: H319}]}
+      - {name: 轻眼刺激物 L, pct: 5, hazards: [{hazard_class: eye_damage, category: "2B", h_code: H320}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {eye_damage: ["2A"]}
+
+  # ---------------------------------------------------------- 致敏（GB 30000.21）
+  - id: G-24
+    title: 皮肤致敏类别 1 组分 1% → 混合物皮肤致敏类别 1（边界）
+    source: "GB 30000.21：皮肤致敏类别 1 通用限值 1%"
+    derivation: "1% ≥ 1% → 皮肤致敏 1"
+    components:
+      - {name: 致敏物 M, pct: 1, hazards: [{hazard_class: skin_sensitizer, category: "1", h_code: H317}]}
+      - {name: 水, pct: 99, cas: "7732-18-5"}
+    expected: {skin_sensitizer: ["1"]}
+  - id: G-25
+    title: 皮肤致敏类别 1A 组分 0.09% → 低于 0.1% 限值 → 不分类
+    source: "GB 30000.21：皮肤致敏类别 1A 通用限值 0.1%"
+    derivation: "0.09% < 0.1% → 不分类"
+    components:
+      - {name: 强致敏物 N, pct: 0.09, hazards: [{hazard_class: skin_sensitizer, category: "1A", h_code: H317}]}
+      - {name: 水, pct: 99.91, cas: "7732-18-5"}
+    expected: {skin_sensitizer: []}
+  - id: G-26
+    title: 皮肤致敏类别 1A 组分 0.1% → 混合物皮肤致敏类别 1A（边界）
+    source: "GB 30000.21：皮肤致敏类别 1A 通用限值 0.1%"
+    derivation: "0.1% ≥ 0.1% → 皮肤致敏 1A"
+    components:
+      - {name: 强致敏物 N, pct: 0.1, hazards: [{hazard_class: skin_sensitizer, category: "1A", h_code: H317}]}
+      - {name: 水, pct: 99.9, cas: "7732-18-5"}
+    expected: {skin_sensitizer: ["1A"]}
+  - id: G-27
+    title: 呼吸致敏类别 1 组分 1%（液体）→ 混合物呼吸致敏类别 1（边界）
+    source: "GB 30000.21：呼吸致敏类别 1 通用限值 1%（非气体）"
+    derivation: "1% ≥ 1% → 呼吸致敏 1"
+    components:
+      - {name: 呼吸致敏物 O, pct: 1, hazards: [{hazard_class: resp_sensitizer, category: "1", h_code: H334}]}
+      - {name: 水, pct: 99, cas: "7732-18-5"}
+    expected: {resp_sensitizer: ["1"]}
+  - id: G-28
+    title: 呼吸致敏类别 1 组分 0.2%（气体）→ 混合物呼吸致敏类别 1（气体限值 0.2%）
+    source: "GB 30000.21：呼吸致敏类别 1 气体限值 0.2%"
+    derivation: "气体形态，0.2% ≥ 0.2% → 呼吸致敏 1"
+    components:
+      - {name: 呼吸致敏气体 P, pct: 0.2, hazards: [{hazard_class: resp_sensitizer, category: "1", h_code: H334}]}
+      - {name: 水, pct: 99.8, cas: "7732-18-5"}
+    props: {phys_state: gas}
+    expected: {resp_sensitizer: ["1"]}
+  - id: G-29
+    title: 呼吸致敏类别 1 组分 0.19%（气体）→ 低于 0.2% 气体限值 → 不分类
+    source: "GB 30000.21：呼吸致敏类别 1 气体限值 0.2%"
+    derivation: "气体形态，0.19% < 0.2% → 不分类"
+    components:
+      - {name: 呼吸致敏气体 P, pct: 0.19, hazards: [{hazard_class: resp_sensitizer, category: "1", h_code: H334}]}
+      - {name: 水, pct: 99.81, cas: "7732-18-5"}
+    props: {phys_state: gas}
+    expected: {resp_sensitizer: []}
+
+  # ---------------------------------------------------------- CMR（GB 30000.22/.23/.24）
+  - id: G-30
+    title: 致突变类别 1B 组分 0.1% → 混合物致突变类别 1B（边界）
+    source: "GB 30000.22：致突变类别 1A/1B 通用限值 0.1%"
+    derivation: "0.1% ≥ 0.1% → 致突变 1B"
+    components:
+      - {name: 致突变物 Q, pct: 0.1, hazards: [{hazard_class: mutagenicity, category: "1B", h_code: H340}]}
+      - {name: 水, pct: 99.9, cas: "7732-18-5"}
+    expected: {mutagenicity: ["1B"]}
+  - id: G-31
+    title: 致突变类别 1B 组分 0.09% → 低于 0.1% 限值 → 不分类
+    source: "GB 30000.22：致突变类别 1A/1B 通用限值 0.1%"
+    derivation: "0.09% < 0.1% → 不分类"
+    components:
+      - {name: 致突变物 Q, pct: 0.09, hazards: [{hazard_class: mutagenicity, category: "1B", h_code: H340}]}
+      - {name: 水, pct: 99.91, cas: "7732-18-5"}
+    expected: {mutagenicity: []}
+  - id: G-32
+    title: 致癌类别 2 组分 1% → 混合物致癌类别 2（边界）
+    source: "GB 30000.23：致癌类别 2 通用限值 1%"
+    derivation: "1% ≥ 1% → 致癌 2"
+    components:
+      - {name: 可疑致癌物 R, pct: 1, hazards: [{hazard_class: carcinogenicity, category: "2", h_code: H351}]}
+      - {name: 水, pct: 99, cas: "7732-18-5"}
+    expected: {carcinogenicity: ["2"]}
+  - id: G-33
+    title: 致癌类别 2 组分 0.9% → 低于 1% 限值 → 不分类
+    source: "GB 30000.23：致癌类别 2 通用限值 1%"
+    derivation: "0.9% < 1% → 不分类"
+    components:
+      - {name: 可疑致癌物 R, pct: 0.9, hazards: [{hazard_class: carcinogenicity, category: "2", h_code: H351}]}
+      - {name: 水, pct: 99.1, cas: "7732-18-5"}
+    expected: {carcinogenicity: []}
+  - id: G-34
+    title: 生殖毒性类别 1A 组分 0.3% → 混合物生殖毒性类别 1A（边界）
+    source: "GB 30000.24：生殖毒性类别 1A/1B 通用限值 0.3%"
+    derivation: "0.3% ≥ 0.3% → 生殖毒性 1A"
+    components:
+      - {name: 生殖毒物 S, pct: 0.3, hazards: [{hazard_class: reproductive, category: "1A", h_code: H360}]}
+      - {name: 水, pct: 99.7, cas: "7732-18-5"}
+    expected: {reproductive: ["1A"]}
+  - id: G-35
+    title: 生殖毒性类别 2 组分 3% → 混合物生殖毒性类别 2（边界）
+    source: "GB 30000.24：生殖毒性类别 2 通用限值 3%"
+    derivation: "3% ≥ 3% → 生殖毒性 2"
+    components:
+      - {name: 生殖毒物 T, pct: 3, hazards: [{hazard_class: reproductive, category: "2", h_code: H361}]}
+      - {name: 水, pct: 97, cas: "7732-18-5"}
+    expected: {reproductive: ["2"]}
+  - id: G-36
+    title: 生殖毒性类别 1A 0.3% + 哺乳期类别 0.3% → 类别 1A 与哺乳期并存
+    source: "GB 30000.24：哺乳期为附加类别，与主类别并存"
+    derivation: "1A：0.3% ≥ 0.3%；哺乳期：0.3% ≥ 0.3% → 两者并存"
+    components:
+      - {name: 生殖毒物 S, pct: 0.3, hazards: [{hazard_class: reproductive, category: "1A", h_code: H360}, {hazard_class: reproductive, category: "lact", h_code: H362}]}
+      - {name: 水, pct: 99.7, cas: "7732-18-5"}
+    expected: {reproductive: ["1A", "lact"]}
+
+  # ---------------------------------------------------------- 特异性靶器官毒性（GB 30000.25/.26）
+  - id: G-37
+    title: STOT-SE 类别 1 组分 10% → 混合物 STOT-SE 类别 1（边界）
+    source: "GB 30000.25：类别 1 组分 ≥ 10% → 类别 1"
+    derivation: "10% ≥ 10% → STOT-SE 1"
+    components:
+      - {name: 靶器官毒物 U, pct: 10, hazards: [{hazard_class: stot_se, category: "1", h_code: H370}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {stot_se: ["1"]}
+  - id: G-38
+    title: STOT-SE 类别 1 组分 5% → 混合物 STOT-SE 类别 2（降级带）
+    source: "GB 30000.25：类别 1 组分在 1%–10% → 类别 2"
+    derivation: "1% ≤ 5% < 10% → STOT-SE 2"
+    components:
+      - {name: 靶器官毒物 U, pct: 5, hazards: [{hazard_class: stot_se, category: "1", h_code: H370}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    expected: {stot_se: ["2"]}
+  - id: G-39
+    title: STOT-SE 类别 1 组分 0.9% → 低于 1% 降级带下限 → 不分类
+    source: "GB 30000.25：类别 1 组分 < 1% → 不分类"
+    derivation: "0.9% < 1% → 不分类"
+    components:
+      - {name: 靶器官毒物 U, pct: 0.9, hazards: [{hazard_class: stot_se, category: "1", h_code: H370}]}
+      - {name: 水, pct: 99.1, cas: "7732-18-5"}
+    expected: {stot_se: []}
+  - id: G-40
+    title: STOT-RE 类别 2 组分 10% → 混合物 STOT-RE 类别 2（边界）
+    source: "GB 30000.26：类别 2 组分 ≥ 10% → 类别 2"
+    derivation: "10% ≥ 10% → STOT-RE 2"
+    components:
+      - {name: 重复接触毒物 V, pct: 10, hazards: [{hazard_class: stot_re, category: "2", h_code: H373}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {stot_re: ["2"]}
+  - id: G-41
+    title: STOT-SE 类别 3（H335 呼吸道刺激）组分合计 20% → 混合物 STOT-SE 类别 3（边界）
+    source: "GB 30000.25：同效应类别 3 组分合计 ≥ 20% → 类别 3"
+    derivation: "ΣH335 = 20% ≥ 20% → STOT-SE 3"
+    components:
+      - {name: 刺激气体 W, pct: 20, hazards: [{hazard_class: stot_se, category: "3", h_code: H335}]}
+      - {name: 水, pct: 80, cas: "7732-18-5"}
+    expected: {stot_se: ["3"]}
+  - id: G-42
+    title: STOT-SE 类别 3（H336 麻醉效应）组分合计 19% → 低于 20% → 不分类
+    source: "GB 30000.25：同效应类别 3 组分合计 ≥ 20% → 类别 3"
+    derivation: "ΣH336 = 19% < 20% → 不分类"
+    components:
+      - {name: 麻醉性溶剂 X, pct: 19, hazards: [{hazard_class: stot_se, category: "3", h_code: H336}]}
+      - {name: 水, pct: 81, cas: "7732-18-5"}
+    expected: {stot_se: []}
+
+  # ---------------------------------------------------------- 吸入危害（GB 30000.27）
+  - id: G-43
+    title: 吸入危害类别 1 组分 10% + 40℃ 运动黏度 20.5 mm²/s → 类别 1（黏度边界）
+    source: "GB 30000.27：Σ类别1 ≥ 10% 且黏度 ≤ 20.5 mm²/s → 类别 1"
+    derivation: "Σ = 10% ≥ 10%，黏度 20.5 ≤ 20.5 → 类别 1"
+    components:
+      - {name: 吸入危害物 Y, pct: 10, hazards: [{hazard_class: aspiration, category: "1", h_code: H304}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    props: {kinematic_viscosity_40c: 20.5}
+    expected: {aspiration: ["1"]}
+  - id: G-44
+    title: 吸入危害类别 1 组分 10% + 黏度 21 mm²/s → 黏度超限 → 不分类
+    source: "GB 30000.27：黏度 > 20.5 mm²/s → 不分类"
+    derivation: "Σ = 10% ≥ 10%，但黏度 21 > 20.5 → 不分类"
+    components:
+      - {name: 吸入危害物 Y, pct: 10, hazards: [{hazard_class: aspiration, category: "1", h_code: H304}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    props: {kinematic_viscosity_40c: 21}
+    expected: {aspiration: []}
+  - id: G-45
+    title: 吸入危害类别 1 组分 9% → 低于 10% 合计限值 → 不分类
+    source: "GB 30000.27：Σ类别1 ≥ 10% → 类别 1"
+    derivation: "Σ = 9% < 10% → 不分类"
+    components:
+      - {name: 吸入危害物 Y, pct: 9, hazards: [{hazard_class: aspiration, category: "1", h_code: H304}]}
+      - {name: 水, pct: 91, cas: "7732-18-5"}
+    props: {kinematic_viscosity_40c: 10}
+    expected: {aspiration: []}
+  - id: G-46
+    title: 吸入危害类别 1 组分 10% 但缺少 40℃ 运动黏度 → 无法判定（数据缺口，不分类）
+    source: "GB 30000.27：缺少黏度时无法判定，记数据缺口"
+    derivation: "Σ = 10% ≥ 10%，但黏度缺失 → 不分类 + blocking 数据缺口"
+    components:
+      - {name: 吸入危害物 Y, pct: 10, hazards: [{hazard_class: aspiration, category: "1", h_code: H304}]}
+      - {name: 水, pct: 90, cas: "7732-18-5"}
+    expected: {aspiration: []}
+
+  # ---------------------------------------------------------- 水生环境（GB 30000.28，加和法）
+  - id: G-47
+    title: 水生急性类别 1 组分 25%（M=1）→ 急性类别 1（边界）
+    source: "GB 30000.28：Σ(急1×M) = 25 ≥ 25 → 急性 1"
+    derivation: "S1 = 25×1 = 25 ≥ 25 → 急性 1"
+    components:
+      - {name: 水生剧毒物 Z, pct: 25, hazards: [{hazard_class: aquatic_acute, category: "1", h_code: H400}]}
+      - {name: 水, pct: 75, cas: "7732-18-5"}
+    expected: {aquatic_acute: ["1"]}
+    absent: [aquatic_chronic]
+  - id: G-48
+    title: 水生急性类别 1 组分 24% → S1 未达标但 S2 达标 → 急性类别 2
+    source: "GB 30000.28：S1 < 25，10×S1 + Σ急2 = 240 ≥ 25 → 急性 2"
+    derivation: "S1 = 24 < 25；S2 = 10×24 = 240 ≥ 25 → 急性 2"
+    components:
+      - {name: 水生剧毒物 Z, pct: 24, hazards: [{hazard_class: aquatic_acute, category: "1", h_code: H400}]}
+      - {name: 水, pct: 76, cas: "7732-18-5"}
+    expected: {aquatic_acute: ["2"]}
+  - id: G-49
+    title: 水生急性类别 1 组分 2.5%（M=10）→ S1 = 25 → 急性类别 1（M 因子）
+    source: "GB 30000.28：M 因子乘入 Σ(急1×M)"
+    derivation: "S1 = 2.5×10 = 25 ≥ 25 → 急性 1"
+    components:
+      - {name: 高 M 因子水生毒物 AA, pct: 2.5, hazards: [{hazard_class: aquatic_acute, category: "1", h_code: H400, m_factor_acute: 10}]}
+      - {name: 水, pct: 97.5, cas: "7732-18-5"}
+    expected: {aquatic_acute: ["1"]}
+  - id: G-50
+    title: 水生急性类别 1 组分 0.05% → 低于 0.1% 相关截止值 → 不计入
+    source: "GB 30000.28：急性 1 / 长期 1 组分相关截止值 0.1%"
+    derivation: "0.05% < 0.1% → 不计入 → 不分类"
+    components:
+      - {name: 水生剧毒物 Z, pct: 0.05, hazards: [{hazard_class: aquatic_acute, category: "1", h_code: H400}]}
+      - {name: 水, pct: 99.95, cas: "7732-18-5"}
+    expected: {aquatic_acute: []}
+  - id: G-51
+    title: 水生长期类别 1 组分 25%（M=1）→ 长期类别 1（边界）
+    source: "GB 30000.28：Σ(慢1×M) = 25 ≥ 25 → 长期 1"
+    derivation: "C1 = 25×1 = 25 ≥ 25 → 长期 1"
+    components:
+      - {name: 长期水生毒物 AB, pct: 25, hazards: [{hazard_class: aquatic_chronic, category: "1", h_code: H410}]}
+      - {name: 水, pct: 75, cas: "7732-18-5"}
+    expected: {aquatic_chronic: ["1"]}
+    absent: [aquatic_acute]
+  - id: G-52
+    title: 水生长期类别 1 组分 3% → C1 未达标但 C2 达标 → 长期类别 2
+    source: "GB 30000.28：C1 < 25，10×C1 + Σ慢2 = 30 ≥ 25 → 长期 2"
+    derivation: "C1 = 3 < 25；C2 = 10×3 = 30 ≥ 25 → 长期 2"
+    components:
+      - {name: 长期水生毒物 AB, pct: 3, hazards: [{hazard_class: aquatic_chronic, category: "1", h_code: H410}]}
+      - {name: 水, pct: 97, cas: "7732-18-5"}
+    expected: {aquatic_chronic: ["2"]}
+  - id: G-53
+    title: 水生长期类别 4 组分 25% → Σ慢1..4 = 25 → 长期类别 4（边界）
+    source: "GB 30000.28：C1/C2/C3 均未达标，Σ慢1..4 = 25 ≥ 25 → 长期 4"
+    derivation: "C4 = 25 ≥ 25 → 长期 4"
+    components:
+      - {name: 低水生危害物 AC, pct: 25, hazards: [{hazard_class: aquatic_chronic, category: "4", h_code: H413}]}
+      - {name: 水, pct: 75, cas: "7732-18-5"}
+    expected: {aquatic_chronic: ["4"]}
+  - id: G-54
+    title: 水生长期类别 4 组分 24% → Σ慢1..4 = 24 < 25 → 不分类
+    source: "GB 30000.28：Σ慢1..4 = 24 < 25 → 不分类"
+    derivation: "C4 = 24 < 25 → 不分类"
+    components:
+      - {name: 低水生危害物 AC, pct: 24, hazards: [{hazard_class: aquatic_chronic, category: "4", h_code: H413}]}
+      - {name: 水, pct: 76, cas: "7732-18-5"}
+    expected: {aquatic_chronic: []}
+
+  # ---------------------------------------------------------- 臭氧层（GB 30000.29）
+  - id: G-55
+    title: 臭氧类别 1 组分 0.1% → 类别 1（边界）
+    source: "GB 30000.29：臭氧类别 1 组分 ≥ 0.1% → 类别 1"
+    derivation: "0.1% ≥ 0.1% → 臭氧 1"
+    components:
+      - {name: 臭氧消耗物 AD, pct: 0.1, hazards: [{hazard_class: ozone, category: "1", h_code: H420}]}
+      - {name: 水, pct: 99.9, cas: "7732-18-5"}
+    expected: {ozone: ["1"]}
+  - id: G-56
+    title: 臭氧类别 1 组分 0.09% → 低于 0.1% → 不分类
+    source: "GB 30000.29：臭氧类别 1 组分 ≥ 0.1% → 类别 1"
+    derivation: "0.09% < 0.1% → 不分类"
+    components:
+      - {name: 臭氧消耗物 AD, pct: 0.09, hazards: [{hazard_class: ozone, category: "1", h_code: H420}]}
+      - {name: 水, pct: 99.91, cas: "7732-18-5"}
+    expected: {ozone: []}
+
+  # ---------------------------------------------------------- 易燃液体（GB 30000.7，实测闪点/初沸点）
+  - id: G-57
+    title: 闭杯闪点 20℃ + 初沸点 30℃ → 易燃液体类别 1
+    source: "GB 30000.7：闪点 < 23℃ 且初沸点 ≤ 35℃ → 类别 1"
+    derivation: "闪点 20 < 23，初沸点 30 ≤ 35 → 类别 1"
+    components:
+      - {name: 易燃溶剂 AE, pct: 5, hazards: [{hazard_class: flammable_liquid, category: "3", h_code: H226}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    props: {flash_point_c: 20, initial_boiling_point_c: 30}
+    expected: {flammable_liquid: ["1"]}
+  - id: G-58
+    title: 闭杯闪点 20℃ + 初沸点 40℃ → 易燃液体类别 2
+    source: "GB 30000.7：闪点 < 23℃ 且初沸点 > 35℃ → 类别 2"
+    derivation: "闪点 20 < 23，初沸点 40 > 35 → 类别 2"
+    components:
+      - {name: 易燃溶剂 AE, pct: 5, hazards: [{hazard_class: flammable_liquid, category: "3", h_code: H226}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    props: {flash_point_c: 20, initial_boiling_point_c: 40}
+    expected: {flammable_liquid: ["2"]}
+  - id: G-59
+    title: 闭杯闪点 40℃ → 易燃液体类别 3
+    source: "GB 30000.7：23℃ ≤ 闪点 ≤ 60℃ → 类别 3"
+    derivation: "23 ≤ 40 ≤ 60 → 类别 3"
+    components:
+      - {name: 易燃溶剂 AE, pct: 5, hazards: [{hazard_class: flammable_liquid, category: "3", h_code: H226}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    props: {flash_point_c: 40}
+    expected: {flammable_liquid: ["3"]}
+  - id: G-60
+    title: 闭杯闪点 40℃ + 持续燃烧试验（L.2）为否 → 可不划为类别 3
+    source: "GB 30000.7 注：35℃ < 闪点 ≤ 60℃ 且不持续燃烧（UN L.2）可不划为类别 3"
+    derivation: "35 < 40 ≤ 60 且 L.2 为否 → 豁免 → 不分类"
+    components:
+      - {name: 易燃溶剂 AE, pct: 5, hazards: [{hazard_class: flammable_liquid, category: "3", h_code: H226}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    props: {flash_point_c: 40, sustained_combustion: false}
+    expected: {flammable_liquid: []}
+  - id: G-61
+    title: 闭杯闪点 70℃ → 易燃液体类别 4
+    source: "GB 30000.7：60℃ < 闪点 ≤ 93℃ → 类别 4"
+    derivation: "60 < 70 ≤ 93 → 类别 4"
+    components:
+      - {name: 可燃溶剂 AF, pct: 5, hazards: [{hazard_class: flammable_liquid, category: "4", h_code: H227}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    props: {flash_point_c: 70}
+    expected: {flammable_liquid: ["4"]}
+  - id: G-62
+    title: 闭杯闪点 100℃ → 超出类别 4 上限 → 不分类
+    source: "GB 30000.7：闪点 > 93℃ → 不分类"
+    derivation: "100 > 93 → 不分类"
+    components:
+      - {name: 可燃溶剂 AF, pct: 5, hazards: [{hazard_class: flammable_liquid, category: "4", h_code: H227}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    props: {flash_point_c: 100}
+    expected: {flammable_liquid: []}
+  - id: G-63
+    title: 闭杯闪点 20℃ 但缺少初沸点 → 从严按类别 1 判定（附数据缺口）
+    source: "GB 30000.7：闪点 < 23℃ 时需初沸点区分类别 1/2；缺失时从严判类别 1"
+    derivation: "闪点 20 < 23，初沸点缺失 → 从严类别 1 + blocking 数据缺口"
+    components:
+      - {name: 易燃溶剂 AE, pct: 5, hazards: [{hazard_class: flammable_liquid, category: "3", h_code: H226}]}
+      - {name: 水, pct: 95, cas: "7732-18-5"}
+    props: {flash_point_c: 20}
+    expected: {flammable_liquid: ["1"]}
+
+  # ---------------------------------------------------------- 易燃气溶胶（GB 30000.4，试验判定）
+  - id: G-64
+    title: 气溶胶：易燃组分 90% + 燃烧热 35 kJ/g → 类别 1
+    source: "GB 30000.4：易燃组分 ≥ 85% 且燃烧热 ≥ 30 kJ/g → 类别 1"
+    derivation: "90% ≥ 85%，35 ≥ 30 → 类别 1"
+    components:
+      - {name: 易燃推进剂 AG, pct: 90, hazards: [{hazard_class: flammable_liquid, category: "2", h_code: H225}]}
+      - {name: 水, pct: 10, cas: "7732-18-5"}
+    props: {phys_state: aerosol, heat_of_combustion_kj_g: 35}
+    expected: {aerosol: ["1"]}
+  - id: G-65
+    title: 气溶胶：喷雾点火距离 80 cm → 类别 1
+    source: "GB 30000.4：喷雾点火距离 ≥ 75 cm → 类别 1"
+    derivation: "80 ≥ 75 → 类别 1"
+    components:
+      - {name: 易燃推进剂 AG, pct: 50, hazards: [{hazard_class: flammable_liquid, category: "2", h_code: H225}]}
+      - {name: 水, pct: 50, cas: "7732-18-5"}
+    props: {phys_state: aerosol, ignition_distance_cm: 80}
+    expected: {aerosol: ["1"]}
+  - id: G-66
+    title: 气溶胶：燃烧热 25 kJ/g（未达类别 1）→ 类别 2
+    source: "GB 30000.4：燃烧热 ≥ 20 kJ/g 且未达类别 1 → 类别 2"
+    derivation: "25 ≥ 20，未达类别 1 → 类别 2"
+    components:
+      - {name: 易燃推进剂 AG, pct: 50, hazards: [{hazard_class: flammable_liquid, category: "2", h_code: H225}]}
+      - {name: 水, pct: 50, cas: "7732-18-5"}
+    props: {phys_state: aerosol, heat_of_combustion_kj_g: 25}
+    expected: {aerosol: ["2"]}
+  - id: G-67
+    title: 气溶胶：易燃组分 1% + 燃烧热 10 kJ/g → 类别 3
+    source: "GB 30000.4：易燃组分 ≤ 1% 且燃烧热 < 20 kJ/g，且未达类别 1/2 → 类别 3"
+    derivation: "1% ≤ 1%，10 < 20 → 类别 3"
+    components:
+      - {name: 易燃推进剂 AG, pct: 1, hazards: [{hazard_class: flammable_liquid, category: "2", h_code: H225}]}
+      - {name: 水, pct: 99, cas: "7732-18-5"}
+    props: {phys_state: aerosol, heat_of_combustion_kj_g: 10}
+    expected: {aerosol: ["3"]}
+  - id: G-68
+    title: 气溶胶含易燃组分但无任何试验数据 → 无法判定（数据缺口，不分类）
+    source: "GB 30000.4：气溶胶类别由试验判定，无数据时不猜测"
+    derivation: "无燃烧热/点火距离/泡沫数据 → 不分类 + blocking 数据缺口"
+    components:
+      - {name: 易燃推进剂 AG, pct: 50, hazards: [{hazard_class: flammable_liquid, category: "2", h_code: H225}]}
+      - {name: 水, pct: 50, cas: "7732-18-5"}
+    props: {phys_state: aerosol}
+    expected: {aerosol: []}
+
+  # ---------------------------------------------------------- 金属腐蚀（GB 30000.17）与物理筛查
+  - id: G-69
+    title: UN C.1 腐蚀速率 7.0 mm/年 → 金属腐蚀类别 1
+    source: "GB 30000.17：钢/铝腐蚀速率 > 6.25 mm/年 → 类别 1"
+    derivation: "7.0 > 6.25 → 类别 1"
+    components:
+      - {name: 水, pct: 100, cas: "7732-18-5"}
+    props: {metal_corrosion_rate_mm_per_year: 7.0}
+    expected: {metal_corrosive: ["1"]}
+  - id: G-70
+    title: UN C.1 腐蚀速率 6.25 mm/年 → 等于限值 → 不分类
+    source: "GB 30000.17：腐蚀速率 > 6.25 mm/年 → 类别 1（等于不限）"
+    derivation: "6.25 不大于 6.25 → 不分类"
+    components:
+      - {name: 水, pct: 100, cas: "7732-18-5"}
+    props: {metal_corrosion_rate_mm_per_year: 6.25}
+    expected: {metal_corrosive: []}
+  - id: G-71
+    title: 含爆炸物组分 1% → 物理危害不由组成计算，需试验确认（不分类 + 数据缺口）
+    source: "GB 30000.2：爆炸物等物理类别不由组成计算，须试验或专家判断"
+    derivation: "爆炸物组分 ≥ 1% 筛查阈值 → blocking 数据缺口，不赋类别"
+    components:
+      - {name: 爆炸物 AH, pct: 1, hazards: [{hazard_class: explosive, category: "1.1", h_code: H201}]}
+      - {name: 水, pct: 99, cas: "7732-18-5"}
+    expected: {}
+    absent: [explosive]

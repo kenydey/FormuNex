@@ -96,3 +96,33 @@ def test_coverage_on_the_bundled_catalogue():
     clean = sum(1 for e in entries if not parse_hazard_text(e["hazard_category"]).needs_review)
     assert len(entries) == 2857
     assert clean / len(entries) >= 0.94
+
+
+# Unparsed fragments attested in the bundled catalogue (2026-10-18 audit): all are
+# pre-GHS legacy labels (reported for human review by design, never mapped) or
+# free-text notes, never a GB 30000 class name. A new unparsed spelling fails
+# this test so a human reviews it instead of the parser silently dropping it.
+KNOWN_UNPARSED = {
+    "刺激性固体", ";有毒固体", ";腐蚀性液体,类别1", "有毒固体", "腐蚀性固体",
+    "腐蚀性液体,类别1", "刺激性液体/固体", ";腐蚀性固体", ";腐蚀性液体",
+    "健康危害和环境危害需根据组分进行判断。", "有毒固体,类别2", "有毒液体,类别3",
+    "腐蚀性液体", ";有毒固体,类别2", ";腐蚀性固体,类别1", ";有毒固体,类别1",
+    "(粉尘可燃)",
+}
+
+
+def test_catalogue_unparsed_fragments_are_only_known_notes():
+    entries = json.loads(CATALOGUE.read_text(encoding="utf-8"))["chemicals"]
+    unparsed: set[str] = set()
+    combos: set[tuple] = set()
+    for e in entries:
+        r = parse_hazard_text(e["hazard_category"])
+        unparsed.update(r.unparsed)
+        for i in r.items:
+            combos.add((i.hazard_class, i.category, i.is_minimum, bool(i.condition)))
+    assert unparsed <= KNOWN_UNPARSED
+    # The "119 危害类别写法" in the dev plan counts observed classification-phrase
+    # variants (class + category + minimum + conditional), not entries in the
+    # names table (40 spellings, which already cover every class name attested
+    # in the bundled catalogue). The parser must keep handling at least 119.
+    assert len(combos) >= 119

@@ -320,7 +320,7 @@ def _verify_delivery(c, pkg: dict) -> dict:
 # --------------------------------------------------------------------------- the chain
 
 
-def test_plm_lifecycle_end_to_end(stack):
+def test_plm_lifecycle_end_to_end(stack, signed_off_ruleset):
     c, h = stack["c"], stack["h"]
 
     _knowledge(c)
