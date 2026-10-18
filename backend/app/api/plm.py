@@ -1,14 +1,21 @@
 """PLM & Release Center API — GB 30000 classification and the substance database (Workspace 5)."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field, ValidationError
 
 from ._principal import CurrentUser, current_user, optional_user
 
 router = APIRouter(prefix="/plm", tags=["plm"])
+
+# WebSocket router: mounted WITHOUT the /api prefix (see main.py), so the
+# endpoint is /ws/formulations/{id}/compliance. Browsers cannot set an
+# Authorization header on a WebSocket handshake; classification is a read-only
+# computation with no persistence, same as POST /api/plm/ghs/classify, so the
+# endpoint carries no auth dependency (parity with the REST endpoint).
 
 
 class HazardIn(BaseModel):
@@ -45,7 +52,23 @@ class PropertiesIn(BaseModel):
     sustained_combustion: bool | None = None
     inhalation_form: Literal["gas", "vapour", "dust_mist"] | None = None
     product_category: str | None = None
+    # Aerosol tests (GB 30000.4); foam_test_result = {"flame_height_cm": .., "flame_duration_s": ..}.
+    heat_of_combustion_kj_g: float | None = Field(default=None, ge=0)
+    ignition_distance_cm: float | None = Field(default=None, ge=0)
+    foam_test_result: dict[str, float] | None = None
     sources: dict[str, str] = Field(default_factory=dict)
+
+
+class BridgingReferenceIn(BaseModel):
+    ref_id: str = ""
+    label: str = ""
+    components: list[ComponentIn] = Field(default_factory=list)
+    hazards: list[HazardIn] = Field(default_factory=list)
+
+
+class BridgingIn(BaseModel):
+    principle: Literal["dilution", "batching", "concentration", "interpolation", "substantially_similar"]
+    references: list[BridgingReferenceIn] = Field(default_factory=list)
 
 
 class ClassifyRequest(BaseModel):
@@ -54,6 +77,7 @@ class ClassifyRequest(BaseModel):
     mode: Literal["max", "typical"] = "max"
     include_transport: bool = True
     formulation_version_id: str | None = None  # persist the result against this version
+    bridging: BridgingIn | None = None  # GB 30000 bridging principle + reference mixture(s)
 
 
 class ClassifyVersionRequest(BaseModel):
@@ -61,6 +85,7 @@ class ClassifyVersionRequest(BaseModel):
     mode: Literal["max", "typical"] = "max"
     include_transport: bool = True
     persist: bool = True
+    bridging: BridgingIn | None = None
 
 
 def _session():
@@ -85,7 +110,8 @@ def classify_composition(body: ClassifyRequest) -> dict[str, Any]:
     items = [c.model_dump(exclude_none=True) for c in body.components]
     with _session() as session:
         result = service.classify_items(session, items, body.properties.model_dump(), mode=body.mode,
-                                        include_transport=body.include_transport)
+                                        include_transport=body.include_transport,
+                                        bridging=body.bridging.model_dump() if body.bridging else None)
         response = service.to_response(session, result)
         if body.formulation_version_id:
             row = service.persist(session, result, formulation_version_id=body.formulation_version_id)
@@ -106,7 +132,8 @@ def classify_formulation_version(version_id: str, body: ClassifyVersionRequest) 
         if not items:
             raise HTTPException(status_code=422, detail="该配方版本没有组分")
         result = service.classify_items(session, items, body.properties.model_dump(), mode=body.mode,
-                                        include_transport=body.include_transport)
+                                        include_transport=body.include_transport,
+                                        bridging=body.bridging.model_dump() if body.bridging else None)
         response = service.to_response(session, result)
         if body.persist:
             row = service.persist(session, result, formulation_version_id=version_id)
@@ -115,42 +142,123 @@ def classify_formulation_version(version_id: str, body: ClassifyVersionRequest) 
     return response
 
 
+# --------------------------------------------------------------------------- WebSocket: real-time compliance
+
+
+ws_router = APIRouter()
+
+
+def _classify_ws_sync(payload: dict[str, Any]) -> dict[str, Any]:
+    """Classification for the WebSocket path (runs in a worker thread so the event loop stays responsive).
+
+    Same response structure as POST /api/plm/ghs/classify, via the cached
+    lookup path the real-time editor needs to meet its 150 ms budget.
+    """
+    from ..services.plm.ghs import service
+
+    req = ClassifyRequest(**payload)
+    with _session() as session:
+        result, _built = service.build_and_classify(
+            session, [c.model_dump(exclude_none=True) for c in req.components],
+            req.properties.model_dump(), mode=req.mode, include_transport=req.include_transport, cached=True)
+        return service.to_response(session, result, cached=True)
+
+
+@ws_router.websocket("/ws/formulations/{formulation_id}/compliance")
+async def formulation_compliance_ws(websocket: WebSocket, formulation_id: str) -> None:
+    """Real-time GB 30000 compliance over WebSocket (方案 §4.6 / §3.6).
+
+    Protocol (JSON text frames):
+      client → {"type": "classify", "components": [...], "properties": {...},
+                "mode": "max", "include_transport": true}
+        ``components`` omitted → classify the saved formulation version
+        ``formulation_id`` (``"new"`` = unsaved editor: components required).
+      client → {"type": "ping"} → server {"type": "pong"}
+      server → {"type": "classification", ...same fields as POST /api/plm/ghs/classify...}
+      server → {"type": "error", "detail": "..."} (the socket stays open)
+
+    The socket never persists anything: classification results are computed
+    in-memory only; saving still goes through the REST endpoints.
+    """
+    from ..services.plm.ghs import service
+
+    await websocket.accept()
+    while True:
+        try:
+            msg = await websocket.receive_json()
+        except WebSocketDisconnect:
+            return
+        except Exception:  # noqa: BLE001 - malformed frame: tell the client, keep the socket open
+            try:
+                await websocket.send_json({"type": "error", "detail": "消息必须是 JSON 对象"})
+            except Exception:  # noqa: BLE001 - client went away mid-send
+                return
+            continue
+        if not isinstance(msg, dict):
+            await websocket.send_json({"type": "error", "detail": "消息必须是 JSON 对象"})
+            continue
+        mtype = msg.get("type", "classify")
+        if mtype == "ping":
+            await websocket.send_json({"type": "pong"})
+            continue
+        if mtype != "classify":
+            await websocket.send_json({"type": "error", "detail": f"未知消息类型：{mtype}"})
+            continue
+        try:
+            payload = {"components": msg.get("components"), "properties": msg.get("properties") or {},
+                       "mode": msg.get("mode", "max"), "include_transport": msg.get("include_transport", True)}
+            if payload["components"] is None:
+                if formulation_id == "new":
+                    raise ValueError("未保存的配方请提供组分（components）")
+                with _session() as session:
+                    try:
+                        payload["components"] = service.formulation_version_items(session, formulation_id)
+                    except KeyError:
+                        raise ValueError("配方版本不存在") from None
+                if not payload["components"]:
+                    raise ValueError("该配方版本没有组分")
+            response = await asyncio.to_thread(_classify_ws_sync, payload)
+        except ValidationError as exc:
+            await websocket.send_json({"type": "error", "detail": f"请求校验失败：{exc.errors()}"})
+            continue
+        except ValueError as exc:
+            await websocket.send_json({"type": "error", "detail": str(exc)})
+            continue
+        except Exception as exc:  # noqa: BLE001 - classification must never kill the socket
+            await websocket.send_json({"type": "error", "detail": f"分类失败：{exc}"})
+            continue
+        await websocket.send_json({"type": "classification", **response})
+
+
 @router.get("/substances")
 def search_substances(q: str = Query(..., min_length=1, max_length=200), limit: int = Query(20, ge=1, le=100)
                       ) -> list[dict[str, Any]]:
     """Look up substances by CAS (exact) or Chinese / English name (substring)."""
-    from sqlalchemy import or_, select
-
-    from ..db.models_regulatory import SubstanceClassificationRow, SubstanceRow
-    from ..services.plm.regulatory import cas as cas_mod
-    from ..services.plm.regulatory.source_priority import effective
+    from ..agents import regulatory as reg_agent
 
     with _session() as session:
-        norm = cas_mod.normalize(q)
-        if norm:
-            stmt = select(SubstanceRow).where(SubstanceRow.cas_no == norm)
-        else:
-            like = f"%{q.strip()}%"
-            stmt = (select(SubstanceRow)
-                    .where(or_(SubstanceRow.name_zh.like(like), SubstanceRow.name_en.ilike(like)))
-                    .order_by(SubstanceRow.hazardous_catalog_no.is_(None), SubstanceRow.name_zh)
-                    .limit(limit))
-        subs = session.execute(stmt).scalars().all()
-        ids = [s.id for s in subs]
-        cls_rows = session.execute(
-            select(SubstanceClassificationRow).where(SubstanceClassificationRow.substance_id.in_(ids))
-        ).scalars().all() if ids else []
-        by_sub: dict[str, list] = {}
-        for r in cls_rows:
-            by_sub.setdefault(r.substance_id, []).append(r)
-        return [{
-            "id": s.id, "cas_no": s.cas_no, "name_zh": s.name_zh, "name_en": s.name_en,
-            "hazardous_catalog_no": s.hazardous_catalog_no, "highly_toxic": s.highly_toxic,
-            "precursor_control": s.precursor_control, "explosive_precursor": s.explosive_precursor,
-            "classifications": [{"hazard_class": r.hazard_class, "category": r.category, "h_code": r.h_code,
-                                 "source": r.source, "is_minimum": r.is_minimum, "locked": r.locked_at is not None}
-                                for r in effective(by_sub.get(s.id, []))],
-        } for s in subs]
+        return reg_agent.lookup_substance(session, q, limit=limit)
+
+
+class RegulatoryAskIn(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    intent: Literal["auto", "substance", "explain", "substitute", "standard"] = "auto"
+    components: list[dict[str, Any]] | None = None  # explain / substitute need these; role hint per item optional
+    properties: PropertiesIn | None = None
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+@router.post("/regulatory/ask")
+def regulatory_ask(body: RegulatoryAskIn) -> dict[str, Any]:
+    """Read-only regulatory agent: substance lookup, classification explanation, hazard-reduction
+    suggestions, GB / national-standard Q&A. Never writes anything."""
+    from ..agents import regulatory as reg_agent
+
+    with _session() as session:
+        return reg_agent.ask(session, question=body.question, intent=body.intent,
+                             components=body.components,
+                             properties=body.properties.model_dump() if body.properties else None,
+                             limit=body.limit)
 
 
 # =========================================================================== products & documents (M4)
@@ -338,7 +446,9 @@ def get_document(document_id: str) -> dict[str, Any]:
 
 
 @router.get("/documents/{document_id}/file/{fmt}")
-def download_document(document_id: str, fmt: Literal["pdf", "docx"]):
+def download_document(document_id: str, fmt: Literal["pdf", "docx", "png"],
+                      dpi: int = Query(300, ge=72, le=600)):
+    """Download a document file. ``png`` is label-only: the stored label PDF rasterised on demand."""
     from fastapi.responses import Response
 
     from ..db.models_plm import RegulatoryDocumentRow
@@ -348,6 +458,20 @@ def download_document(document_id: str, fmt: Literal["pdf", "docx"]):
         row = session.get(RegulatoryDocumentRow, document_id)
         if row is None:
             raise HTTPException(status_code=404, detail="文档不存在")
+        if fmt == "png":
+            if row.doc_type != "label":
+                raise HTTPException(status_code=422, detail="PNG 导出仅适用于标签文档")
+            if not row.rendered_pdf_key or not storage.exists(row.rendered_pdf_key):
+                raise HTTPException(status_code=404, detail="该标签没有 PDF 文件")
+            from ..services.plm.render.label_png import LabelPngError, render_label_png
+
+            try:
+                data = render_label_png(storage.get(row.rendered_pdf_key), dpi=dpi)
+            except LabelPngError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from None
+            name = f"{row.doc_type}-{row.lang}-v{row.version_no}.png"
+            return Response(data, media_type="image/png",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
         key = row.rendered_pdf_key if fmt == "pdf" else row.rendered_docx_key
         if not key or not storage.exists(key):
             raise HTTPException(status_code=404, detail=f"该文档没有 {fmt} 文件")

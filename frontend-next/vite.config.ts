@@ -30,6 +30,7 @@ export default defineConfig({
       "/api/tasks": { ...api, proxyTimeout: 10_800_000, timeout: 10_800_000 },
       "/api": api,
       "/health": api,
+      "/ws": { target: "http://127.0.0.1:8000", changeOrigin: true, ws: true },
     },
   },
   test: {

@@ -51,6 +51,29 @@ export default function FormulationEditorPage() {
   const spec = project.data?.workspace.spec_contract;
   const domain = project.data?.workspace.requirement?.domain ?? "anticorrosion_coating";
 
+  // Real-time compliance: WebSocket (/ws/formulations/{id}/compliance) with REST fallback.
+  // The socket re-classifies on every edit; when it is down or not yet open, the debounced
+  // REST call below takes over, so the panel never goes dead.
+  const versionId = lineage?.parent ?? "new";
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsAliveRef = useRef(false);
+  useEffect(() => {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${window.location.host}/ws/formulations/${encodeURIComponent(versionId)}/compliance`);
+    ws.onopen = () => { wsAliveRef.current = true; };
+    ws.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as { type?: string; detail?: string } & Classification;
+        if (data.type === "classification") { setCls(data); setClsError(null); setBusy(false); }
+        else if (data.type === "error") { setClsError(data.detail ?? "实时合规失败"); setBusy(false); }
+      } catch { /* ignore malformed frame */ }
+    };
+    ws.onerror = () => { wsAliveRef.current = false; };
+    ws.onclose = () => { wsAliveRef.current = false; };
+    wsRef.current = ws;
+    return () => { ws.close(); wsRef.current = null; wsAliveRef.current = false; };
+  }, [versionId]);
+
   // Debounced (400 ms) GB 30000 evaluation of the current composition.
   const filled = useMemo(() => rows.filter((r) => r.name.trim() && Number(r.weight_pct) > 0), [rows]);
   useEffect(() => {
@@ -59,13 +82,21 @@ export default function FormulationEditorPage() {
       return;
     }
     const h = setTimeout(async () => {
+      const payload = {
+        components: filled.map((r) => ({ name: r.zh_name || r.name, pct: Number(r.weight_pct), cas: r.cas_no || null })),
+        properties: { phys_state: "liquid", ...(flash != null ? { flash_point_c: flash, sources: { flash_point_c: "measured" } } : {}) },
+        include_transport: true,
+      };
+      // WebSocket path (preferred): send and let onmessage fill the panel.
+      if (wsRef.current && wsAliveRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        setBusy(true);
+        wsRef.current.send(JSON.stringify({ type: "classify", ...payload }));
+        return;
+      }
+      // REST fallback: the socket is down, not yet open, or the browser blocks it.
       setBusy(true);
       try {
-        setCls(await call<Classification>("POST", "/api/plm/ghs/classify", {
-          components: filled.map((r) => ({ name: r.zh_name || r.name, pct: Number(r.weight_pct), cas: r.cas_no || null })),
-          properties: { phys_state: "liquid", ...(flash != null ? { flash_point_c: flash, sources: { flash_point_c: "measured" } } : {}) },
-          include_transport: true,
-        }));
+        setCls(await call<Classification>("POST", "/api/plm/ghs/classify", payload));
         setClsError(null);
       } catch (e) {
         setClsError(e);

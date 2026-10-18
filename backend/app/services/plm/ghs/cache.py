@@ -1,6 +1,6 @@
 """In-process cache of the regulatory data the classification engine reads (方案 §4.6, §7).
 
-The real-time compliance socket re-classifies the whole formulation on every
+The real-time compliance WebSocket (``/ws/formulations/{id}/compliance``) re-classifies the whole formulation on every
 edit; reading 50 substances, their classifications and raw-material
 compositions from the database each time would cost far more than the
 engine itself. :class:`CachedLookup` serves those reads from a process-wide

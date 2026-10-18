@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import Request
+from starlette.requests import HTTPConnection
 
 from ._principal import _bearer, current_user
 
@@ -39,8 +39,14 @@ def required_permission(method: str, path: str) -> str | None:
     return None
 
 
-def admin_guard(request: Request) -> None:
-    permission = required_permission(request.method, request.url.path)
+def admin_guard(request: HTTPConnection) -> None:
+    # HTTPConnection (not Request): FastAPI only fills a ``Request``-typed
+    # dependency param when the connection *is* a Request, so a WebSocket
+    # route would call this with no args. HTTPConnection is the common base of
+    # Request and WebSocket, and the guard only needs method / url / headers.
+    # WebSocket has no .method: treat it as a read (never blocked here).
+    method = getattr(request, "method", "GET")
+    permission = required_permission(method, request.url.path)
     if permission is None:
         return
     from ..services.identity import tokens

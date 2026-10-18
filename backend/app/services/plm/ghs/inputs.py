@@ -59,7 +59,7 @@ def _hazards(rows: list[SubstanceClassificationRow]) -> list[ComponentHazard]:
 
 class _Lookup:
     """Every database read of the input builder goes through here, so a caching subclass
-    (:mod:`.cache`, used by the real-time compliance socket) can serve repeated lookups from memory."""
+    (:mod:`.cache`, used by the real-time compliance WebSocket endpoint) can serve repeated lookups from memory."""
 
     def __init__(self, session: Session, rs: RuleSet) -> None:
         self.session = session

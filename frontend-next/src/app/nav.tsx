@@ -42,6 +42,7 @@ const BASE_NAV: NavItem[] = [
   { path: "/plm", key: "nav.plm", zh: "⑤ PLM 文档与发布", icon: <FileProtectOutlined />, children: [
     { path: "/plm/products", key: "nav.plm.products", zh: "产品与修订" },
     { path: "/plm/label-designer", key: "nav.plm.labels", zh: "标签设计器" },
+    { path: "/plm/regulatory", key: "nav.plm.regulatory", zh: "法规助手" },
   ] },
   { path: "/materials", key: "nav.materials", zh: "物料与法规库", icon: <DatabaseOutlined />, children: [
     { path: "/materials/substances", key: "nav.materials.substances", zh: "物质与法规数据" },
