@@ -91,11 +91,31 @@ def test_missing_category_and_empty_text():
 
 
 def test_coverage_on_the_bundled_catalogue():
-    """Regression floor: the parser maps at least 94% of the catalogue without review."""
+    """Regression floor: the parser maps at least 94% of the catalogue without review.
+
+    The floor is measured over entries that HAVE hazard text. 382 entries have no
+    hazard text to parse (84 pre-existing + 298 added 2026-10-19 from the official
+    2015 版 catalogue, which carries no classification column) — they are counted
+    separately below, never folded into the parser floor.
+    """
     entries = json.loads(CATALOGUE.read_text(encoding="utf-8"))["chemicals"]
-    clean = sum(1 for e in entries if not parse_hazard_text(e["hazard_category"]).needs_review)
-    assert len(entries) == 2857
-    assert clean / len(entries) >= 0.94
+    classified = [e for e in entries if (e["hazard_category"] or "").strip()]
+    clean = sum(1 for e in classified if not parse_hazard_text(e["hazard_category"]).needs_review)
+    assert len(entries) == 3155
+    assert len(entries) - len(classified) == 382
+    assert clean / len(classified) >= 0.94
+
+
+def test_supplemented_entries_carry_official_catalog_no():
+    """Entries added 2026-10-19 from the official catalogue (index > 2857) must carry
+    the official 序号 (``catalog_no``) and must not invent hazard text / English names."""
+    entries = json.loads(CATALOGUE.read_text(encoding="utf-8"))["chemicals"]
+    added = [e for e in entries if e["index"] > 2857]
+    assert len(added) == 298
+    assert all(e.get("catalog_no") for e in added)
+    assert all(not (e["hazard_category"] or "").strip() for e in added)
+    assert all(not (e["english_name"] or "").strip() for e in added)
+    assert all((e["cas_number"] or "").strip() for e in added)
 
 
 # Unparsed fragments attested in the bundled catalogue (2026-10-18 audit): all are

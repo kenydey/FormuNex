@@ -3,8 +3,15 @@
 Sources (``app/resources/regulatory``, imported from MSDS-Generator):
 
 * ``common_chemicals.json.gz`` — 131k substances (CAS, Chinese / English name, formula)
-* ``hazard_chemical_info.json`` — 《危险化学品目录（2015 版）》, 2,857 entries with
-  free-text GB 30000 classifications and 剧毒 / 易制毒 / 易制爆 remarks
+* ``hazard_chemical_info.json`` — 《危险化学品目录（2015 版）》, 3,155 entries with
+  free-text GB 30000 classifications and 剧毒 / 易制毒 / 易制爆 remarks.
+  Re-verified against the official catalogue text on 2026-10-19: 298 entries were
+  missing from the bundled file and were added with only catalogue fields
+  (序号/品名/别名/CAS号/备注 — no invented hazard text or English name); 29
+  bundled entries are NOT in the 2015 版 catalogue (MSDS-Generator additions,
+  mostly 易制毒/易制爆) and carry ``source`` marking that. ``index`` is the
+  file's own row number; ``catalog_no`` (when present) is the official catalogue
+  序号 and is what seeds ``hazardous_catalog_no`` / ``catalog_no``.
 * ``oel_gbz2_2019.json`` — GBZ 2.1-2019 occupational exposure limits
 * ``hazard_statements.json`` / ``precaution_statements.json`` — H / P texts (Chinese)
 * ``hpstatements_en.json`` — H / P texts (English), vendored mhchem/hpstatements CLP
@@ -175,6 +182,16 @@ def seed_regulatory_db(
 # --------------------------------------------------------------------------- substances
 
 
+def _catalog_no(item: dict) -> int | None:
+    """Official catalogue 序号 for an entry: ``catalog_no`` when present, else ``index``.
+
+    ``index`` is the bundled file's own row number (MSDS-Generator ordering, NOT the
+    official 序号); ``catalog_no`` is the official 序号 verified against the 2015 版
+    catalogue text. Newer entries carry ``catalog_no``; older ones fall back to ``index``.
+    """
+    return item.get("catalog_no", item.get("index"))
+
+
 def _collect_substances(
     resources: Path, include_common: bool, review: _Review, stats: dict
 ) -> dict[str, dict]:
@@ -213,10 +230,10 @@ def _collect_substances(
             if how in ("excel_date", "excel_serial"):
                 repaired += 1
                 review.add("repaired_cas", name=name, cas_no=cas, original=original, how=how,
-                           catalog_no=item.get("index"))
+                           catalog_no=_catalog_no(item))
         for original in invalid:
             review.add("invalid_cas", name=name, cas_no=str(original)[:32], file="hazard_chemical_info",
-                       catalog_no=item.get("index"))
+                       catalog_no=_catalog_no(item))
         if not cas_list:
             generic += 1
             continue
@@ -226,14 +243,14 @@ def _collect_substances(
         if not parsed.needs_review:
             parsed_clean += 1
         else:
-            review.add("hazard_text", name=name, cas_no=cas_list[0][1], catalog_no=item.get("index"),
+            review.add("hazard_text", name=name, cas_no=cas_list[0][1], catalog_no=_catalog_no(item),
                        text=item.get("hazard_category"), reasons=parsed.review_reasons,
                        unparsed=parsed.unparsed)
         # One catalogue entry may list several CAS numbers (hydrates, isomers):
         # each is a substance carrying the entry's classification.
         for _original, cas, _how in cas_list:
             _apply_catalog_entry(entry(cas), item, name, parsed)
-            entries_by_cas.setdefault(cas, []).append(item.get("index"))
+            entries_by_cas.setdefault(cas, []).append(_catalog_no(item))
     # The catalogue lists some substances more than once (e.g. 苯酚 as solid and as
     # solution, with different classifications). Their classifications are merged,
     # which is only right for one form — a person decides which apply.
@@ -268,7 +285,7 @@ def _apply_catalog_entry(e: dict, item: dict, name: str, parsed: ParseResult) ->
         if alias.strip() and alias.strip() not in e["aliases"]:
             e["aliases"].append(alias.strip())
     if e["catalog_no"] is None:
-        e["catalog_no"] = item.get("index")
+        e["catalog_no"] = _catalog_no(item)
     notes = item.get("notes") or ""
     if "剧毒" in notes:
         e["highly_toxic"] = True
@@ -285,7 +302,7 @@ def _apply_catalog_entry(e: dict, item: dict, name: str, parsed: ParseResult) ->
         if prev is None:
             e["classifications"][key] = {
                 "h_code": p.h_code, "is_minimum": p.is_minimum, "qualifier": qualifier,
-                "conditional": bool(p.condition), "catalog_no": item.get("index"),
+                "conditional": bool(p.condition), "catalog_no": _catalog_no(item),
             }
         elif qualifier and qualifier not in prev["qualifier"]:
             prev["qualifier"] = (prev["qualifier"] + qualifier)[:200]
@@ -386,7 +403,7 @@ def _replace_generic_entries(conn: Connection, resources: Path, release_id: str,
             continue
         parsed = parse_hazard_text(item.get("hazard_category") or "")
         rows.append({
-            "id": _uid(), "catalog_no": item.get("index"), "name_zh": (item.get("chinese_name") or "")[:300],
+            "id": _uid(), "catalog_no": _catalog_no(item), "name_zh": (item.get("chinese_name") or "")[:300],
             "name_en": (item.get("english_name") or "")[:300],
             "aliases": [a.strip() for a in re.split(r"[;；]", item.get("alias") or "") if a.strip()],
             "hazard_text": item.get("hazard_category") or "",
