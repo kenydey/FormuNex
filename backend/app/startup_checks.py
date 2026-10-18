@@ -51,7 +51,10 @@ def run_startup_checks(settings) -> list[str]:
 
     # 1. db_url must use a supported scheme.
     db_url = (getattr(settings, "db_url", "") or "").strip()
-    scheme = urlparse(db_url).scheme.lower()
+    # SQLAlchemy permits a driver-qualified scheme (postgresql+psycopg2://).
+    # The driver is an implementation detail, not a different database, so strip
+    # it before matching — docker-compose and .env.example both ship that form.
+    scheme = urlparse(db_url).scheme.lower().split("+", 1)[0]
     if scheme not in _SUPPORTED_DB_SCHEMES:
         errors.append(
             f"FORMUNEX_DB_URL has unsupported scheme {scheme!r} "
