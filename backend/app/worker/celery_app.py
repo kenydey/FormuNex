@@ -59,6 +59,42 @@ celery_app.conf.update(
     result_expires=86400,
 )
 
+# ── 任务队列拆分（开发方案 §4.6） ──────────────────────────────────────────
+# 入库 / 寻优 / 渲染 / 法规 / 默认 5 个队列 + molscribe（已有专用 worker）。
+# 分发全部走 .delay()（无显式 queue），路由由这里的 task_routes 决定。
+# render / regulatory 目前没有 Celery 任务（PLM 文档同步生成、PubChem 同步
+# 补充），队列先声明预留，后续任务接入时只需在这里加一行路由。
+from kombu import Exchange, Queue
+
+celery_app.conf.task_queues = (
+    Queue("default", Exchange("default"), routing_key="default"),
+    Queue("ingest", Exchange("ingest"), routing_key="ingest"),
+    Queue("optimize", Exchange("optimize"), routing_key="optimize"),
+    Queue("render", Exchange("render"), routing_key="render"),
+    Queue("regulatory", Exchange("regulatory"), routing_key="regulatory"),
+    Queue("molscribe", Exchange("molscribe"), routing_key="molscribe"),
+)
+celery_app.conf.task_default_queue = "default"
+celery_app.conf.task_routes = {
+    # ingest（入库）
+    "formunex.kb_ingest": {"queue": "ingest"},
+    "formunex.file_ingest": {"queue": "ingest"},
+    "formunex.kb_reparse": {"queue": "ingest"},
+    "formunex.fulltext_retry": {"queue": "ingest"},
+    "formunex.chunk_quality_sample": {"queue": "ingest"},
+    # optimize（寻优 / 推荐 / 闭环）
+    "formunex.optimize": {"queue": "optimize"},
+    "formunex.recommend": {"queue": "optimize"},
+    "formunex.loop": {"queue": "optimize"},
+    "formunex.doe_cycle": {"queue": "optimize"},
+    "formunex.inverse_design": {"queue": "optimize"},
+    "formunex.screening": {"queue": "optimize"},
+    # molscribe（已有专用 worker，显式路由，防落入 default）
+    "formunex.molscribe_recognize": {"queue": "molscribe"},
+    # render / regulatory：预留，暂无任务。其它任务（search / deep_research /
+    # topic_sweep / wiki / kg / deps_install / noop）走 default。
+}
+
 # ── Celery Beat 主题雷达(P2, 2026-09-05; 2026-10-03 改为设置驱动) ───────────────
 # FORMUNEX_TOPIC_RADAR_ENABLED + FORMUNEX_TOPIC_RADAR_TOPICS（JSON 数组）生成计划，
 # 见 worker/topic_radar.py。只有 beat 进程运行时才会触发（compose: --profile radar）；

@@ -136,10 +136,13 @@ services:
       start_period: 120s
 
   # Async jobs run in Celery worker; API returns 202 + SSE progress stream.
+  # Queues (开发方案 §4.6): ingest / optimize / render / regulatory / default.
+  # The main worker consumes all five; split into per-queue workers later by
+  # copying this service with a narrower --queues list. molscribe stays separate.
   worker:
     build: ./backend
     restart: unless-stopped
-    command: celery -A app.worker.celery_app.celery_app worker --loglevel=info
+    command: celery -A app.worker.celery_app.celery_app worker --queues=ingest,optimize,render,regulatory,default --loglevel=info
     env_file:
       - .env
     environment:

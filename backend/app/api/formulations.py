@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+
+from ._principal import CurrentUser, optional_user
 
 from ..domain.examples import BUILTIN_METRICS, EXAMPLE_PROJECTS, ROLE_CATALOG, load_example
 from ..domain.formulation_gate import validate_formulations
@@ -605,6 +607,10 @@ class IngredientChangeView(BaseModel):
     before_pct: float | None = None
     after_pct: float | None = None
     delta_pct: float | None = None
+    # Banded disclosures for callers without formulation.read_exact (same
+    # banding SDS section 3 uses); exact fields are None in that case.
+    before_pct_band: str | None = None
+    after_pct_band: str | None = None
 
 
 class DiffResponse(BaseModel):
@@ -615,6 +621,29 @@ class DiffResponse(BaseModel):
     renamed: list[str] | None = None
     ingredient_changes: list[IngredientChangeView] = Field(default_factory=list)
     metric_deltas: dict = Field(default_factory=dict)
+
+
+def _can_read_exact(user: CurrentUser | None) -> bool:
+    """Service API keys (operator credentials) keep exact values; a signed-in
+    account needs ``formulation.read_exact`` or sees concentration bands."""
+    if user is None:
+        return True
+    return user.principal.can("formulation.read_exact")
+
+
+def _redact_snapshot(snapshot: dict) -> dict:
+    """Replace exact weight_pct with concentration bands (confidential_ranges)."""
+    import copy
+
+    from ..services.plm.documents.confidential_ranges import band
+
+    snap = copy.deepcopy(snapshot)
+    for key in ("ingredients", "components"):
+        for ing in snap.get(key, []) or []:
+            if isinstance(ing, dict) and isinstance(ing.get("weight_pct"), (int, float)):
+                ing["weight_pct_band"] = band(float(ing["weight_pct"]))
+                del ing["weight_pct"]
+    return snap
 
 
 def _to_view(row) -> VersionView:
@@ -702,23 +731,30 @@ def formulation_lineage(lineage_id: str) -> LineageResponse:
 
 
 @router.get("/formulations/versions/detail/{version_id}", response_model=VersionDetail)
-def formulation_version_detail(version_id: str) -> VersionDetail:
+def formulation_version_detail(version_id: str, user: CurrentUser | None = Depends(optional_user)) -> VersionDetail:
     from ..services.formulation_history import get_history_store
 
     row = get_history_store().get(version_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"未找到版本：{version_id}")
-    return VersionDetail(**_to_view(row).model_dump(), snapshot=row.snapshot or {})
+    snapshot = row.snapshot or {}
+    if not _can_read_exact(user):
+        snapshot = _redact_snapshot(snapshot)
+    return VersionDetail(**_to_view(row).model_dump(), snapshot=snapshot)
 
 
 @router.get("/formulations/versions/{from_id}/diff/{to_id}", response_model=DiffResponse)
-def diff_formulation_versions(from_id: str, to_id: str) -> DiffResponse:
+def diff_formulation_versions(
+    from_id: str, to_id: str, user: CurrentUser | None = Depends(optional_user)
+) -> DiffResponse:
     """What changed between two revisions — the question history exists to answer."""
     from ..services.formulation_history import get_history_store
+    from ..services.plm.documents.confidential_ranges import band
 
     diff = get_history_store().diff_versions(from_id, to_id)
     if diff is None:
         raise HTTPException(status_code=404, detail="版本不存在")
+    exact = _can_read_exact(user)
     return DiffResponse(
         from_version=diff.from_version,
         to_version=diff.to_version,
@@ -728,7 +764,11 @@ def diff_formulation_versions(from_id: str, to_id: str) -> DiffResponse:
         ingredient_changes=[
             IngredientChangeView(
                 name=c.name, change=c.change, role=c.role,
-                before_pct=c.before_pct, after_pct=c.after_pct, delta_pct=c.delta_pct,
+                before_pct=c.before_pct if exact else None,
+                after_pct=c.after_pct if exact else None,
+                delta_pct=c.delta_pct if exact else None,
+                before_pct_band=band(c.before_pct) if (not exact and c.before_pct is not None) else None,
+                after_pct_band=band(c.after_pct) if (not exact and c.after_pct is not None) else None,
             )
             for c in diff.ingredient_changes
         ],

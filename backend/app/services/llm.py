@@ -25,7 +25,7 @@ from .query_aware_compression import (
 import json
 import logging
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel
 from tenacity import (
@@ -828,6 +828,7 @@ def _call_llm(
     *,
     disable_thinking: bool = False,
     model: str | None = None,
+    payload: Any | None = None,
 ) -> str | None:
     """Route to the configured provider; return None on any failure.
 
@@ -836,7 +837,18 @@ def _call_llm(
     max_tokens 才停, 单次回答耗时 2 分钟+(2026-09-04 排查 136-143s 根因)。
     disable_thinking=True → deepseek v4 系关闭 thinking(问答主回答用:
     实测 154s 草稿污染 vs 6s 直接干净回答)。
+
+    敏感数据分级路由（开发方案 §4.5）: ``payload`` 给出时按结构化
+    payload 分级，否则按 prompt 文本分级。secret（精确配比）只发私有
+    模型；未配置私有模型时抛 ``SensitiveDataRefusal``，绝不静默外发。
     """
+    from .llm_router import call_private_llm, classify_payload, resolve_route
+
+    sensitivity = classify_payload(payload if payload is not None else prompt)
+    destination, _reason = resolve_route(sensitivity)  # secret + 无私有模型 → 抛错
+    if destination == "private":
+        return call_private_llm(prompt, max_tokens, model=model)
+
     settings = get_settings()
     provider = effective_setting(settings, "llm_provider")
     api_key = settings.get_active_api_key()
@@ -871,12 +883,17 @@ def complete_json(prompt: str, *, model: str | None = None) -> dict | None:
     """
     import json
 
+    from .llm_router import classify_payload
     from .llm_trace import trace_generation
 
+    # 审计字段（§4.5）：每一次 LLM 调用记录 sensitivity / provider。
+    _sensitivity = classify_payload(prompt)
+    _provider = effective_setting(get_settings(), "llm_provider")
     with trace_generation(
         "complete_json",
         input_preview=prompt,
-        metadata={"kind": "json", "model": model or "default"},
+        metadata={"kind": "json", "model": model or "default",
+                  "sensitivity": _sensitivity, "provider": str(_provider)},
     ) as span:
         raw = _call_llm(prompt, model=model)
         if not raw:

@@ -187,6 +187,12 @@ class Settings(BaseSettings):
     custom_api_key: str | None = None
     custom_base_url: str | None = None
 
+    # 私有模型（开发方案 §4.5 敏感数据分级路由）。
+    # secret 级 payload（精确配比）只发这里；未配置时拒绝请求，绝不静默外发。
+    private_llm_endpoint: str | None = None  # OpenAI 兼容端点，如 http://127.0.0.1:8080/v1
+    private_llm_api_key: str | None = None
+    private_llm_model: str = ""  # 空 → 端点默认模型
+
     # 检索设置
     search_limit_per_source: int = 50    # 每源单页大小（增量翻页）；不设单源总量上限
     search_total_limit: int = 300        # 全部来源合并后的总量上限（按相关性排序截断）

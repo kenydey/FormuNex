@@ -33,12 +33,12 @@ def _has_table(table: str) -> bool:
 # Frozen copy of the permission matrix at this revision (app/services/identity/rbac.py owns the live one).
 _ROLES: list[tuple[str, str, str, list[str]]] = [
     ("rd_engineer", "研发工程师", "R&D Engineer", [
-        "knowledge.read", "knowledge.write", "spec.read", "formulation.read", "formulation.read_exact",
+        "knowledge.read", "knowledge.write", "project.write", "spec.read", "formulation.read", "formulation.read_exact",
         "formulation.write", "doe.write", "optimize.run", "lab.execute", "regulatory.read",
         "plm.document.write",
     ]),
     ("project_lead", "项目负责人", "Project Lead", [
-        "knowledge.read", "knowledge.write", "spec.read", "spec.write", "formulation.read",
+        "knowledge.read", "knowledge.write", "project.write", "spec.read", "spec.write", "formulation.read",
         "formulation.read_exact", "formulation.write", "formulation.freeze", "doe.write", "optimize.run",
         "lab.execute", "lab.review", "regulatory.read", "plm.document.write", "release.submit",
         "release.sign",

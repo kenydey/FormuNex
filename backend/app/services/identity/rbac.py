@@ -18,6 +18,7 @@ from dataclasses import dataclass
 PERMISSIONS: dict[str, str] = {
     "knowledge.read": "查看知识库、检索与 Wiki",
     "knowledge.write": "入库文献 / 专利、编辑 Wiki",
+    "project.write": "创建 / 编辑 / 删除项目",
     "spec.read": "查看项目规格与目标契约",
     "spec.write": "编辑项目规格、目标契约与合规红线",
     "formulation.read": "查看配方（组成以区间显示）",
@@ -64,12 +65,12 @@ def _role(code: str, zh: str, en: str, perms: Iterable[str]) -> RoleDef:
 
 BUILTIN_ROLES: tuple[RoleDef, ...] = (
     _role("rd_engineer", "研发工程师", "R&D Engineer", [
-        "knowledge.read", "knowledge.write", "spec.read", "formulation.read", "formulation.read_exact",
+        "knowledge.read", "knowledge.write", "project.write", "spec.read", "formulation.read", "formulation.read_exact",
         "formulation.write", "doe.write", "optimize.run", "lab.execute", "regulatory.read",
         "plm.document.write",
     ]),
     _role("project_lead", "项目负责人", "Project Lead", [
-        "knowledge.read", "knowledge.write", "spec.read", "spec.write", "formulation.read",
+        "knowledge.read", "knowledge.write", "project.write", "spec.read", "spec.write", "formulation.read",
         "formulation.read_exact", "formulation.write", "formulation.freeze", "doe.write", "optimize.run",
         "lab.execute", "lab.review", "regulatory.read", "plm.document.write", "release.submit",
         "release.sign",
