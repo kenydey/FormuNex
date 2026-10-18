@@ -33,3 +33,20 @@ export interface DocDepth {
 
 export const pages = (r: [number, number] | null | undefined) =>
   !r ? "" : r[0] === r[1] ? `p.${r[0]}` : `p.${r[0]}–${r[1]}`;
+
+/**
+ * Group chunks by page for the source-alignment view. Chunks without a page
+ * land in the `null` bucket (shown as "未标页"). Pages sort ascending,
+ * the unpaged bucket last.
+ */
+export function groupChunksByPage(chunks: Chunk[]): { page: number | null; chunks: Chunk[] }[] {
+  const by = new Map<number | null, Chunk[]>();
+  for (const c of chunks) {
+    const arr = by.get(c.page);
+    if (arr) arr.push(c);
+    else by.set(c.page, [c]);
+  }
+  return [...by.entries()]
+    .map(([page, cs]) => ({ page, chunks: cs }))
+    .sort((a, b) => (a.page == null ? 1 : b.page == null ? -1 : a.page - b.page));
+}

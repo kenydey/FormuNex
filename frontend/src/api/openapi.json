@@ -3559,7 +3559,7 @@
      "experiments"
     ],
     "summary": "Sync Experiment From Datalab",
-    "description": "手动触发单个实验的 Datalab -> MeasurementStore 同步 (P0-2)。\n\n流程: 由 experiment_id 查 ExperimentRow, 取本次同步的 Datalab item_id\n(请求体 ``datalab_item_id`` 优先, 否则行上绑定的 ``item_id``) -> 拉取\nDatalab ``formumind_measurements`` 块 -> 校验块内 experiment_id 与调用方\n一致 -> 写入 MeasurementStore 明细并回写 ``experiments.measured`` ->\n成功后刷新训练 registry。\n\n可见性语义: 行的 ``item_id`` 不被改写。本地训练记录\n(``item_id IS NULL``) 同步后仍对 ``SqlExperimentStore`` 可见, 下一轮\nDOE 的 ``load_prior_measurements()`` 可见 lab 实测; 已绑定 Datalab 的行\n仍归 Datalab store 管 (Datalab 可达时 live 读)。\n\nFail-open: Datalab 不可达返回 ``{\"synced\": 0, \"errors\": [...]}`` 而不是\n500; ``validated`` 恒为 None, 真实端到端验证见 scripts/verify_datalab.py。",
+    "description": "手动触发单个实验的 Datalab -> MeasurementStore 同步 (P0-2)。\n\n流程: 由 experiment_id 查 ExperimentRow, 取本次同步的 Datalab item_id\n(请求体 ``datalab_item_id`` 优先, 否则行上绑定的 ``item_id``) -> 拉取\nDatalab ``formumind_measurements`` 块 -> 校验块内 experiment_id 与调用方\n一致 -> 写入 MeasurementStore 明细并回写 ``experiments.measured`` ->\n成功后刷新训练 registry。\n\n可见性语义: 行的 ``item_id`` 不被改写。本地训练记录\n(``item_id IS NULL``) 同步后仍对 ``LocalExperimentStore`` 可见, 下一轮\nDOE 的 ``load_prior_measurements()`` 可见 lab 实测; 已绑定 Datalab 的行\n仍归 Datalab store 管 (Datalab 可达时 live 读)。\n\nFail-open: Datalab 不可达返回 ``{\"synced\": 0, \"errors\": [...]}`` 而不是\n500; ``validated`` 恒为 None, 真实端到端验证见 scripts/verify_datalab.py。",
     "operationId": "sync_experiment_from_datalab_api_experiments__experiment_id__sync_datalab_post",
     "parameters": [
      {
@@ -5730,6 +5730,93 @@
           "additionalProperties": true
          },
          "title": "Response Search Substances Api Plm Substances Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/sds-import": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Import Supplier Sds",
+    "description": "Import one supplier SDS file (PDF / DOCX / text) into the substance database.\n\n补齐计划 1-5: parse → upsert substance by CAS → replace this substance's\nunlocked ``supplier_sds`` classifications (confidence 0.95). A mixture SDS\n(several CAS numbers), a missing product name / CAS / classification, or\nan unparsable file is a 422 with an explicit reason — never a silent skip.",
+    "operationId": "import_supplier_sds_api_plm_substances_sds_import_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_import_supplier_sds_api_plm_substances_sds_import_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Import Supplier Sds Api Plm Substances Sds Import Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/{substance_id}/pubchem-enrich": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Enrich Substance Pubchem",
+    "description": "Enqueue the PubChem GHS enrichment task (补齐计划 1-6) for one substance.\n\nThe worker resolves the substance to a PubChem CID, fetches its GHS\nclassification from PUG-View, and writes ``source='pubchem'`` rows\n(confidence 0.6). 404 when the substance does not exist; 503 when the\ntask queue (Redis) is unreachable.",
+    "operationId": "enrich_substance_pubchem_api_plm_substances__substance_id__pubchem_enrich_post",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "title": "Response Enrich Substance Pubchem Api Plm Substances  Substance Id  Pubchem Enrich Post"
         }
        }
       }
@@ -8175,6 +8262,372 @@
     }
    }
   },
+  "/api/cockpit/optimizer-rules": {
+   "get": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Get Optimizer Rules",
+    "description": "返回当前寻优规则（运行时 overlay 生效）。",
+    "operationId": "get_optimizer_rules_api_cockpit_optimizer_rules_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Get Optimizer Rules Api Cockpit Optimizer Rules Get"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Set Optimizer Rules",
+    "description": "微调寻优规则：写 .env（FORMUNEX_OPTIMIZER_*）+ 运行时 overlay，立即生效。\n\n写入模式沿用 api-token 端点（write_env_updates + runtime set）。",
+    "operationId": "set_optimizer_rules_api_cockpit_optimizer_rules_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OptimizerRulesIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Set Optimizer Rules Api Cockpit Optimizer Rules Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/cockpit/doe/{plan_id}/points": {
+   "get": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Doe Points",
+    "description": "返回 DOE 计划逐点列表（带已存审核）。",
+    "operationId": "doe_points_api_cockpit_doe__plan_id__points_get",
+    "parameters": [
+     {
+      "name": "plan_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Plan Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Doe Points Api Cockpit Doe  Plan Id  Points Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/cockpit/doe/{plan_id}/points/review": {
+   "post": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Review Doe Points",
+    "description": "逐点审核：accept / modify（改因子值）/ reject。\n\n驳回的点保留记录但不进入有效点；复审覆盖旧审核。",
+    "operationId": "review_doe_points_api_cockpit_doe__plan_id__points_review_post",
+    "parameters": [
+     {
+      "name": "plan_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Plan Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PointReviewsIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Review Doe Points Api Cockpit Doe  Plan Id  Points Review Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/cockpit/sensitivity": {
+   "post": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Sensitivity",
+    "description": "Sobol 一阶指数 + 局部梯度灵敏度。\n\npoints: [{id, factors: {name: value}, objective: float}]。\n因子名取全部点因子并集排序；缺失因子 → 422（不静默补 0）。",
+    "operationId": "sensitivity_api_cockpit_sensitivity_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SensitivityIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Sensitivity Api Cockpit Sensitivity Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/cockpit/rheology/fit": {
+   "post": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Rheology Fit",
+    "description": "流变曲线拟合：Power-law / Herschel–Bulkley / Cross（标准模型）。\n\npoints: [{shear_rate, viscosity}] 或 [{shear_rate, shear_stress}]。\nauto: 三模型都拟合，取 R² 最高者。",
+    "operationId": "rheology_fit_api_cockpit_rheology_fit_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RheologyFitIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Rheology Fit Api Cockpit Rheology Fit Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/cockpit/acid-stability/trend": {
+   "post": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Acid Stability Trend",
+    "description": "酸稳定性趋势：逐配方扫浴液 pH，返回每 pH 的 status/violations/reasons。",
+    "operationId": "acid_stability_trend_api_cockpit_acid_stability_trend_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AcidTrendIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Acid Stability Trend Api Cockpit Acid Stability Trend Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/cockpit/color": {
+   "post": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Color Page",
+    "description": "色度：各配方 Lab + 与参考色的双口径 ΔE（ΔE00 / ΔE*ab）。\n\ndelta_e_00 为 CIEDE2000（colour-science 未安装时为 null，不静默 fallback）；\ndelta_e_ab 为 CIE76 欧氏距离（始终可用）；delta_e 为兼容键，等于\ndelta_e_00（有）或 delta_e_ab（无），delta_e_method 说明实际口径。",
+    "operationId": "color_page_api_cockpit_color_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ColorIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Color Page Api Cockpit Color Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/cockpit/color/materials": {
+   "get": {
+    "tags": [
+     "cockpit"
+    ],
+    "summary": "Color Materials",
+    "description": "带 CIELAB 值的原料清单（供前端组分选择）。\n\n与 /api/materials 同源：读 domain.knowledge.RAW_MATERIALS，\n只返回含 lab 值的原料。",
+    "operationId": "color_materials_api_cockpit_color_materials_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Color Materials Api Cockpit Color Materials Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/lab/methods": {
    "get": {
     "tags": [
@@ -8836,6 +9289,208 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Cancel Task Api Lab Tasks  Task Id  Cancel Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/lab/tasks/{task_id}/attachments": {
+   "get": {
+    "tags": [
+     "lab"
+    ],
+    "summary": "List Task Attachments",
+    "operationId": "list_task_attachments_api_lab_tasks__task_id__attachments_get",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Task Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response List Task Attachments Api Lab Tasks  Task Id  Attachments Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "lab"
+    ],
+    "summary": "Upload Task Attachment",
+    "description": "上传任务附件（原始记录 / 图谱 / 现场照片）。大小上限走 ingest_max_upload_bytes。",
+    "operationId": "upload_task_attachment_api_lab_tasks__task_id__attachments_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Task Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_upload_task_attachment_api_lab_tasks__task_id__attachments_post"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Upload Task Attachment Api Lab Tasks  Task Id  Attachments Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/lab/tasks/{task_id}/attachments/{attachment_id}/download": {
+   "get": {
+    "tags": [
+     "lab"
+    ],
+    "summary": "Download Task Attachment",
+    "operationId": "download_task_attachment_api_lab_tasks__task_id__attachments__attachment_id__download_get",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "attachment_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Attachment Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/lab/tasks/{task_id}/attachments/{attachment_id}": {
+   "delete": {
+    "tags": [
+     "lab"
+    ],
+    "summary": "Delete Task Attachment",
+    "operationId": "delete_task_attachment_api_lab_tasks__task_id__attachments__attachment_id__delete",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "attachment_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Attachment Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Delete Task Attachment Api Lab Tasks  Task Id  Attachments  Attachment Id  Delete"
         }
        }
       }
@@ -10531,6 +11186,150 @@
       "content": {
        "application/json": {
         "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/wiki/storm/outline": {
+   "post": {
+    "tags": [
+     "wiki"
+    ],
+    "summary": "Generate Storm Outline Endpoint",
+    "description": "Plan 2-5 step 1: generate + persist a STORM outline for the frontend editor.\n\nReturns the outline flat (ReportOutline JSON). Always regenerates — the\nfrontend's \"重新生成\" re-calls this; edited outlines are saved via PUT.",
+    "operationId": "generate_storm_outline_endpoint_api_wiki_storm_outline_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/StormOutlineRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Generate Storm Outline Endpoint Api Wiki Storm Outline Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/wiki/storm/outline/{project_id}": {
+   "get": {
+    "tags": [
+     "wiki"
+    ],
+    "summary": "Get Storm Outline Endpoint",
+    "description": "Read a persisted STORM outline (404 when none). Returns the outline flat.",
+    "operationId": "get_storm_outline_endpoint_api_wiki_storm_outline__project_id__get",
+    "parameters": [
+     {
+      "name": "project_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Project Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Storm Outline Endpoint Api Wiki Storm Outline  Project Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "wiki"
+    ],
+    "summary": "Save Storm Outline Endpoint",
+    "description": "Plan 2-5 step 1: save an edited outline (frontend outline editor).\n\nAccepts the flat outline JSON (or ``{\"outline\": {...}}``). Returns the\nsaved outline flat.",
+    "operationId": "save_storm_outline_endpoint_api_wiki_storm_outline__project_id__put",
+    "parameters": [
+     {
+      "name": "project_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Project Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Save Storm Outline Endpoint Api Wiki Storm Outline  Project Id  Put"
+        }
        }
       }
      },
@@ -13172,7 +13971,7 @@
       "in": "path",
       "required": true,
       "schema": {
-       "type": "integer",
+       "type": "string",
        "title": "Request Id"
       }
      }
@@ -13265,6 +14064,53 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Get Lineage Api Provenance Lineage Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/provenance/product-chain": {
+   "get": {
+    "tags": [
+     "provenance"
+    ],
+    "summary": "Get Product Chain",
+    "description": "Full-chain traceability for one product: downstream from the product\n(revisions → documents / release packages) plus each revision's upstream\nchain (experiment / formulation version / formulation / project).",
+    "operationId": "get_product_chain_api_provenance_product_chain_get",
+    "parameters": [
+     {
+      "name": "product_id",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 64,
+       "title": "Product Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Product Chain Api Provenance Product Chain Get"
         }
        }
       }
@@ -14660,6 +15506,50 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Supply Risk Api Materials Supply Risk Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/materials/substitution-triggers": {
+   "post": {
+    "tags": [
+     "materials"
+    ],
+    "summary": "Substitution Triggers",
+    "description": "补齐计划 2-6: 替换触发扫描 —— 断供 + 超成本 + 命中红线 + 分类升级。\n\n基线配方按 domain 生成（与 supply-risk 同口径）；红线取 project_id 对应项目\n的约束（不传则不扫红线）；分类升级需 baseline_classifications（不传则不扫）。",
+    "operationId": "substitution_triggers_api_materials_substitution_triggers_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SubstitutionTriggersRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Substitution Triggers Api Materials Substitution Triggers Post"
         }
        }
       }
@@ -18420,6 +19310,61 @@
     }
    }
   },
+  "/api/projects/{project_id}/contract-change-notices/acknowledge": {
+   "post": {
+    "tags": [
+     "projects"
+    ],
+    "summary": "Acknowledge Contract Changes",
+    "description": "补齐计划 2-9: 下游（DOE/门禁）确认已看到契约变更并重新评估。\n\n通知本身不删除（审计留痕），只置 acknowledged=true + acknowledged_at。",
+    "operationId": "acknowledge_contract_changes_api_projects__project_id__contract_change_notices_acknowledge_post",
+    "parameters": [
+     {
+      "name": "project_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Project Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AcknowledgeContractChangesBody"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Acknowledge Contract Changes Api Projects  Project Id  Contract Change Notices Acknowledge Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/projects/{project_id}/history": {
    "get": {
     "tags": [
@@ -20117,6 +21062,99 @@
     }
    }
   },
+  "/api/compliance-lists": {
+   "get": {
+    "tags": [
+     "compliance"
+    ],
+    "summary": "List Compliance Lists",
+    "operationId": "list_compliance_lists_api_compliance_lists_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response List Compliance Lists Api Compliance Lists Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/compliance-lists/{list_id}": {
+   "get": {
+    "tags": [
+     "compliance"
+    ],
+    "summary": "Get Compliance List",
+    "operationId": "get_compliance_list_api_compliance_lists__list_id__get",
+    "parameters": [
+     {
+      "name": "list_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "List Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Compliance List Api Compliance Lists  List Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/meta/substrates": {
+   "get": {
+    "tags": [
+     "meta"
+    ],
+    "summary": "List Substrates",
+    "description": "补齐计划 2-11: 基材选项（内置枚举 + FORMUNEX_EXTRA_SUBSTRATES 配置扩展）。\n\n前端从此处取选项（失败时回退内置硬编码），新增基材无需改前端代码。",
+    "operationId": "list_substrates_api_meta_substrates_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/SubstrateOption"
+         },
+         "type": "array",
+         "title": "Response List Substrates Api Meta Substrates Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/meta/default-levers": {
    "get": {
     "tags": [
@@ -20141,9 +21179,10 @@
       "in": "query",
       "required": false,
       "schema": {
-       "$ref": "#/components/schemas/Substrate",
+       "type": "string",
        "description": "Substrate",
-       "default": "carbon_steel"
+       "default": "carbon_steel",
+       "title": "Substrate"
       },
       "description": "Substrate"
      },
@@ -20265,6 +21304,63 @@
  },
  "components": {
   "schemas": {
+   "AcidTrendIn": {
+    "properties": {
+     "formulations": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Formulations"
+     },
+     "ph_min": {
+      "type": "number",
+      "maximum": 14,
+      "minimum": 0,
+      "title": "Ph Min",
+      "default": 2
+     },
+     "ph_max": {
+      "type": "number",
+      "maximum": 14,
+      "minimum": 0,
+      "title": "Ph Max",
+      "default": 6
+     },
+     "ph_step": {
+      "type": "number",
+      "maximum": 2,
+      "exclusiveMinimum": 0,
+      "title": "Ph Step",
+      "default": 0.5
+     }
+    },
+    "type": "object",
+    "required": [
+     "formulations"
+    ],
+    "title": "AcidTrendIn"
+   },
+   "AcknowledgeContractChangesBody": {
+    "properties": {
+     "at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "At"
+     }
+    },
+    "type": "object",
+    "title": "AcknowledgeContractChangesBody",
+    "description": "确认契约变更通知：at 为空 → 确认全部未确认通知；否则只确认该 at 的一条。"
+   },
    "ActiveDoeRequest": {
     "properties": {
      "project_id": {
@@ -20286,7 +21382,15 @@
       "$ref": "#/components/schemas/ProductDomain"
      },
      "substrate": {
-      "$ref": "#/components/schemas/Substrate",
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Substrate"
+       },
+       {
+        "type": "string"
+       }
+      ],
+      "title": "Substrate",
       "default": "carbon_steel"
      },
      "salt_spray_hours": {
@@ -20339,6 +21443,19 @@
       "title": "Voc Limit Gpl",
       "description": "Max VOC (g/L); None disables VOC limit checks",
       "default": 420
+     },
+     "process_window": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Process Window",
+      "description": "工艺窗口（规格契约）"
      },
      "ph_target": {
       "anyOf": [
@@ -21096,6 +22213,20 @@
     ],
     "title": "Body_import_materials_api_materials_import_post"
    },
+   "Body_import_supplier_sds_api_plm_substances_sds_import_post": {
+    "properties": {
+     "file": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "File"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ],
+    "title": "Body_import_supplier_sds_api_plm_substances_sds_import_post"
+   },
    "Body_ingest_batch_api_ingest_batch_post": {
     "properties": {
      "files": {
@@ -21285,6 +22416,20 @@
      "file"
     ],
     "title": "Body_upload_project_export_api_projects__project_id__exports_upload_post"
+   },
+   "Body_upload_task_attachment_api_lab_tasks__task_id__attachments_post": {
+    "properties": {
+     "file": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "File"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ],
+    "title": "Body_upload_task_attachment_api_lab_tasks__task_id__attachments_post"
    },
    "Body_upload_template_api_plm_templates_post": {
     "properties": {
@@ -22180,6 +23325,48 @@
     },
     "type": "object",
     "title": "CollectionUpdate"
+   },
+   "ColorIn": {
+    "properties": {
+     "formulations": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Formulations"
+     },
+     "reference_lab": {
+      "anyOf": [
+       {
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array",
+        "maxItems": 3,
+        "minItems": 3
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reference Lab"
+     }
+    },
+    "type": "object",
+    "required": [
+     "formulations"
+    ],
+    "title": "ColorIn"
    },
    "CompositionItem": {
     "properties": {
@@ -29493,7 +30680,15 @@
       "$ref": "#/components/schemas/ProductDomain"
      },
      "substrate": {
-      "$ref": "#/components/schemas/Substrate",
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Substrate"
+       },
+       {
+        "type": "string"
+       }
+      ],
+      "title": "Substrate",
       "default": "carbon_steel"
      },
      "salt_spray_hours": {
@@ -29546,6 +30741,19 @@
       "title": "Voc Limit Gpl",
       "description": "Max VOC (g/L); None disables VOC limit checks",
       "default": 420
+     },
+     "process_window": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Process Window",
+      "description": "工艺窗口（规格契约）"
      },
      "ph_target": {
       "anyOf": [
@@ -30952,6 +32160,11 @@
       "title": "Display Name",
       "default": ""
      },
+     "is_release_indicator": {
+      "type": "boolean",
+      "title": "Is Release Indicator",
+      "default": false
+     },
      "weight": {
       "type": "number",
       "maximum": 1,
@@ -31064,6 +32277,14 @@
       "type": "integer",
       "title": "Lab Points Used",
       "default": 0
+     },
+     "acquisition_history": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Acquisition History"
      }
     },
     "type": "object",
@@ -31138,6 +32359,52 @@
      "requirement"
     ],
     "title": "OptimizeRequest"
+   },
+   "OptimizerRulesIn": {
+    "properties": {
+     "ucb_kappa": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 10,
+        "exclusiveMinimum": 0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ucb Kappa"
+     },
+     "early_stop_patience": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 100,
+        "minimum": 1
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Early Stop Patience"
+     },
+     "early_stop_min_delta": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 1,
+        "exclusiveMinimum": 0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Early Stop Min Delta"
+     }
+    },
+    "type": "object",
+    "title": "OptimizerRulesIn",
+    "description": "寻优规则：仅 numpy-UCB 引擎与早停判断读取。\n\nucb_kappa: UCB 权重 μ + κσ（κ 越大越偏探索）；patience/min_delta: 早停。"
    },
    "OrphanReportView": {
     "properties": {
@@ -31547,6 +32814,65 @@
      "id"
     ],
     "title": "PointIn"
+   },
+   "PointReviewIn": {
+    "properties": {
+     "run_id": {
+      "type": "integer",
+      "title": "Run Id"
+     },
+     "decision": {
+      "type": "string",
+      "enum": [
+       "accept",
+       "modify",
+       "reject"
+      ],
+      "title": "Decision"
+     },
+     "factors": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "number"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Factors"
+     },
+     "note": {
+      "type": "string",
+      "title": "Note",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "required": [
+     "run_id",
+     "decision"
+    ],
+    "title": "PointReviewIn"
+   },
+   "PointReviewsIn": {
+    "properties": {
+     "reviews": {
+      "items": {
+       "$ref": "#/components/schemas/PointReviewIn"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Reviews"
+     }
+    },
+    "type": "object",
+    "required": [
+     "reviews"
+    ],
+    "title": "PointReviewsIn"
    },
    "PredictIn": {
     "properties": {
@@ -32318,6 +33644,14 @@
       "additionalProperties": true,
       "type": "object",
       "title": "Spec Contract"
+     },
+     "contract_change_notices": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Contract Change Notices"
      }
     },
     "type": "object",
@@ -32617,6 +33951,17 @@
        }
       ],
       "title": "Task Ids"
+     },
+     "since": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Since"
      }
     },
     "type": "object",
@@ -33733,7 +35078,15 @@
       "$ref": "#/components/schemas/ProductDomain"
      },
      "substrate": {
-      "$ref": "#/components/schemas/Substrate",
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Substrate"
+       },
+       {
+        "type": "string"
+       }
+      ],
+      "title": "Substrate",
       "default": "carbon_steel"
      },
      "salt_spray_hours": {
@@ -33786,6 +35139,19 @@
       "title": "Voc Limit Gpl",
       "description": "Max VOC (g/L); None disables VOC limit checks",
       "default": 420
+     },
+     "process_window": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Process Window",
+      "description": "工艺窗口（规格契约）"
      },
      "ph_target": {
       "anyOf": [
@@ -33917,7 +35283,15 @@
       "$ref": "#/components/schemas/ProductDomain"
      },
      "substrate": {
-      "$ref": "#/components/schemas/Substrate",
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Substrate"
+       },
+       {
+        "type": "string"
+       }
+      ],
+      "title": "Substrate",
       "default": "carbon_steel"
      },
      "salt_spray_hours": {
@@ -33970,6 +35344,19 @@
       "title": "Voc Limit Gpl",
       "description": "Max VOC (g/L); None disables VOC limit checks",
       "default": 420
+     },
+     "process_window": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Process Window",
+      "description": "工艺窗口（规格契约）"
      },
      "ph_target": {
       "anyOf": [
@@ -34417,6 +35804,37 @@
      "spec_snapshot"
     ],
     "title": "RevisionSpecIn"
+   },
+   "RheologyFitIn": {
+    "properties": {
+     "points": {
+      "items": {
+       "additionalProperties": {
+        "type": "number"
+       },
+       "type": "object"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Points"
+     },
+     "model": {
+      "type": "string",
+      "enum": [
+       "auto",
+       "power_law",
+       "herschel_bulkley",
+       "cross"
+      ],
+      "title": "Model",
+      "default": "auto"
+     }
+    },
+    "type": "object",
+    "required": [
+     "points"
+    ],
+    "title": "RheologyFitIn"
    },
    "RoCrateExportRequest": {
     "properties": {
@@ -34971,6 +36389,45 @@
     },
     "type": "object",
     "title": "SecretsUpdate"
+   },
+   "SensitivityIn": {
+    "properties": {
+     "points": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Points"
+     },
+     "selected_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Selected Id"
+     },
+     "n_samples": {
+      "type": "integer",
+      "maximum": 65536,
+      "minimum": 256,
+      "title": "N Samples",
+      "default": 8192
+     }
+    },
+    "type": "object",
+    "required": [
+     "points"
+    ],
+    "title": "SensitivityIn"
    },
    "SessionDeleteResponse": {
     "properties": {
@@ -35865,6 +37322,50 @@
     ],
     "title": "StatsResponse"
    },
+   "StormOutlineRequest": {
+    "properties": {
+     "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "title": "Project Id"
+     },
+     "topic": {
+      "type": "string",
+      "title": "Topic",
+      "default": ""
+     },
+     "max_sections": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 12,
+        "minimum": 3
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Sections"
+     },
+     "perspectives": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Perspectives"
+     },
+     "use_llm": {
+      "type": "boolean",
+      "title": "Use Llm",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "project_id"
+    ],
+    "title": "StormOutlineRequest"
+   },
    "StormReportExportRequest": {
     "properties": {
      "project_id": {
@@ -36022,6 +37523,18 @@
        }
       ],
       "title": "Campaign Id"
+     },
+     "outline": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Outline"
      }
     },
     "type": "object",
@@ -36218,10 +37731,81 @@
       "minimum": 1,
       "title": "Llm Limit",
       "default": 5
+     },
+     "classification_preview_limit": {
+      "type": "integer",
+      "maximum": 10,
+      "minimum": 0,
+      "title": "Classification Preview Limit",
+      "default": 5
      }
     },
     "type": "object",
     "title": "SubstituteRequest"
+   },
+   "SubstitutionTriggersRequest": {
+    "properties": {
+     "domain": {
+      "type": "string",
+      "title": "Domain",
+      "default": ""
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
+     },
+     "cost_limit_per_kg": {
+      "anyOf": [
+       {
+        "type": "number",
+        "minimum": 0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cost Limit Per Kg"
+     },
+     "material_price_limits": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "number"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Material Price Limits"
+     },
+     "baseline_classifications": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Baseline Classifications"
+     }
+    },
+    "type": "object",
+    "title": "SubstitutionTriggersRequest",
+    "description": "补齐计划 2-6: 替换触发扫描参数（基线配方按 domain 生成，与 supply-risk 同口径）。"
    },
    "Substrate": {
     "type": "string",
@@ -36230,9 +37814,35 @@
      "galvanized_steel",
      "aluminum",
      "stainless_steel",
-     "magnesium_alloy"
+     "magnesium_alloy",
+     "a356",
+     "adc12",
+     "cold_rolled_steel"
     ],
     "title": "Substrate"
+   },
+   "SubstrateOption": {
+    "properties": {
+     "value": {
+      "type": "string",
+      "title": "Value"
+     },
+     "label_zh": {
+      "type": "string",
+      "title": "Label Zh"
+     },
+     "label_en": {
+      "type": "string",
+      "title": "Label En"
+     }
+    },
+    "type": "object",
+    "required": [
+     "value",
+     "label_zh",
+     "label_en"
+    ],
+    "title": "SubstrateOption"
    },
    "Supplier": {
     "properties": {
@@ -36322,7 +37932,7 @@
     },
     "type": "object",
     "title": "SyncDatalabRequest",
-    "description": "POST /experiments/{id}/sync-datalab 请求体。\n\n``datalab_item_id``: 本次同步要拉取的 Datalab item。行保持本地训练记录\n身份 (``item_id`` 不被改写), 因此同步到的 lab 测量对\n``SqlExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的\n``load_prior_measurements()`` 能吃到 lab 实测。若省略, 则回退使用行上\n已绑定的 ``item_id`` (若行上也没有 -> 409)。"
+    "description": "POST /experiments/{id}/sync-datalab 请求体。\n\n``datalab_item_id``: 本次同步要拉取的 Datalab item。行保持本地训练记录\n身份 (``item_id`` 不被改写), 因此同步到的 lab 测量对\n``LocalExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的\n``load_prior_measurements()`` 能吃到 lab 实测。若省略, 则回退使用行上\n已绑定的 ``item_id`` (若行上也没有 -> 409)。"
    },
    "TagUpdateRequest": {
     "properties": {
@@ -36871,6 +38481,12 @@
       "type": "boolean",
       "title": "Use Llm",
       "default": true
+     },
+     "query_kind": {
+      "type": "string",
+      "pattern": "^(auto|extraction|deep_research|explicit)$",
+      "title": "Query Kind",
+      "default": "auto"
      }
     },
     "type": "object",

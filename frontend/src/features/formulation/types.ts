@@ -15,6 +15,10 @@ export interface Ingredient {
   notes?: string;
   evidence_refs?: string[];
   grounding_confidence?: "high" | "medium" | "low";
+  /** Editor-only annotations (cost / VOC / premix group): sent for forward compatibility; the backend drops unknown fields. */
+  cost_per_kg?: number;
+  voc_g_l?: number;
+  group?: string;
 }
 
 export interface EffectTrace { field: string; label: string; status: "wired" | "unwired" | string; detail?: string; consumers?: string[] }

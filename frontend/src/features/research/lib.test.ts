@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  citationTarget, deepPercent, dispositionName, draftForEmbodiment, mergeEvidence, pageLabel, parseKbIngest, parseSearchData,
-  sanitizeEvidence, shelfFilename, sortFindings, sourceBadge, stageIndex, toggleDiffPick, confirmPath, chatHistory, mapKbSourceIds, resolveItems,
+  citationTarget, clusterEvidence, dedupKey, deepPercent, dispositionName, draftForEmbodiment, mergeEvidence, pageLabel, parseKbIngest, parseSearchData,
+  sanitizeEvidence, shelfFilename, sortFindings, sourceBadge, stageIndex, toggleDiffPick, confirmPath, chatHistory, mapKbSourceIds, resolveItems, valueScore,
 } from "./lib";
 import type { EmbodimentDraft, Evidence, PreflightFinding } from "./types";
 
@@ -98,7 +98,6 @@ describe("research lib", () => {
 
 describe("KB full-text mapping of search hits", () => {
   const ev = (identifier: string, extra: Partial<Evidence> = {}): Evidence => ({ source: "patents", identifier, title: identifier, snippet: "", relevance: 0.5, ...extra });
-
   it("maps hits via KB-build docs (patent aliases) and resolve matches, skipping failed docs", () => {
     const rows = [ev("CN-112345678-A"), ev("10.1000/xyz"), ev("web-1", { url: "https://e.org/a" }), ev("US1234567B2"), ev("kb:abc#c3")];
     const docs = [
@@ -114,5 +113,30 @@ describe("KB full-text mapping of search hits", () => {
   it("asks the resolve endpoint only for unmapped, real, unique hits", () => {
     const rows = [ev("a", { url: "https://x" }), ev("a"), ev("b"), ev("kb:z#c0"), ev("seed", { is_seed_corpus: true })];
     expect(resolveItems(rows, { b: "s-b" })).toEqual([{ identifier: "a", url: "https://x", url_alt: null }]);
+  });
+});
+
+describe("federated dedup clusters and value score", () => {
+  const ev = (identifier: string, extra: Partial<Evidence> = {}): Evidence => ({ source: "patents", identifier, title: identifier, snippet: "", relevance: 0.5, ...extra });
+
+  it("collapses identifier spellings into one cluster", () => {
+    expect(dedupKey(ev("CN 112345678 A"))).toBe(dedupKey(ev("CN112345678A")));
+    expect(dedupKey(ev("https://doi.org/10.1000/xyz"))).toBe(dedupKey(ev("10.1000/xyz")));
+    expect(dedupKey(ev("", { title: "水性 环氧" }))).toBe(dedupKey(ev("", { title: "水性环氧" })));
+    const clusters = clusterEvidence([
+      ev("CN 112345678 A", { relevance: 0.6, source: "patents" }),
+      ev("CN112345678A", { relevance: 0.9, source: "surechembl" }),
+      ev("US999", { relevance: 0.7 }),
+    ]);
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0].items).toHaveLength(2);
+    expect(clusters[0].representative.relevance).toBe(0.9);
+    expect(clusters[0].representative.source).toBe("surechembl");
+  });
+
+  it("scores value from relevance, domain match, OA and KB presence", () => {
+    expect(valueScore(ev("a", { relevance: 1, domain_match: "strong", is_oa: true }), true)).toBe(1);
+    expect(valueScore(ev("a", { relevance: 0, domain_match: "none" }), false)).toBe(0);
+    expect(valueScore(ev("a", { relevance: 0.8, domain_match: "weak" }), false)).toBe(0.5);
   });
 });

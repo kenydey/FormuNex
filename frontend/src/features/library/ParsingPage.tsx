@@ -1,13 +1,14 @@
 import { CheckCard, PageContainer, ProCard } from "@ant-design/pro-components";
-import { Alert, App, Badge, Descriptions, Input, Space, Tag, Typography } from "antd";
+import { Alert, App, Badge, Button, Descriptions, Input, List, Space, Tag, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { SmilesDrawing } from "@/shared/Markdown";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { PARSE_PROFILES, missingForProfile } from "./logic";
 import type { OcsrStatus, ParseAvailability } from "./types";
+import { addCorrection, exportCorrections, findCorrection, loadCorrections, removeCorrection, saveCorrections, type OcsrCorrection } from "./ocsrCorrections";
 
 const PROFILE_KEY = ["settings", "parse-profile"];
 
@@ -63,9 +64,36 @@ export function ParseProfileSelector() {
 /** Offline chemical-structure recognition status; SMILES preview (no structure editor in this UI). */
 export function OcsrPanel() {
   const { t } = useTranslation();
+  const { message } = App.useApp();
   const q = useQuery({ queryKey: ["settings", "ocsr"], queryFn: () => call<{ status: OcsrStatus }>("GET", "/api/settings/ocsr") });
   const [smiles, setSmiles] = useState("c1ccccc1O");
+  const [corrections, setCorrections] = useState<OcsrCorrection[]>(() => loadCorrections());
+  const [orig, setOrig] = useState("");
+  const [fixed, setFixed] = useState("");
+  const [note, setNote] = useState("");
   const st = q.data?.status;
+  // A correction recorded for this exact OCSR output: offer to apply it.
+  const matched = findCorrection(corrections, smiles);
+  useEffect(() => { saveCorrections(corrections); }, [corrections]);
+  const save = () => {
+    const next = addCorrection(corrections, orig || smiles, fixed, note);
+    if (next === corrections) {
+      message.warning(t("library.ocsr.correct_invalid", "原 SMILES 与校正后相同或为空，未保存"));
+      return;
+    }
+    setCorrections(next);
+    setFixed("");
+    setNote("");
+    message.success(t("library.ocsr.correct_saved", "校正已保存，下次出现相同识别结果时自动提示"));
+  };
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([exportCorrections(corrections)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ocsr-corrections.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   return (
     <ProCard bordered title={t("library.ocsr.title", "OCSR 离线结构识别")} loading={q.isLoading}>
       <Typography.Paragraph type="secondary">
@@ -91,6 +119,42 @@ export function OcsrPanel() {
         <Input.TextArea rows={3} style={{ width: 320, fontFamily: "monospace" }} value={smiles} onChange={(e) => setSmiles(e.target.value)}
           placeholder={t("library.ocsr.smiles_ph", "粘贴或编辑 SMILES")} />
         {smiles.trim() && <SmilesDrawing key={smiles.trim()} smiles={smiles.trim()} width={300} height={200} />}
+      </Space>
+      {matched && (
+        <Alert type="success" showIcon style={{ marginTop: 12 }}
+          message={t("library.ocsr.correct_found", "该识别结果已有校正")}
+          description={<Space>{t("library.ocsr.correct_to", "校正为 {{s}}", { s: matched.corrected })}
+            <Button size="small" type="primary" onClick={() => setSmiles(matched.corrected)}>{t("library.ocsr.apply", "应用校正")}</Button></Space>} />
+      )}
+      <Typography.Title level={5} style={{ marginTop: 16 }}>{t("library.ocsr.correct_title", "OCSR 校正回写")}</Typography.Title>
+      <Typography.Paragraph type="secondary">
+        {t("library.ocsr.correct_desc", "OCSR 误识时在此校正：校正记录保存在本机，再次出现相同识别结果时自动提示；可导出 JSON 交给 OCSR 管线作后续回写。")}
+      </Typography.Paragraph>
+      <Space direction="vertical" style={{ width: "100%" }}>
+        <Space wrap>
+          <Input style={{ width: 300, fontFamily: "monospace" }} value={orig} onChange={(e) => setOrig(e.target.value)}
+            placeholder={t("library.ocsr.orig_ph", "OCSR 识别结果（空则用上方 SMILES）")} />
+          <Input style={{ width: 300, fontFamily: "monospace" }} value={fixed} onChange={(e) => setFixed(e.target.value)}
+            placeholder={t("library.ocsr.fixed_ph", "校正后的 SMILES")} />
+          <Input style={{ width: 220 }} value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder={t("library.ocsr.note_ph", "备注（可选）")} />
+          <Button type="primary" disabled={!fixed.trim()} onClick={save}>{t("library.ocsr.correct_save", "保存校正")}</Button>
+          <Button disabled={!corrections.length} onClick={download}>{t("library.ocsr.export", "导出校正记录")}</Button>
+        </Space>
+        {corrections.length > 0 && (
+          <List size="small" bordered dataSource={corrections} renderItem={(c) => (
+            <List.Item actions={[
+              <Button key="apply" size="small" type="link" onClick={() => setSmiles(c.corrected)}>{t("library.ocsr.apply", "应用校正")}</Button>,
+              <Button key="del" size="small" type="link" danger onClick={() => setCorrections(removeCorrection(corrections, c.id))}>{t("common.delete", "删除")}</Button>,
+            ]}>
+              <Space wrap>
+                <Typography.Text code>{c.original}</Typography.Text>→<Typography.Text code>{c.corrected}</Typography.Text>
+                {c.note && <Typography.Text type="secondary">{c.note}</Typography.Text>}
+                <Typography.Text type="secondary">{new Date(c.created_at).toLocaleString()}</Typography.Text>
+              </Space>
+            </List.Item>
+          )} />
+        )}
       </Space>
     </ProCard>
   );

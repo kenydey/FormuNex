@@ -38,6 +38,11 @@ const BASE_NAV: NavItem[] = [
   { path: "/cockpit", key: "nav.cockpit", zh: "④ AI 寻优驾驶舱", icon: <SlidersOutlined />, children: [
     { path: "/cockpit/pareto", key: "nav.cockpit.pareto", zh: "帕累托与定型" },
     { path: "/cockpit/conformal", key: "nav.cockpit.conformal", zh: "预测区间与偏差" },
+    { path: "/cockpit/acquisition", key: "nav.cockpit.acquisition", zh: "采集函数趋势" },
+    { path: "/cockpit/point-review", key: "nav.cockpit.point_review", zh: "逐点审核与规则" },
+    { path: "/cockpit/rheology", key: "nav.cockpit.rheology", zh: "流变拟合" },
+    { path: "/cockpit/color", key: "nav.cockpit.color", zh: "色度" },
+    { path: "/cockpit/acid-stability", key: "nav.cockpit.acid_stability", zh: "酸稳定性趋势" },
   ] },
   { path: "/plm", key: "nav.plm", zh: "⑤ PLM 文档与发布", icon: <FileProtectOutlined />, children: [
     { path: "/plm/products", key: "nav.plm.products", zh: "产品与修订" },

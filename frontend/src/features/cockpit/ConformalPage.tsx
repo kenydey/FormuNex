@@ -9,6 +9,7 @@ import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
 import { useCampaigns } from "@/features/workbench/hooks";
 import { BiasTrendCard } from "@/features/workbench/panels";
+import { diagonalLine, residualHistogram, residualStats, scatterPoints } from "./conformalCharts";
 
 interface HistoryPoint { index: number; id: string | null; predicted: number; actual: number; lower: number | null; upper: number | null; covered: boolean; rolling_coverage: number }
 interface Out {
@@ -90,6 +91,28 @@ export default function ConformalPage() {
                 { name: t("conformal.cov", "滚动覆盖率"), type: "line", yAxisIndex: 1, data: h.map((p) => p.rolling_coverage), lineStyle: { type: "dashed" } },
               ],
             }} />
+          </ProCard>
+          {/* 补齐 2-18: 预测–实测散点（y=x 对角线）+ 残差分布直方图 */}
+          <ProCard bordered style={{ marginTop: 16 }} title={t("conformal.scatter_title", "预测–实测散点与残差分布")}>
+            <Space direction="vertical" style={{ width: "100%" }} size="large">
+              <Chart height={360} option={{
+                tooltip: { trigger: "item", formatter: (p: unknown) => { const d = (p as { data: number[] }).data; return `${t("conformal.pred", "预测")}: ${d[0]}<br/>${t("conformal.actual", "实测")}: ${d[1]}`; } },
+                legend: { data: [t("conformal.pairs", "配对点"), t("conformal.diagonal", "y=x（完美预测）")] },
+                xAxis: { name: t("conformal.pred", "预测"), scale: true },
+                yAxis: { name: t("conformal.actual", "实测"), scale: true },
+                series: [
+                  { name: t("conformal.pairs", "配对点"), type: "scatter", symbolSize: 8, data: scatterPoints(h).map((p) => [p.x, p.y]) },
+                  { name: t("conformal.diagonal", "y=x（完美预测）"), type: "line", symbol: "none", lineStyle: { type: "dashed", color: "#fa8c16" }, data: diagonalLine(h) },
+                ],
+              }} />
+              <Chart height={260} option={{
+                tooltip: { trigger: "item", formatter: (p: unknown) => { const d = (p as { data: { name: string; value: number } }).data; return `${d.name}<br/>${t("conformal.count", "计数")}: ${d.value}`; } },
+                xAxis: { type: "category", name: t("conformal.residual", "残差（预测−实测）"), data: residualHistogram(h).map((b) => `${b.start.toFixed(2)}~${b.end.toFixed(2)}`) },
+                yAxis: { type: "value", name: t("conformal.count", "计数") },
+                series: [{ type: "bar", data: residualHistogram(h).map((b) => ({ name: `${b.start.toFixed(2)}~${b.end.toFixed(2)}`, value: b.count })) }],
+              }} />
+              <span>{t("conformal.residual_stats", "残差均值（偏差）{{bias}}，RMSE {{rmse}}", (() => { const s = residualStats(h); return { bias: s.bias.toFixed(3), rmse: s.rmse.toFixed(3) }; })())}</span>
+            </Space>
           </ProCard>
         </>
       )}

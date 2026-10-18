@@ -210,6 +210,21 @@ export default function SubstitutionPage() {
                   { title: t("design.sub.feasibility", "可行性"), render: (_v, c) => (c.feasible
                     ? <Tooltip title={confidenceNote(c.delta_confidence)}><Tag color={c.delta_confidence === "high" ? "green" : "gold"}>{t("design.sub.usable", "可用")}</Tag></Tooltip>
                     : <Tooltip title={c.blocking_reasons.join("\n")}><Tag color="red">{t("design.sub.blocked", "拦截")}</Tag></Tooltip>) },
+                  // 补齐计划 2-7: 替换后分类预览（仅前 N 个候选有；升级标红）
+                  { title: t("design.sub.class_preview", "替换后分类"), render: (_v, c) => {
+                    if (!c.classification_after) return <Typography.Text type="secondary">—</Typography.Text>;
+                    const before = c.classification_before;
+                    const after = c.classification_after;
+                    const label = `${after.signal_word ?? t("design.sub.no_signal", "无信号词")} · ${(after.h_codes ?? []).join(" ") || "—"}`;
+                    if (c.classification_upgraded) {
+                      return <Tooltip title={t("design.sub.class_upgraded_tip", "替换后分类升级：{{before}} → {{after}}", {
+                        before: `${before?.signal_word ?? "—"} ${(before?.h_codes ?? []).join(" ")}`,
+                        after: `${after.signal_word ?? "—"} ${(after.h_codes ?? []).join(" ")}`,
+                      })}><Tag color="red">{t("design.sub.class_upgraded", "分类升级")} · {label}</Tag></Tooltip>;
+                    }
+                    if (c.classification_changed) return <Tag color="gold">{t("design.sub.class_changed", "分类变化")} · {label}</Tag>;
+                    return <Tag color="green">{t("design.sub.class_same", "分类不变")} · {label}</Tag>;
+                  } },
                 ]} />
             )}
             {report.candidates[0] && <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>

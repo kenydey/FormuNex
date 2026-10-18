@@ -12,9 +12,15 @@ import type { ProjectDetail } from "@/features/spec/types";
 import type { LabTask } from "@/features/lab/types";
 import { ParallelChart } from "@/features/workbench/charts";
 import { WinningModal } from "./WinningModal";
+import { Scatter3D } from "./Scatter3D";
 
 interface Obj { metric: string; direction: "maximize" | "minimize" | "match_target"; target_value?: number | null }
 interface ParetoPoint { id: string; rank: number | null; values: Record<string, number>; hazard_score?: number; signal_word?: string | null; pictograms?: string[] }
+interface SensitivityOut {
+  surrogate: { r2: number; reliable: boolean; reliability_note?: string };
+  local: { at: number[]; gradient: number[]; gradient_per_range: number[] };
+  sobol_first_order: { factor: string; index: number }[];
+}
 
 /** 帕累托前沿 (方案 §5.4): reviewed lab results; hazard score can be a minimised objective. */
 export default function ParetoPage() {
@@ -27,10 +33,13 @@ export default function ParetoPage() {
   const metrics = Array.from(new Set(done.flatMap((x) => Object.keys(x.measured ?? {}))));
   const projectObjs: Obj[] = (project.data?.workspace.requirement?.objectives ?? []).map((o) => ({ metric: o.metric, direction: o.direction, target_value: o.target_value }));
   const [objs, setObjs] = useState<Obj[] | null>(null);
-  const objectives = objs ?? projectObjs.filter((o) => metrics.includes(o.metric)).slice(0, 2);
+  // 补齐 2-19: 目标支持到 3 个（后端 pareto 接受 1~6 个目标）。
+  const objectives = (objs ?? projectObjs.filter((o) => metrics.includes(o.metric)).slice(0, 2)).slice(0, 3);
   const [hazard, setHazard] = useState(false);
   const [casMap, setCasMap] = useState<Record<string, string>>({});
   const [winning, setWinning] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [onlySelected, setOnlySelected] = useState(false);
   const factorNames = useMemo(() => Array.from(new Set(done.flatMap((x) => Object.entries(x.factors).filter(([, v]) => typeof v === "number").map(([k]) => k)))), [done]);
 
   const run = useMutation({
@@ -47,17 +56,47 @@ export default function ParetoPage() {
   });
   const byNo = new Map(done.map((x) => [x.task_no, x]));
   const res = run.data;
-  const [xm, ym] = [objectives[0]?.metric, objectives[1]?.metric ?? (hazard ? "hazard_score" : undefined)];
+  const [xm, ym, zm] = [objectives[0]?.metric, objectives[1]?.metric, objectives[2]?.metric];
   const val = (p: ParetoPoint, m?: string) => (m === "hazard_score" ? p.hazard_score : m ? p.values[m] : undefined);
+  const frontierPoints = (res?.points ?? []).filter((p) => p.rank === 0);
+  const otherPoints = (res?.points ?? []).filter((p) => p.rank !== 0);
+
+  // 补齐 2-19: 刷选联动 — brushSelected 给出各 series 的 dataIndex，映射回点 id。
+  const onBrushSelected = (params: unknown) => {
+    const batch = (params as { batch?: { selected?: { seriesIndex: number; dataIndex: number[] }[] }[] }).batch?.[0];
+    const ids: string[] = [];
+    for (const sel of batch?.selected ?? []) {
+      const arr = sel.seriesIndex === 0 ? frontierPoints : otherPoints;
+      for (const i of sel.dataIndex) if (arr[i]) ids.push(arr[i].id);
+    }
+    setSelectedIds(ids);
+  };
+
+  // 补齐 2-19: 灵敏度详情 — 用全部已复核任务的数值因子 + 首个目标实测值调 /sensitivity。
+  const sensitivity = useMutation({
+    mutationFn: (pointId: string) => {
+      const factorSet = factorNames.filter((f) => done.every((x) => typeof x.factors[f] === "number"));
+      const points = done
+        .filter((x) => x.measured?.[objectives[0].metric] != null && factorSet.every((f) => typeof x.factors[f] === "number"))
+        .map((x) => ({ id: x.task_no, factors: Object.fromEntries(factorSet.map((f) => [f, x.factors[f] as number])), objective: x.measured![objectives[0].metric] }));
+      return call<SensitivityOut>("POST", "/api/cockpit/sensitivity", { points, selected_id: pointId });
+    },
+  });
+  const selectedId = selectedIds[0] ?? null;
+  const selectedTask = selectedId ? byNo.get(selectedId) : undefined;
+
+  const tableData = [...(res?.points ?? [])].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
+    .filter((p) => !onlySelected || selectedIds.includes(p.id));
 
   return (
     <PageContainer subTitle={t("pareto.sub", "只使用已复核的实测值；点击前沿上的点可设为定型")}>
       <ProCard bordered>
         <Space wrap>
           <span>{t("pareto.objectives", "目标")}</span>
-          <Select mode="multiple" style={{ minWidth: 320 }} value={objectives.map((o) => `${o.metric}:${o.direction}`)}
-            onChange={(vals: string[]) => setObjs(vals.map((v) => { const [metric, direction] = v.split(":"); return { metric, direction: direction as Obj["direction"] }; }))}
+          <Select mode="multiple" style={{ minWidth: 320 }} maxCount={3} value={objectives.map((o) => `${o.metric}:${o.direction}`)}
+            onChange={(vals: string[]) => setObjs(vals.slice(0, 3).map((v) => { const [metric, direction] = v.split(":"); return { metric, direction: direction as Obj["direction"] }; }))}
             options={metrics.flatMap((m) => [{ value: `${m}:maximize`, label: `${m} ↑` }, { value: `${m}:minimize`, label: `${m} ↓` }])} />
+          <span>{t("pareto.objectives_hint", "最多 3 个目标；3 个目标时可用 3D 散点")}</span>
           <Switch checked={hazard} onChange={setHazard} /> {t("pareto.hazard", "危害评分作为最小化目标（由组成计算）")}
           <Button type="primary" disabled={!objectives.length} loading={run.isPending} onClick={() => run.mutate()}>{t("pareto.run", "计算前沿")}</Button>
         </Space>
@@ -82,16 +121,26 @@ export default function ParetoPage() {
                   tooltip: { trigger: "item", formatter: (p: unknown) => { const d = (p as { data: { name: string; value: number[] } }).data; return `${d.name}<br/>${xm}: ${d.value[0]}<br/>${ym}: ${d.value[1]}`; } },
                   xAxis: { name: xm, scale: true }, yAxis: { name: ym, scale: true },
                   legend: { data: [t("pareto.frontier", "帕累托前沿"), t("pareto.others", "其他")] },
+                  brush: { toolbox: ["rect", "clear"], xAxisIndex: 0, yAxisIndex: 0 },
                   series: [
                     { name: t("pareto.frontier", "帕累托前沿"), type: "scatter", symbolSize: 14,
-                      data: res.points.filter((p) => p.rank === 0).map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
+                      data: frontierPoints.map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
                     { name: t("pareto.others", "其他"), type: "scatter", symbolSize: 8, itemStyle: { opacity: 0.5 },
-                      data: res.points.filter((p) => p.rank !== 0).map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
+                      data: otherPoints.map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
                   ],
                 }}
-                onEvents={{ click: (p) => { const exp = byNo.get((p as { name: string }).name)?.experiment_id; if (exp && can("formulation.freeze")) setWinning(exp); } }}
+                onEvents={{ click: (p) => { const id = (p as { name: string }).name; if (id) setSelectedIds([id]); const exp = byNo.get(id)?.experiment_id; if (exp && can("formulation.freeze")) setWinning(exp); }, brushSelected: onBrushSelected }}
               />
             ) },
+            ...(zm ? [{ key: "scatter3d", label: t("pareto.view_3d", "3D 散点"), children: (
+              <Scatter3D
+                points={res.points.filter((p) => val(p, xm) != null && val(p, ym) != null && val(p, zm) != null)
+                  .map((p) => ({ id: p.id, values: [val(p, xm)!, val(p, ym)!, val(p, zm)!] as [number, number, number], frontier: p.rank === 0 }))}
+                axisNames={[xm, ym, zm]}
+                selectedId={selectedId}
+                onSelect={(id) => setSelectedIds([id])}
+              />
+            ) }] : []),
             { key: "parallel", label: t("pareto.view_parallel", "平行坐标"), children: (
               <ParallelChart
                 axes={[...objectives.map((o) => ({ key: o.metric, label: o.metric, direction: o.direction })),
@@ -100,14 +149,43 @@ export default function ParetoPage() {
                 highlight={new Set(res.points.filter((p) => p.rank === 0).map((p) => p.id))} />
             ) },
           ]} />
-          <Table size="small" rowKey="id" pagination={false} dataSource={[...res.points].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))} columns={[
+          <Space wrap style={{ marginTop: 8 }}>
+            <span>{t("pareto.selected", "已选 {{n}} 点", { n: selectedIds.length })}</span>
+            <Switch checked={onlySelected} onChange={setOnlySelected} /> {t("pareto.only_selected", "表格仅看选中")}
+            <Button size="small" onClick={() => { setSelectedIds([]); setOnlySelected(false); }}>{t("pareto.clear_selection", "清除选中")}</Button>
+          </Space>
+          <Table size="small" rowKey="id" pagination={false} dataSource={tableData} rowClassName={(p) => (selectedIds.includes(p.id) ? "ant-table-row-selected" : "")} columns={[
             { title: t("tasks.no", "任务单"), dataIndex: "id" },
             { title: t("pareto.rank", "前沿层级"), dataIndex: "rank", render: (r: number) => (r === 0 ? <Tag color="green">0</Tag> : r) },
             ...objectives.map((o) => ({ title: o.metric, render: (_v: unknown, p: ParetoPoint) => p.values[o.metric] })),
             ...(hazard ? [{ title: t("pareto.hazard_col", "危害评分"), dataIndex: "hazard_score" }] : []),
+            { title: "", render: (_v: unknown, p: ParetoPoint) => <Button size="small" onClick={() => setSelectedIds([p.id])}>{t("pareto.detail", "详情")}</Button> },
             { title: "", render: (_v: unknown, p: ParetoPoint) => can("formulation.freeze") && p.rank === 0 &&
               <Button size="small" onClick={() => setWinning(byNo.get(p.id)?.experiment_id ?? null)}>{t("pareto.win", "设为定型")}</Button> },
           ]} />
+          {/* 补齐 2-19: 刷选/点击联动详情 + 灵敏度 */}
+          {selectedTask && (
+            <ProCard bordered style={{ marginTop: 16 }} title={t("pareto.detail_title", "选中点 {{id}}", { id: selectedTask.task_no })}>
+              <Space direction="vertical" style={{ width: "100%" }}>
+                <span>{t("pareto.detail_factors", "因子：{{f}}", { f: JSON.stringify(selectedTask.factors) })}</span>
+                <span>{t("pareto.detail_measured", "实测：{{m}}", { m: JSON.stringify(selectedTask.measured) })}</span>
+                <Button type="primary" disabled={!objectives[0]} loading={sensitivity.isPending}
+                  onClick={() => sensitivity.mutate(selectedTask.task_no)}>{t("pareto.sensitivity", "灵敏度分析（局部梯度 + Sobol）")}</Button>
+                <ErrorAlert error={sensitivity.error} />
+                {sensitivity.data && (
+                  <>
+                    {!sensitivity.data.surrogate.reliable && <Alert type="warning" showIcon message={sensitivity.data.surrogate.reliability_note ?? t("pareto.surrogate_unreliable", "代理模型 R² 偏低，灵敏度仅供参考")} />}
+                    <Table size="small" rowKey="factor" pagination={false} dataSource={sensitivity.data.sobol_first_order} columns={[
+                      { title: t("pareto.factor", "因子"), dataIndex: "factor" },
+                      { title: t("pareto.sobol", "一阶 Sobol 指数"), dataIndex: "index", render: (v: number) => v.toFixed(3) },
+                      { title: t("pareto.gradient", "局部梯度（每单位因子）"), render: (_v: unknown, r: { factor: string }) => { const i = sensitivity.data!.sobol_first_order.findIndex((s) => s.factor === r.factor); return sensitivity.data!.local.gradient[i]?.toFixed(4); } },
+                      { title: t("pareto.gradient_range", "局部梯度（每全距）"), render: (_v: unknown, r: { factor: string }) => { const i = sensitivity.data!.sobol_first_order.findIndex((s) => s.factor === r.factor); return sensitivity.data!.local.gradient_per_range[i]?.toFixed(4); } },
+                    ]} />
+                  </>
+                )}
+              </Space>
+            </ProCard>
+          )}
           <Alert style={{ marginTop: 8 }} type="info" showIcon message={t("pareto.hazard_note", "危害评分仅用于排序（按危害类别与严重度加权），不是法规量。")} />
         </ProCard>
       )}

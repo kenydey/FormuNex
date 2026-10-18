@@ -10,6 +10,7 @@ import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
 import type { ProjectDetail } from "@/features/spec/types";
 import type { ProductDetail } from "./types";
+import { ProductLineageChainCard } from "./ProductLineageChain";
 
 interface Lineage { lineage_id: string; versions: { id: string; version: number; name: string }[] }
 interface QcRow { metric: string; value: number | null; unit?: string; test_method?: string }
@@ -71,6 +72,7 @@ export default function ProductDetailPage() {
           ]} />
         </ProCard>
       </ProCard>
+      <ProductLineageChainCard productId={productId} />
       <Modal open={revOpen} title={t("plm.new_revision", "新建修订版")} onCancel={() => setRevOpen(false)} confirmLoading={createRev.isPending}
         onOk={async () => createRev.mutate(await rForm.validateFields())} destroyOnHidden>
         <Form form={rForm} layout="vertical">

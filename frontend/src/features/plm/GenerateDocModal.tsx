@@ -1,4 +1,4 @@
-import { App, Button, Divider, Form, Input, InputNumber, Modal, Select, Space, Typography } from "antd";
+import { Alert, App, Button, Divider, Form, Input, InputNumber, Modal, Select, Space, Tag, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -6,7 +6,8 @@ import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { EditableRows } from "@/shared/EditableRows";
 import { errorText } from "@/shared/feedback";
-import type { ProductDetail, Revision } from "./types";
+import type { DocSummary, ProductDetail, Revision } from "./types";
+import { loadLocks } from "./fieldLocks";
 
 interface Candidates { sds_properties: Record<string, { value: number; method: string; source: string }>; notes?: string[] }
 interface Secret { cas: string; generic: string }
@@ -67,11 +68,27 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
     onError: (e) => message.error(errorText(e)),
   });
   const sds = docType === "sds" || docType === "label";
+  // Locked fields of the latest same-type document of this revision: regeneration
+  // should preserve them — surface them here (the lock lives in the browser).
+  const docs = useQuery({ queryKey: ["plm", "docs", revision.id], enabled: open,
+    queryFn: () => call<DocSummary[]>("GET", `/api/plm/revisions/${revision.id}/documents`) });
+  const latestOfType = (docs.data ?? []).filter((x) => x.doc_type === docType).sort((a, b) => b.version_no - a.version_no)[0];
+  const lockedFields = latestOfType ? (loadLocks()[latestOfType.id] ?? []) : [];
   return (
     <Modal open={open} width={760} title={t("doc.generate", "生成文档")} onCancel={onClose} confirmLoading={gen.isPending} destroyOnHidden
       onOk={async () => gen.mutate(await form.validateFields())}>
       <Form form={form} layout="vertical" initialValues={{ doc_type: "sds", lang: "zh-CN", phys_state: "liquid" }}>
-        <Space>
+        {lockedFields.length > 0 && (
+          <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+            message={t("doc.locked_notice", "上一版本有 {{n}} 个锁定字段，重新生成时请核对保留", { n: lockedFields.length })}
+            description={<Space direction="vertical" size={4}>
+              <Space wrap>{lockedFields.map((l) => <Tag key={l.fieldKey} color="gold">{l.label}：{l.value}</Tag>)}</Space>
+              <Button size="small" onClick={() => {
+                void navigator.clipboard?.writeText(JSON.stringify(lockedFields, null, 2));
+                message.success(t("doc.locked_copied", "锁定字段已复制"));
+              }}>{t("doc.locked_copy", "复制锁定字段值")}</Button>
+            </Space>} />
+        )}        <Space>
           <Form.Item name="doc_type" label={t("doc.type", "类型")}><Select style={{ width: 140 }} options={[
             { value: "sds", label: "SDS" }, { value: "tds", label: "TDS" }, { value: "label", label: t("doc.label", "标签") }, { value: "coa", label: "COA" }]} /></Form.Item>
           <Form.Item name="lang" label={t("doc.lang", "语言")}><Select style={{ width: 120 }} options={[{ value: "zh-CN", label: "中文" }, { value: "en-US", label: "English" }]} /></Form.Item>

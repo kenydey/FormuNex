@@ -1,17 +1,20 @@
 import { PageContainer, ProCard, ProTable } from "@ant-design/pro-components";
 import { UploadOutlined } from "@ant-design/icons";
-import { Alert, App, Button, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Timeline, Upload } from "antd";
+import { RevoGrid } from "@revolist/react-datagrid";
+import { Alert, App, Button, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Timeline, Typography, Upload } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { call } from "@/api/client";
+import { call, fetchBlobUrl } from "@/api/client";
 import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
 import type { Instrument, LabTask, Measurement, Method } from "./types";
 
 interface Entry { metric: string; value: number | null; method_code?: string; instrument_id?: string; note?: string }
+
+interface TaskAttachment { id: string; filename: string; content_type: string; size_bytes: number; sha256: string; uploaded_by?: string | null; created_at?: string | null }
 
 export default function TaskDetailPage() {
   const { t } = useTranslation();
@@ -24,6 +27,10 @@ export default function TaskDetailPage() {
   const instruments = useQuery({ queryKey: ["lab", "instruments"], queryFn: () => call<Instrument[]>("GET", "/api/lab/instruments") });
   const [entries, setEntries] = useState<Entry[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+  // 补齐计划 2-14: 批量录入用 RevoGrid（可从 Excel 粘贴区域），与配方编辑器同款。
+  const entryGrid = useRef<HTMLRevoGridElement>(null);
+  const attachments = useQuery({ queryKey: ["lab", "task-attachments", taskId],
+    queryFn: () => call<TaskAttachment[]>("GET", `/api/lab/tasks/${taskId}/attachments`) });
   const [history, setHistory] = useState<{ id: string; rows: { field: string; old: string; new: string; reason: string; at: string }[] } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const refresh = () => { void qc.invalidateQueries({ queryKey: ["lab"] }); };
@@ -88,23 +95,69 @@ export default function TaskDetailPage() {
           {warnings.length > 0 && <Alert type="warning" showIcon closable style={{ marginBottom: 8 }} message={warnings.map((w, i) => <div key={i}>{w}</div>)} onClose={() => setWarnings([])} />}
           {editable && entries.length > 0 && (
             <>
-              <Table size="small" pagination={false} rowKey="metric" dataSource={entries} columns={[
-                { title: t("tasks.metric", "指标"), dataIndex: "metric" },
-                { title: t("measure.value", "数值"), render: (_v, r, i) => <InputNumber value={r.value ?? undefined} onChange={(v) => setEntries(entries.map((e, j) => (j === i ? { ...e, value: v } : e)))} /> },
-                { title: t("measure.method", "方法"), render: (_v, r, i) => <Select style={{ width: 200 }} value={r.method_code}
-                  options={(methods.data ?? []).filter((m) => m.active && (!m.metric || m.metric === r.metric)).map((m) => ({ value: m.code, label: `${m.code} ${m.unit}` }))}
-                  onChange={(v) => setEntries(entries.map((e, j) => (j === i ? { ...e, method_code: v } : e)))} /> },
-                { title: t("measure.instrument", "仪器"), render: (_v, r, i) => <Select allowClear style={{ width: 180 }} value={r.instrument_id}
-                  options={(instruments.data ?? []).filter((x) => x.active).map((x) => ({ value: x.id, label: `${x.asset_no} ${x.name}`, disabled: x.calibration_state === "overdue" }))}
-                  onChange={(v) => setEntries(entries.map((e, j) => (j === i ? { ...e, instrument_id: v } : e)))} /> },
-              ]} />
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                {t("measure.grid_help", "批量录入：可从 Excel 直接粘贴数值区域；方法列填方法代码，仪器列填资产编号，备注列填文字。服务端校验方法与仪器校准，未知方法将被拒绝。")}
+              </Typography.Paragraph>
+              <div className="fx-grid" style={{ height: Math.min(400, 48 + entries.length * 34) }}>
+                <RevoGrid ref={entryGrid} source={entries} range resize theme="compact"
+                  columns={[
+                    { prop: "metric", name: t("tasks.metric", "指标"), size: 160, readonly: true },
+                    { prop: "value", name: t("measure.value", "数值"), size: 120, columnType: "numeric" },
+                    { prop: "method_code", name: t("measure.method", "方法"), size: 160 },
+                    { prop: "instrument_id", name: t("measure.instrument", "仪器"), size: 160 },
+                    { prop: "note", name: t("measure.note", "备注"), size: 200 },
+                  ]}
+                  onAfteredit={() => void (async () => {
+                    const data = (await entryGrid.current?.getSource()) as Entry[] | undefined;
+                    if (data) setEntries(data.map((e) => ({ ...e, value: e.value == null || (e.value as unknown) === "" ? null : Number(e.value) })));
+                  })()} />
+              </div>
               <Button type="primary" style={{ marginTop: 8 }} loading={act.isPending}
-                onClick={() => act.mutate({ path: `/api/lab/tasks/${taskId}/measurements`, body: {
-                  measurements: entries.filter((e) => e.value != null).map((e) => ({ metric: e.metric, value: e.value, method_code: e.method_code, instrument_id: e.instrument_id })) } },
-                  { onSuccess: () => setEntries([]) })}>{t("measure.record", "保存录入")}</Button>
+                onClick={async () => {
+                  const data = ((await entryGrid.current?.getSource()) as Entry[] | undefined) ?? entries;
+                  const measurements = data.filter((e) => e.value != null && (e.value as unknown) !== "").map((e) => ({
+                    metric: e.metric, value: Number(e.value), method_code: e.method_code || undefined,
+                    instrument_id: e.instrument_id || undefined, note: e.note || undefined }));
+                  await act.mutateAsync({ path: `/api/lab/tasks/${taskId}/measurements`, body: { measurements } });
+                  setEntries([]);
+                }}>{t("measure.record", "保存录入")}</Button>
             </>
           )}
         </ProCard>
+      </ProCard>
+      {/* 补齐计划 2-14: 任务附件（原始记录 / 图谱 / 现场照片） */}
+      <ProCard bordered style={{ marginTop: 16 }} title={t("tasks.attachments", "任务附件")}
+        extra={<Upload showUploadList={false} customRequest={async ({ file }) => {
+          try {
+            const fd = new FormData();
+            fd.append("file", file as File);
+            await call("POST", `/api/lab/tasks/${taskId}/attachments`, fd);
+            message.success(t("tasks.uploaded", "附件已上传"));
+            void qc.invalidateQueries({ queryKey: ["lab", "task-attachments", taskId] });
+          } catch (e) { message.error(errorText(e)); }
+        }}>
+          <Button icon={<UploadOutlined />}>{t("tasks.upload", "上传附件")}</Button>
+        </Upload>}>
+        <Table size="small" pagination={false} rowKey="id" dataSource={attachments.data ?? []} columns={[
+          { title: t("tasks.file", "文件名"), dataIndex: "filename" },
+          { title: t("tasks.size", "大小"), dataIndex: "size_bytes", width: 120, render: (v: number) => `${(v / 1024).toFixed(1)} KB` },
+          { title: t("tasks.uploaded_at", "上传时间"), dataIndex: "created_at", width: 180, render: (v: string | null) => v?.slice(0, 19).replace("T", " ") ?? "—" },
+          { title: t("common.actions", "操作"), width: 140, render: (_d, r: TaskAttachment) => [
+            <a key="dl" onClick={async () => {
+              try {
+                const url = await fetchBlobUrl(`/api/lab/tasks/${taskId}/attachments/${r.id}/download`);
+                window.open(url, "_blank", "noopener");
+              } catch (e) { message.error(errorText(e)); }
+            }}>{t("tasks.download", "下载")}</a>,
+            can("doe.write") && <a key="del" onClick={() => modal.confirm({
+              title: t("tasks.del_att", "删除附件"), content: r.filename,
+              onOk: async () => {
+                await call("DELETE", `/api/lab/tasks/${taskId}/attachments/${r.id}`);
+                void qc.invalidateQueries({ queryKey: ["lab", "task-attachments", taskId] });
+              },
+            })}>{t("common.delete", "删除")}</a>,
+          ] },
+        ]} />
       </ProCard>
       <ProCard bordered style={{ marginTop: 16 }} title={t("measure.list", "测量记录（全部保留）")}>
         <ProTable<Measurement> rowKey="id" search={false} options={false} pagination={false} dataSource={data.measurements} columns={[

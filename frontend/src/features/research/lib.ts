@@ -226,3 +226,53 @@ export function mapKbSourceIds(rows: Evidence[], docs: KbIngestDoc[] = [], match
   }
   return out;
 }
+
+/**
+ * Dedup key for a search hit: the same document is often returned by several
+ * federated sources with different identifier spellings (``CN 123456 A`` vs
+ * ``CN123456A``, DOI vs DOI URL). Normalising to alphanumerics collapses those;
+ * hits without an identifier fall back to the normalised title.
+ */
+export function dedupKey(e: Pick<Evidence, "identifier" | "title">): string {
+  const id = (e.identifier || "").trim().toLowerCase()
+    .replace(/^https?:\/\//, "").replace(/^(doi:|dx\.doi\.org\/|doi\.org\/)/, "").replace(/[^a-z0-9]+/g, "");
+  if (id) return `id:${id}`;
+  return `title:${(e.title || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "")}`;
+}
+
+export interface EvidenceCluster { key: string; items: Evidence[]; representative: Evidence }
+
+/**
+ * Group search hits into dedup clusters (same document from several sources).
+ * The representative is the highest-relevance member; clusters sort by it.
+ * Complements ``mergeEvidence`` (exact-key dedup): this catches near-duplicates
+ * whose identifiers differ only in punctuation/spacing/prefix.
+ */
+export function clusterEvidence(items: Evidence[]): EvidenceCluster[] {
+  const byKey = new Map<string, Evidence[]>();
+  for (const e of items) {
+    const k = dedupKey(e);
+    const arr = byKey.get(k);
+    if (arr) arr.push(e);
+    else byKey.set(k, [e]);
+  }
+  return [...byKey.values()]
+    .map((members) => ({
+      key: dedupKey(members[0]),
+      items: members,
+      representative: [...members].sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0))[0],
+    }))
+    .sort((a, b) => (b.representative.relevance ?? 0) - (a.representative.relevance ?? 0));
+}
+
+/**
+ * Composite value score (0–1) from signals the hit already carries — the
+ * backend exposes no value score, so the frontend derives one and labels it
+ * as such: relevance 50% + domain match 20% + open-access 15% + already
+ * in KB (full text available) 15%.
+ */
+export function valueScore(e: Evidence, inKb: boolean): number {
+  const rel = Number.isFinite(Number(e.relevance)) ? Math.min(1, Math.max(0, Number(e.relevance))) : 0;
+  const domain = e.domain_match === "strong" ? 1 : e.domain_match === "weak" ? 0.5 : 0;
+  return Math.round((0.5 * rel + 0.2 * domain + 0.15 * (e.is_oa ? 1 : 0) + 0.15 * (inKb ? 1 : 0)) * 100) / 100;
+}

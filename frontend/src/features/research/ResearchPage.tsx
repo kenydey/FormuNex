@@ -5,9 +5,10 @@ import { useTranslation } from "react-i18next";
 import DeepResearchTab from "./DeepResearchTab";
 import ExternalSearchTab from "./ExternalSearchTab";
 import ResearchChatTab from "./ResearchChatTab";
+import StormReportTab from "./StormReportTab";
 import { useResearch } from "./store";
 
-const TABS = ["search", "chat", "deep"] as const;
+const TABS = ["search", "chat", "deep", "storm"] as const;
 type Tab = (typeof TABS)[number];
 
 /** 外部检索与深度研究: federated external search → grounded Q&A → CRAG deep research report (legacy ResearchPanel). */
@@ -27,6 +28,7 @@ export default function ResearchPage() {
         { key: "search", tab: t("research.tab.search", "外部检索（{{n}}）", { n: sources.length }) },
         { key: "chat", tab: t("research.tab.chat", "资料问答（{{n}}）", { n: selected.length }) },
         { key: "deep", tab: report ? t("research.tab.deep_ready", "深度研究 · 已生成") : t("research.tab.deep", "深度研究") },
+        { key: "storm", tab: t("research.tab.storm", "STORM 长文") },
       ]}
       extra={(
         <Space>
@@ -38,6 +40,7 @@ export default function ResearchPage() {
       {tab === "search" && <ExternalSearchTab />}
       {tab === "chat" && <ResearchChatTab />}
       {tab === "deep" && <DeepResearchTab />}
+      {tab === "storm" && <StormReportTab />}
     </PageContainer>
   );
 }

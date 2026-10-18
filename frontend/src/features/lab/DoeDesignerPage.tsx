@@ -49,6 +49,41 @@ export default function DoeDesignerPage() {
   const projectId = useUi((s) => s.projectId);
   const project = useQuery({ queryKey: ["project", projectId], enabled: !!projectId, queryFn: () => call<ProjectDetail>("GET", `/api/projects/${projectId}`) });
   const spec = project.data?.workspace.spec_contract;
+  // 补齐计划 2-9: 未确认的契约变更通知 —— 下游 DOE 须重新评估，确认后消失。
+  const pendingNotices = (project.data?.workspace.contract_change_notices ?? []).filter((n) => !n.acknowledged);
+  const acknowledge = useMutation({
+    mutationFn: () => call("POST", `/api/projects/${projectId}/contract-change-notices/acknowledge`, {}),
+    onSuccess: () => {
+      message.success(t("doe.contract_ack", "已确认契约变更，请按新契约重新评估 DOE"));
+      void project.refetch();
+    },
+    onError: (e) => message.error(errorText(e)),
+  });
+  const pw = spec?.process_window ?? {};
+  // 补齐计划 2-10: 从规格契约工艺窗口填充工艺因子。窗口值是契约定点，DOE 因子以定点为中心
+  // ±10% 探索（可手动改）；已存在的同名因子不覆盖（用户手动值优先）。
+  // 补齐计划 2-10: 从规格契约工艺窗口填充工艺因子。窗口为 [lo, hi] 区间（前端真实形状）
+  // → 因子上下限即窗口区间；单个数字（旧数据）→ 定点 ±10%。已存在的同名因子不覆盖。
+  const fillFromProcessWindow = () => {
+    const next = [...proc];
+    const pushRange = (name: string, lo: number, hi: number, unit: string) => {
+      if (next.some((p) => p.name === name)) return;
+      next.push({ name, low: lo, high: hi, levels: 3, unit });
+    };
+    const push = (name: string, value: number | [number, number] | undefined, unit: string) => {
+      if (value === undefined) return;
+      if (Array.isArray(value)) pushRange(name, value[0], value[1], unit);
+      else pushRange(name, Math.max(0, Math.round(value * 0.9 * 100) / 100), Math.round(value * 1.1 * 100) / 100, unit);
+    };
+    push("固化温度", pw.cure_temp_c, "°C");
+    push("固化时间", pw.cure_time_min, "min");
+    push("干膜厚度", pw.film_thickness_um, "μm");
+    setProc(next);
+    message.success(t("doe.filled_pw", "已从工艺窗口填充工艺因子（可手动调整）"));
+  };
+  const fmtWindow = (v: number | [number, number] | undefined, unit: string) =>
+    v === undefined ? null : Array.isArray(v) ? `${v[0]}~${v[1]} ${unit}` : `${v} ${unit}`;
+  const hasProcessWindow = pw.cure_temp_c !== undefined || pw.cure_time_min !== undefined || pw.film_thickness_um !== undefined;
   const arrays = useQuery({ queryKey: ["doe", "arrays"], queryFn: () => call<{ name: string; runs: number; columns: number }[]>("GET", "/api/doe/designs/orthogonal-arrays") });
 
   const [oaFactors, setOaFactors] = useState<LevelFactor[]>([{ name: "固化温度", levels: "120, 150, 180" }, { name: "固化时间", levels: "20, 30, 40" }]);
@@ -92,6 +127,19 @@ export default function DoeDesignerPage() {
   const procEditor = (
     <>
       <Typography.Title level={5}>{t("doe.process", "工艺因子（连续）")}</Typography.Title>
+      {hasProcessWindow && (
+        <Space style={{ marginBottom: 8 }} wrap>
+          <Alert type="info" showIcon style={{ padding: "4px 12px" }}
+            message={t("doe.pw_hint", "规格契约工艺窗口：{{window}}", {
+              window: [
+                fmtWindow(pw.cure_temp_c, "°C") ? `固化温度 ${fmtWindow(pw.cure_temp_c, "°C")}` : null,
+                fmtWindow(pw.cure_time_min, "min") ? `固化时间 ${fmtWindow(pw.cure_time_min, "min")}` : null,
+                fmtWindow(pw.film_thickness_um, "μm") ? `干膜厚度 ${fmtWindow(pw.film_thickness_um, "μm")}` : null,
+              ].filter(Boolean).join(" · "),
+            })} />
+          <Button size="small" onClick={fillFromProcessWindow}>{t("doe.fill_pw", "从工艺窗口填充")}</Button>
+        </Space>
+      )}
       <EditableRows<Process> value={proc} onChange={setProc} newRow={() => ({ name: "", low: 0, high: 1, levels: 3 })} columns={[
         { title: t("doe.factor", "因子"), dataIndex: "name" },
         { title: t("doe.low", "下限"), dataIndex: "low", valueType: "digit" },
@@ -117,6 +165,15 @@ export default function DoeDesignerPage() {
       <Link key="history" to="/lab/doe/history"><Button>{t("design.doe.history", "DOE 历史")}</Button></Link>,
     ]}>
       <ProCard bordered>
+        {pendingNotices.length > 0 && (
+          <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+            message={t("doe.contract_changed", "规格契约已变更（{{keys}}），请按新契约重新评估 DOE", {
+              keys: [...new Set(pendingNotices.flatMap((n) => n.changed_keys))].join("、"),
+            })}
+            action={<Button size="small" type="primary" loading={acknowledge.isPending} onClick={() => acknowledge.mutate()}>
+              {t("doe.contract_ack_btn", "已知晓，重新评估")}
+            </Button>} />
+        )}
         <Tabs items={[
           { key: "orthogonal", label: t("doe.orthogonal", "正交表（Taguchi）"), children: (
             <>

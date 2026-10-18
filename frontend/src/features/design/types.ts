@@ -180,6 +180,14 @@ export interface SubstituteCandidate {
   stale_price?: boolean;
   missing_price?: boolean;
   long_lead_time?: boolean;
+  /** 补齐计划 2-7: 替换后分类预览（仅前 N 个库内候选有；分类失败时缺失）。 */
+  classification_before?: { signal_word?: string | null; h_codes?: string[]; pictograms?: string[] };
+  classification_after?: { signal_word?: string | null; h_codes?: string[]; pictograms?: string[] };
+  classification_changed?: boolean;
+  classification_upgraded?: boolean;
+  /** Phase 1D: 项目红线命中（有 session + project_id 时）。 */
+  redline_hits?: { code: string; message: string }[];
+  redline_violated?: boolean;
 }
 interface Evidence { source_id?: string; chunk_id?: string | null; sentence?: string; confidence?: number | null }
 export interface ExternalCandidate {

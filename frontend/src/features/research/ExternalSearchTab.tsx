@@ -2,7 +2,7 @@ import { ProTable } from "@ant-design/pro-components";
 import { Alert, App, Badge, Button, Card, Checkbox, Input, Popconfirm, Progress, Space, Tag, Tooltip, Typography, Upload } from "antd";
 import { CloudDownloadOutlined, DeleteOutlined, ExperimentOutlined, FileTextOutlined, UploadOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
@@ -10,8 +10,8 @@ import { awaitTask, cancelTask, type AsyncTaskAccepted } from "@/api/stream";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { EmbodimentDraftDrawer } from "./EmbodimentDraftDrawer";
 import {
-  citationTarget, evidenceKey, mapKbSourceIds, pageLabel, parseKbIngest, parseSearchData, resolveItems, sourceBadge, SOURCE_TYPES,
-  type KbResolveMatch,
+  citationTarget, clusterEvidence, evidenceKey, mapKbSourceIds, pageLabel, parseKbIngest, parseSearchData, resolveItems, sourceBadge, valueScore, SOURCE_TYPES,
+  type EvidenceCluster, type KbResolveMatch,
 } from "./lib";
 import { useResearch } from "./store";
 import type {
@@ -39,6 +39,8 @@ export default function ExternalSearchTab() {
   const [kbMap, setKbMap] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<EmbodimentDraft | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [dedup, setDedup] = useState(true);
+  const [batch, setBatch] = useState<{ active: boolean; done: number; skipped: number; failed: number; total: number } | null>(null);
   const abort = useRef<{ ctrl: AbortController; taskId?: string } | null>(null);
 
   const status = useQuery({
@@ -48,6 +50,16 @@ export default function ExternalSearchTab() {
   });
   const patchRow = (k: string, p: RowState) => setRows((r) => ({ ...r, [k]: { ...r[k], ...p } }));
   const sourceIdOf = (k: string) => rows[k]?.sourceId || kbMap[k] || null;
+  /** Whether a hit's full text is already in the KB (indexed / skipped / resolved). */
+  const inKbOf = (e: Evidence) => {
+    const r = rows[evidenceKey(e)];
+    const sid = sourceIdOf(evidenceKey(e));
+    return r?.status === "indexed" || r?.status === "skipped" || (!!sid && r?.status !== "failed");
+  };
+  /** Dedup clusters of the current hits; when dedup is on, the table shows one row per cluster. */
+  const clusters = useMemo(() => clusterEvidence(s.sources), [s.sources]);
+  const clusterByRepKey = useMemo(() => new Map(clusters.map((c) => [evidenceKey(c.representative), c])), [clusters]);
+  const shown = useMemo(() => (dedup ? clusters.map((c) => c.representative) : s.sources), [dedup, clusters, s.sources]);
 
   /** Map hits to their KB documents: progress docs first, then one resolve call for whatever is still unmapped. */
   const resolveKb = async (docs: KbIngestDoc[] = []) => {
@@ -180,7 +192,8 @@ export default function ExternalSearchTab() {
     }
   };
 
-  const ingest = async (e: Evidence) => {
+  /** Ingest one hit's full text; quiet mode suppresses per-row toasts (batch ingest reports a summary). Returns the outcome. */
+  const ingest = async (e: Evidence, opts?: { quiet?: boolean }): Promise<"indexed" | "skipped" | "failed"> => {
     const k = evidenceKey(e);
     patchRow(k, { busy: "ingest", error: null });
     try {
@@ -198,16 +211,40 @@ export default function ExternalSearchTab() {
       }
       patchRow(k, { status: st, sourceId, error: res.ok ? null : res.reason ?? null });
       if (res.ok) {
-        message.success(st === "skipped" ? t("research.ingest.exists", "已在库 · {{id}}", { id: res.canonical_id || e.identifier })
+        if (!opts?.quiet) message.success(st === "skipped" ? t("research.ingest.exists", "已在库 · {{id}}", { id: res.canonical_id || e.identifier })
           : t("research.ingest.done", "全文已入库 · {{id}}", { id: res.canonical_id || e.identifier }));
         void qc.invalidateQueries({ queryKey: ["kb", "sources"] });
-      } else message.error(res.reason || t("research.ingest.failed", "入库全文失败"));
+        return st === "skipped" ? "skipped" : "indexed";
+      }
+      if (!opts?.quiet) message.error(res.reason || t("research.ingest.failed", "入库全文失败"));
+      return "failed";
     } catch (err) {
       patchRow(k, { status: "failed", error: errorText(err) });
-      message.error(errorText(err));
+      if (!opts?.quiet) message.error(errorText(err));
+      return "failed";
     } finally {
       patchRow(k, { busy: undefined });
     }
+  };
+
+  /** Batch-ingest the selected rows, one at a time (the endpoint ingests one evidence row per call). */
+  const batchIngest = async () => {
+    const targets = s.sources.filter((e) => s.selected.includes(evidenceKey(e)));
+    if (!targets.length || batch?.active) return;
+    setBatch({ active: true, done: 0, skipped: 0, failed: 0, total: targets.length });
+    let done = 0, skipped = 0, failed = 0;
+    for (const e of targets) {
+      if (inKbOf(e)) { skipped += 1; }
+      else {
+        const out = await ingest(e, { quiet: true });
+        if (out === "indexed") done += 1;
+        else if (out === "skipped") skipped += 1;
+        else failed += 1;
+      }
+      setBatch({ active: true, done, skipped, failed, total: targets.length });
+    }
+    setBatch({ active: false, done, skipped, failed, total: targets.length });
+    message.success(t("research.ingest.batch_done", "批量入库完成：成功 {{d}}，已在库 {{s}}，失败 {{f}}", { d: done, s: skipped, f: failed }));
   };
 
   const extract = async (e: Evidence) => {
@@ -309,13 +346,46 @@ export default function ExternalSearchTab() {
               </Space>
             )} />
         )}
+        {batch && (
+          <Alert type={batch.active ? "info" : "success"} showIcon style={{ marginBottom: 12 }}
+            message={batch.active
+              ? t("research.ingest.batch_progress", "批量入库中…")
+              : t("research.ingest.batch_done", "批量入库完成：成功 {{d}}，已在库 {{s}}，失败 {{f}}", { d: batch.done, s: batch.skipped, f: batch.failed })}
+            description={<Space wrap>
+              <Progress size="small" style={{ width: 200 }} percent={batch.total ? Math.round(((batch.done + batch.skipped + batch.failed) / batch.total) * 100) : 0} />
+              <Tag>{t("research.ingest.batch_count", "{{done}} / {{total}}", { done: batch.done + batch.skipped + batch.failed, total: batch.total })}</Tag>
+            </Space>} />
+        )}
       </div>
 
       <ProTable<Evidence>
-        rowKey={evidenceKey} search={false} dataSource={s.sources} options={false} size="small"
+        rowKey={evidenceKey} search={false} dataSource={shown} options={false} size="small"
         pagination={{ pageSize: 20, showSizeChanger: true }}
         headerTitle={t("research.sources.title", "资料（已选 {{s}} / {{n}}，用于问答与深度研究）", { s: s.selected.length, n: s.sources.length })}
+        expandable={dedup ? { expandedRowRender: (e) => {
+          const c: EvidenceCluster | undefined = clusterByRepKey.get(evidenceKey(e));
+          const members = (c?.items ?? []).filter((m) => evidenceKey(m) !== evidenceKey(e));
+          if (!members.length) return null;
+          return (
+            <Space direction="vertical" size={2}>
+              <Typography.Text type="secondary">{t("research.cluster.members", "同文档其他来源（{{n}}）", { n: members.length })}</Typography.Text>
+              {members.map((m) => (
+                <Typography.Text key={evidenceKey(m)} type="secondary" style={{ fontSize: 12 }}>
+                  {m.source} · {m.identifier || m.title} · {t("research.sources.col_rel", "相关度")} {Number(m.relevance ?? 0).toFixed(2)}
+                </Typography.Text>
+              ))}
+            </Space>
+          );
+        }, rowExpandable: (e) => (clusterByRepKey.get(evidenceKey(e))?.items.length ?? 0) > 1 } : undefined}
         toolBarRender={() => [
+          <Space key="tb" wrap>
+            <Checkbox checked={dedup} onChange={(e) => setDedup(e.target.checked)}>
+              {t("research.cluster.dedup", "去重簇（同文档合并）")}
+            </Checkbox>
+            <Button disabled={!s.selected.length || batch?.active} loading={batch?.active} onClick={() => void batchIngest()}>
+              {t("research.ingest.batch", "批量入库已选（{{n}}）", { n: s.selected.length })}
+            </Button>
+          </Space>,
           <Popconfirm key="clear" title={t("research.sources.clear_confirm", "清空全部资料？")} onConfirm={() => s.resetSources()} disabled={!s.sources.length}>
             <Button danger disabled={!s.sources.length}>{t("research.sources.clear", "清空")}</Button>
           </Popconfirm>,
@@ -340,12 +410,26 @@ export default function ExternalSearchTab() {
             render: (_d, e) => [e.assignee, e.pub_date, pageLabel(e)].filter(Boolean).join(" · ") || "—" },
           { title: t("research.sources.col_rel", "相关度"), dataIndex: "relevance", width: 80, sorter: (a, b) => a.relevance - b.relevance,
             render: (_d, e) => Number(e.relevance ?? 0).toFixed(2) },
+          { title: t("research.sources.col_value", "价值"), width: 90,
+            sorter: (a, b) => valueScore(a, inKbOf(a)) - valueScore(b, inKbOf(b)),
+            render: (_d, e) => {
+              const v = valueScore(e, inKbOf(e));
+              return (
+                <Tooltip title={t("research.value.tip", "前端综合评分：相关度 50% + 领域匹配 20% + 开放获取 15% + 已入库全文 15%")}>
+                  <Tag color={v >= 0.7 ? "green" : v >= 0.4 ? "gold" : "default"}>{v.toFixed(2)}</Tag>
+                </Tooltip>
+              );
+            } },
+          { title: t("research.sources.col_cluster", "重复"), width: 80, render: (_d, e) => {
+            const n = dedup ? (clusterByRepKey.get(evidenceKey(e))?.items.length ?? 1) : 1;
+            return n > 1 ? <Tag color="blue">{t("research.cluster.count", "×{{n}} 来源", { n })}</Tag> : "—";
+          } },
           { title: t("research.sources.col_snippet", "摘要"), dataIndex: "snippet", ellipsis: true, hideInTable: false },
           { title: t("common.actions", "操作"), valueType: "option", width: 260, render: (_d, e) => {
             const k = evidenceKey(e);
             const r = rows[k];
             const sid = sourceIdOf(k);
-            const inKb = r?.status === "indexed" || r?.status === "skipped" || (!!sid && r?.status !== "failed");
+            const inKb = inKbOf(e);
             const draftable = e.source === "surechembl" || !!sid;
             return [
               <Tooltip key="i" title={r?.error ?? undefined}>

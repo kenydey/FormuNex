@@ -30,6 +30,14 @@ export default function SpecStudioPage() {
   const qc = useQueryClient();
   const en = i18n.language === "en-US";
   const q = useQuery({ queryKey: ["project", projectId], queryFn: () => call<ProjectDetail>("GET", `/api/projects/${projectId}`) });
+  // 补齐计划 2-11: 基材选项取后端 /api/meta/substrates（内置 + 配置扩展），失败时回退 SUBSTRATES 硬编码。
+  const substratesQ = useQuery({
+    queryKey: ["meta", "substrates"],
+    queryFn: () => call<{ value: string; label_zh: string; label_en: string }[]>("GET", "/api/meta/substrates"),
+    staleTime: 60_000,
+  });
+  const substrateOptions = (substratesQ.data?.length ? substratesQ.data : SUBSTRATES.map((d) => ({ value: d[0], label_zh: d[1], label_en: d[2] })))
+    .map((d) => ({ value: d.value, label: d[en ? "label_en" : "label_zh"] as string }));
   const [req, setReq] = useState<Requirement | null>(null);
   const [spec, setSpec] = useState<SpecContract>({});
   const [activeKeys, setActiveKeys] = useState<ConstraintKey[]>([]);
@@ -72,7 +80,7 @@ export default function SpecStudioPage() {
                 <Form.Item label={t("spec.product_type", "产品类型")}><Input value={req.product_type} onChange={(e) => setR({ product_type: e.target.value })} /></Form.Item>
                 <Form.Item label={t("spec.application", "应用场景")}><Input.TextArea rows={3} value={req.application} onChange={(e) => setR({ application: e.target.value })} /></Form.Item>
                 <Form.Item label={t("spec.substrate", "基材")}>
-                  <Select value={req.substrate} onChange={(v) => setR({ substrate: v })} options={SUBSTRATES.map((d) => ({ value: d[0], label: d[en ? 2 : 1] }))} />
+                  <Select value={req.substrate} onChange={(v) => setR({ substrate: v })} options={substrateOptions} />
                 </Form.Item>
                 <Form.Item label={t("spec.notes", "备注")}><Input.TextArea rows={3} value={req.notes} onChange={(e) => setR({ notes: e.target.value })} /></Form.Item>
               </Form>
@@ -80,6 +88,7 @@ export default function SpecStudioPage() {
             { key: "objectives", label: t("spec.tab.objectives", "目标契约"), children: (
               <>
                 <Typography.Paragraph type="secondary">{t("spec.objectives.help", "寻优目标：方向、参考范围或目标值、权重。用于 DOE 与 BayBE。")}</Typography.Paragraph>
+                <Typography.Paragraph type="secondary">{t("spec.objectives.release_hint", "勾选“出厂指标”的目标，在定型/冻结时自动派生为出厂检验项（COA），无需在“出厂与验收”页重复录入；显式录入的出厂指标优先。")}</Typography.Paragraph>
                 <EditableRows<Objective>
                   value={req.objectives as Objective[]}
                   onChange={(rows) => setR({ objectives: rows })}
@@ -94,6 +103,8 @@ export default function SpecStudioPage() {
                     { title: t("spec.target", "目标值"), dataIndex: "target_value", valueType: "digit" },
                     { title: t("spec.unit", "单位"), dataIndex: "unit", width: 90 },
                     { title: t("spec.weight", "权重"), dataIndex: "weight", valueType: "digit", width: 90 },
+                    // 补齐计划 2-8: 出厂指标标志
+                    { title: t("spec.release_indicator", "出厂指标"), dataIndex: "is_release_indicator", valueType: "switch", width: 90 },
                   ]}
                 />
               </>
@@ -150,6 +161,15 @@ export default function SpecStudioPage() {
             { key: "release", label: t("spec.tab.release", "出厂与验收"), children: (
               <>
                 <Typography.Title level={5}>{t("spec.release_specs", "出厂指标（COA 判定）")}</Typography.Title>
+                {/* 补齐计划 2-8: 派生预览 —— 标出厂指标且未显式录入的目标，定型时自动派生 */}
+                {(req.objectives ?? []).filter((o) => o.is_release_indicator && o.metric && !(spec.release_specs ?? []).some((s) => s.metric === o.metric)).length > 0 && (
+                  <Typography.Paragraph type="secondary">
+                    {t("spec.release_derived_hint", "定型时自动派生：{{metrics}}（来自目标契约的出厂指标勾选；显式录入的优先）", {
+                      metrics: (req.objectives ?? []).filter((o) => o.is_release_indicator && o.metric && !(spec.release_specs ?? []).some((s) => s.metric === o.metric))
+                        .map((o) => o.display_name || o.metric).join("、"),
+                    })}
+                  </Typography.Paragraph>
+                )}
                 <EditableRows<ReleaseSpec>
                   value={spec.release_specs} onChange={(rows) => setS({ release_specs: rows })}
                   newRow={() => ({ metric: "", comparison: "full" })}
@@ -158,6 +178,8 @@ export default function SpecStudioPage() {
                     { title: t("spec.label", "检验项目"), dataIndex: "label" },
                     { title: t("spec.unit", "单位"), dataIndex: "unit", width: 80 },
                     { title: t("spec.method", "检验方法"), dataIndex: "method" },
+                    // 补齐计划 2-8: 检验方法标准号（COA 优先显示，空则回退 method）
+                    { title: t("spec.test_method_standard", "检验方法标准号"), dataIndex: "test_method_standard" },
                     { title: t("spec.min", "下限"), dataIndex: "min", valueType: "digit", width: 90 },
                     { title: t("spec.max", "上限"), dataIndex: "max", valueType: "digit", width: 90 },
                     { title: t("spec.comparison", "判定"), dataIndex: "comparison", valueType: "select", width: 120,

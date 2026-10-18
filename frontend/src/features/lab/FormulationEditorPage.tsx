@@ -1,6 +1,6 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { Alert, App, Button, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Statistic, Tooltip, Typography } from "antd";
-import { ApartmentOutlined, BulbOutlined, HistoryOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Divider, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Statistic, Table, Tag, Tooltip, Typography } from "antd";
+import { ApartmentOutlined, BulbOutlined, DeleteOutlined, DownOutlined, DragOutlined, HistoryOutlined, UpOutlined } from "@ant-design/icons";
 import { RevoGrid } from "@revolist/react-datagrid";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -11,7 +11,10 @@ import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
 import { ComplianceSummary, type Classification } from "@/features/plm/ComplianceSummary";
-import { ROLES, fillWith, newRow, normalize, redLineViolations, total, type Row } from "./formula";
+import {
+  ROLES, ROLE_LABELS, applyAnnotations, extractAnnotations, fillWith, groupSubtotals, newRow, normalize, redLineViolations,
+  rowCost, rowVoc, suggestRole, total, totalCost, totalVoc, type Row, type RowAnnotation,
+} from "./formula";
 import "./grid.css";
 import { VersionHistory } from "@/features/formulation/VersionHistory";
 import { ProvenanceDrawer } from "@/features/formulation/Provenance";
@@ -50,6 +53,42 @@ export default function FormulationEditorPage() {
   });
   const spec = project.data?.workspace.spec_contract;
   const domain = project.data?.workspace.requirement?.domain ?? "anticorrosion_coating";
+
+  // Editor-only annotations (cost / VOC / premix group): the backend version
+  // snapshot drops unknown ingredient fields, so these live in localStorage,
+  // keyed by lineage (see formula.ts). They are also sent in the save payload
+  // for forward compatibility.
+  const annKey = `formunex:editor-annotations:${lineage?.lineage_id ?? "new"}`;
+  const readAnns = (key: string): Record<string, RowAnnotation> => {
+    try { return JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, RowAnnotation>; }
+    catch { return {}; }
+  };
+  useEffect(() => {
+    const anns = extractAnnotations(rows);
+    try {
+      // Fresh mount shows three empty rows: don't wipe previously stored annotations.
+      if (Object.keys(anns).length === 0 && localStorage.getItem(annKey) && !rows.some((r) => r.name.trim())) return;
+      localStorage.setItem(annKey, JSON.stringify(anns));
+    } catch { /* storage full / private mode: annotations stay session-only */ }
+  }, [rows, annKey]);
+  const patchRow = (uid: string, p: Partial<Row>) => setRows((rs) => rs.map((r) => (r.uid === uid ? { ...r, ...p } : r)));
+  const moveRow = (uid: string, dir: -1 | 1) => setRows((rs) => {
+    const i = rs.findIndex((r) => r.uid === uid);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= rs.length) return rs;
+    const out = [...rs];
+    [out[i], out[j]] = [out[j], out[i]];
+    return out;
+  });
+  const reorderRow = (fromUid: string, toUid: string) => setRows((rs) => {
+    const from = rs.findIndex((r) => r.uid === fromUid);
+    const to = rs.findIndex((r) => r.uid === toUid);
+    if (from < 0 || to < 0 || from === to) return rs;
+    const out = [...rs];
+    const [moved] = out.splice(from, 1);
+    out.splice(out.findIndex((r) => r.uid === toUid), 0, moved);
+    return out;
+  });
 
   // Real-time compliance: WebSocket (/ws/formulations/{id}/compliance) with REST fallback.
   // The socket re-classifies on every edit; when it is down or not yet open, the debounced
@@ -115,13 +154,26 @@ export default function FormulationEditorPage() {
 
   const pull = async () => {
     const data = (await grid.current?.getSource()) as Row[] | undefined;
-    if (data) setRows(data.map((r) => ({ ...r, weight_pct: Number(r.weight_pct) || 0, locked: r.locked === true || String(r.locked) === "true" })));
+    if (!data) return;
+    // The grid does not carry the editor-only fields (cost / VOC / group):
+    // merge its output with the previous rows by uid so edits are not lost.
+    setRows((prev) => {
+      const byUid = new Map(prev.map((r) => [r.uid, r]));
+      return data.map((r) => {
+        const old = byUid.get(r.uid);
+        return { ...r, weight_pct: Number(r.weight_pct) || 0, locked: r.locked === true || String(r.locked) === "true",
+          cost_per_kg: old?.cost_per_kg, voc_g_l: old?.voc_g_l, group: old?.group };
+      });
+    });
   };
 
   const loadVersion = async (versionId: string) => {
     const v = await call<{ snapshot: { name?: string; ingredients?: { name: string; zh_name?: string; cas_no?: string; role?: string; weight_pct: number }[] }; lineage_id: string; id: string; name: string }>(
       "GET", `/api/formulations/versions/detail/${versionId}`);
-    setRows((v.snapshot.ingredients ?? []).map((i) => ({ ...newRow(), name: i.name, zh_name: i.zh_name, cas_no: i.cas_no, role: i.role, weight_pct: i.weight_pct })));
+    setRows(applyAnnotations(
+      (v.snapshot.ingredients ?? []).map((i) => ({ ...newRow(), name: i.name, zh_name: i.zh_name, cas_no: i.cas_no, role: i.role, weight_pct: i.weight_pct })),
+      readAnns(`formunex:editor-annotations:${v.lineage_id}`),
+    ));
     setName(v.name);
     setLineage({ lineage_id: v.lineage_id, parent: v.id });
     setLoadOpen(false);
@@ -138,7 +190,7 @@ export default function FormulationEditorPage() {
   useEffect(() => {
     const st = location.state as AdoptState | null;
     if (!st?.adopt) return;
-    setRows(ingredientsToEditorRows(st.adopt.ingredients).map((i) => ({ ...newRow(), ...i })));
+    setRows(applyAnnotations(ingredientsToEditorRows(st.adopt.ingredients).map((i) => ({ ...newRow(), ...i })), readAnns("formunex:editor-annotations:new")));
     setName(st.adopt.name);
     setLineage(null);
     setAdopted(st.adopt);
@@ -146,12 +198,15 @@ export default function FormulationEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
   const current: Formulation = { name: name || t("formula.untitled", "未命名配方"), domain, source: "manual",
-    ingredients: filled.map((r) => ({ name: r.name, zh_name: r.zh_name, cas_no: r.cas_no || null, role: r.role || "other", weight_pct: Number(r.weight_pct) })) };
+    ingredients: filled.map((r) => ({ name: r.name, zh_name: r.zh_name, cas_no: r.cas_no || null, role: r.role || "other", weight_pct: Number(r.weight_pct),
+      // Editor-only annotations (cost / VOC / group): sent for forward compatibility; the backend drops unknown fields.
+      cost_per_kg: r.cost_per_kg, voc_g_l: r.voc_g_l, group: r.group })) };
 
   const save = useMutation({
     mutationFn: (v: { name: string; change_summary: string }) => call<{ id: string; lineage_id: string; version: number }>("POST", "/api/formulations/versions", {
       formulation: { name: v.name, domain, source: "manual",
-        ingredients: filled.map((r) => ({ name: r.name, zh_name: r.zh_name, cas_no: r.cas_no || null, role: r.role || "other", weight_pct: Number(r.weight_pct) })) },
+        ingredients: filled.map((r) => ({ name: r.name, zh_name: r.zh_name, cas_no: r.cas_no || null, role: r.role || "other", weight_pct: Number(r.weight_pct),
+          cost_per_kg: r.cost_per_kg, voc_g_l: r.voc_g_l, group: r.group })) },
       lineage_id: lineage?.lineage_id ?? null, parent_version_id: lineage?.parent ?? null,
       change_summary: v.change_summary, project_id: projectId,
     }),
@@ -213,6 +268,9 @@ export default function FormulationEditorPage() {
           <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
             {t("formula.grid_help", "可直接从 Excel 粘贴区域；角色可选：{{roles}}；锁定列填 true 的行不参与归一化。", { roles: ROLES.join(" / ") })}
           </Typography.Paragraph>
+          <DetailPanel
+            rows={rows} onPatch={patchRow} onMove={moveRow} onReorder={reorderRow}
+            onRemove={(uid) => setRows((rs) => rs.filter((r) => r.uid !== uid))} />
         </ProCard>
         <ProCard colSpan={380} title={<Space>{t("formula.compliance", "实时合规")}{busy && <Spin size="small" />}</Space>}>
           <Form layout="inline" style={{ marginBottom: 12 }}>
@@ -242,6 +300,96 @@ export default function FormulationEditorPage() {
         </Form>
       </Modal>
     </PageContainer>
+  );
+}
+
+/** Per-row detail panel: role dropdown + suggestion, cost / VOC / premix group, drag-sort. */
+function DetailPanel({ rows, onPatch, onMove, onReorder, onRemove }: {
+  rows: Row[]; onPatch: (uid: string, p: Partial<Row>) => void; onMove: (uid: string, dir: -1 | 1) => void;
+  onReorder: (fromUid: string, toUid: string) => void; onRemove: (uid: string) => void;
+}) {
+  const { t } = useTranslation();
+  const { message } = App.useApp();
+  const [dragOver, setDragOver] = useState<string | null>(null);
+  const named = useMemo(() => rows.filter((r) => r.name.trim()), [rows]);
+  const groups = useMemo(() => groupSubtotals(rows), [rows]);
+  const groupNames = useMemo(() => [...new Set(rows.map((r) => (r.group || "").trim()).filter(Boolean))], [rows]);
+  const suggest = (r: Row) => {
+    const role = suggestRole(r);
+    onPatch(r.uid, { role });
+    message.success(t("formula.role_suggested", "已建议角色：{{role}}", { role: ROLE_LABELS[role] ?? role }));
+  };
+  return (
+    <div style={{ marginTop: 16 }}>
+      <Divider orientation="left" plain>{t("formula.detail_title", "组分明细（角色 / 成本 / VOC / 预混料组）")}</Divider>
+      <Typography.Paragraph type="secondary">
+        {t("formula.detail_help", "拖拽行可排序；成本与 VOC 为本机编辑辅助，保存在本机浏览器，不随版本快照上传服务器；VOC 合计为按质量加权的估算（假设各组分密度相近）。")}
+      </Typography.Paragraph>
+      <Table<Row> size="small" pagination={false} rowKey="uid" dataSource={named}
+        rowClassName={(r) => (dragOver === r.uid ? "fx-drop-target" : "")}
+        onRow={(r) => ({
+          draggable: true,
+          onDragStart: (e) => { e.dataTransfer.setData("text/plain", r.uid); e.dataTransfer.effectAllowed = "move"; },
+          onDragOver: (e) => { e.preventDefault(); setDragOver(r.uid); },
+          onDragLeave: () => setDragOver((d) => (d === r.uid ? null : d)),
+          onDrop: (e) => {
+            e.preventDefault();
+            const from = e.dataTransfer.getData("text/plain");
+            setDragOver(null);
+            if (from && from !== r.uid) onReorder(from, r.uid);
+          },
+        })}
+        columns={[
+          { title: t("formula.col_order", "排序"), width: 110, render: (_d, r) => (
+            <Space size={2}>
+              <span title={t("formula.drag", "拖拽排序")} style={{ cursor: "grab" }}><DragOutlined /></span>
+              <Button size="small" type="text" icon={<UpOutlined />} aria-label={t("formula.move_up", "上移")} onClick={() => onMove(r.uid, -1)} />
+              <Button size="small" type="text" icon={<DownOutlined />} aria-label={t("formula.move_down", "下移")} onClick={() => onMove(r.uid, 1)} />
+            </Space>
+          ) },
+          { title: t("formula.name", "原料"), width: 150, ellipsis: true, render: (_d, r) => r.zh_name || r.name },
+          { title: t("formula.role", "角色"), width: 210, render: (_d, r) => (
+            <Space.Compact>
+              <Select style={{ width: 130 }} value={r.role || undefined} placeholder={t("formula.role_ph", "选择角色")}
+                options={ROLES.map((x) => ({ value: x, label: `${ROLE_LABELS[x] ?? x} (${x})` }))}
+                onChange={(v) => onPatch(r.uid, { role: v })} />
+              <Button size="small" onClick={() => suggest(r)}>{t("formula.suggest", "建议")}</Button>
+            </Space.Compact>
+          ) },
+          { title: t("formula.cost_per_kg", "成本 元/kg"), width: 130, render: (_d, r) => (
+            <InputNumber size="small" min={0} style={{ width: "100%" }} value={r.cost_per_kg ?? undefined}
+              placeholder="—" onChange={(v) => onPatch(r.uid, { cost_per_kg: v ?? undefined })} />
+          ) },
+          { title: t("formula.voc_per_l", "VOC g/L"), width: 120, render: (_d, r) => (
+            <InputNumber size="small" min={0} style={{ width: "100%" }} value={r.voc_g_l ?? undefined}
+              placeholder="—" onChange={(v) => onPatch(r.uid, { voc_g_l: v ?? undefined })} />
+          ) },
+          { title: t("formula.group", "预混料组"), width: 130, render: (_d, r) => (
+            <Select size="small" style={{ width: "100%" }} mode="tags" maxCount={1} value={r.group ? [r.group] : []}
+              placeholder={t("formula.group_ph", "输入组名")} options={groupNames.map((g) => ({ value: g, label: g }))}
+              onChange={(v) => onPatch(r.uid, { group: v[0] || undefined })} />
+          ) },
+          { title: t("formula.cost_subtotal", "成本小计 元/kg配方"), width: 130, render: (_d, r) => rowCost(r).toFixed(2) },
+          { title: t("formula.voc_contrib", "VOC 贡献 g/L"), width: 110, render: (_d, r) => rowVoc(r).toFixed(1) },
+          { title: "", width: 40, render: (_d, r) => (
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label={t("common.delete", "删除")} onClick={() => onRemove(r.uid)} />
+          ) },
+        ]} />
+      <Space style={{ marginTop: 12 }} wrap>
+        <Statistic title={t("formula.total_cost", "配方成本")} value={totalCost(rows)} suffix={t("formula.cost_unit", "元/kg")} precision={2} />
+        <Statistic title={t("formula.total_voc", "VOC 估算")} value={totalVoc(rows)} suffix="g/L" precision={1} />
+      </Space>
+      {groups.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <Typography.Text type="secondary">{t("formula.group_subtotals", "预混料组小计：")}</Typography.Text>
+          <Space wrap style={{ marginLeft: 8 }}>
+            {groups.map((g) => (
+              <Tag key={g.group || "—"}>{g.group || t("formula.ungrouped", "未分组")} · {g.weight_pct.toFixed(1)}% · {g.cost.toFixed(2)} {t("formula.cost_unit", "元/kg")} · {g.voc.toFixed(1)} g/L</Tag>
+            ))}
+          </Space>
+        </div>
+      )}
+    </div>
   );
 }
 

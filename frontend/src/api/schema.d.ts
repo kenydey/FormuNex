@@ -1406,7 +1406,7 @@ export interface paths {
          *     成功后刷新训练 registry。
          *
          *     可见性语义: 行的 ``item_id`` 不被改写。本地训练记录
-         *     (``item_id IS NULL``) 同步后仍对 ``SqlExperimentStore`` 可见, 下一轮
+         *     (``item_id IS NULL``) 同步后仍对 ``LocalExperimentStore`` 可见, 下一轮
          *     DOE 的 ``load_prior_measurements()`` 可见 lab 实测; 已绑定 Datalab 的行
          *     仍归 Datalab store 管 (Datalab 可达时 live 读)。
          *
@@ -2421,6 +2421,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plm/substances/sds-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Supplier Sds
+         * @description Import one supplier SDS file (PDF / DOCX / text) into the substance database.
+         *
+         *     补齐计划 1-5: parse → upsert substance by CAS → replace this substance's
+         *     unlocked ``supplier_sds`` classifications (confidence 0.95). A mixture SDS
+         *     (several CAS numbers), a missing product name / CAS / classification, or
+         *     an unparsable file is a 422 with an explicit reason — never a silent skip.
+         */
+        post: operations["import_supplier_sds_api_plm_substances_sds_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/{substance_id}/pubchem-enrich": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enrich Substance Pubchem
+         * @description Enqueue the PubChem GHS enrichment task (补齐计划 1-6) for one substance.
+         *
+         *     The worker resolves the substance to a PubChem CID, fetches its GHS
+         *     classification from PUG-View, and writes ``source='pubchem'`` rows
+         *     (confidence 0.6). 404 when the substance does not exist; 503 when the
+         *     task queue (Redis) is unreachable.
+         */
+        post: operations["enrich_substance_pubchem_api_plm_substances__substance_id__pubchem_enrich_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plm/regulatory/ask": {
         parameters: {
             query?: never;
@@ -3307,6 +3357,187 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cockpit/optimizer-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Optimizer Rules
+         * @description 返回当前寻优规则（运行时 overlay 生效）。
+         */
+        get: operations["get_optimizer_rules_api_cockpit_optimizer_rules_get"];
+        put?: never;
+        /**
+         * Set Optimizer Rules
+         * @description 微调寻优规则：写 .env（FORMUNEX_OPTIMIZER_*）+ 运行时 overlay，立即生效。
+         *
+         *     写入模式沿用 api-token 端点（write_env_updates + runtime set）。
+         */
+        post: operations["set_optimizer_rules_api_cockpit_optimizer_rules_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cockpit/doe/{plan_id}/points": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Doe Points
+         * @description 返回 DOE 计划逐点列表（带已存审核）。
+         */
+        get: operations["doe_points_api_cockpit_doe__plan_id__points_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cockpit/doe/{plan_id}/points/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review Doe Points
+         * @description 逐点审核：accept / modify（改因子值）/ reject。
+         *
+         *     驳回的点保留记录但不进入有效点；复审覆盖旧审核。
+         */
+        post: operations["review_doe_points_api_cockpit_doe__plan_id__points_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cockpit/sensitivity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sensitivity
+         * @description Sobol 一阶指数 + 局部梯度灵敏度。
+         *
+         *     points: [{id, factors: {name: value}, objective: float}]。
+         *     因子名取全部点因子并集排序；缺失因子 → 422（不静默补 0）。
+         */
+        post: operations["sensitivity_api_cockpit_sensitivity_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cockpit/rheology/fit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rheology Fit
+         * @description 流变曲线拟合：Power-law / Herschel–Bulkley / Cross（标准模型）。
+         *
+         *     points: [{shear_rate, viscosity}] 或 [{shear_rate, shear_stress}]。
+         *     auto: 三模型都拟合，取 R² 最高者。
+         */
+        post: operations["rheology_fit_api_cockpit_rheology_fit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cockpit/acid-stability/trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acid Stability Trend
+         * @description 酸稳定性趋势：逐配方扫浴液 pH，返回每 pH 的 status/violations/reasons。
+         */
+        post: operations["acid_stability_trend_api_cockpit_acid_stability_trend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cockpit/color": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Color Page
+         * @description 色度：各配方 Lab + 与参考色的双口径 ΔE（ΔE00 / ΔE*ab）。
+         *
+         *     delta_e_00 为 CIEDE2000（colour-science 未安装时为 null，不静默 fallback）；
+         *     delta_e_ab 为 CIE76 欧氏距离（始终可用）；delta_e 为兼容键，等于
+         *     delta_e_00（有）或 delta_e_ab（无），delta_e_method 说明实际口径。
+         */
+        post: operations["color_page_api_cockpit_color_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cockpit/color/materials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Color Materials
+         * @description 带 CIELAB 值的原料清单（供前端组分选择）。
+         *
+         *     与 /api/materials 同源：读 domain.knowledge.RAW_MATERIALS，
+         *     只返回含 lab 值的原料。
+         */
+        get: operations["color_materials_api_cockpit_color_materials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/lab/methods": {
         parameters: {
             query?: never;
@@ -3495,6 +3726,61 @@ export interface paths {
         /** Cancel Task */
         post: operations["cancel_task_api_lab_tasks__task_id__cancel_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/lab/tasks/{task_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Task Attachments */
+        get: operations["list_task_attachments_api_lab_tasks__task_id__attachments_get"];
+        put?: never;
+        /**
+         * Upload Task Attachment
+         * @description 上传任务附件（原始记录 / 图谱 / 现场照片）。大小上限走 ingest_max_upload_bytes。
+         */
+        post: operations["upload_task_attachment_api_lab_tasks__task_id__attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/lab/tasks/{task_id}/attachments/{attachment_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Task Attachment */
+        get: operations["download_task_attachment_api_lab_tasks__task_id__attachments__attachment_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/lab/tasks/{task_id}/attachments/{attachment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Task Attachment */
+        delete: operations["delete_task_attachment_api_lab_tasks__task_id__attachments__attachment_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4143,6 +4429,56 @@ export interface paths {
          * @description STORM longform report (async). Flag-gated; does not mutate sync /dossier/report.
          */
         post: operations["start_storm_report_endpoint_api_wiki_storm_report_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/wiki/storm/outline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Storm Outline Endpoint
+         * @description Plan 2-5 step 1: generate + persist a STORM outline for the frontend editor.
+         *
+         *     Returns the outline flat (ReportOutline JSON). Always regenerates — the
+         *     frontend's "重新生成" re-calls this; edited outlines are saved via PUT.
+         */
+        post: operations["generate_storm_outline_endpoint_api_wiki_storm_outline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/wiki/storm/outline/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Storm Outline Endpoint
+         * @description Read a persisted STORM outline (404 when none). Returns the outline flat.
+         */
+        get: operations["get_storm_outline_endpoint_api_wiki_storm_outline__project_id__get"];
+        /**
+         * Save Storm Outline Endpoint
+         * @description Plan 2-5 step 1: save an edited outline (frontend outline editor).
+         *
+         *     Accepts the flat outline JSON (or ``{"outline": {...}}``). Returns the
+         *     saved outline flat.
+         */
+        put: operations["save_storm_outline_endpoint_api_wiki_storm_outline__project_id__put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5203,6 +5539,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provenance/product-chain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Product Chain
+         * @description Full-chain traceability for one product: downstream from the product
+         *     (revisions → documents / release packages) plus each revision's upstream
+         *     chain (experiment / formulation version / formulation / project).
+         */
+        get: operations["get_product_chain_api_provenance_product_chain_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reviews/runs": {
         parameters: {
             query?: never;
@@ -5629,6 +5987,29 @@ export interface paths {
         get: operations["supply_risk_api_materials_supply_risk_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/materials/substitution-triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Substitution Triggers
+         * @description 补齐计划 2-6: 替换触发扫描 —— 断供 + 超成本 + 命中红线 + 分类升级。
+         *
+         *     基线配方按 domain 生成（与 supply-risk 同口径）；红线取 project_id 对应项目
+         *     的约束（不传则不扫红线）；分类升级需 baseline_classifications（不传则不扫）。
+         */
+        post: operations["substitution_triggers_api_materials_substitution_triggers_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7153,6 +7534,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/contract-change-notices/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Contract Changes
+         * @description 补齐计划 2-9: 下游（DOE/门禁）确认已看到契约变更并重新评估。
+         *
+         *     通知本身不删除（审计留痕），只置 acknowledged=true + acknowledged_at。
+         */
+        post: operations["acknowledge_contract_changes_api_projects__project_id__contract_change_notices_acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{project_id}/history": {
         parameters: {
             query?: never;
@@ -7755,6 +8158,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/compliance-lists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Compliance Lists */
+        get: operations["list_compliance_lists_api_compliance_lists_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/compliance-lists/{list_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Compliance List */
+        get: operations["get_compliance_list_api_compliance_lists__list_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/meta/substrates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Substrates
+         * @description 补齐计划 2-11: 基材选项（内置枚举 + FORMUNEX_EXTRA_SUBSTRATES 配置扩展）。
+         *
+         *     前端从此处取选项（失败时回退内置硬编码），新增基材无需改前端代码。
+         */
+        get: operations["list_substrates_api_meta_substrates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/meta/default-levers": {
         parameters: {
             query?: never;
@@ -7843,6 +8302,36 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AcidTrendIn */
+        AcidTrendIn: {
+            /** Formulations */
+            formulations: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Ph Min
+             * @default 2
+             */
+            ph_min: number;
+            /**
+             * Ph Max
+             * @default 6
+             */
+            ph_max: number;
+            /**
+             * Ph Step
+             * @default 0.5
+             */
+            ph_step: number;
+        };
+        /**
+         * AcknowledgeContractChangesBody
+         * @description 确认契约变更通知：at 为空 → 确认全部未确认通知；否则只确认该 at 的一条。
+         */
+        AcknowledgeContractChangesBody: {
+            /** At */
+            at?: string | null;
+        };
         /**
          * ActiveDoeRequest
          * @description Request body for active-learning DOE: extends Requirement with optional fields.
@@ -7864,8 +8353,11 @@ export interface components {
              */
             application: string;
             domain: components["schemas"]["ProductDomain"];
-            /** @default carbon_steel */
-            substrate: components["schemas"]["Substrate"];
+            /**
+             * Substrate
+             * @default carbon_steel
+             */
+            substrate: components["schemas"]["Substrate"] | string;
             /**
              * Salt Spray Hours
              * @description Target neutral salt spray resistance (h)
@@ -7896,6 +8388,13 @@ export interface components {
              * @default 420
              */
             voc_limit_gpl: number | null;
+            /**
+             * Process Window
+             * @description 工艺窗口（规格契约）
+             */
+            process_window?: {
+                [key: string]: unknown;
+            } | null;
             /** Ph Target */
             ph_target?: number | null;
             /**
@@ -8198,6 +8697,11 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_import_supplier_sds_api_plm_substances_sds_import_post */
+        Body_import_supplier_sds_api_plm_substances_sds_import_post: {
+            /** File */
+            file: string;
+        };
         /** Body_ingest_batch_api_ingest_batch_post */
         Body_ingest_batch_api_ingest_batch_post: {
             /** Files */
@@ -8283,6 +8787,11 @@ export interface components {
             file: string;
             /** Filename */
             filename?: string | null;
+        };
+        /** Body_upload_task_attachment_api_lab_tasks__task_id__attachments_post */
+        Body_upload_task_attachment_api_lab_tasks__task_id__attachments_post: {
+            /** File */
+            file: string;
         };
         /** Body_upload_template_api_plm_templates_post */
         Body_upload_template_api_plm_templates_post: {
@@ -8583,6 +9092,19 @@ export interface components {
             /** Screening Preset */
             screening_preset?: string | null;
             schedule?: components["schemas"]["ScheduleIn"] | null;
+        };
+        /** ColorIn */
+        ColorIn: {
+            /** Formulations */
+            formulations: {
+                [key: string]: unknown;
+            }[];
+            /** Reference Lab */
+            reference_lab?: [
+                number,
+                number,
+                number
+            ] | null;
         };
         /** CompositionItem */
         CompositionItem: {
@@ -11642,8 +12164,11 @@ export interface components {
              */
             application: string;
             domain: components["schemas"]["ProductDomain"];
-            /** @default carbon_steel */
-            substrate: components["schemas"]["Substrate"];
+            /**
+             * Substrate
+             * @default carbon_steel
+             */
+            substrate: components["schemas"]["Substrate"] | string;
             /**
              * Salt Spray Hours
              * @description Target neutral salt spray resistance (h)
@@ -11674,6 +12199,13 @@ export interface components {
              * @default 420
              */
             voc_limit_gpl: number | null;
+            /**
+             * Process Window
+             * @description 工艺窗口（规格契约）
+             */
+            process_window?: {
+                [key: string]: unknown;
+            } | null;
             /** Ph Target */
             ph_target?: number | null;
             /**
@@ -12228,6 +12760,11 @@ export interface components {
              */
             display_name: string;
             /**
+             * Is Release Indicator
+             * @default false
+             */
+            is_release_indicator: boolean;
+            /**
              * Weight
              * @default 1
              */
@@ -12282,6 +12819,10 @@ export interface components {
              * @default 0
              */
             lab_points_used: number;
+            /** Acquisition History */
+            acquisition_history?: {
+                [key: string]: unknown;
+            }[];
         };
         /** OptimizeRequest */
         OptimizeRequest: {
@@ -12302,6 +12843,20 @@ export interface components {
              * @description DOE cold-start seed; None=deterministic default 0
              */
             seed?: number | null;
+        };
+        /**
+         * OptimizerRulesIn
+         * @description 寻优规则：仅 numpy-UCB 引擎与早停判断读取。
+         *
+         *     ucb_kappa: UCB 权重 μ + κσ（κ 越大越偏探索）；patience/min_delta: 早停。
+         */
+        OptimizerRulesIn: {
+            /** Ucb Kappa */
+            ucb_kappa?: number | null;
+            /** Early Stop Patience */
+            early_stop_patience?: number | null;
+            /** Early Stop Min Delta */
+            early_stop_min_delta?: number | null;
         };
         /** OrphanReportView */
         OrphanReportView: {
@@ -12464,6 +13019,30 @@ export interface components {
             };
             /** Composition */
             composition?: components["schemas"]["CompositionItem"][] | null;
+        };
+        /** PointReviewIn */
+        PointReviewIn: {
+            /** Run Id */
+            run_id: number;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accept" | "modify" | "reject";
+            /** Factors */
+            factors?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /** PointReviewsIn */
+        PointReviewsIn: {
+            /** Reviews */
+            reviews: components["schemas"]["PointReviewIn"][];
         };
         /** PredictIn */
         PredictIn: {
@@ -12838,6 +13417,10 @@ export interface components {
             spec_contract?: {
                 [key: string]: unknown;
             };
+            /** Contract Change Notices */
+            contract_change_notices?: {
+                [key: string]: unknown;
+            }[];
         };
         /** PromoteRequirementRequest */
         PromoteRequirementRequest: {
@@ -12929,6 +13512,8 @@ export interface components {
         PullIn: {
             /** Task Ids */
             task_ids?: string[] | null;
+            /** Since */
+            since?: string | null;
         };
         /** PushIn */
         PushIn: {
@@ -13411,8 +13996,11 @@ export interface components {
              */
             application: string;
             domain: components["schemas"]["ProductDomain"];
-            /** @default carbon_steel */
-            substrate: components["schemas"]["Substrate"];
+            /**
+             * Substrate
+             * @default carbon_steel
+             */
+            substrate: components["schemas"]["Substrate"] | string;
             /**
              * Salt Spray Hours
              * @description Target neutral salt spray resistance (h)
@@ -13443,6 +14031,13 @@ export interface components {
              * @default 420
              */
             voc_limit_gpl: number | null;
+            /**
+             * Process Window
+             * @description 工艺窗口（规格契约）
+             */
+            process_window?: {
+                [key: string]: unknown;
+            } | null;
             /** Ph Target */
             ph_target?: number | null;
             /**
@@ -13507,8 +14102,11 @@ export interface components {
              */
             application: string;
             domain: components["schemas"]["ProductDomain"];
-            /** @default carbon_steel */
-            substrate: components["schemas"]["Substrate"];
+            /**
+             * Substrate
+             * @default carbon_steel
+             */
+            substrate: components["schemas"]["Substrate"] | string;
             /**
              * Salt Spray Hours
              * @description Target neutral salt spray resistance (h)
@@ -13539,6 +14137,13 @@ export interface components {
              * @default 420
              */
             voc_limit_gpl: number | null;
+            /**
+             * Process Window
+             * @description 工艺窗口（规格契约）
+             */
+            process_window?: {
+                [key: string]: unknown;
+            } | null;
             /** Ph Target */
             ph_target?: number | null;
             /**
@@ -13736,6 +14341,19 @@ export interface components {
             spec_snapshot: {
                 [key: string]: unknown;
             };
+        };
+        /** RheologyFitIn */
+        RheologyFitIn: {
+            /** Points */
+            points: {
+                [key: string]: number;
+            }[];
+            /**
+             * Model
+             * @default auto
+             * @enum {string}
+             */
+            model: "auto" | "power_law" | "herschel_bulkley" | "cross";
         };
         /** RoCrateExportRequest */
         RoCrateExportRequest: {
@@ -13975,6 +14593,20 @@ export interface components {
             updates?: {
                 [key: string]: string | null;
             };
+        };
+        /** SensitivityIn */
+        SensitivityIn: {
+            /** Points */
+            points: {
+                [key: string]: unknown;
+            }[];
+            /** Selected Id */
+            selected_id?: string | number | null;
+            /**
+             * N Samples
+             * @default 8192
+             */
+            n_samples: number;
         };
         /** SessionDeleteResponse */
         SessionDeleteResponse: {
@@ -14355,6 +14987,25 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** StormOutlineRequest */
+        StormOutlineRequest: {
+            /** Project Id */
+            project_id: string;
+            /**
+             * Topic
+             * @default
+             */
+            topic: string;
+            /** Max Sections */
+            max_sections?: number | null;
+            /** Perspectives */
+            perspectives?: string[];
+            /**
+             * Use Llm
+             * @default false
+             */
+            use_llm: boolean;
+        };
         /** StormReportExportRequest */
         StormReportExportRequest: {
             /** Project Id */
@@ -14429,6 +15080,10 @@ export interface components {
             persist: boolean;
             /** Campaign Id */
             campaign_id?: string | null;
+            /** Outline */
+            outline?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** StructuredAnswer */
         StructuredAnswer: {
@@ -14520,12 +15175,51 @@ export interface components {
              * @default 5
              */
             llm_limit: number;
+            /**
+             * Classification Preview Limit
+             * @default 5
+             */
+            classification_preview_limit: number;
+        };
+        /**
+         * SubstitutionTriggersRequest
+         * @description 补齐计划 2-6: 替换触发扫描参数（基线配方按 domain 生成，与 supply-risk 同口径）。
+         */
+        SubstitutionTriggersRequest: {
+            /**
+             * Domain
+             * @default
+             */
+            domain: string;
+            /** Project Id */
+            project_id?: string | null;
+            /** Cost Limit Per Kg */
+            cost_limit_per_kg?: number | null;
+            /** Material Price Limits */
+            material_price_limits?: {
+                [key: string]: number;
+            } | null;
+            /** Baseline Classifications */
+            baseline_classifications?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            } | null;
         };
         /**
          * Substrate
          * @enum {string}
          */
-        Substrate: "carbon_steel" | "galvanized_steel" | "aluminum" | "stainless_steel" | "magnesium_alloy";
+        Substrate: "carbon_steel" | "galvanized_steel" | "aluminum" | "stainless_steel" | "magnesium_alloy" | "a356" | "adc12" | "cold_rolled_steel";
+        /** SubstrateOption */
+        SubstrateOption: {
+            /** Value */
+            value: string;
+            /** Label Zh */
+            label_zh: string;
+            /** Label En */
+            label_en: string;
+        };
         /**
          * Supplier
          * @description Structured supplier record harvested from PubChem ``Chemical Vendors``.
@@ -14575,7 +15269,7 @@ export interface components {
          *
          *     ``datalab_item_id``: 本次同步要拉取的 Datalab item。行保持本地训练记录
          *     身份 (``item_id`` 不被改写), 因此同步到的 lab 测量对
-         *     ``SqlExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的
+         *     ``LocalExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的
          *     ``load_prior_measurements()`` 能吃到 lab 实测。若省略, 则回退使用行上
          *     已绑定的 ``item_id`` (若行上也没有 -> 409)。
          */
@@ -14818,6 +15512,11 @@ export interface components {
              * @default true
              */
             use_llm: boolean;
+            /**
+             * Query Kind
+             * @default auto
+             */
+            query_kind: string;
         };
         /** UpdateSkillBody */
         UpdateSkillBody: {
@@ -19536,6 +20235,72 @@ export interface operations {
             };
         };
     };
+    import_supplier_sds_api_plm_substances_sds_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_supplier_sds_api_plm_substances_sds_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enrich_substance_pubchem_api_plm_substances__substance_id__pubchem_enrich_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     regulatory_ask_api_plm_regulatory_ask_post: {
         parameters: {
             query?: never;
@@ -21280,6 +22045,295 @@ export interface operations {
             };
         };
     };
+    get_optimizer_rules_api_cockpit_optimizer_rules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    set_optimizer_rules_api_cockpit_optimizer_rules_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptimizerRulesIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    doe_points_api_cockpit_doe__plan_id__points_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_doe_points_api_cockpit_doe__plan_id__points_review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PointReviewsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sensitivity_api_cockpit_sensitivity_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SensitivityIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rheology_fit_api_cockpit_rheology_fit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RheologyFitIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acid_stability_trend_api_cockpit_acid_stability_trend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcidTrendIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    color_page_api_cockpit_color_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ColorIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    color_materials_api_cockpit_color_materials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     list_methods_api_lab_methods_get: {
         parameters: {
             query?: {
@@ -21721,6 +22775,142 @@ export interface operations {
                 "application/json": components["schemas"]["ReasonIn"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_task_attachments_api_lab_tasks__task_id__attachments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_task_attachment_api_lab_tasks__task_id__attachments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_task_attachment_api_lab_tasks__task_id__attachments_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_task_attachment_api_lab_tasks__task_id__attachments__attachment_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_task_attachment_api_lab_tasks__task_id__attachments__attachment_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -22874,6 +24064,113 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_storm_outline_endpoint_api_wiki_storm_outline_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StormOutlineRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_storm_outline_endpoint_api_wiki_storm_outline__project_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_storm_outline_endpoint_api_wiki_storm_outline__project_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -24754,7 +26051,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                request_id: number;
+                request_id: string;
             };
             cookie?: never;
         };
@@ -24792,6 +26089,39 @@ export interface operations {
                 node_type: string;
                 node_id: string;
                 depth?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_product_chain_api_provenance_product_chain_get: {
+        parameters: {
+            query: {
+                product_id: string;
             };
             header?: never;
             path?: never;
@@ -25717,6 +27047,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    substitution_triggers_api_materials_substitution_triggers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubstitutionTriggersRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -28473,6 +29838,43 @@ export interface operations {
             };
         };
     };
+    acknowledge_contract_changes_api_projects__project_id__contract_change_notices_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcknowledgeContractChangesBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     project_payload_history_api_projects__project_id__history_get: {
         parameters: {
             query?: {
@@ -29694,13 +31096,88 @@ export interface operations {
             };
         };
     };
+    list_compliance_lists_api_compliance_lists_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    get_compliance_list_api_compliance_lists__list_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                list_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_substrates_api_meta_substrates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubstrateOption"][];
+                };
+            };
+        };
+    };
     get_default_levers_api_meta_default_levers_get: {
         parameters: {
             query: {
                 /** @description Product domain */
                 domain: components["schemas"]["ProductDomain"];
                 /** @description Substrate */
-                substrate?: components["schemas"]["Substrate"];
+                substrate?: string;
                 /** @description Cure temp for process levers */
                 cure_temperature_c?: number | null;
             };
