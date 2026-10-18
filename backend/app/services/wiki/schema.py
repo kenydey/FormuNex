@@ -110,8 +110,20 @@ def chemical_entity_id(*, cas: str | None = None, smiles: str | None = None) -> 
 
 
 def wiki_root_from_db_url(db_url: str) -> Path:
-    """``sqlite:///./data/formunex.db`` → ``./data/wiki``."""
-    raw = (db_url or "").replace("sqlite:///", "").strip()
+    """Derive the Wiki directory from the database URL.
+
+    ``sqlite:///./data/formunex.db`` → ``./data/wiki``
+
+    For a server database (``postgresql://user:pw@host:5432/db``) the URL is not
+    a filesystem path, so there is nothing to derive: fall back to the default
+    ``data/wiki``. The previous version only stripped the ``sqlite:///`` prefix
+    and fed the rest to ``Path()``, which silently created a directory literally
+    named ``postgresql:`` and buried every Wiki page under it.
+    """
+    raw = (db_url or "").strip()
+    if not raw.startswith("sqlite"):
+        return Path("data") / "wiki"
+    raw = raw.replace("sqlite:///", "").strip()
     if not raw or raw == ":memory:":
         return Path("data") / "wiki"
     parent = Path(raw).expanduser().resolve().parent
