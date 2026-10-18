@@ -6,6 +6,7 @@ import { useSession } from "@/app/session";
 import { normalizeSettingsTab, type SettingsTab } from "./logic";
 import { ModelTab } from "./ModelTab";
 import { ApiKeysTab } from "./ApiKeysTab";
+import { ApiTokenPanel } from "./ApiTokenPanel";
 import { SkillsTab } from "./SkillsTab";
 import { EnvFlagsTab } from "./EnvFlagsTab";
 import { DependenciesTab } from "./DependenciesTab";
@@ -28,6 +29,7 @@ export default function SettingsPage() {
   const tabs: { key: SettingsTab; tab: string }[] = [
     { key: "model", tab: t("settings.tab.model", "模型") },
     { key: "keys", tab: t("settings.tab.keys", "API 密钥与检索路由") },
+    { key: "api-token", tab: t("settings.tab.api_token", "API 访问令牌") },
     { key: "capabilities", tab: t("settings.tab.capabilities", "Skills 技能") },
     { key: "env", tab: t("settings.tab.env", "环境变量") },
     { key: "deps", tab: t("settings.tab.deps", "依赖管理") },
@@ -38,6 +40,7 @@ export default function SettingsPage() {
       onTabChange={(k) => navigate(`/admin/settings/${k}`)}>
       {tab === "model" && <ModelTab />}
       {tab === "keys" && <ApiKeysTab />}
+      {tab === "api-token" && <ApiTokenPanel />}
       {tab === "capabilities" && <SkillsTab />}
       {tab === "env" && <EnvFlagsTab />}
       {tab === "deps" && <DependenciesTab />}

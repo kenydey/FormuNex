@@ -47,8 +47,12 @@ def resolve_api_token(settings: Settings) -> str | None:
     global _DEV_TOKEN_CACHE
     if not settings.api_auth_enabled:
         return None
-    if settings.api_token:
-        return settings.api_token.strip()
+    # UI 设置的 token 走运行时 overlay（立即生效，无需重启）；未通过 UI 设置时回落到 env / Settings。
+    from ..services.runtime_secrets import effective_setting
+
+    configured = effective_setting(settings, "api_token")
+    if configured:
+        return str(configured).strip()
     env = settings.environment.strip().lower()
     if env in ("production", "prod"):
         raise RuntimeError(

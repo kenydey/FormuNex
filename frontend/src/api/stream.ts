@@ -3,6 +3,8 @@
  * with ``authFetch`` (same token refresh as every other call). Used by Chat (POST /api/chat/stream) and background
  * tasks (GET /api/tasks/{id}/stream, with a polling fallback when the stream drops).
  */
+import i18n from "@/app/i18n";
+// 纯模块不能用 useTranslation：用 i18n 单例（import 即初始化；未初始化时 i18n.t 返回 undefined，故必须 import）。
 import { authFetch } from "./auth";
 import { ApiError } from "./client";
 
@@ -97,7 +99,7 @@ export async function postSse<E extends { type?: string }>(path: string, body: u
     if (ev.type === "done" || ev.type === "error") terminated = true;
     onEvent(ev);
   });
-  if (!terminated && !signal?.aborted) throw new Error("流式响应中断（未收到结束事件）");
+  if (!terminated && !signal?.aborted) throw new Error(i18n.t("task.stream_interrupted", "流式响应中断（未收到结束事件）"));
 }
 
 const FROM_STATE: Record<TaskState, TaskProgressStatus> = {
@@ -127,7 +129,8 @@ export async function awaitTask(taskId: string, opts: { onEvent?: (ev: TaskProgr
   const terminal = (ev: TaskProgressEvent) => ev.status === "COMPLETED" || ev.status === "FAILED" || ev.status === "CANCELLED";
   const settle = (ev: TaskProgressEvent) => {
     if (ev.status === "COMPLETED") return ev;
-    throw new Error(ev.message || (ev.status === "CANCELLED" ? "任务已取消" : "任务失败"));
+    throw new Error(ev.message || (ev.status === "CANCELLED"
+      ? i18n.t("task.cancelled", "任务已取消") : i18n.t("task.failed", "任务失败")));
   };
   try {
     const res = await authFetch(`/api/tasks/${encodeURIComponent(taskId)}/stream`, { headers: { Accept: "text/event-stream" }, signal });
@@ -139,12 +142,12 @@ export async function awaitTask(taskId: string, opts: { onEvent?: (ev: TaskProgr
       if (last && terminal(last)) return settle(last);
     }
   } catch (err) {
-    if (signal?.aborted) throw new Error("已停止等待");
+    if (signal?.aborted) throw new Error(i18n.t("task.wait_stopped", "已停止等待"));
     void err; // fall through to polling
   }
   for (;;) {
-    if (signal?.aborted) throw new Error("已停止等待");
-    if (Date.now() > deadline) throw new Error(`任务超时（${Math.round(timeoutMs / 1000)} 秒），后台仍在运行`);
+    if (signal?.aborted) throw new Error(i18n.t("task.wait_stopped", "已停止等待"));
+    if (Date.now() > deadline) throw new Error(i18n.t("task.timeout", "任务超时（{{s}} 秒），后台仍在运行", { s: Math.round(timeoutMs / 1000) }));
     const s = await getTask(taskId);
     const ev: TaskProgressEvent = { status: FROM_STATE[s.state] ?? "FAILED", message: s.message, progress: s.progress,
       stage: s.stage, data: s.result ?? undefined, elapsed_ms: s.elapsed_ms };

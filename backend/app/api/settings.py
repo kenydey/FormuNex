@@ -302,6 +302,58 @@ def post_secret_test(body: SecretTestRequest):
     return probe_secret(body.id)
 
 
+class ApiTokenUpdate(BaseModel):
+    # token 给出 → 设置；token 为 null → 清除。空字符串是 422（避免表单误触清空）。
+    token: str | None = None
+
+
+def _api_token_status() -> dict:
+    """平台 bearer token（FORMUNEX_API_TOKEN）状态——只返回掩码，绝不回显完整值。"""
+    from ..services.runtime_secrets import effective_setting
+    from ..services.secrets_store import _mask
+
+    settings = get_settings()
+    value = str(effective_setting(settings, "api_token") or "").strip()
+    return {"set": bool(value), "masked": _mask(value), "auth_enabled": bool(settings.api_auth_enabled)}
+
+
+@router.get("/settings/api-token")
+def get_api_token_status():
+    """平台自身的 bearer token 状态（供脚本 / API 客户端用，非第三方密钥）。
+
+    UI 会话走 JWT，不用它；它只给脚本调用方做 ``Authorization: Bearer``。
+    """
+    return _api_token_status()
+
+
+@router.post("/settings/api-token")
+def post_api_token_update(body: ApiTokenUpdate):
+    """设置（token 给出）或清除（token 为 null）平台 bearer token。
+
+    写服务器 .env（FORMUNEX_API_TOKEN）+ 运行时 overlay，立即生效无需重启。
+    token 必须是单个无空白字符串——Bearer 解析按空白切分，含空格会在静默中破坏鉴权。
+    """
+    from ..services.runtime_secrets import get_runtime_secrets
+    from ..services.secrets_store import check_env_value, write_env_updates
+
+    if body.token is None:
+        write_env_updates({"FORMUNEX_API_TOKEN": ""})
+        get_runtime_secrets().set("api_token", None)
+    else:
+        token = body.token.strip()
+        if not token:
+            raise HTTPException(status_code=422, detail="token 为空：要清除请传 null")
+        if any(c.isspace() for c in token):
+            raise HTTPException(status_code=422, detail="token 不能含空白字符")
+        try:
+            check_env_value(token, what="api_token")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        write_env_updates({"FORMUNEX_API_TOKEN": token})
+        get_runtime_secrets().set("api_token", token)
+    return _api_token_status()
+
+
 @router.get("/settings/env-flags")
 def get_env_flags():
     from ..services.env_flags import list_env_flags, list_env_vars

@@ -1,4 +1,6 @@
 /** Pure formulation-editor logic (unit-tested): totals, normalisation, red-line checks. */
+import i18n from "@/app/i18n";
+// 纯逻辑模块不能用 useTranslation：用 i18n 单例（import 即初始化；未初始化时 i18n.t 返回 undefined，故必须 import）。
 import type { SpecContract } from "@/features/spec/types";
 
 export interface Row {
@@ -26,7 +28,8 @@ export function normalize(rows: Row[]): Row[] {
   const locked = rows.filter((r) => r.locked).reduce((s, r) => s + (Number(r.weight_pct) || 0), 0);
   const free = rows.filter((r) => !r.locked).reduce((s, r) => s + (Number(r.weight_pct) || 0), 0);
   const room = 100 - locked;
-  if (free <= 0 || room < 0) throw new Error(room < 0 ? "锁定组分合计已超过 100%" : "没有可归一化的组分");
+  if (free <= 0 || room < 0) throw new Error(room < 0
+    ? i18n.t("formula.locked_over", "锁定组分合计已超过 100%") : i18n.t("formula.no_normalizable", "没有可归一化的组分"));
   const k = room / free;
   const out = rows.map((r) => (r.locked ? r : { ...r, weight_pct: r4((Number(r.weight_pct) || 0) * k) }));
   return fixRounding(out);
@@ -36,7 +39,7 @@ export function normalize(rows: Row[]): Row[] {
 export function fillWith(rows: Row[], uid: string): Row[] {
   const others = rows.filter((r) => r.uid !== uid).reduce((s, r) => s + (Number(r.weight_pct) || 0), 0);
   const balance = r4(100 - others);
-  if (balance < 0) throw new Error("其余组分合计已超过 100%");
+  if (balance < 0) throw new Error(i18n.t("formula.remainder_over", "其余组分合计已超过 100%"));
   return rows.map((r) => (r.uid === uid ? { ...r, weight_pct: balance } : r));
 }
 
@@ -58,15 +61,22 @@ export function redLineViolations(rows: Row[], spec: SpecContract | undefined, c
     const hit = rows.filter((r) => r.cas_no && r.cas_no.trim() === rl.cas);
     const pct = r4(hit.reduce((s, r) => s + (Number(r.weight_pct) || 0), 0));
     if (hit.length && pct > (rl.max_pct ?? 0)) {
-      hit.forEach((r) => out.push({ uid: r.uid, message: `${rl.name || rl.cas}：${pct}% 超过红线 ${rl.max_pct ?? 0}%${rl.reason ? `（${rl.reason}）` : ""}` }));
+      hit.forEach((r) => out.push({
+      uid: r.uid,
+      message: rl.reason
+        ? i18n.t("formula.redline_over_reason", "{{name}}：{{pct}}% 超过红线 {{max}}%（{{reason}}）",
+          { name: rl.name || rl.cas, pct, max: rl.max_pct ?? 0, reason: rl.reason })
+        : i18n.t("formula.redline_over", "{{name}}：{{pct}}% 超过红线 {{max}}%",
+          { name: rl.name || rl.cas, pct, max: rl.max_pct ?? 0 }),
+    }));
     }
   }
   const pictos = (cls?.pictograms ?? []).map((p) => p.code);
   const bad = pictos.filter((p) => (spec.forbidden_pictograms ?? []).includes(p));
-  if (bad.length) out.push({ message: `出现禁止的象形图 ${bad.join("、")}` });
+  if (bad.length) out.push({ message: i18n.t("formula.forbidden_pictogram", "出现禁止的象形图 {{list}}", { list: bad.join("、") }) });
   const sw = cls?.signal_word;
   if (sw && spec.forbidden_signal_word && (spec.forbidden_signal_word === "警告" || sw === spec.forbidden_signal_word)) {
-    out.push({ message: `信号词为“${sw}”，违反规格契约` });
+    out.push({ message: i18n.t("formula.signal_word_violation", "信号词为“{{sw}}”，违反规格契约", { sw }) });
   }
   return out;
 }

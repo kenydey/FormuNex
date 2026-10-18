@@ -1,10 +1,12 @@
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { awaitTask, cancelTask, thinkingSteps, type AsyncTaskAccepted, type TaskProgressEvent, type ThinkingStep } from "@/api/stream";
 import type { ResearchResult } from "./types";
 
 /** Submit a 202 task endpoint (recommend / AI-modify) and follow its progress; resolves to ``data.research``. */
 export function useResearchTask() {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [event, setEvent] = useState<TaskProgressEvent | null>(null);
   const [steps, setSteps] = useState<ThinkingStep[]>([]);
@@ -28,7 +30,7 @@ export function useResearchTask() {
         },
       });
       const research = (final.data as { research?: ResearchResult } | undefined)?.research;
-      if (!research) throw new Error("任务未返回推荐结果");
+      if (!research) throw new Error(t("formulation.task_no_result", "任务未返回推荐结果"));
       return research;
     } finally {
       setBusy(false);

@@ -7,6 +7,7 @@ const en: Record<string, string> = {
   "settings.title": "Settings",
   "settings.tab.model": "Models",
   "settings.tab.keys": "API keys & retrieval routing",
+  "settings.tab.api_token": "API access token",
   "settings.tab.capabilities": "Skills",
   "settings.tab.env": "Environment flags",
   "settings.tab.deps": "Dependencies",
@@ -323,6 +324,15 @@ const en: Record<string, string> = {
   "settings.org.ingredient": "Ingredient",
   "settings.org.avg_pct": "Avg. wt %",
   "settings.org.best_metric": "Best metric",
+  "settings.api_token.title": "API access token",
+  "settings.api_token.intro": "The platform's own API access token, for scripts and API clients via Authorization: Bearer. UI sessions use the sign-in JWT, not this token. The token lives in the server .env; this page only shows a mask.",
+  "settings.api_token.auth_off": "API auth is currently disabled: the token has no effect until auth is enabled (FORMUNEX_API_AUTH_ENABLED=true).",
+  "settings.api_token.current": "Current {{v}} — type a new token to replace it",
+  "settings.api_token.new_token": "Type a new token (a single string with no whitespace)",
+  "settings.api_token.saved": "Saved to the server .env, effective immediately",
+  "settings.api_token.cleared": "Cleared",
+  "settings.api_token.confirm_clear": "Clear the platform token? Script calls will fail immediately.",
+  "settings.api_token.usage": "Script usage: curl -H \"Authorization: Bearer <token>\" <backend>/api/...",
 };
 
 export default en;

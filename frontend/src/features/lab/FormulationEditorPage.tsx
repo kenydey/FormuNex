@@ -65,14 +65,14 @@ export default function FormulationEditorPage() {
       try {
         const data = JSON.parse(ev.data) as { type?: string; detail?: string } & Classification;
         if (data.type === "classification") { setCls(data); setClsError(null); setBusy(false); }
-        else if (data.type === "error") { setClsError(data.detail ?? "实时合规失败"); setBusy(false); }
+        else if (data.type === "error") { setClsError(data.detail ?? t("formula.compliance_failed", "实时合规失败")); setBusy(false); }
       } catch { /* ignore malformed frame */ }
     };
     ws.onerror = () => { wsAliveRef.current = false; };
     ws.onclose = () => { wsAliveRef.current = false; };
     wsRef.current = ws;
     return () => { ws.close(); wsRef.current = null; wsAliveRef.current = false; };
-  }, [versionId]);
+  }, [versionId, t]);
 
   // Debounced (400 ms) GB 30000 evaluation of the current composition.
   const filled = useMemo(() => rows.filter((r) => r.name.trim() && Number(r.weight_pct) > 0), [rows]);

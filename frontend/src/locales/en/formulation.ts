@@ -325,6 +325,7 @@ const en: Record<string, string> = {
   "formulation.ver.saved": "Saved as version {{v}}",
   "formulation.ver.summary": "Change",
   "formulation.ver.to": "To version",
+  "formulation.task_no_result": "Task returned no recommendation",
   "formulation.ver.version": "Version",
 };
 
