@@ -19,6 +19,20 @@ const ROUTES = [
   "/lab/leaderboard", "/lab/recommend", "/lab/inverse-design", "/lab/substitution", "/lab/similar", "/lab/qc-report",
   "/cockpit/pareto", "/cockpit/conformal", "/cockpit/workbench", "/cockpit/loop", "/cockpit/models", "/cockpit/surface",
   "/plm/products", "/plm/label-designer",
+  // Param pages: non-existent ids must show their own not-found / empty state (ErrorAlert / Empty / Result),
+  // never crash. String ids use `no-such-*` (same convention as /lab/lineage/no-such-lineage below);
+  // numeric ids (workbench campaign / row) use 999999 (same as /lab/experiments/999999) because the
+  // backend declares campaign_id: int — a non-numeric id would 422 at the router, not exercise the page.
+  // /plm/regulatory and /admin/desktop take no id. /admin/settings (bare) redirects to /admin/settings/model.
+  "/plm/products/no-such-product", "/plm/revisions/no-such-revision", "/plm/documents/no-such-document",
+  "/plm/packages/no-such-package", "/plm/regulatory",
+  "/knowledge/sources/no-such-source", "/knowledge/chat/no-such-session", "/knowledge/reviews/no-such-run",
+  "/spec/projects/no-such-project", "/spec/projects/no-such-project/sources",
+  "/lab/tasks/no-such-task",
+  "/lab/experiments/workbench/999999/rows/999999", "/lab/experiments/workbench/999999/diff",
+  "/lab/provenance/formulation/no-such-node",
+  "/cockpit/workbench/999999",
+  "/admin/desktop", "/admin/settings",
   "/materials/substances", "/materials/raw", "/materials/raw?tab=pending", "/materials/raw?tab=structure",
   "/admin/users", "/admin/audit", "/admin/connectors", "/admin/settings/model", "/admin/settings/keys",
   "/admin/settings/capabilities", "/admin/settings/env", "/admin/settings/deps", "/admin/settings/kb",
