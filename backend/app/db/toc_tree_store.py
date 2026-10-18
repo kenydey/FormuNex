@@ -53,6 +53,28 @@ class TocTreeStore:
             session.commit()
             return row
 
+    def update_tree(self, source_id: str, tree: dict[str, Any]) -> DocumentTocTreeRow | None:
+        """Replace the stored tree without touching summaries_status (summary jobs)."""
+        with self._session_factory() as session:
+            row = session.get(DocumentTocTreeRow, source_id)
+            if row is None:
+                return None
+            row.tree = tree
+            session.add(row)
+            session.commit()
+            return row
+
+    def set_summaries_status(self, source_id: str, status: str) -> DocumentTocTreeRow | None:
+        """Summaries state machine: none -> pending -> done | partial."""
+        with self._session_factory() as session:
+            row = session.get(DocumentTocTreeRow, source_id)
+            if row is None:
+                return None
+            row.summaries_status = status
+            session.add(row)
+            session.commit()
+            return row
+
     def delete(self, source_id: str) -> int:
         with self._session_factory() as session:
             n = session.execute(delete(DocumentTocTreeRow).where(DocumentTocTreeRow.source_id == source_id)).rowcount

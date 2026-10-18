@@ -1,9 +1,12 @@
 # Browser tests (frontend-next)
 
 `routes.spec.ts` opens every page twice (without and with a project selected) and fails on uncaught errors,
-console errors, the error boundary or 5xx API responses. `smoke.spec.ts` logs in and walks the core screens (dashboard, products → revision → SDS proofreader,
-release gate, label designer, formulation editor, lab tasks, audit log in English). It needs a running
-backend and Vite dev server, so it is **not** part of `npm test` or CI.
+console errors, the error boundary or 5xx API responses. `smoke.spec.ts` has three tests: the main-path
+smoke (dashboard → spec → formulation → DOE → SDS, all pure UI), the PLM publish lifecycle
+(TDS/COA/label → approve → candidate → gate → 4-step sign-off → release), and lab measurement →
+review → Pareto winning. It needs a running backend and Vite dev server, so it is **not** part of
+`npm test` or PR CI — it runs nightly via `.github/workflows/playwright-nightly.yml` (and on demand
+from the Actions tab).
 
 ```bash
 # 1. throw-away database + seed (demo / Fx-Smoke-2026!, xylene/water, formulation fv-demo, lab methods)
@@ -25,3 +28,9 @@ npx playwright test            # both specs; or e.g. npx playwright test e2e/rou
 
 The seed is not idempotent (unique usernames); delete the database file before re-seeding. The test
 creates products with a unique code per run, so it can be repeated against the same database.
+
+Seeded users (all password `Fx-Smoke-2026!`): `demo` (all roles, creates everything), `checker`
+(EHS + quality: approves documents, reviews measurements), `signer_lead` / `signer_ehs` /
+`signer_qa` / `signer_rm` (one per release sign-off step — the backend forbids one person
+signing two steps). The xylene classification is locked (manual) and water carries an explicit
+`not_classified` row so the release gate G2 passes.

@@ -46,6 +46,29 @@ def rebuild_toc_tree(source_id: str) -> dict[str, Any]:
     return stats
 
 
+@router.post("/sources/{source_id}/toc-tree/summarize", status_code=202)
+def summarize_toc_tree(source_id: str):
+    """Trigger background LLM summaries for one document's ToC nodes.
+
+    Cost guard: only the explicitly requested document is summarised, never a
+    full-library sweep. The row moves to ``pending`` now; the Celery job flips
+    it to ``done`` / ``partial``. Poll ``GET .../toc-tree`` for the result.
+    """
+    from ..db.toc_tree_store import get_toc_tree_store
+
+    store = get_toc_tree_store()
+    row = store.get(source_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="该文档尚无目录树（未入库或未构建）")
+    if row.summaries_status == "done":
+        return {"source_id": source_id, "summaries_status": "done", "detail": "节点摘要已全部生成"}
+    store.set_summaries_status(source_id, "pending")
+    from ..worker.tasks import run_toc_summaries_task
+    from ._dispatch import submit
+
+    return submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries")
+
+
 @router.post("/pageindex/search")
 def pageindex_search(body: TwoStageSearchRequest) -> dict[str, Any]:
     """Stage 1 hybrid search → stage 2 ToC-tree navigation with an auditable reasoning trace."""

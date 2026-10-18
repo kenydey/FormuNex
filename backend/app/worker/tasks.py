@@ -858,6 +858,21 @@ def run_kb_ingest_task(self, payload: dict) -> dict:
     return _kb_ingest_impl(self.request.id, payload)
 
 
+# ── PageIndex ToC node summaries ─────────────────────────────────────────────
+# Triggered explicitly per document (POST /kb/sources/{id}/toc-tree/summarize);
+# never a full-library sweep (LLM cost). Retries cover transient provider
+# outages; per-node failures land the document in "partial", not a failed job.
+
+
+@celery_app.task(bind=True, name="formunex.toc_summaries", max_retries=3,
+                 autoretry_for=(ConnectionError, TimeoutError, OSError),
+                 retry_backoff=True)
+def run_toc_summaries_task(self, payload: dict) -> dict:
+    from ..services.pageindex.summaries import generate_summaries
+
+    return generate_summaries(payload["source_id"])
+
+
 # ── Async file ingest (upload → 202 → SSE) ───────────────────────────────────
 # Parsing a scanned PDF is minutes of OCR; holding the HTTP request open while
 # that runs is what let an intermediary in front of uvicorn cut the connection
