@@ -8,6 +8,12 @@
       FormuNex 在所有部署形态下都以 PostgreSQL 为主库，SQLite 仅用于 CI/单测。
     Native 模式（-Native）：本地 venv + npm + SQLite，仅用于开发调试。
 
+  Docker 模式的前置条件是 Linux 容器：Windows 容器模式的 daemon 拉不了 Linux
+  镜像（compose pull 以 no matching manifest 失败）。检测到 Windows 容器模式时，
+  能切到 Linux 容器则切（Docker Desktop 的 DockerCli.exe -SwitchLinuxEngine）；
+  无法切换时警告并跳过 Docker 栈、改走 Native 安装（不交互，全取默认值），
+  不让可选栈拖垮整个安装。
+
   用法:
     # 方式一（推荐）：双击 install.bat（Docker 模式）
     # 方式二：powershell -ExecutionPolicy Bypass -File install.ps1
@@ -38,6 +44,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Docker 模式回退到 Native 时置 $true：回退路径不交互，全部取默认值。
+$script:NonInteractive = $false
 $Root = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $BackendDir = Join-Path $Root "backend"
 $VenvDir = Join-Path $BackendDir ".venv"
@@ -126,6 +134,29 @@ function Setup-Env {
   }
 }
 
+# Docker Desktop 的容器模式切换。GH Windows runner 用的是 Windows 容器模式的
+# dockerd（无 Docker Desktop），DockerCli.exe 不存在时无法切换，返回 $false。
+function Switch-DockerToLinux {
+  $cli = Join-Path $env:ProgramFiles "Docker\Docker\DockerCli.exe"
+  if (-not (Test-Path $cli)) {
+    Write-Host "    未找到 Docker Desktop（DockerCli.exe），无法切换容器模式"
+    return $false
+  }
+  Write-Host "    正在切换到 Linux 容器（DockerCli.exe -SwitchLinuxEngine）..."
+  $sw = Invoke-Probe { & $cli -SwitchLinuxEngine }
+  if (-not $sw.Ok) {
+    Write-Warn "切换到 Linux 容器失败：$($sw.Output)"
+    return $false
+  }
+  for ($i = 1; $i -le 30; $i++) {
+    $probe = Invoke-Probe { & docker info --format "{{.OSType}}" }
+    if ($probe.Ok -and $probe.Output -eq "linux") { return $true }
+    Start-Sleep -Seconds 2
+  }
+  Write-Warn "切换后 60 秒内 Docker 仍未回到 Linux 容器模式"
+  return $false
+}
+
 # ---------------------------------------------------------------------------
 # Docker 模式（默认，推荐）
 # ---------------------------------------------------------------------------
@@ -159,6 +190,24 @@ function Install-Docker {
     exit 1
   }
   Write-Ok "Docker daemon 运行中"
+
+  # 容器模式检测：Windows 容器模式的 daemon 拉不了 Linux 镜像，compose pull 会以
+  # no matching manifest 失败。能切到 Linux 容器则切；不能则跳过 Docker 栈、
+  # 改走 Native 安装（venv + SQLite），不要让可选栈拖垮整个安装。
+  $osType = (Invoke-Probe { & docker info --format "{{.OSType}}" }).Output
+  if ($osType -eq "windows") {
+    Write-Warn "Docker 当前为 Windows 容器模式，无法运行 Linux 镜像"
+    if (-not (Switch-DockerToLinux)) {
+      Write-Warn "跳过 Docker 栈（PostgreSQL / Redis / Neo4j），改为 Native 安装"
+      Write-Host "    如需 Docker 模式：打开 Docker Desktop → 切换到 Linux 容器，或执行 DockerCli.exe -SwitchLinuxEngine 后重跑安装"
+      $script:NonInteractive = $true
+      Install-Native
+      return
+    }
+    Write-Ok "已切换到 Linux 容器模式"
+  } elseif ($osType -ne "linux") {
+    Write-Warn "无法确定 Docker 容器模式（docker info 返回 '$osType'），继续按 Linux 模式尝试"
+  }
 
   Setup-Env
 
@@ -368,7 +417,7 @@ function Install-Native {
   Write-Host "    3) bge-m3 (推荐, ~2GB, 多语言, 解决跨语言召回)"
   Write-Host "    4) Qwen3-Embedding-0.6B (~1.2GB, 多语言)"
   Write-Host "    5) m3e-base (~200MB, 中文)"
-  $embChoice = Read-Host "    请选择 [1-5, 默认1]"
+  $embChoice = if ($script:NonInteractive) { "1" } else { Read-Host "    请选择 [1-5, 默认1]" }
   if ([string]::IsNullOrWhiteSpace($embChoice)) { $embChoice = "1" }
   switch ($embChoice) {
     "2" { $embModel = "BAAI/bge-small-zh-v1.5" }
@@ -387,7 +436,7 @@ function Install-Native {
   }
   Write-Host "    已选择: $embModel"
   if ($embModel -eq "BAAI/bge-m3" -or $embModel -eq "Qwen/Qwen3-Embedding-0.6B") {
-    $dlAns = Read-Host "    模型约 1-2GB，是否现在下载？[y/N]"
+    $dlAns = if ($script:NonInteractive) { "N" } else { Read-Host "    模型约 1-2GB，是否现在下载？[y/N]" }
     if ($dlAns -match "^[Yy]$") {
       Write-Host "    下载中..."
       $dlOk = Invoke-Optional { & $VenvPython -c "from huggingface_hub import snapshot_download; snapshot_download('$embModel', allow_patterns=['*.json','*.txt','*.model','*.safetensors','*.bin']); print('    下载完成')" }
