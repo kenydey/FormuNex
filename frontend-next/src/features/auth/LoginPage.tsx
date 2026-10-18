@@ -23,7 +23,7 @@ export default function LoginPage() {
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "linear-gradient(135deg,#0f3550,#1f5f8b)" }}>
       <Card style={{ width: 380 }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <img src="/favicon.svg" width={48} height={48} alt="" />
+          <img src="/favicon.png" width={48} height={48} alt="" />
           <Typography.Title level={3} style={{ margin: "8px 0 0" }}>{t("app.title", "方枢 FormuNex")}</Typography.Title>
           <Typography.Text type="secondary">{t("login.subtitle", "配方研发与化学品合规平台")}</Typography.Text>
         </div>

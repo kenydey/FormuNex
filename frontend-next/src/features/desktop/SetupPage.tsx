@@ -53,7 +53,7 @@ export default function SetupPage() {
 
   return (
     <div style={{ minHeight: "100vh", padding: "32px 16px", display: "flex", justifyContent: "center" }}>
-      <Card style={{ width: "100%", maxWidth: 920 }} title={<Space><img src="/favicon.svg" width={24} alt="" />{t("desktop.setup", "方枢 FormuNex 首次设置")}</Space>}
+      <Card style={{ width: "100%", maxWidth: 920 }} title={<Space><img src="/favicon.png" width={24} alt="" />{t("desktop.setup", "方枢 FormuNex 首次设置")}</Space>}
         extra={<Typography.Text type="secondary">v{info.app_version}</Typography.Text>}>
         <Steps size="small" current={current} items={items} style={{ marginBottom: 24 }} />
         {error ? <Alert type="error" showIcon message={errorText(error)} style={{ marginBottom: 16 }} closable onClose={() => setError(null)} /> : null}

@@ -41,7 +41,7 @@ export function Shell() {
   return (
     <ProLayout
       title={t("app.title", "方枢 FormuNex")}
-      logo="/favicon.svg"
+      logo="/favicon.png"
       layout="mix"
       fixSiderbar
       location={{ pathname: location.pathname }}
