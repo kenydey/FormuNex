@@ -1,0 +1,156 @@
+# FormuNex 反向代理 TLS 终止示例配置
+#
+# 用途：生产部署时，在 FormuNex 应用之外加一层反向代理，由反代终止 TLS。
+# FormuNex 应用内不做 TLS 终止：前端容器与后端均只监听 HTTP，且 compose
+# 默认只绑 127.0.0.1（见 docker-compose.yml / docker-compose.prod.yml）。
+#
+# 使用方法：
+#   1. 把本文件复制为 /etc/nginx/conf.d/formunex.conf（或 sites-available 下并做软链）。
+#   2. 把下面所有 <你的域名>、<证书路径> 占位符改成真实值（见 deploy/reverse-proxy/README.md）。
+#   3. 执行 nginx -t && nginx -s reload（或 systemctl reload nginx）。
+#
+# 注意：本文件为示例，不是开箱即用的生产配置。启用前务必通读中文注释。
+
+# 上游：FormuNex 前端容器（容器内 nginx :80，宿主机映射为 5173）
+# 如果反代与 compose 不在同一台机器，把 127.0.0.1 改成 compose 所在主机的内网 IP，
+# 并把 compose 里前端/后端的绑定地址相应放开（默认只绑 127.0.0.1，外网直连会被拒绝）。
+upstream formunex_frontend {
+    server 127.0.0.1:5173;
+}
+
+# 上游：FormuNex 后端（uvicorn :8000，compose 默认只绑 127.0.0.1）
+upstream formunex_backend {
+    server 127.0.0.1:8000;
+}
+
+# SSE 端点用 ?token= 传 bearer 令牌（EventSource 无法设置请求头），
+# 日志只记路径不记查询串，避免令牌落入日志。
+log_format formunex_noargs '$remote_addr - [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
+
+# ---- HTTP :80：全部跳转 HTTPS，不提供任何 HTTP 内容 ----
+server {
+    listen 80;
+    # 改成你的真实域名，例如 formunex.example.com
+    server_name <你的域名>;
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ---- HTTPS :443：TLS 终止 + 反代 ----
+server {
+    listen 443 ssl;
+    # 如需 IPv6，取消下面一行的注释（主机无 IPv6 时保持注释，否则 nginx 启动失败）：
+    # listen [::]:443 ssl;
+    # 改成你的真实域名，必须与证书的域名一致
+    server_name <你的域名>;
+
+    access_log /var/log/nginx/formunex-access.log formunex_noargs;
+    error_log  /var/log/nginx/formunex-error.log warn;
+
+    # ---- 证书：改成你的真实证书路径 ----
+    # Let's Encrypt（certbot）默认路径形如：
+    #   /etc/letsencrypt/live/<你的域名>/fullchain.pem
+    #   /etc/letsencrypt/live/<你的域名>/privkey.pem
+    ssl_certificate     <证书 fullchain.pem 路径>;
+    ssl_certificate_key <证书 privkey.pem 路径>;
+
+    # ---- TLS 协议与密码套件：只留现代协议 ----
+    ssl_protocols TLSv1.2 TLSv1.3;
+    # Mozilla intermediate 套件（TLS 1.3 的套件由协议自动协商，不受此列表影响）
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    # 关闭 session ticket，避免重启后旧 ticket 可解密新会话（前向保密）
+    ssl_session_tickets off;
+
+    # ---- 安全响应头 ----
+    # HSTS：警告——只有在确认 HTTPS 已正常工作后再启用！
+    # 一旦启用，浏览器会在 max-age 内强制走 HTTPS；若证书过期/配置错误，
+    # 用户在有效期内无法回退到 HTTP。不要加 preload，除非你清楚其后果。
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # 如需禁止页面被 iframe 嵌入，取消下一行注释（FormuNex 前端本身不依赖被嵌入）：
+    # add_header X-Frame-Options "DENY" always;
+
+    # ---- 上传大小：与前端容器保持一致 ----
+    # 后端允许 20 MiB 上传（FORMUNEX_INGEST_MAX_UPLOAD_BYTES），
+    # nginx 默认 1m 会在请求到达后端前返回 413。
+    client_max_body_size 25m;
+
+    # 静态文本资源压缩（已压缩的字体/图片不在此列表，不重复压缩）
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss;
+    gzip_min_length 1024;
+
+    # ---- 前端页面与静态资源 ----
+    location / {
+        proxy_pass http://formunex_frontend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # 告诉后端原始请求是 HTTPS（后端据此生成绝对 URL / 安全 Cookie）
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 300s;
+    }
+
+    # ---- SSE：任务进度流（长连接） ----
+    # 必须关缓冲，否则 nginx 会攒满缓冲区才下发，进度流看起来像“卡住后一次性爆发”。
+    location /api/tasks/ {
+        proxy_pass http://formunex_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        chunked_transfer_encoding off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # ---- WebSocket：实时合规推送 ----
+    # 必须透传 Upgrade 头，否则握手失败（表现为 WS 连不上、前端实时合规无更新）。
+    location /ws/ {
+        proxy_pass http://formunex_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # ---- API ----
+    location /api/ {
+        proxy_pass http://formunex_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 300s;
+    }
+
+    # ---- 健康检查 ----
+    location /health {
+        proxy_pass http://formunex_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}

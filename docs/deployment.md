@@ -31,7 +31,9 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
 健康检查：`GET http://localhost:8000/health`（compose healthcheck 已配）。
-前端经反向代理对外时，在代理层加 TLS；不要直接把 5173 暴露到公网。
+
+对外提供 HTTPS 时，在应用之外加反向代理，由反代层终止 TLS（应用内不做 TLS 终止；不要直接把 5173 暴露到公网）。
+示例配置与步骤见 `deploy/reverse-proxy/README.md`（含 Let's Encrypt 取证、自签证书仅供内网测试）。
 
 ## 端口与凭据
 
