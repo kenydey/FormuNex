@@ -92,6 +92,12 @@ BUILTIN_ROLES: tuple[RoleDef, ...] = (
         "release.sign", "release.publish", "release.withdraw", "audit.read",
     ]),
     _role("sys_admin", "系统管理员", "System Administrator", [
+        # knowledge.read is the floor for the whole UI: search, the Knowledge Hub and
+        # Wiki are unreachable without it, so an administrator who only holds this role
+        # could log in and then get 403 on every retrieval call. Business-data
+        # permissions (formulation.*, spec.*, doe.*, release.*) stay out on purpose —
+        # trade secrets remain segregated by design; grant a second role for those.
+        "knowledge.read",
         "admin.users", "admin.templates", "admin.companies", "admin.llm", "admin.connectors", "audit.read",
     ]),
 )
