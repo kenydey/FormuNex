@@ -134,13 +134,27 @@ def private_llm_configured(settings: Any | None = None) -> bool:
     return bool(endpoint and api_key)
 
 
-def resolve_route(sensitivity: Sensitivity, settings: Any | None = None) -> tuple[str, str]:
-    """Return (destination, reason): ``private`` or ``external``.
+def resolve_route(
+    sensitivity: Sensitivity,
+    settings: Any | None = None,
+    *,
+    external_configured: bool = True,
+) -> tuple[str, str]:
+    """Return (destination, reason): ``private``, ``external`` or ``none``.
 
-    Raises :class:`SensitiveDataRefusal` for ``secret`` with no private model.
+    Raises :class:`SensitiveDataRefusal` for ``secret`` with no private model
+    — but only when an external call would actually be made
+    (``external_configured=True``). With no external key configured there is
+    nothing to exfiltrate to, so a secret payload degrades to ``"none"``
+    (no call) instead of failing the whole flow — e.g. a deep-research task
+    over a seed corpus in an environment with no LLM configured at all.
+    The security invariant is unchanged: secret data never reaches an
+    external provider when a call would be made.
     """
     if sensitivity == "secret":
         if not private_llm_configured(settings):
+            if not external_configured:
+                return "none", "secret payload, no model configured — no call made"
             raise SensitiveDataRefusal()
         return "private", "secret payload -> private model"
     return "external", f"{sensitivity} payload -> configured provider"

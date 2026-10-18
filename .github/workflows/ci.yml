@@ -290,7 +290,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e ".[dev,llm,science,optimize,pydoe]" pandas
+          # documents extra (reportlab / python-docx)：与 Linux backend job 对齐。
+          # 缺它时 PLM 端点与 PDF 导出会因缺渲染依赖而失败。
+          pip install -e ".[dev,llm,science,optimize,pydoe,documents]" pandas
 
       # Setting up a fresh SQLite database took 3-26 s per test here and the cause was a guess (a commit - an fsync - per DDL
       # statement). One shard prints what a commit, a new file and a rename cost on the runner, so the next change is made on
@@ -584,7 +586,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e '.[dev,science,optimize,pydoe]' pandas
+          # documents extra：fuzz 覆盖 PLM 端点，缺渲染依赖时全是 500 噪音。
+          pip install -e '.[dev,science,optimize,pydoe,documents]' pandas
 
       - name: Fuzz every documented operation
         # A different seed set per run (the run number), so repeated runs cover more of the input space.

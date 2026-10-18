@@ -13,12 +13,24 @@ from functools import lru_cache
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from reportlab.graphics import renderPDF
-from reportlab.lib import colors
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas as rl_canvas
-from reportlab.platypus import Frame, Paragraph
+try:
+    from reportlab.graphics import renderPDF
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.platypus import Frame, Paragraph
+except ImportError:
+    # reportlab 是 documents extra：见 docx.py 同款 guard。
+    renderPDF = None  # type: ignore[assignment]
+    colors = None  # type: ignore[assignment]
+    ParagraphStyle = None  # type: ignore[assignment]
+    mm = None  # type: ignore[assignment]
+    rl_canvas = None  # type: ignore[assignment]
+    Frame = None  # type: ignore[assignment]
+    Paragraph = None  # type: ignore[assignment]
+
+from . import MissingRenderDependency
 
 from .fonts import resolve_font
 
@@ -42,6 +54,8 @@ def _field(content: dict, key: str):
 
 
 def render_label_pdf(content: dict) -> tuple[bytes, dict]:
+    if rl_canvas is None:
+        raise MissingRenderDependency("reportlab")
     font = resolve_font()
     size = (content.get("meta") or {}).get("size") or {}
     w, h = float(size.get("width_mm", 100)) * mm, float(size.get("height_mm", 150)) * mm

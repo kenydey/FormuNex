@@ -10,10 +10,20 @@ from __future__ import annotations
 import io
 from typing import Any
 
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.shared import Pt
+try:
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+except ImportError:
+    # python-docx 是 documents extra：最小安装仍要能 import PLM service，
+    # 只有真正渲染 DOCX 时才报缺依赖（API 层转 503）。
+    Document = None  # type: ignore[assignment]
+    WD_ALIGN_PARAGRAPH = None  # type: ignore[assignment]
+    qn = None  # type: ignore[assignment]
+    Pt = None  # type: ignore[assignment]
+
+from . import MissingRenderDependency
 
 
 def _text(value: Any) -> str:
@@ -36,8 +46,13 @@ def _set_cjk_font(doc, name: str = "SimSun") -> None:
 
 
 def render_docx(content: dict, template: bytes | None = None) -> bytes:
+    if Document is None:
+        raise MissingRenderDependency("python-docx")
     if template is not None:
-        from docxtpl import DocxTemplate
+        try:
+            from docxtpl import DocxTemplate
+        except ImportError as exc:
+            raise MissingRenderDependency("docxtpl") from exc
 
         tpl = DocxTemplate(io.BytesIO(template))
         tpl.render({**content, "text": _text})

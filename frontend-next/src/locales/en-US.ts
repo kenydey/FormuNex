@@ -377,6 +377,7 @@ const en: Record<string, string> = {
   "nav.plm": "⑤ PLM & Release Center",
   "nav.plm.labels": "Label designer",
   "nav.plm.products": "Products & revisions",
+  "nav.plm.regulatory": "Regulatory agent",
   "nav.spec": "② Requirement & Spec Studio",
   "nav.spec.projects": "Projects & specifications",
   "pareto.cas_map": "Map numeric factors to components (CAS; blank = by name):",

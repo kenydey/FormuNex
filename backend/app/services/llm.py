@@ -840,18 +840,26 @@ def _call_llm(
 
     敏感数据分级路由（开发方案 §4.5）: ``payload`` 给出时按结构化
     payload 分级，否则按 prompt 文本分级。secret（精确配比）只发私有
-    模型；未配置私有模型时抛 ``SensitiveDataRefusal``，绝不静默外发。
+    模型；未配置私有模型且外部 key 已配置（外发会真实发生）时抛
+    ``SensitiveDataRefusal``，绝不静默外发；无任何模型可调时按无 LLM
+    降级返回 None（拒绝的目的是防止外泄，不是惩罚无私有模型）。
     """
     from .llm_router import call_private_llm, classify_payload, resolve_route
-
-    sensitivity = classify_payload(payload if payload is not None else prompt)
-    destination, _reason = resolve_route(sensitivity)  # secret + 无私有模型 → 抛错
-    if destination == "private":
-        return call_private_llm(prompt, max_tokens, model=model)
 
     settings = get_settings()
     provider = effective_setting(settings, "llm_provider")
     api_key = settings.get_active_api_key()
+    sensitivity = classify_payload(payload if payload is not None else prompt)
+    # external_configured 必须与下面实际外发路径用同一个 key 来源判定：
+    # key 为空时根本不会外发，拒绝无意义，只会把可降级流程打成硬失败。
+    destination, _reason = resolve_route(
+        sensitivity, settings, external_configured=bool(api_key)
+    )
+    if destination == "private":
+        return call_private_llm(prompt, max_tokens, model=model)
+    if destination == "none":
+        return None
+
     if not api_key:
         return None
     # P1-19: per-caller 模型覆盖（reviewer 小模型用）；为空 → 全局 llm_model（向后兼容）。

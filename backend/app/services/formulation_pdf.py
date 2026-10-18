@@ -5,11 +5,26 @@ import io
 from datetime import datetime, timezone
 from xml.sax.saxutils import escape
 
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+except ImportError:
+    # reportlab 是 documents extra：最小安装仍要能 import，
+    # 只有真正导出 PDF 时才报缺依赖（API 层转 503）。
+    colors = None  # type: ignore[assignment]
+    A4 = None  # type: ignore[assignment]
+    ParagraphStyle = None  # type: ignore[assignment]
+    mm = None  # type: ignore[assignment]
+    Paragraph = None  # type: ignore[assignment]
+    SimpleDocTemplate = None  # type: ignore[assignment]
+    Spacer = None  # type: ignore[assignment]
+    Table = None  # type: ignore[assignment]
+    TableStyle = None  # type: ignore[assignment]
+
+from .plm.render import MissingRenderDependency
 
 from ..domain.schemas import Formulation
 from .plm.render.fonts import resolve_font
@@ -37,6 +52,8 @@ def _fmt(v: float | None, digits: int = 2) -> str:
 
 
 def render_formulation_pdf(f: Formulation, *, lang: str = "zh-CN", title: str | None = None) -> tuple[bytes, dict]:
+    if Paragraph is None:
+        raise MissingRenderDependency("reportlab")
     """Return (pdf bytes, render info: font, embedded)."""
     lab = _LABELS.get(lang, _LABELS["zh-CN"])
     font = resolve_font()

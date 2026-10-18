@@ -62,18 +62,48 @@ class TestResolveRoute:
 
 
 class TestCallLlmRouting:
-    def test_call_llm_secret_without_private_refuses(self):
+    def test_call_llm_secret_without_private_refuses(self, monkeypatch):
         from app.services.llm import _call_llm
 
-        assert not router.private_llm_configured()
-        with pytest.raises(SensitiveDataRefusal):
-            _call_llm("unused", payload={"ingredients": [{"name": "二甲苯", "weight_pct": 30}]})
+        # 拒绝只在外发会真实发生时触发：需配置一个外部 key。
+        monkeypatch.setenv("FORMUNEX_ANTHROPIC_API_KEY", "dummy-external-key")
+        get_settings.cache_clear()
+        try:
+            assert not router.private_llm_configured()
+            with pytest.raises(SensitiveDataRefusal):
+                _call_llm("unused", payload={"ingredients": [{"name": "二甲苯", "weight_pct": 30}]})
+        finally:
+            get_settings.cache_clear()
 
-    def test_call_llm_secret_prompt_without_private_refuses(self):
+    def test_call_llm_secret_prompt_without_private_refuses(self, monkeypatch):
         from app.services.llm import _call_llm
 
-        with pytest.raises(SensitiveDataRefusal):
-            _call_llm("配方：二甲苯 30%，水 70%")
+        monkeypatch.setenv("FORMUNEX_ANTHROPIC_API_KEY", "dummy-external-key")
+        get_settings.cache_clear()
+        try:
+            with pytest.raises(SensitiveDataRefusal):
+                _call_llm("配方：二甲苯 30%，水 70%")
+        finally:
+            get_settings.cache_clear()
+
+    def test_call_llm_secret_without_any_model_degrades_to_none(self, monkeypatch):
+        """无私有模型且无外部 key：无外发可能，按无 LLM 降级返回 None，不抛错。
+
+        回归：CI 的 deep-research / cohort 测试在无 LLM 环境下被
+        SensitiveDataRefusal 打成硬失败（任务 state=failed）。
+        """
+        from app.services.llm import _call_llm
+
+        monkeypatch.delenv("FORMUNEX_ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("FORMUNEX_PRIVATE_LLM_ENDPOINT", raising=False)
+        monkeypatch.delenv("FORMUNEX_PRIVATE_LLM_API_KEY", raising=False)
+        get_settings.cache_clear()
+        try:
+            assert not router.private_llm_configured()
+            assert _call_llm("配方：二甲苯 30%，水 70%") is None
+            assert _call_llm("unused", payload={"ingredients": [{"name": "二甲苯", "weight_pct": 30}]}) is None
+        finally:
+            get_settings.cache_clear()
 
     def test_call_llm_secret_with_private_uses_private_endpoint(self, monkeypatch):
         from app.services import llm as llm_module

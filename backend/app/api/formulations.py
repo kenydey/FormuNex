@@ -111,8 +111,12 @@ def export_formulation_pdf(body: FormulationPdfRequest) -> Response:
     from urllib.parse import quote
 
     from ..services.formulation_pdf import render_formulation_pdf
+    from ..services.plm.render import MissingRenderDependency
 
-    pdf, info = render_formulation_pdf(body.formulation, lang=body.lang, title=body.title)
+    try:
+        pdf, info = render_formulation_pdf(body.formulation, lang=body.lang, title=body.title)
+    except MissingRenderDependency as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     stem = re.sub(r"[\\/:*?\"<>|\s]+", "_", (body.title or body.formulation.name or "formulation").strip())[:80] or "formulation"
     ascii_stem = re.sub(r"[^A-Za-z0-9._-]", "_", stem) or "formulation"
     return Response(

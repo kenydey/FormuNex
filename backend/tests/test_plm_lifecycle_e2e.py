@@ -67,7 +67,10 @@ def stack(tmp_path, monkeypatch):
     monkeypatch.setenv("FORMUNEX_DB_URL", f"sqlite:///{tmp_path / 'lifecycle.db'}")
     monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "false")
     monkeypatch.setenv("FORMUNEX_CELERY_EAGER", "true")
-    monkeypatch.setenv("FORMUNEX_KB_V2_ENABLED", "false")
+    # NOTE: KB v2 必须保持开启（默认 True）。KB_V2_ENABLED=false 时
+    # index_source 直接返回 0、不写任何 chunk，且检索端同样返回 []，
+    # _knowledge 步的 KB 搜索永远为空。此前 fixture 误关了它，导致
+    # test_plm_lifecycle_end_to_end 从提交起就红（CI 35 起）。
     monkeypatch.setenv("FORMUNEX_KG_ENABLED", "false")
     monkeypatch.setenv("FORMUNEX_PLM_STORAGE_DIR", str(tmp_path / "plm"))
     monkeypatch.setenv("FORMUNEX_PLM_COMPANY_NAME", "方枢示例化工有限公司")

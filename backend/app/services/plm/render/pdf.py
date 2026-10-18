@@ -10,12 +10,27 @@ import io
 from typing import Any
 from xml.sax.saxutils import escape
 
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas as rl_canvas
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+except ImportError:
+    # reportlab 是 documents extra：见 docx.py 同款 guard。
+    colors = None  # type: ignore[assignment]
+    A4 = None  # type: ignore[assignment]
+    ParagraphStyle = None  # type: ignore[assignment]
+    mm = None  # type: ignore[assignment]
+    rl_canvas = None  # type: ignore[assignment]
+    Paragraph = None  # type: ignore[assignment]
+    SimpleDocTemplate = None  # type: ignore[assignment]
+    Spacer = None  # type: ignore[assignment]
+    Table = None  # type: ignore[assignment]
+    TableStyle = None  # type: ignore[assignment]
+
+from . import MissingRenderDependency
 
 from .fonts import resolve_font
 
@@ -32,8 +47,11 @@ def _text(value: Any) -> str:
     return escape(str(value))
 
 
-def _pictogram_row(codes: list[str], side: float = 18 * mm):
+def _pictogram_row(codes: list[str], side: float | None = None):
     """GHS pictograms as vector drawings in one row (SDS section 2)."""
+    # 默认值不在签名里算：mm 是 reportlab 的，缺依赖时模块仍要能 import。
+    if side is None:
+        side = 18 * mm
     from .label_pdf import _pictogram
 
     cells = []
@@ -88,6 +106,8 @@ def _numbered_canvas(header_left: str, header_right: str, lang: str, font: str):
 
 def render_pdf(content: dict) -> tuple[bytes, dict]:
     """Return (pdf bytes, render info: font, embedded)."""
+    if Paragraph is None:
+        raise MissingRenderDependency("reportlab")
     font = resolve_font()
     lang = content.get("lang", "zh-CN")
     base = ParagraphStyle("base", fontName=font.name, fontSize=9, leading=12.5, wordWrap="CJK")

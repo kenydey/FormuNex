@@ -31,6 +31,7 @@ SECRET_REGISTRY: list[tuple[str, str, str, str]] = [
     ("minimax_api_key", "FORMUNEX_MINIMAX_API_KEY", "MiniMax", "llm"),
     ("xai_api_key", "FORMUNEX_XAI_API_KEY", "xAI (Grok)", "llm"),
     ("custom_api_key", "FORMUNEX_CUSTOM_API_KEY", "自定义端点（HF Endpoints 等）", "llm"),
+    ("private_llm_api_key", "FORMUNEX_PRIVATE_LLM_API_KEY", "私有模型（secret 数据专用，精确配比只发这里）", "llm"),
     ("vision_api_key", "FORMUNEX_VISION_API_KEY", "视觉模型（独立于文本时）", "llm"),
     ("serpapi_api_key", "FORMUNEX_SERPAPI_API_KEY", "SerpAPI", "search"),
     ("tavily_api_key", "FORMUNEX_TAVILY_API_KEY", "Tavily", "search"),

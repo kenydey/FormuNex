@@ -20,12 +20,24 @@ import re
 from typing import Any
 from xml.sax.saxutils import escape
 
-from reportlab.graphics import renderPDF
-from reportlab.lib import colors
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas as rl_canvas
-from reportlab.platypus import Frame, Paragraph
+try:
+    from reportlab.graphics import renderPDF
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.platypus import Frame, Paragraph
+except ImportError:
+    # reportlab 是 documents extra：见 docx.py 同款 guard。
+    renderPDF = None  # type: ignore[assignment]
+    colors = None  # type: ignore[assignment]
+    ParagraphStyle = None  # type: ignore[assignment]
+    mm = None  # type: ignore[assignment]
+    rl_canvas = None  # type: ignore[assignment]
+    Frame = None  # type: ignore[assignment]
+    Paragraph = None  # type: ignore[assignment]
+
+from . import MissingRenderDependency
 
 from .fonts import resolve_font
 from .label_pdf import _field, _pictogram
@@ -86,6 +98,8 @@ def _text_for(content: dict, e: dict, variables: dict[str, Any]) -> str:
 
 def render_layout_pdf(content: dict, layout: dict[str, Any], variables: dict[str, Any] | None = None
                       ) -> tuple[bytes, dict]:
+    if rl_canvas is None:
+        raise MissingRenderDependency("reportlab")
     layout = validate_layout(layout)
     variables = variables or {}
     font = resolve_font()

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   FormuNex 一键安装脚本 (Windows)
 
@@ -230,7 +230,7 @@ function Install-Native {
   )
   $torchExtras = @("bo", "heavy")
 
-  Write-Step "[1/5] 环境检查（Native 模式）"
+  Write-Step "Native 1/5 环境检查"
 
   $py = Find-Python
   if (-not $py) {
@@ -269,7 +269,7 @@ function Install-Native {
   }
 
   # ---- [2/5] 后端依赖 ----
-  Write-Step "[2/5] 安装后端依赖（virtualenv + pinned requirements + extras）"
+  Write-Step "Native 2/5 安装后端依赖（virtualenv + pinned requirements + extras）"
 
   $rebuildReason = ""
   if (Test-Path $VenvDir) {
@@ -340,7 +340,7 @@ function Install-Native {
   }
 
   # ---- [3/5] 前端依赖（frontend-next 新前端 + legacy frontend） ----
-  Write-Step "[3/5] 安装前端依赖"
+  Write-Step "Native 3/5 安装前端依赖"
   if ($SkipFrontend) {
     Write-Warn "已跳过（-SkipFrontend）"
   } elseif ($npmCmd) {
@@ -355,7 +355,7 @@ function Install-Native {
   # ---- [4/5] .env 与数据库迁移 ----
   Setup-Env
 
-  Write-Step "[5/5] 数据库迁移（SQLite，仅开发用；生产请用 Docker 模式的 PostgreSQL）"
+  Write-Step "Native 5/5 数据库迁移（SQLite，仅开发用；生产请用 Docker 模式的 PostgreSQL）"
   Push-Location $BackendDir
   try { Invoke-Step "数据库迁移" { & $VenvPython -m alembic upgrade head } } finally { Pop-Location }
   Write-Host "    数据库已就绪"
@@ -426,6 +426,9 @@ function Install-Native {
 # ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
+# NOTE: 这一行是后端安装器测试的切片边界（Invoke-Probe → 第一个 Write-Step "[1/5]"）。
+# 它必须在所有函数定义之后、顶层位置；函数内部不要再用 Write-Step "[N/5]" 格式，否则切片会在函数中途截断。
+Write-Step "[1/5] 开始安装"
 if ($Native) {
   Install-Native
 } else {

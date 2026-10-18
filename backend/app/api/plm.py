@@ -408,6 +408,7 @@ def generate_document(revision_id: str, body: DocumentIn,
                       user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
     """Generate a new version of an SDS / TDS / COA / label (never edits an existing version)."""
     from ..services.plm.documents import service as docs
+    from ..services.plm.render import MissingRenderDependency
 
     payload = body.model_dump(exclude={"doc_type", "lang"})
     payload["properties"] = body.properties.model_dump() if body.properties else None
@@ -415,6 +416,9 @@ def generate_document(revision_id: str, body: DocumentIn,
         try:
             row = docs.generate_document(session, revision_id, body.doc_type, lang=body.lang, payload=payload,
                                          created_by=user.id if user else None)
+        except MissingRenderDependency as exc:
+            # 缺渲染依赖（reportlab / python-docx 未安装）是 503，不是 500。
+            raise HTTPException(status_code=503, detail=str(exc)) from None
         except (docs.DocumentError, KeyError) as exc:
             raise _doc_error(exc) from None
         session.commit()
@@ -938,6 +942,7 @@ def preview_label_layout(body: LabelPreviewIn):
     from fastapi.responses import Response
 
     from ..db.models_plm import RegulatoryDocumentRow
+    from ..services.plm.render import MissingRenderDependency
     from ..services.plm.render.label_layout import LayoutError, render_layout_pdf
 
     content = _SAMPLE_LABEL
@@ -949,6 +954,8 @@ def preview_label_layout(body: LabelPreviewIn):
             content = doc.content
     try:
         pdf, info = render_layout_pdf(content, body.layout, body.variables)
+    except MissingRenderDependency as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     except LayoutError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     return Response(pdf, media_type="application/pdf", headers={
