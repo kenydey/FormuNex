@@ -2364,6 +2364,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plm/rulesets/{version}/recompute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recompute Ruleset
+         * @description Plan 3-10: batch re-classification on a rule-set release.
+         *
+         *     ``apply=false`` (default) is a dry run: reports affected products and
+         *     what would change, persists nothing. ``apply=true`` persists each fresh
+         *     result as a *new* classification row; old rows are never mutated, and
+         *     documents citing them still need regeneration (listed per product).
+         *     Requires ``plm.document.write`` (see ``_rbac_guard``).
+         */
+        post: operations["recompute_ruleset_api_plm_rulesets__version__recompute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plm/ghs/classify": {
         parameters: {
             query?: never;
@@ -2663,13 +2689,39 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Templates
+         * @description List uploaded Word templates (Phase 3B, 3-13: template admin needs a list, not just upload).
+         */
+        get: operations["list_templates_api_plm_templates_get"];
         put?: never;
         /**
          * Upload Template
          * @description Upload a Word template (docxtpl / Jinja tags) used for future renderings of that document type.
          */
         post: operations["upload_template_api_plm_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/templates/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Template
+         * @description Preview a Word template (Phase 3B, 3-13): render sample content — or a real
+         *     document's content when ``document_id`` is given — with the uploaded template
+         *     (or a stored one via ``template_id``) and return the DOCX. Nothing is saved.
+         */
+        post: operations["preview_template_api_plm_templates_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3044,6 +3096,30 @@ export interface paths {
          * @description Render a layout with a real label's content (or sample content) to PDF, without saving anything.
          */
         post: operations["preview_label_layout_api_plm_label_templates_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/labels/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Batch Labels
+         * @description Batch-generate labels (Phase 3B, 3-14): render N label contents to one ZIP of PDFs.
+         *
+         *     Pure render — nothing is saved, no document versions are created. ``color_space="cmyk"``
+         *     draws text / borders / QR with DeviceCMYK inks (SVG pictograms keep their source colours);
+         *     ``pdfa=True`` post-processes each PDF to PDF/A-2b.
+         */
+        post: operations["batch_labels_api_plm_labels_batch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8756,6 +8832,26 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_preview_template_api_plm_templates_preview_post */
+        Body_preview_template_api_plm_templates_preview_post: {
+            /** File */
+            file?: string | null;
+            /** Template Id */
+            template_id?: string | null;
+            /**
+             * Doc Type
+             * @enum {string}
+             */
+            doc_type: "sds" | "tds" | "coa";
+            /**
+             * Lang
+             * @default zh-CN
+             * @enum {string}
+             */
+            lang: "zh-CN" | "en-US";
+            /** Document Id */
+            document_id?: string | null;
+        };
         /** Body_structure_image_endpoint_api_chemical_structure_post */
         Body_structure_image_endpoint_api_chemical_structure_post: {
             /**
@@ -9666,6 +9762,11 @@ export interface components {
             label?: {
                 [key: string]: unknown;
             };
+            /**
+             * Pdfa
+             * @default false
+             */
+            pdfa: boolean;
         };
         /** DoeAbortBody */
         DoeAbortBody: {
@@ -11749,6 +11850,31 @@ export interface components {
             api_key?: string | null;
             /** Baseurl */
             baseUrl?: string | null;
+        };
+        /** LabelBatchIn */
+        LabelBatchIn: {
+            /** Labels */
+            labels: components["schemas"]["LabelBatchItem"][];
+            /**
+             * Color Space
+             * @default rgb
+             * @enum {string}
+             */
+            color_space: "rgb" | "cmyk";
+            /**
+             * Pdfa
+             * @default false
+             */
+            pdfa: boolean;
+        };
+        /** LabelBatchItem */
+        LabelBatchItem: {
+            /** Content */
+            content: {
+                [key: string]: unknown;
+            };
+            /** Filename */
+            filename?: string | null;
         };
         /** LabelPreviewIn */
         LabelPreviewIn: {
@@ -20129,6 +20255,41 @@ export interface operations {
             };
         };
     };
+    recompute_ruleset_api_plm_rulesets__version__recompute_post: {
+        parameters: {
+            query?: {
+                apply?: boolean;
+            };
+            header?: never;
+            path: {
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     classify_composition_api_plm_ghs_classify_post: {
         parameters: {
             query?: never;
@@ -20721,6 +20882,40 @@ export interface operations {
             };
         };
     };
+    list_templates_api_plm_templates_get: {
+        parameters: {
+            query?: {
+                doc_type?: string | null;
+                lang?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_template_api_plm_templates_post: {
         parameters: {
             query?: never;
@@ -20743,6 +20938,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_template_api_plm_templates_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_preview_template_api_plm_templates_preview_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -21438,6 +21666,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["LabelPreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    batch_labels_api_plm_labels_batch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LabelBatchIn"];
             };
         };
         responses: {

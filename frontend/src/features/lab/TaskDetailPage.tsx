@@ -4,13 +4,14 @@ import { RevoGrid } from "@revolist/react-datagrid";
 import { Alert, App, Button, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Timeline, Typography, Upload } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call, fetchBlobUrl } from "@/api/client";
 import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
 import type { Instrument, LabTask, Measurement, Method } from "./types";
+import { siblingNav } from "./matrixNav";
 
 interface Entry { metric: string; value: number | null; method_code?: string; instrument_id?: string; note?: string }
 
@@ -20,6 +21,7 @@ export default function TaskDetailPage() {
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
   const { taskId = "" } = useParams();
+  const navigate = useNavigate();
   const { me, can } = useSession();
   const qc = useQueryClient();
   const task = useQuery({ queryKey: ["lab", "task", taskId], queryFn: () => call<LabTask>("GET", `/api/lab/tasks/${taskId}`) });
@@ -31,6 +33,13 @@ export default function TaskDetailPage() {
   const entryGrid = useRef<HTMLRevoGridElement>(null);
   const attachments = useQuery({ queryKey: ["lab", "task-attachments", taskId],
     queryFn: () => call<TaskAttachment[]>("GET", `/api/lab/tasks/${taskId}/attachments`) });
+  // 补齐计划 3-17：所属 DOE 矩阵总点数 + 同计划任务单（按矩阵顺序导航）。
+  const planId = task.data?.doe_plan_id;
+  const plan = useQuery({ queryKey: ["lab", "task-plan", planId], enabled: !!planId,
+    queryFn: () => call<{ runs: { run_id: number }[] }>("GET", `/api/doe/plans/${planId}`) });
+  const siblings = useQuery({ queryKey: ["lab", "task-siblings", planId], enabled: !!planId,
+    queryFn: () => call<LabTask[]>("GET", `/api/lab/tasks?doe_plan_id=${planId}`) });
+  const nav = planId ? siblingNav(siblings.data ?? [], taskId) : { prev: null, next: null };
   const [history, setHistory] = useState<{ id: string; rows: { field: string; old: string; new: string; reason: string; at: string }[] } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const refresh = () => { void qc.invalidateQueries({ queryKey: ["lab"] }); };
@@ -64,6 +73,8 @@ export default function TaskDetailPage() {
   return (
     <PageContainer title={data.task_no} subTitle={<StatusTag status={data.status} />}
       extra={<Space>
+        {nav.prev && <Button onClick={() => navigate(`/lab/tasks/${nav.prev!.id}`)}>{t("tasks.prev_run", "上一运行")}</Button>}
+        {nav.next && <Button onClick={() => navigate(`/lab/tasks/${nav.next!.id}`)}>{t("tasks.next_run", "下一运行")}</Button>}
         {data.status === "open" && can("lab.execute") && <Button onClick={() => act.mutate({ path: `/api/lab/tasks/${taskId}/claim` })}>{t("tasks.claim", "领取")}</Button>}
         {data.status === "in_progress" && mine && <Button type="primary" onClick={() => act.mutate({ path: `/api/lab/tasks/${taskId}/submit` })}>{t("tasks.submit", "提交复核")}</Button>}
         {["open", "in_progress", "pending_review"].includes(data.status) && can("doe.write") &&
@@ -77,7 +88,16 @@ export default function TaskDetailPage() {
         <ProCard colSpan={{ xs: 24, md: 8 }} bordered title={t("tasks.info", "任务信息")}>
           <Descriptions column={1} size="small">
             <Descriptions.Item label={t("tasks.sample", "样品号")}><Tag>{data.sample_no}</Tag></Descriptions.Item>
-            <Descriptions.Item label={t("tasks.run", "试验点")}>{data.run_index ?? "—"}</Descriptions.Item>
+            {/* 补齐计划 3-17：试验点序号 + 所属矩阵总点数 + 回到矩阵总览。 */}
+            <Descriptions.Item label={t("tasks.run", "试验点")}>
+              {data.run_index ?? "—"}{data.doe_plan_id && (plan.data?.runs.length ?? 0) > 0
+                ? ` / ${t("tasks.matrix_total", "共 {{n}} 点", { n: plan.data!.runs.length })}` : ""}
+            </Descriptions.Item>
+            {data.doe_plan_id && (
+              <Descriptions.Item label={t("tasks.plan", "所属 DOE 计划")}>
+                <a onClick={() => navigate(`/lab/tasks?plan=${data.doe_plan_id}`)}>{data.doe_plan_id.slice(0, 8)}</a>
+              </Descriptions.Item>
+            )}
             {Object.entries(data.factors).map(([k, v]) => <Descriptions.Item key={k} label={k}>{String(v)}</Descriptions.Item>)}
           </Descriptions>
           <Table size="small" pagination={false} rowKey="metric" dataSource={data.requested_metrics} columns={[

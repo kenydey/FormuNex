@@ -5587,6 +5587,61 @@
     }
    }
   },
+  "/api/plm/rulesets/{version}/recompute": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Recompute Ruleset",
+    "description": "Plan 3-10: batch re-classification on a rule-set release.\n\n``apply=false`` (default) is a dry run: reports affected products and\nwhat would change, persists nothing. ``apply=true`` persists each fresh\nresult as a *new* classification row; old rows are never mutated, and\ndocuments citing them still need regeneration (listed per product).\nRequires ``plm.document.write`` (see ``_rbac_guard``).",
+    "operationId": "recompute_ruleset_api_plm_rulesets__version__recompute_post",
+    "parameters": [
+     {
+      "name": "version",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Version"
+      }
+     },
+     {
+      "name": "apply",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "Apply"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Recompute Ruleset Api Plm Rulesets  Version  Recompute Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/plm/ghs/classify": {
    "post": {
     "tags": [
@@ -6472,14 +6527,14 @@
     "description": "Upload a Word template (docxtpl / Jinja tags) used for future renderings of that document type.",
     "operationId": "upload_template_api_plm_templates_post",
     "requestBody": {
+     "required": true,
      "content": {
       "multipart/form-data": {
        "schema": {
         "$ref": "#/components/schemas/Body_upload_template_api_plm_templates_post"
        }
       }
-     },
-     "required": true
+     }
     },
     "responses": {
      "201": {
@@ -6487,10 +6542,119 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response Upload Template Api Plm Templates Post"
         }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Templates",
+    "description": "List uploaded Word templates (Phase 3B, 3-13: template admin needs a list, not just upload).",
+    "operationId": "list_templates_api_plm_templates_get",
+    "parameters": [
+     {
+      "name": "doc_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Doc Type"
+      }
+     },
+     {
+      "name": "lang",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Lang"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response List Templates Api Plm Templates Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/templates/preview": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Preview Template",
+    "description": "Preview a Word template (Phase 3B, 3-13): render sample content — or a real\ndocument's content when ``document_id`` is given — with the uploaded template\n(or a stored one via ``template_id``) and return the DOCX. Nothing is saved.",
+    "operationId": "preview_template_api_plm_templates_preview_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_preview_template_api_plm_templates_preview_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
        }
       }
      },
@@ -7502,6 +7666,46 @@
       "application/json": {
        "schema": {
         "$ref": "#/components/schemas/LabelPreviewIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/labels/batch": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Batch Labels",
+    "description": "Batch-generate labels (Phase 3B, 3-14): render N label contents to one ZIP of PDFs.\n\nPure render — nothing is saved, no document versions are created. ``color_space=\"cmyk\"``\ndraws text / borders / QR with DeviceCMYK inks (SVG pictograms keep their source colours);\n``pdfa=True`` post-processes each PDF to PDF/A-2b.",
+    "operationId": "batch_labels_api_plm_labels_batch_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LabelBatchIn"
        }
       }
      },
@@ -22347,6 +22551,67 @@
     ],
     "title": "Body_mcp_import_upload_api_connectors_mcp_import_upload_post"
    },
+   "Body_preview_template_api_plm_templates_preview_post": {
+    "properties": {
+     "file": {
+      "anyOf": [
+       {
+        "type": "string",
+        "contentMediaType": "application/octet-stream"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "File"
+     },
+     "template_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Template Id"
+     },
+     "doc_type": {
+      "type": "string",
+      "enum": [
+       "sds",
+       "tds",
+       "coa"
+      ],
+      "title": "Doc Type"
+     },
+     "lang": {
+      "type": "string",
+      "enum": [
+       "zh-CN",
+       "en-US"
+      ],
+      "title": "Lang",
+      "default": "zh-CN"
+     },
+     "document_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Document Id"
+     }
+    },
+    "type": "object",
+    "required": [
+     "doc_type"
+    ],
+    "title": "Body_preview_template_api_plm_templates_preview_post"
+   },
    "Body_structure_image_endpoint_api_chemical_structure_post": {
     "properties": {
      "image": {
@@ -24758,6 +25023,11 @@
       "additionalProperties": true,
       "type": "object",
       "title": "Label"
+     },
+     "pdfa": {
+      "type": "boolean",
+      "title": "Pdfa",
+      "default": false
      }
     },
     "type": "object",
@@ -29589,6 +29859,63 @@
     "type": "object",
     "title": "LLMSettingsUpdate",
     "description": "Accept both snake_case and camelCase from the frontend."
+   },
+   "LabelBatchIn": {
+    "properties": {
+     "labels": {
+      "items": {
+       "$ref": "#/components/schemas/LabelBatchItem"
+      },
+      "type": "array",
+      "maxItems": 50,
+      "minItems": 1,
+      "title": "Labels"
+     },
+     "color_space": {
+      "type": "string",
+      "enum": [
+       "rgb",
+       "cmyk"
+      ],
+      "title": "Color Space",
+      "default": "rgb"
+     },
+     "pdfa": {
+      "type": "boolean",
+      "title": "Pdfa",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "labels"
+    ],
+    "title": "LabelBatchIn"
+   },
+   "LabelBatchItem": {
+    "properties": {
+     "content": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Content"
+     },
+     "filename": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Filename"
+     }
+    },
+    "type": "object",
+    "required": [
+     "content"
+    ],
+    "title": "LabelBatchItem"
    },
    "LabelPreviewIn": {
     "properties": {
