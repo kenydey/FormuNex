@@ -1,4 +1,14 @@
-"""Chemical name / CAS lookup via PubChem PUG REST with catalog fallback and 24h cache."""
+"""Chemical name / CAS lookup: catalog → local 131k substance library (DB) →
+PubChem PUG REST → PubChemPy → chemtools PubChem → SureChEMBL, with 24h cache.
+
+The local-library tier queries the seeded ``substances`` table (``common_chemicals``,
+131k rows) by exact CAS / exact or case-insensitive Chinese / English name, so
+formulation / material auto-matching resolves locally without a PubChem round-trip.
+It runs before every network tier; PubChem is only reached on a local miss. The
+local library carries CAS + names + formula only — SMILES / molar mass stay
+``None`` there rather than being filled from somewhere else, and every hit is
+labelled with its true ``source`` (``local_library`` vs ``pubchem`` vs ...).
+"""
 from __future__ import annotations
 
 import logging
@@ -6,6 +16,8 @@ from .errors import degrade_return
 import re
 from typing import Any
 from urllib.parse import quote
+
+from sqlalchemy import func, or_, select
 
 from ..domain.knowledge import RAW_MATERIALS
 
@@ -54,6 +66,59 @@ def _lookup_catalog(q: str) -> dict[str, Any] | None:
         "found": True,
         "source": "catalog",
     }
+
+
+def _lookup_local_library(q: str) -> dict[str, Any] | None:
+    """Tier 2: the seeded 131k local substance library (``substances`` table).
+
+    Exact CAS (normalised with the seed's ``cas.repair`` — including the Excel
+    date / serial corruption fix, checksum-verified) or exact / case-insensitive
+    Chinese / English name. Every branch is index-backed: ``cas_no`` (unique),
+    ``name_zh`` / ``name_en`` (plain indexes) and ``lower(name_zh)`` /
+    ``lower(name_en)`` (expression indexes, alembic 0065). A short-lived session
+    from the process-wide factory keeps the ``lookup_chemical(q)`` signature
+    unchanged; any DB problem degrades to ``None`` so the chain falls through
+    to PubChem exactly as before.
+    """
+    from ..db.database import default_session_factory
+    from ..db.models_regulatory import SubstanceRow
+    from .plm.regulatory.cas import repair as repair_cas
+
+    query = (q or "").strip()
+    if not query:
+        return None
+    try:
+        cas, _how = repair_cas(query)
+        conditions = []
+        if cas:
+            conditions.append(SubstanceRow.cas_no == cas)
+        conditions.append(SubstanceRow.name_zh == query)
+        conditions.append(SubstanceRow.name_en == query)
+        lowered = query.lower()
+        conditions.append(func.lower(SubstanceRow.name_zh) == lowered)
+        conditions.append(func.lower(SubstanceRow.name_en) == lowered)
+        with default_session_factory()() as session:
+            row = session.execute(
+                select(SubstanceRow).where(or_(*conditions)).order_by(SubstanceRow.id).limit(1)
+            ).scalar_one_or_none()
+        if row is None:
+            return None
+        # The library carries CAS + names + formula only: SMILES / molar mass
+        # are genuinely absent, so they stay None — never backfilled from
+        # another source under this tier's label.
+        return {
+            "query": q,
+            "cas": row.cas_no or "",
+            "iupac_name": row.name_en or q,
+            "zh_name": row.name_zh or _zh_from_query(q),
+            "formula": row.mf or "",
+            "smiles": row.smiles,
+            "molar_mass": None,
+            "found": True,
+            "source": "local_library",
+        }
+    except Exception as exc:
+        return degrade_return(logger, exc, "local library lookup failed", None)
 
 
 def _lookup_pubchem(q: str) -> dict[str, Any] | None:
@@ -255,6 +320,7 @@ def lookup_chemical(q: str) -> dict[str, Any]:
     providers_tried: list[str] = []
     resolvers = (
         ("catalog", _lookup_catalog),
+        ("local_library", _lookup_local_library),
         ("pubchem", _lookup_pubchem),
         ("pubchempy_compound", _lookup_compound_synonyms),
         ("pubchempy", _lookup_offline_compounds),

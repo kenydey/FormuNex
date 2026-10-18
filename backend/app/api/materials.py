@@ -242,9 +242,12 @@ def _enrich_spec(name: str, spec: dict) -> dict:
         logger.debug("material enrich failed for %s: %s", name, exc)
         return {}
     out: dict = {}
+    # Lookup payloads carry the CAS under ``cas``; material specs carry it
+    # under ``cas_no`` — map it, otherwise CAS enrichment silently never fires.
+    key_map = {"cas_no": "cas"}
     for key in ("cas_no", "smiles", "formula", "zh_name", "molar_mass"):
-        if not spec.get(key) and found.get(key):
-            out[key] = found[key]
+        if not spec.get(key) and found.get(key_map.get(key, key)):
+            out[key] = found[key_map.get(key, key)]
     return out
 
 

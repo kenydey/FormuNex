@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0064(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0064_plm_integration_p0``)."""
+def test_revision_chain_head_is_0065(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0065_substances_name_lower_indexes``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0064(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0064"
+    assert heads[0] == "0065"
 
 
 def test_migrations_partial_columns_branch(
@@ -509,6 +509,44 @@ def test_0014_converts_legacy_string_references_to_integers(
     # SQLite rebuilds a table without re-checking foreign keys, so the only
     # proof the result is consistent is to ask it explicitly.
     assert _fetch_all(tmp_db_url, "PRAGMA foreign_key_check(doe_plans)") == []
+
+
+def test_migration_0065_substances_name_lower_indexes(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0065 adds the ``lower(name_zh)`` / ``lower(name_en)`` expression indexes on
+    ``substances`` (case-insensitive local-library lookup stays index-backed);
+    downgrade drops them; re-upgrade is idempotent.
+
+    (A fresh DB already has the indexes at every revision — ``0001_baseline``
+    runs ``create_all`` from the current models — so the migration is exercised
+    through a downgrade first.)
+
+    NOTE: SQLAlchemy's ``inspect().get_indexes()`` cannot reflect expression
+    indexes, so the assertion reads ``sqlite_master`` directly.
+    """
+    from tests.alembic_helpers import run_downgrade
+
+    def _all_index_names() -> set[str]:
+        rows = _fetch_all(
+            tmp_db_url, "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='substances'"
+        )
+        return {r[0] for r in rows}
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert {
+        "ix_substances_name_zh_lower", "ix_substances_name_en_lower",
+    } <= _all_index_names()
+
+    run_downgrade(tmp_db_url, monkeypatch, "0064")
+    assert not {
+        "ix_substances_name_zh_lower", "ix_substances_name_en_lower",
+    } & _all_index_names()
+
+    # Re-upgrade is idempotent (twice).
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert {
+        "ix_substances_name_zh_lower", "ix_substances_name_en_lower",
+    } <= _all_index_names()
 
 
 def test_migration_0035_parser_column(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:

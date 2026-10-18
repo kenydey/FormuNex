@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .models import Base, _utcnow
@@ -38,7 +38,14 @@ class RegulatoryDataRelease(Base):
 
 class SubstanceRow(Base):
     __tablename__ = "substances"
-    __table_args__ = (Index("ix_substances_name_zh", "name_zh"),)
+    __table_args__ = (
+        Index("ix_substances_name_zh", "name_zh"),
+        # Case-insensitive name lookup in chemical_lookup must stay index-backed:
+        # a plain index does not serve ``lower(col) = ...``, so the local-library
+        # tier (alembic 0065) reads through these expression indexes.
+        Index("ix_substances_name_zh_lower", text("lower(name_zh)")),
+        Index("ix_substances_name_en_lower", text("lower(name_en)")),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     # Unique when present; generic catalogue entries ("六价铬化合物") have none.

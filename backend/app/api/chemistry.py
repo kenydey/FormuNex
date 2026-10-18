@@ -29,7 +29,7 @@ class EnrichMaterialsResponse(BaseModel):
 
 @router.get("/chemical/lookup")
 def chemical_lookup(q: str = Query(..., min_length=1, description="中文名/英文名/CAS No.")) -> dict:
-    """Look up chemical metadata by name or CAS (catalog → PubChem → SureChEMBL)."""
+    """Look up chemical metadata by name or CAS (catalog → local 131k library → PubChem → SureChEMBL)."""
     return lookup_chemical(q)
 
 
