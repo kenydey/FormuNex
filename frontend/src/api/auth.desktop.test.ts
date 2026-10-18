@@ -1,3 +1,13 @@
+// @vitest-environment node
+// 本文件必须跑在 node 环境而非 jsdom：jsdom 的 AbortSignal 会覆盖全局，
+// 而 Request 仍是 Node 的 undici——undici 用全局 AbortSignal 创建 signal，
+// 却用内部 AbortSignal 类校验，于是连自己创建的 signal 都拒绝
+// （authFetch 里 new Request(target, request) 抛 "Expected signal to be an
+// instance of AbortSignal"）。node 环境下两者同源，无此问题。
+(globalThis as unknown as { window: unknown }).window = {
+  location: { origin: "http://localhost:3000" },
+};
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authFetch, getAccessToken, logoutBody, refreshAccessToken, rememberRefreshToken, setAccessToken, setRefreshStore, type RefreshStore } from "./auth";
 import { setApiBase } from "./base";
