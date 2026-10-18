@@ -324,9 +324,16 @@ _store: FormulationHistoryStore | None = None
 
 
 def get_history_store() -> FormulationHistoryStore:
+    # The session factory is rebuilt when FORMUNEX_DB_URL changes (see
+    # ``_default_pair``). A store bound to the first factory would keep
+    # writing to the old database — in the full suite that made saves
+    # land in an earlier test's tmp DB (0 rows in the test's own DB).
+    # Rebuild when the factory identity changes; in production the factory
+    # never changes, so this stays a single store.
     global _store
-    if _store is None:
-        from ..db.database import default_session_factory
+    from ..db.database import default_session_factory
 
-        _store = FormulationHistoryStore(default_session_factory())
+    factory = default_session_factory()
+    if _store is None or _store._session_factory is not factory:
+        _store = FormulationHistoryStore(factory)
     return _store

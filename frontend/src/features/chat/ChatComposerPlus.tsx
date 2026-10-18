@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useEnvFlag } from "@/features/settings/useEnvFlag";
 import { trailingToken } from "./logic";
 import { builtinTarget, playbookTarget, uncoveredBuiltins, type PlaybookContext, type PlaybookTarget } from "./playbooks";
 import type { BuiltinConnector, McpServerConfig, UnifiedSkill } from "./types";
@@ -40,6 +41,9 @@ export function ChatComposerPlus({ value, onChange, context, onPrefill }: {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  // FORMUNEX_CHAT_COMPOSER_PLUS_ENABLED: off hides the "+" menu (plain-text
+  // composer keeps working). Fallback true until the first env-flags response.
+  const composerPlusEnabled = useEnvFlag("chat_composer_plus_enabled", true);
   const skills = useSkills(open);
   const conns = useQuery({ queryKey: ["chat", "connectors"], enabled: open, staleTime: 60_000,
     queryFn: () => call<{ builtin: BuiltinConnector[]; mcp: McpServerConfig[] }>("GET", "/api/connectors") });
@@ -132,6 +136,7 @@ export function ChatComposerPlus({ value, onChange, context, onPrefill }: {
       )}
     </div>
   );
+  if (!composerPlusEnabled) return null;
   return (
     <Popover trigger="click" placement="topLeft" open={open} onOpenChange={setOpen} content={content}
       title={t("chat.plus.title", "技能 · 文献综合 · 连接器")}>

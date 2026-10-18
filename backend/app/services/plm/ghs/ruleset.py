@@ -48,8 +48,18 @@ class RuleSet:
 
 @lru_cache(maxsize=8)
 def load_ruleset(name: str = DEFAULT_RULESET) -> RuleSet:
+    # A hostile name must never escape RULESET_DIR (``../`` traversal) or
+    # blow up the filesystem call: overlong names raise OSError from
+    # ``is_file()`` (ENAMETOOLONG), not FileNotFoundError. Both map to
+    # "unknown rule set" — callers translate that to 404.
+    if not name or "/" in name or "\\" in name or ".." in name or len(name) > 200:
+        raise FileNotFoundError(f"unknown GHS rule set {name!r}")
     path = RULESET_DIR / f"{name}.yaml"
-    if not path.is_file():
+    try:
+        exists = path.is_file()
+    except OSError:
+        exists = False
+    if not exists:
         raise FileNotFoundError(f"unknown GHS rule set {name!r}")
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if data.get("version") != name:
@@ -110,7 +120,12 @@ class RuleSetSignoff:
 def load_signoff(version: str) -> RuleSetSignoff | None:
     """The EHS sign-off record for ``version``; None when not filed yet."""
     path = SIGNOFF_DIR / f"{version}.yaml"
-    if not path.is_file():
+    try:
+        exists = path.is_file()
+    except OSError:
+        # Overlong / hostile version: no sign-off can be filed under it.
+        exists = False
+    if not exists:
         return None
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):

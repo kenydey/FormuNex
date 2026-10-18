@@ -25,6 +25,18 @@ def _signoff(**over):
 # --------------------------------------------------------------------------- record validation
 
 
+def test_load_ruleset_rejects_hostile_names():
+    # Overlong names raise OSError (ENAMETOOLONG) from is_file(), not
+    # FileNotFoundError; traversal must not escape the ruleset dir.
+    with pytest.raises(FileNotFoundError):
+        load_ruleset("a" * 3000)
+    with pytest.raises(FileNotFoundError):
+        load_ruleset("../etc/passwd")
+    with pytest.raises(FileNotFoundError):
+        load_ruleset("")
+    assert load_signoff("a" * 3000) is None
+
+
 def test_valid_signoff_has_no_problems():
     assert _signoff().problems("gb30000-2013.v1") == []
 

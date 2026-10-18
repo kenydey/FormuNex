@@ -175,6 +175,15 @@ def test_recompute_unknown_version_rejected(recompute_db):
             rr.recompute_ruleset(session, "no-such-ruleset", apply=False)
 
 
+def test_recompute_endpoint_rejects_hostile_version(recompute_db):
+    api, _ids = recompute_db
+    # api-fuzz: a 3000-char version used to 500 (ENAMETOOLONG escapes
+    # ``is_file()`` as OSError, not FileNotFoundError); traversal must not
+    # escape the ruleset dir. Both are "unknown rule set" → 404.
+    assert api.post("/api/plm/rulesets/" + "a" * 3000 + "/recompute").status_code == 404
+    assert api.post("/api/plm/rulesets/..%2F..%2Fetc%2Fpasswd/recompute").status_code == 404
+
+
 def test_recompute_endpoint_dry_run(recompute_db):
     from app.services.plm.ghs.ruleset import DEFAULT_RULESET
 

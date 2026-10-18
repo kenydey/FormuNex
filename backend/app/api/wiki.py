@@ -616,6 +616,9 @@ def generate_storm_outline_endpoint(body: StormOutlineRequest) -> dict:
         pack = get_dossier_pack(body.project_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # Blank / whitespace-only project_id: same mapping as /dossier/{id}/pack.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     outline = generate_outline(
         pack, project_id=body.project_id, topic=body.topic or "",
         max_sections=body.max_sections or 6,

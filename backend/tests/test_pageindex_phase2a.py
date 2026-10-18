@@ -347,6 +347,17 @@ def test_storm_outline_endpoints(wiki_env):
     assert client.put(f"/api/wiki/storm/outline/{pid}", json=bad).status_code == 400
 
 
+def test_storm_outline_blank_project_id_is_400(wiki_env):
+    from app.main import app
+
+    client = TestClient(app)
+    # api-fuzz: whitespace-only project_id used to 500 (ValueError from
+    # build_project_dossier_pack was not caught here; /dossier/pack already
+    # mapped it to 400).
+    assert client.post("/api/wiki/storm/outline", json={"project_id": "\n\r\t"}).status_code == 400
+    assert client.post("/api/wiki/storm/outline", json={"project_id": "   "}).status_code == 400
+
+
 def test_run_storm_report_uses_provided_outline(wiki_env):
     from app.services.wiki.storm_orchestrator import run_storm_report
     from app.services.wiki.storm_schema import ReportOutline, SectionSpec

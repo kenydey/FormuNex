@@ -18,7 +18,10 @@ LAYOUT = {"size_mm": [100, 150], "elements": [
 ]}
 
 
-def test_lists_revision_detail_and_spec_editing(env):  # noqa: F811
+def test_lists_revision_detail_and_spec_editing(env, signed_off_ruleset):  # noqa: F811
+    # signed_off_ruleset: this test drives the submit flow through _ready(),
+    # whose gate requires a released rule set (same as test_full_release_flow).
+    # The draft-blocks-release behaviour itself is covered by test_ruleset_signoff.
     c, h, rid, pid = env["client"], env["h"], env["rid"], env["pid"]
     products = c.get("/api/plm/products").json()
     assert products[0]["code"] == "FX-100" and products[0]["revisions"] == 1
