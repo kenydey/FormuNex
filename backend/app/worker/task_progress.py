@@ -328,6 +328,7 @@ def persist_result(
     result: dict[str, Any] | None,
     *,
     failed: bool = False,
+    message: str | None = None,
 ) -> None:
     try:
         client = _redis_client()
@@ -339,10 +340,14 @@ def persist_result(
     except Exception as exc:
         _log_redis_failure(exc, "persist_result redis set failed for %s: %s", task_id)
         _file_write_result(task_id, result)
+    # When the caller knows the failure text, publish it here: persist_result
+    # used to always publish the generic "failed", and a poll landing between
+    # that publish and the follow-up _persist_terminal (which carries the real
+    # text) observed state=failed with the generic message.
     publish_progress(
         task_id,
         TaskProgressStatus.FAILED if failed else TaskProgressStatus.COMPLETED,
-        message="failed" if failed else "done",
+        message=message if message is not None else ("failed" if failed else "done"),
         progress=1.0 if not failed else 0.0,
         data=result,
     )

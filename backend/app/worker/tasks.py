@@ -2212,7 +2212,7 @@ def _kb_reparse_impl(task_id: str, payload: dict) -> dict:
     except Exception as exc:
         logger.exception("kb reparse failed for %s", source_id)
         err = {"error": str(exc), "source_id": source_id}
-        persist_result(task_id, err, failed=True)
+        persist_result(task_id, err, failed=True, message=str(exc))
         _persist_terminal(task_id, "kb_reparse", err, failed=True, message=str(exc))
         raise
     message = f"重新解析完成：{result.get('chunks', 0)} 个分块"

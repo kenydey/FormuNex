@@ -67,6 +67,8 @@ def _embedded_font_pdf() -> bytes:
 
 
 def test_pdfa_xmp_and_output_intent():
+    if srgb_icc_bytes() is None:
+        pytest.skip("no sRGB ICC profile obtainable here (LittleCMS unavailable and no FORMUNEX_PDFA_ICC_PATH)")
     pdf, info = apply_pdfa_2b(_embedded_font_pdf(), title="Test", author="FormuNex")
     assert pdf.startswith(b"%PDF")
     assert info == {"pdfa": True, "pdfa_part": 2, "pdfa_conformance": "B",

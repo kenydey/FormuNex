@@ -61,13 +61,16 @@ jobs:
       - name: Start backend + frontend
         run: |
           (cd ../backend && nohup python -m uvicorn app.main:app --port 8000 > /tmp/fx-e2e-backend.log 2>&1 &)
-          nohup npx vite --port 5174 > /tmp/fx-e2e-vite.log 2>&1 &
+          # Bind Vite to 127.0.0.1 explicitly: without --host it binds
+          # localhost, which Node may resolve to IPv6 ::1, while the health
+          # check below curls IPv4 127.0.0.1 and then times out.
+          nohup npx vite --port 5174 --host 127.0.0.1 > /tmp/fx-e2e-vite.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1 && curl -sf http://127.0.0.1:5174/ >/dev/null 2>&1 && break
             sleep 2
           done
           curl -sf http://127.0.0.1:8000/health || (echo "--- backend log ---"; tail -50 /tmp/fx-e2e-backend.log; exit 1)
-          curl -sf http://127.0.0.1:5174/ || (echo "--- vite log ---"; tail -50 /tmp/fx-e2e-vite.log; exit 1)
+          curl -sf http://127.0.0.1:5174/ || (echo "--- vite log ---"; tail -50 /tmp/fx-e2e-vite.log; echo "--- listening sockets (proves what Vite actually bound) ---"; (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || echo "no ss/netstat on this runner"); exit 1)
 
       - name: Playwright tests
         run: npx playwright test

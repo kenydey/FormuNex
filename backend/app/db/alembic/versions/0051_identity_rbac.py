@@ -31,6 +31,10 @@ def _has_table(table: str) -> bool:
 
 
 # Frozen copy of the permission matrix at this revision (app/services/identity/rbac.py owns the live one).
+# Kept in sync with the live definition by convention: test_identity_audit
+# compares this file's _ROLES against rbac.BUILTIN_ROLES and fails on drift.
+# (Approved exception, 2026-10-19: this file is updated in place when live
+# roles change; existing databases pick the change up via migration 0066.)
 _ROLES: list[tuple[str, str, str, list[str]]] = [
     ("rd_engineer", "研发工程师", "R&D Engineer", [
         "knowledge.read", "knowledge.write", "project.write", "spec.read", "formulation.read", "formulation.read_exact",
@@ -59,6 +63,7 @@ _ROLES: list[tuple[str, str, str, list[str]]] = [
         "release.sign", "release.publish", "release.withdraw", "audit.read",
     ]),
     ("sys_admin", "系统管理员", "System Administrator", [
+        "knowledge.read",
         "admin.users", "admin.templates", "admin.companies", "admin.llm", "admin.connectors", "audit.read",
     ]),
 ]

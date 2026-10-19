@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0065(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0065_substances_name_lower_indexes``)."""
+def test_revision_chain_head_is_0066(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0066_sys_admin_knowledge_read``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0065(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0065"
+    assert heads[0] == "0066"
 
 
 def test_migrations_partial_columns_branch(
@@ -509,6 +509,39 @@ def test_0014_converts_legacy_string_references_to_integers(
     # SQLite rebuilds a table without re-checking foreign keys, so the only
     # proof the result is consistent is to ask it explicitly.
     assert _fetch_all(tmp_db_url, "PRAGMA foreign_key_check(doe_plans)") == []
+
+
+def test_migration_0066_sys_admin_knowledge_read(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0066 adds ``knowledge.read`` to the stored ``sys_admin`` seed row (live
+    definition gained it in 6db1a65); downgrade removes it; re-upgrade is
+    idempotent.
+
+    (A fresh DB seeds ``sys_admin`` with ``knowledge.read`` already — the
+    0051 file copy of ``_ROLES`` was updated in place to match live — so the
+    migration is exercised through a downgrade first.)
+    """
+    import json
+
+    from tests.alembic_helpers import run_downgrade
+
+    def _sys_admin_perms() -> list[str]:
+        rows = _fetch_all(
+            tmp_db_url, "SELECT permissions FROM roles WHERE code='sys_admin'"
+        )
+        assert rows, "sys_admin seed row missing"
+        perms = rows[0][0]
+        return json.loads(perms) if isinstance(perms, str) else list(perms)
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "knowledge.read" in _sys_admin_perms()
+
+    run_downgrade(tmp_db_url, monkeypatch, "0065")
+    assert "knowledge.read" not in _sys_admin_perms()
+
+    # Re-upgrade is idempotent (twice).
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    assert "knowledge.read" in _sys_admin_perms()
 
 
 def test_migration_0065_substances_name_lower_indexes(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:

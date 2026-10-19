@@ -274,7 +274,11 @@ def test_api_get_toc_tree_schedules_summaries(kb):
     assert kb["trees"].get(sid).summaries_status == "none"
     r = client.get(f"/api/kb/sources/{sid}/toc-tree")
     assert r.status_code == 200
-    assert kb["trees"].get(sid).summaries_status == "pending"
+    # The toc-tree call schedules summaries, which run on a daemon thread in
+    # eager mode: the status may already have advanced past the transient
+    # "pending" to "partial" before this assertion runs. Either value proves
+    # scheduling happened; asserting the transient alone is a race.
+    assert kb["trees"].get(sid).summaries_status in ("pending", "partial")
 
 
 # --------------------------------------------------------------------------- 2-5 STORM outline endpoints

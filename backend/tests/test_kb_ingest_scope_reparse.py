@@ -142,8 +142,20 @@ def test_reparse_failure_is_reported_on_the_task(client, files_dir, monkeypatch)
     monkeypatch.setattr("app.services.kb_reparse._parse", boom)
     r = client.post(f"/api/kb/sources/{sid}/reparse")
     assert r.status_code == 202
-    task = _wait(client, r.json()["task_id"])
-    assert task.get("state") == "failed" and "parser exploded" in (task.get("message") or str(task.get("result")))
+    task_id = r.json()["task_id"]
+    task = _wait(client, task_id)
+    assert task.get("state") == "failed"
+    # The failure message is written in two steps (persist_result, then
+    # _persist_terminal); a poll landing between them used to see the generic
+    # "failed". Both steps now carry the exception text, but keep waiting for
+    # the final text so any residual scheduling window cannot flake the test.
+    deadline = time.monotonic() + 10
+    while "parser exploded" not in (task.get("message") or str(task.get("result"))):
+        if time.monotonic() > deadline:
+            break
+        time.sleep(0.1)
+        task = client.get(f"/api/tasks/{task_id}").json()
+    assert "parser exploded" in (task.get("message") or str(task.get("result"))), task
 
 
 # ── 3. POST /api/kb/sources/resolve ─────────────────────────────────────────
