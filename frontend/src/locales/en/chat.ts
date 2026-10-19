@@ -166,7 +166,7 @@ const en: Record<string, string> = {
   "chat.wiki_mode.saved": "Updated (applies from the next question)",
   "chat.wiki_mode.tip": "Wiki / Raw fusion (claims still trust Raw only)",
   "nav.knowledge.chat": "Knowledge Q&A",
-  "nav.knowledge.reviews": "Evidence audits",
+  "nav.knowledge.reviews": "Retrieval evidence audits",
   "shell.degraded.deps": "Online retrieval dependencies not installed",
   "shell.degraded.desc": "— deep research, online search and cross-source verification run on offline fallbacks.",
   "shell.degraded.go_deps": "Install dependencies",

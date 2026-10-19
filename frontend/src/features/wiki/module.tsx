@@ -10,10 +10,12 @@ const module: FeatureModule = {
     { path: "knowledge/graph", element: L(() => import("./KgGraphPage")) },
   ],
   nav: {
-    "/knowledge": [
-      { path: "/knowledge/wiki", key: "nav.knowledge.wiki", zh: "Wiki 知识库" },
-      { path: "/knowledge/wiki-graph", key: "nav.knowledge.wiki_graph", zh: "Wiki 链接图" },
-      { path: "/knowledge/graph", key: "nav.knowledge.graph", zh: "材料知识图谱" },
+    "/knowledge-library": [
+      { path: "/knowledge/wiki", key: "nav.knowledge.wiki", zh: "Wiki 知识库", order: 8 },
+      { path: "/knowledge/wiki-graph", key: "nav.knowledge.wiki_graph", zh: "Wiki 链接图", order: 9 },
+    ],
+    "/materials": [
+      { path: "/knowledge/graph", key: "nav.knowledge.graph", zh: "材料知识图谱", order: 2 },
     ],
   },
 };

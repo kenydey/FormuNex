@@ -16,14 +16,16 @@ const module: FeatureModule = {
   ],
   nav: {
     "/knowledge": [
-      { path: "/knowledge/library", key: "nav.knowledge.library", zh: "文献库" },
-      { path: "/knowledge/manifest", key: "nav.knowledge.manifest", zh: "文献冻结与筛选" },
-      { path: "/knowledge/collections", key: "nav.knowledge.collections", zh: "智能集合" },
-      { path: "/knowledge/retrieval", key: "nav.knowledge.retrieval", zh: "检索探针" },
-      { path: "/knowledge/quality", key: "nav.knowledge.quality", zh: "质量运营" },
-      { path: "/knowledge/memory", key: "nav.knowledge.memory", zh: "Agent 记忆" },
-      { path: "/knowledge/notebooklm", key: "nav.knowledge.notebooklm", zh: "NotebookLM" },
-      { path: "/knowledge/parsing", key: "nav.knowledge.parsing", zh: "解析与结构识别" },
+      { path: "/knowledge/retrieval", key: "nav.knowledge.retrieval", zh: "检索探针", order: 2 },
+      { path: "/knowledge/quality", key: "nav.knowledge.quality", zh: "质量运营", order: 7 },
+      { path: "/knowledge/memory", key: "nav.knowledge.memory", zh: "Agent 记忆", order: 8 },
+      { path: "/knowledge/parsing", key: "nav.knowledge.parsing", zh: "解析与结构识别", order: 6 },
+    ],
+    "/knowledge-library": [
+      { path: "/knowledge/library", key: "nav.knowledge.library", zh: "文献库", order: 0 },
+      { path: "/knowledge/manifest", key: "nav.knowledge.manifest", zh: "文献冻结与筛选", order: 1 },
+      { path: "/knowledge/collections", key: "nav.knowledge.collections", zh: "智能集合", order: 2 },
+      { path: "/knowledge/notebooklm", key: "nav.knowledge.notebooklm", zh: "NotebookLM", order: 3 },
     ],
   },
 };

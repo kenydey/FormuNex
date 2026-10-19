@@ -11,11 +11,13 @@ const module: FeatureModule = {
     { path: "cockpit/surface", element: L(() => import("./SurfacePage")) },
   ],
   nav: {
+    "/lab": [
+      { path: "/cockpit/workbench", key: "nav.cockpit.workbench", zh: "实验台账", order: 4 },
+    ],
     "/cockpit": [
-      { path: "/cockpit/workbench", key: "nav.cockpit.workbench", zh: "实验台账" },
-      { path: "/cockpit/loop", key: "nav.cockpit.loop", zh: "自驱动闭环" },
-      { path: "/cockpit/models", key: "nav.cockpit.models", zh: "代理模型" },
-      { path: "/cockpit/surface", key: "nav.cockpit.surface", zh: "响应曲面" },
+      { path: "/cockpit/loop", key: "nav.cockpit.loop", zh: "自驱动闭环", order: 7 },
+      { path: "/cockpit/models", key: "nav.cockpit.models", zh: "代理模型", order: 8 },
+      { path: "/cockpit/surface", key: "nav.cockpit.surface", zh: "响应曲面", order: 9 },
     ],
   },
 };

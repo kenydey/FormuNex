@@ -16,10 +16,10 @@ const module: FeatureModule = {
   ],
   nav: {
     "/lab": [
-      { path: "/lab/recommend", key: "nav.lab.recommend", zh: "AI 配方推荐" },
-      { path: "/lab/leaderboard", key: "nav.lab.leaderboard", zh: "推荐排行榜" },
-      { path: "/lab/lineage", key: "nav.lab.lineage", zh: "配方谱系" },
-      { path: "/lab/experiments", key: "nav.lab.experiments", zh: "实验记录" },
+      { path: "/lab/recommend", key: "nav.lab.recommend", zh: "AI 配方推荐", order: 8 },
+      { path: "/lab/leaderboard", key: "nav.lab.leaderboard", zh: "推荐排行榜", order: 9 },
+      { path: "/lab/lineage", key: "nav.lab.lineage", zh: "配方谱系", order: 10 },
+      { path: "/lab/experiments", key: "nav.lab.experiments", zh: "实验记录", order: 3 },
     ],
   },
 };

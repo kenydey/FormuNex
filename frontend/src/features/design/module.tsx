@@ -14,13 +14,13 @@ const module: FeatureModule = {
   ],
   nav: {
     "/lab": [
-      { path: "/lab/doe/classic", key: "nav.lab.doe_classic", zh: "经典 DOE 与闭环" },
-      { path: "/lab/doe/history", key: "nav.lab.doe_history", zh: "DOE 历史" },
-      { path: "/lab/doe/levers", key: "nav.lab.levers", zh: "DOE 因子" },
-      { path: "/lab/inverse-design", key: "nav.lab.inverse", zh: "逆向设计" },
-      { path: "/lab/substitution", key: "nav.lab.substitution", zh: "原料替代" },
-      { path: "/lab/similar", key: "nav.lab.similar", zh: "相似历史配方" },
-      { path: "/lab/qc-report", key: "nav.lab.qc_report", zh: "检测报告解析" },
+      { path: "/lab/doe/classic", key: "nav.lab.doe_classic", zh: "DOE 闭环（经典 DOE）", order: 11 },
+      { path: "/lab/doe/history", key: "nav.lab.doe_history", zh: "DOE 历史", order: 12 },
+      { path: "/lab/doe/levers", key: "nav.lab.levers", zh: "DOE 因子", order: 13 },
+      { path: "/lab/inverse-design", key: "nav.lab.inverse", zh: "逆向设计", order: 14 },
+      { path: "/lab/substitution", key: "nav.lab.substitution", zh: "原料替代", order: 15 },
+      { path: "/lab/similar", key: "nav.lab.similar", zh: "相似历史配方", order: 16 },
+      { path: "/lab/qc-report", key: "nav.lab.qc_report", zh: "检测报告解析", order: 17 },
     ],
   },
 };

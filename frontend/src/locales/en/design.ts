@@ -270,7 +270,7 @@ const en: Record<string, string> = {
   "design.sub.unresolved": "Structure not resolved ({{s}})",
   "design.sub.usable": "Usable",
   "design.sub.version": "Saved formulation version",
-  "nav.lab.doe_classic": "Classic DOE & loop",
+  "nav.lab.doe_classic": "DOE loop (classic DOE)",
   "nav.lab.doe_history": "DOE history",
   "nav.lab.inverse": "Inverse design",
   "nav.lab.levers": "DOE levers",

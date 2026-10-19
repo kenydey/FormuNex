@@ -11,11 +11,11 @@ const module: FeatureModule = {
     { path: "knowledge/research/ip", element: L(() => import("./IpAnalysisPage")) },
   ],
   nav: {
-    "/knowledge": [
-      { path: "/knowledge/research", key: "nav.knowledge.research", zh: "外部检索与深度研究" },
-      { path: "/knowledge/research/embodiment", key: "nav.knowledge.embodiment", zh: "实施例草稿" },
-      { path: "/knowledge/research/ip", key: "nav.knowledge.ip", zh: "专利 / IP 分析" },
-      { path: "/knowledge/research/artifacts", key: "nav.knowledge.artifacts", zh: "研究产物" },
+    "/knowledge-library": [
+      { path: "/knowledge/research", key: "nav.knowledge.research", zh: "外部检索与深度研究", order: 4 },
+      { path: "/knowledge/research/embodiment", key: "nav.knowledge.embodiment", zh: "实施例草稿", order: 5 },
+      { path: "/knowledge/research/ip", key: "nav.knowledge.ip", zh: "专利 / IP 分析", order: 6 },
+      { path: "/knowledge/research/artifacts", key: "nav.knowledge.artifacts", zh: "研究产物", order: 7 },
     ],
   },
 };

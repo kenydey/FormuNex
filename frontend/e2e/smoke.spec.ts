@@ -106,7 +106,7 @@ test("main path renders without errors", async ({ page }) => {
   await expect(page.getByText("你好，演示用户")).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/01-dashboard.png`, fullPage: true });
 
-  // ② project + spec contract
+  // 研发需求：project + spec contract
   await page.goto("/spec/projects");
   await page.getByRole("button", { name: "新建项目" }).click();
   await page.getByRole("textbox", { name: /项目/ }).fill("环氧底漆开发");
@@ -117,20 +117,20 @@ test("main path renders without errors", async ({ page }) => {
   await page.getByRole("button", { name: /保\s?存/ }).click();
   await expect(page.getByText("规格契约已保存")).toBeVisible();
 
-  // ③ formulation editor: open the seeded version → live GB 30000 panel
+  // 配方与实验：formulation editor: open the seeded version → live GB 30000 panel
   await page.goto("/lab/formulations");
   await page.getByRole("button", { name: "打开版本" }).click();
   await page.getByRole("button", { name: /^v1/ }).first().click();
   await expect(page.getByText("H226").first()).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: `${SHOTS}/03-formulation.png`, fullPage: true });
 
-  // ③ DOE: orthogonal design, persisted
+  // 配方与实验：DOE: orthogonal design, persisted
   await page.goto("/lab/doe");
   await page.getByRole("button", { name: "生成设计" }).first().click();
   await expect(page.getByText("设计结果")).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/04-doe.png`, fullPage: true });
 
-  // ⑤ product → revision → SDS, all through the UI (no direct API calls)
+  // 文档与发布：product → revision → SDS, all through the UI (no direct API calls)
   const { revId } = await createProductRevision(page);
   await generateDoc(page, "sds");
   await page.waitForTimeout(1500);

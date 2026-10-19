@@ -22,7 +22,9 @@ interface ProjectSummary { id: string; title: string; domain: string }
 function toRoutes(items: NavItem[], t: (k: string, d: string) => string, can: (p: string) => boolean): unknown[] {
   return items
     .filter((i) => (!i.permission || can(i.permission)) && (!i.when || i.when()))
-    .map((i) => ({ path: i.path, name: t(i.key, i.zh), icon: i.icon, routes: i.children && toRoutes(i.children, t, can) }));
+    .map((i) => ({ path: i.path, name: t(i.key, i.zh), icon: i.icon, routes: i.children && toRoutes(i.children, t, can) }))
+    // Hide groups left with zero visible children after permission/when filtering (presentation only; no permission change).
+    .filter((r) => !(Array.isArray(r.routes) && r.routes.length === 0));
 }
 
 export function Shell() {
