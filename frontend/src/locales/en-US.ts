@@ -534,6 +534,7 @@ const en: Record<string, string> = {
   "pareto.others": "Other",
   "pareto.rank": "Front",
   "pareto.run": "Compute front",
+  "pareto.scatter_needs_two": "The scatter plot needs two objectives; with a single objective, use the parallel coordinates and the point table below",
   "pareto.selected": "{{n}} points selected",
   "pareto.sensitivity": "Sensitivity analysis (local gradient + Sobol)",
   "pareto.sobol": "First-order Sobol index",

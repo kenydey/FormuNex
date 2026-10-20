@@ -56,7 +56,7 @@ export default function ProductDetailPage() {
     <PageContainer loading={!d} title={d ? `${d.code} · ${d.name_zh}` : ""} subTitle={d && <StatusTag status={d.lifecycle_state} />}>
       <ProCard gutter={16} ghost wrap>
         <ProCard colSpan={{ xs: 24, md: 14 }} bordered title={t("plm.revisions", "修订版")}
-          extra={<Button type="primary" onClick={() => { rForm.setFieldsValue({ copy_spec: true }); setRevOpen(true); }}>{t("plm.new_revision", "新建修订版")}</Button>}>
+          extra={<Button type="primary" onClick={() => setRevOpen(true)}>{t("plm.new_revision", "新建修订版")}</Button>}>
           <ProTable rowKey="id" search={false} options={false} pagination={false} dataSource={d?.revisions} columns={[
             { title: t("plm.rev", "修订"), dataIndex: "rev", render: (_d, r) => <Link to={`/plm/revisions/${r.id}`}>{r.rev}</Link> },
             { title: t("plm.state", "状态"), dataIndex: "state", render: (_d, r) => <StatusTag status={r.state} /> },
@@ -64,7 +64,7 @@ export default function ProductDetailPage() {
           ]} />
         </ProCard>
         <ProCard colSpan={{ xs: 24, md: 10 }} bordered title={t("plm.batches", "批次")}
-          extra={<Button onClick={() => { bForm.resetFields(); setBatchOpen(true); }}>{t("plm.new_batch", "新建批次")}</Button>}>
+          extra={<Button onClick={() => setBatchOpen(true)}>{t("plm.new_batch", "新建批次")}</Button>}>
           <ProTable rowKey="id" search={false} options={false} pagination={false} dataSource={d?.batches} columns={[
             { title: t("plm.batch_no", "批号"), dataIndex: "batch_no" },
             { title: t("plm.state", "状态"), dataIndex: "status" },
@@ -73,9 +73,14 @@ export default function ProductDetailPage() {
         </ProCard>
       </ProCard>
       <ProductLineageChainCard productId={productId} />
+      {/* preserve={false} + initialValues: the Form is destroyOnHidden, so
+          calling form methods while the modal is closed hits an unconnected
+          instance (antd useForm warning), and deferring them to
+          afterOpenChange races with user input. Fresh mount per open gives
+          the copy_spec default without touching the form from outside. */}
       <Modal open={revOpen} title={t("plm.new_revision", "新建修订版")} onCancel={() => setRevOpen(false)} confirmLoading={createRev.isPending}
         onOk={async () => createRev.mutate(await rForm.validateFields())} destroyOnHidden>
-        <Form form={rForm} layout="vertical">
+        <Form form={rForm} layout="vertical" preserve={false} initialValues={{ copy_spec: true }}>
           <Form.Item name="formulation_version_id" label={t("winning.version", "配方版本")} rules={[{ required: true }]}>
             <Select showSearch optionFilterProp="label" options={(lineages.data ?? []).flatMap((l) => l.versions.map((v) => ({ value: v.id, label: `${v.name} v${v.version}` })))} />
           </Form.Item>
@@ -86,7 +91,7 @@ export default function ProductDetailPage() {
       </Modal>
       <Modal open={batchOpen} title={t("plm.new_batch", "新建批次")} onCancel={() => setBatchOpen(false)} confirmLoading={createBatch.isPending}
         onOk={async () => createBatch.mutate(await bForm.validateFields())} destroyOnHidden>
-        <Form form={bForm} layout="vertical">
+        <Form form={bForm} layout="vertical" preserve={false}>
           <Form.Item name="batch_no" label={t("plm.batch_no", "批号")} rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="revision_id" label={t("plm.rev", "修订")}><Select allowClear options={(d?.revisions ?? []).map((r) => ({ value: r.id, label: r.rev }))} /></Form.Item>
           <Space>

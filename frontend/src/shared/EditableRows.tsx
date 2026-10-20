@@ -24,6 +24,10 @@ export function EditableRows<T extends object>({ value, onChange, columns, newRo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
   const editable = useMemo(() => rows.map((r) => r._key), [rows]);
+  // recordCreatorProps.newRecordType must stay "dataSource": with the default cache mode the
+  // new row lives in pro-table's internal newLineRecord cache, whose edit state never lands in
+  // our controlled editableKeys (no editable.onChange), so it renders read-only (no inputs) and
+  // never reaches `value`. DataSource mode inserts it into rows, and `editable` picks its key up.
   const emit = (next: Row<T>[]) => {
     setRows(next);
     onChange(next.map(({ _key, ...r }) => r as unknown as T));
@@ -39,7 +43,7 @@ export function EditableRows<T extends object>({ value, onChange, columns, newRo
         render: () => null,
       }]}
       maxLength={max}
-      recordCreatorProps={{ creatorButtonText: addLabel ?? t("common.add_row", "添加一行"), record: () => ({ ...newRow(), _key: key() }) as Row<T> }}
+      recordCreatorProps={{ creatorButtonText: addLabel ?? t("common.add_row", "添加一行"), newRecordType: "dataSource", record: () => ({ ...newRow(), _key: key() }) as Row<T> }}
       editable={{
         type: "multiple",
         editableKeys: editable,

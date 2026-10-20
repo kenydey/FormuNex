@@ -22,7 +22,10 @@ jobs:
       FORMUNEX_API_AUTH_ENABLED: "false"
       FORMUNEX_AUTH_JWT_SECRET: test-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
       FORMUNEX_PLM_STORAGE_DIR: /tmp/fx-e2e-plm
+      # Company identity for generated documents: SDS §1 requires name,
+      # address and emergency phone — a missing item blocks doc approval.
       FORMUNEX_PLM_COMPANY_NAME: 方枢示例化工有限公司
+      FORMUNEX_PLM_COMPANY_ADDRESS: 上海市浦东新区示例路100号
       FORMUNEX_PLM_EMERGENCY_PHONE: "021-0001"
       FORMUNEX_CELERY_EAGER: "true"
       FX_BASE_URL: http://127.0.0.1:5174
@@ -60,7 +63,11 @@ jobs:
 
       - name: Start backend + frontend
         run: |
-          (cd ../backend && nohup python -m uvicorn app.main:app --port 8000 > /tmp/fx-e2e-backend.log 2>&1 &)
+          # Backend runs through e2e/run_backend.py: the real app, with the
+          # gate's rule-set sign-off simulated (the shipped rule set is still
+          # draft pending the real EHS signature — same fixture approach as
+          # backend/tests/conftest.py's signed_off_ruleset).
+          (cd ../frontend/e2e && nohup python -m uvicorn run_backend:app --port 8000 > /tmp/fx-e2e-backend.log 2>&1 &)
           # Bind Vite to 127.0.0.1 explicitly: without --host it binds
           # localhost, which Node may resolve to IPv6 ::1, while the health
           # check below curls IPv4 127.0.0.1 and then times out.
@@ -80,7 +87,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-screenshots
-          path: frontend/e2e/screenshots
+          path: |
+            frontend/e2e/screenshots
+            frontend/test-results
           if-no-files-found: ignore
 
       - name: Backend log on failure

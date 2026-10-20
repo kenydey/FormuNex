@@ -37,8 +37,9 @@ async function signWithPassword(page: Page, comment?: string) {
   const modal = page.getByRole("dialog");
   await expect(modal.getByLabel(/登录密码/)).toBeVisible();
   await modal.getByLabel(/登录密码/).fill(PASSWORD);
-  if (comment !== undefined) await modal.getByLabel(/意见/).fill(comment);
-  await modal.getByRole("button", { name: /确\s?定|OK/ }).click();
+  if (comment !== undefined) await modal.locator("textarea").first().fill(comment);
+  // SignatureModal's confirm button reads 签名确认, not the generic 确定.
+  await modal.getByRole("button", { name: /签名确认|确\s?定|OK/ }).click();
 }
 
 /** Create a product + revision through the UI only (no direct API calls). */
@@ -55,7 +56,7 @@ async function createProductRevision(page: Page): Promise<{ productId: string; r
   await page.getByRole("button", { name: "新建修订版" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("combobox").first().click();
-  await page.getByRole("option", { name: /FX-100 底漆 v1/ }).click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option", { hasText: /^FX-100 底漆 v1$/ }).click();
   await dialog.getByRole("button", { name: /确\s?定|OK/ }).click();
   await expect(page).toHaveURL(/plm\/revisions\//);
   return { productId, revId: page.url().split("/plm/revisions/")[1] };
@@ -66,22 +67,52 @@ async function generateDoc(page: Page, docType: "sds" | "tds" | "label" | "coa",
   await page.getByRole("tab", { name: "文档" }).click();
   await page.getByRole("button", { name: "生成文档" }).click();
   const dialog = page.getByRole("dialog");
-  // doc_type select is the first combobox in the modal
-  await dialog.getByRole("combobox").first().click();
-  await page.getByRole("option", { name: docType === "label" ? "标签" : docType.toUpperCase(), exact: true }).click();
+  // doc_type select is the first select in the modal. Click the Select
+  // container, not the inner combobox input: with a preselected value the
+  // .ant-select-selection-item span overlays the input and intercepts the
+  // click, so getByRole("combobox").click() never lands.
+  await dialog.locator(".ant-select").first().click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option", { hasText: new RegExp(`^${docType === "label" ? "标签" : docType.toUpperCase()}$`) }).click();
   if (opts.lang) {
-    await dialog.getByRole("combobox").nth(1).click();
-    await page.getByRole("option", { name: opts.lang === "en-US" ? "English" : "中文", exact: true }).click();
+    await dialog.locator(".ant-select").nth(1).click();
+    await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option", { hasText: opts.lang === "en-US" ? /^English$/ : /^中文$/ }).click();
   }
-  if (docType === "sds") {
+  if (docType === "sds" || docType === "label") {
+    // The classification-input section renders for label as well as SDS, and
+    // both must classify from the SAME properties: a label generated without
+    // the flash point classifies differently, which fails gate G5 (mixed
+    // classification inputs), G8 (SDS/label mismatch) and G10 (the label's
+    // classification carries a blocking "no flash point" data gap).
     await dialog.getByLabel(/闭杯闪点/).fill("30");
   }
   if (docType === "tds") {
     await dialog.getByLabel(/产品说明/).fill("双组分环氧底漆，适用于钢结构防腐");
+    // A TDS with missing items cannot be approved: the builder requires at
+    // least one typical-property row and one application-guide field, so
+    // enter both here (same blur-commit typing as the QC/spec tables).
+    await dialog.getByRole("button", { name: "添加一行" }).click();
+    const propInputs = dialog.locator("tbody .ant-table-row").last().locator("input");
+    await expect(propInputs.first()).toBeVisible();
+    // Typical-property columns: key / 项目 / 数值 / 单位 / 方法
+    await propInputs.nth(0).click();
+    await propInputs.nth(0).pressSequentially("density_g_cm3");
+    await page.keyboard.press("Tab");
+    await propInputs.nth(1).click();
+    await propInputs.nth(1).pressSequentially("密度");
+    await page.keyboard.press("Tab");
+    await propInputs.nth(2).click();
+    await propInputs.nth(2).pressSequentially("1.35");
+    await page.keyboard.press("Tab");
+    await propInputs.nth(3).click();
+    await propInputs.nth(3).pressSequentially("g/cm³");
+    await page.keyboard.press("Tab");
+    await dialog.getByLabel(/施工方式/).fill("无气喷涂、刷涂");
   }
   if (docType === "coa") {
-    await dialog.getByLabel(/批号/).click();
-    await page.getByRole("option", { name: opts.batchNo! }).click();
+    // Click the batch Select container (scoped to its form item), not the
+    // inner combobox — same overlay lesson as the doc_type select above.
+    await dialog.locator(".ant-form-item", { hasText: "批号" }).locator(".ant-select").click();
+    await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option", { hasText: new RegExp(`^${opts.batchNo!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).click();
   }
   await dialog.getByRole("button", { name: /确\s?定|OK/ }).click();
   await expect(page).toHaveURL(/plm\/documents\//, { timeout: 30_000 });
@@ -92,10 +123,16 @@ async function generateDoc(page: Page, docType: "sds" | "tds" | "label" | "coa",
 async function approveDocument(page: Page) {
   await page.getByRole("button", { name: /审核通过|签发 COA/ }).click();
   await signWithPassword(page);
-  await expect(page.getByText(/已审核/)).toBeVisible();
+  // Assert on the status tag: the success toast carries the same text and a
+  // bare getByText(/已审核/) strict-matches both while the toast is up.
+  await expect(page.locator(".ant-tag", { hasText: "已审核" })).toBeVisible();
 }
 
 test("main path renders without errors", async ({ page }) => {
+  // Same budget pattern as routes.spec.ts (15 min for ~100 pages): this flow
+  // walks the core pages and cold Vite chunk compiles alone can eat most of
+  // the 60s config default (measured 51–60s warm).
+  test.setTimeout(3 * 60_000);
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => { if (m.type() === "error" && !/favicon|status of 401|findDOMNode/.test(m.text())) errors.push(m.text()); });
@@ -151,7 +188,13 @@ test("main path renders without errors", async ({ page }) => {
     await page.goto(path);
     await expect(page.locator(".ant-pro-page-container").first()).toBeVisible();
   }
+  // The chain badge renders only once the audit query resolves; on a cold
+  // page load (Vite chunk compile + query) that can exceed the default 5s
+  // expect window even though the API itself answers in ~10ms. Wait for the
+  // audit response — the signal the badge actually depends on — first.
+  const auditLoaded = page.waitForResponse((r) => r.url().includes("/api/plm/audit") && r.status() === 200);
   await page.goto("/admin/audit");
+  await auditLoaded;
   await expect(page.getByText(/哈希链完整/)).toBeVisible();
 
   // English UI
@@ -163,6 +206,12 @@ test("main path renders without errors", async ({ page }) => {
 });
 
 test("PLM publish lifecycle: TDS + COA + approve + sign-off + release", async ({ page, browser }) => {
+  // Budget like routes.spec.ts: six document generations, multi-user
+  // approvals and a four-signer loop cannot fit the 60s config default —
+  // every step completes, the test was killed mid-navigation by the total
+  // budget. No step-level timeout is touched.
+  test.setTimeout(5 * 60_000);
+  await login(page);
   // Product + revision (UI), then the full required-doc set for the release gate:
   // SDS zh-CN + en-US, TDS zh-CN + en-US, label zh-CN, COA (one batch).
   const { productId, revId } = await createProductRevision(page);
@@ -189,16 +238,56 @@ test("PLM publish lifecycle: TDS + COA + approve + sign-off + release", async ({
   await page.getByRole("dialog").getByLabel(/批号/).fill(batchNo);
   await page.getByRole("dialog").getByRole("button", { name: /确\s?定|OK/ }).click();
   await expect(page.getByText(batchNo)).toBeVisible();
-  await page.getByRole("link", { name: "录入质检结果" }).first().click();
+  // The QC action is an <a> without href (ProductDetailPage batch table), so
+  // it has no link role — scope a text locator to the batch's own table row.
+  await page.locator(".ant-table-tbody .ant-table-row", { hasText: batchNo }).getByText("录入质检结果", { exact: true }).click();
   const qcDialog = page.getByRole("dialog");
   await qcDialog.getByRole("button", { name: "添加一行" }).click();
   const qcInputs = qcDialog.locator("input");
-  await qcInputs.nth(0).fill("density_g_cm3");
-  await qcInputs.nth(1).fill("1.35");
+  // EditableProTable keeps cell values in its own form store and commits a
+  // cell on blur; submitting while the last cell is still uncommitted races
+  // that commit and intermittently sends results: [] (backend 422). Type
+  // like a user, commit each cell by moving focus on, and blur the last
+  // cell into the unit cell before confirming.
+  await qcInputs.nth(0).click();
+  await qcInputs.nth(0).pressSequentially("density_g_cm3");
+  await page.keyboard.press("Tab");
+  await qcInputs.nth(1).click();
+  await qcInputs.nth(1).pressSequentially("1.35");
+  await page.keyboard.press("Enter");
+  await qcInputs.nth(2).click();
   await qcDialog.getByRole("button", { name: /确\s?定|OK/ }).click();
   await expect(page.getByText("已保存")).toBeVisible();
 
   await page.goto(`/plm/revisions/${revId}`);
+  // COA generation requires release specs (backend 422 with none). This
+  // product has no linked project to copy a spec snapshot from, so enter one
+  // release spec by hand on the 规格快照 tab. Same EditableRows editor as the
+  // QC dialog: values commit cell-by-cell on blur, so type and move on with
+  // Tab, then click the section title to blur the last cell before saving.
+  await page.getByRole("tab", { name: "规格快照" }).click();
+  const specPanel = page.locator(".ant-tabs-tabpane-active");
+  await specPanel.getByRole("button", { name: "添加一行" }).first().click();
+  const specRow = specPanel.locator(".ant-table-wrapper").first().locator("tbody .ant-table-row").last();
+  const specInputs = specRow.locator("input");
+  await expect(specInputs.first()).toBeVisible();
+  // Release-spec columns: 指标 / 检验项目 / 单位 / 检验方法 / 下限 / 上限 / 判定(select, defaults 全数值比较)
+  await specInputs.nth(0).click();
+  await specInputs.nth(0).pressSequentially("density_g_cm3");
+  await page.keyboard.press("Tab");
+  await specInputs.nth(1).click();
+  await specInputs.nth(1).pressSequentially("密度");
+  await page.keyboard.press("Tab");
+  await specInputs.nth(4).click();
+  await specInputs.nth(4).pressSequentially("1.2");
+  await page.keyboard.press("Tab");
+  await specInputs.nth(5).click();
+  await specInputs.nth(5).pressSequentially("1.5");
+  await page.keyboard.press("Tab");
+  await specPanel.getByText("出厂指标（COA 判定）").click();
+  await specPanel.getByRole("button", { name: /保\s?存/ }).click();
+  await expect(page.getByText("完成")).toBeVisible();
+
   await generateDoc(page, "coa", { batchNo });
   docUrls.push(page.url());
 
@@ -219,8 +308,10 @@ test("PLM publish lifecycle: TDS + COA + approve + sign-off + release", async ({
   await expect(page.getByRole("button", { name: "提交签批" })).toBeVisible();
   await page.getByRole("tab", { name: /发布门禁/ }).click();
   // Waive what the UI offers (only waivable checks get a button); the rest must pass.
+  // Exact name: the collapse headers of waivable checks contain 可豁免 in
+  // their accessible name, and a substring match clicks the header instead.
   for (let i = 0; i < 5; i++) {
-    const waive = page.getByRole("button", { name: "豁免" }).first();
+    const waive = page.getByRole("button", { name: "豁免", exact: true }).first();
     if (!(await waive.count())) break;
     await waive.click();
     await signWithPassword(page, "E2E 豁免：非阻断数据缺口");
@@ -267,17 +358,30 @@ test("lab measurement → review → pareto winning", async ({ page, browser }) 
   await dispatchDialog.getByRole("combobox").click();
   await dispatchDialog.getByRole("combobox").fill("density_g_cm3");
   await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape"); // tags 模式下拉选后不自动关闭，先关掉再点确定，避免遮挡
   await dispatchDialog.getByRole("button", { name: /确\s?定|OK/ }).click();
   await expect(page).toHaveURL(/lab\/tasks/);
 
   // Claim the first task, enter a measurement, submit for review.
-  await page.getByRole("link", { name: "领取" }).first().click();
+  // The claim action is an <a> without href (TasksPage table actions), so it
+  // has no link role in the a11y tree — scope a text locator to the first row.
+  await page.locator(".ant-table-tbody .ant-table-row").first().getByText("领取", { exact: true }).click();
   const taskLink = page.locator("a[href*='/lab/tasks/']").first();
   await taskLink.click();
   await expect(page.getByText("按待测指标生成录入行")).toBeVisible();
   await page.getByRole("button", { name: "按待测指标生成录入行" }).click();
-  const entryInputs = page.locator("input[type='number']");
-  await entryInputs.first().fill("1.35");
+  // Entry rows render in a RevoGrid (TaskDetailPage), not form inputs: the
+  // value cell is edited in place — double-click opens the cell editor, fill,
+  // Enter commits (onAfteredit syncs the source that 保存录入 submits).
+  const entryRow = page.getByRole("treegrid").getByRole("row", { name: /density_g_cm3/ });
+  await expect(entryRow).toBeVisible();
+  const valueCell = entryRow.getByRole("gridcell").nth(1);
+  await valueCell.dblclick();
+  const cellEditor = page.locator("revo-grid input").first();
+  await expect(cellEditor).toBeVisible();
+  await cellEditor.fill("1.35");
+  await page.keyboard.press("Enter");
+  await expect(valueCell).toHaveText(/1\.35/);
   await page.getByRole("button", { name: "保存录入" }).click();
   await expect(page.getByText("测量记录")).toBeVisible();
   await page.getByRole("button", { name: "提交复核" }).click();
@@ -294,18 +398,22 @@ test("lab measurement → review → pareto winning", async ({ page, browser }) 
 
   // Pareto: pick the measured metric as objective, compute, set winning.
   await page.goto("/cockpit/pareto");
-  const objSelect = page.getByLabel(/目标/).locator("..").getByRole("combobox");
+  // "目标" is a plain <span>, not a <label> (ParetoPage), so getByLabel
+  // resolves nothing — anchor on the label's Space item and take the Select
+  // rendered in the following item, then pick the visible dropdown row.
+  const objSelect = page.locator(".ant-space-item", { has: page.getByText("目标", { exact: true }) })
+    .locator("xpath=following-sibling::*[1]").locator(".ant-select");
   await objSelect.click();
-  await objSelect.fill("density_g_cm3");
-  await page.keyboard.press("Enter");
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option", { hasText: /^density_g_cm3/ }).first().click();
+  await page.keyboard.press("Escape"); // 多选下拉选后保持打开，关掉防遮挡
   await page.getByRole("button", { name: "计算前沿" }).click();
   await expect(page.getByRole("button", { name: "设为定型" }).first()).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "设为定型" }).first().click();
   const winDialog = page.getByRole("dialog");
   await winDialog.getByRole("combobox").first().click();
-  await page.getByRole("option").first().click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option").first().click();
   await winDialog.getByRole("combobox").nth(1).click();
-  await page.getByRole("option", { name: /FX-100 底漆 v1/ }).click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option", { hasText: /^FX-100 底漆 v1$/ }).click();
   await winDialog.getByRole("button", { name: /确\s?定|OK/ }).click();
   await expect(page.getByText(/已生成修订版/)).toBeVisible();
 });

@@ -12,6 +12,7 @@ import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
 import type { Instrument, LabTask, Measurement, Method } from "./types";
 import { siblingNav } from "./matrixNav";
+import "./grid.css";
 
 interface Entry { metric: string; value: number | null; method_code?: string; instrument_id?: string; note?: string }
 

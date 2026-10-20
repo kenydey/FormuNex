@@ -112,10 +112,10 @@ export default function ParetoPage() {
       </ProCard>
       <ErrorAlert error={run.error ?? tasks.error} />
       {!done.length && <Empty style={{ marginTop: 24 }} description={t("pareto.empty", "当前项目还没有已复核的实验结果")} />}
-      {res && xm && ym && (
+      {res && xm && (
         <ProCard bordered style={{ marginTop: 16 }}>
           <Tabs items={[
-            { key: "scatter", label: t("pareto.view_scatter", "散点"), children: (
+            { key: "scatter", label: t("pareto.view_scatter", "散点"), children: ym ? (
               <Chart height={420}
                 option={{
                   tooltip: { trigger: "item", formatter: (p: unknown) => { const d = (p as { data: { name: string; value: number[] } }).data; return `${d.name}<br/>${xm}: ${d.value[0]}<br/>${ym}: ${d.value[1]}`; } },
@@ -131,6 +131,8 @@ export default function ParetoPage() {
                 }}
                 onEvents={{ click: (p) => { const id = (p as { name: string }).name; if (id) setSelectedIds([id]); const exp = byNo.get(id)?.experiment_id; if (exp && can("formulation.freeze")) setWinning(exp); }, brushSelected: onBrushSelected }}
               />
+            ) : (
+              <Empty style={{ padding: 24 }} description={t("pareto.scatter_needs_two", "散点图需要两个目标；当前为单目标，请看平行坐标与下方点表")} />
             ) },
             ...(zm ? [{ key: "scatter3d", label: t("pareto.view_3d", "3D 散点"), children: (
               <Scatter3D

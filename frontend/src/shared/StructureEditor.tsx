@@ -100,7 +100,7 @@ export function StructureEditorModal({
     <Modal
       open={open}
       width={960}
-      destroyOnClose
+      destroyOnHidden
       onCancel={onClose}
       title={title ?? t("struct_editor.title", "绘制分子结构")}
       footer={
