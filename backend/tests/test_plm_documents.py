@@ -372,3 +372,29 @@ def test_2_8_coa_prefers_test_method_standard():
     by_label = {r[0]: r for r in results}
     assert by_label["固含量"][5] == "GB/T 1725"
     assert by_label["黏度"][5] == "GB/T 1723"
+
+
+def test_doc_payload_debug_log_flag_gated(api, monkeypatch, caplog):
+    """FORMUNEX_PLM_DEBUG_DOC_PAYLOAD: on → payload fields logged, off → silent.
+    Trade secrets must never appear in the log line."""
+    import logging
+
+    client, pid, rid = api
+    body = {"doc_type": "tds",
+            "tds": {"product": {"description": "双组分环氧底漆"},
+                    "properties": [{"key": "density_g_cm3", "label": "密度", "value": 1.35, "unit": "g/cm³"}]},
+            "trade_secrets": {"1330-20-7": "芳烃溶剂"}}
+    with caplog.at_level(logging.INFO, logger="app.api.plm"):
+        monkeypatch.setenv("FORMUNEX_PLM_DEBUG_DOC_PAYLOAD", "true")
+        r = client.post(f"/api/plm/revisions/{rid}/documents", json=body)
+        assert r.status_code == 201, r.text
+    line = next((rec.message for rec in caplog.records if "plm doc payload" in rec.message), None)
+    assert line is not None
+    assert "density_g_cm3" in line and "tds.properties=" in line
+    assert "芳烃溶剂" not in line and "trade_secrets" not in line
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="app.api.plm"):
+        monkeypatch.delenv("FORMUNEX_PLM_DEBUG_DOC_PAYLOAD", raising=False)
+        r = client.post(f"/api/plm/revisions/{rid}/documents", json=body)
+        assert r.status_code == 201, r.text
+    assert not any("plm doc payload" in rec.message for rec in caplog.records)

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
@@ -10,6 +12,18 @@ from pydantic import BaseModel, Field, ValidationError
 from ._principal import CurrentUser, current_user, optional_user
 
 router = APIRouter(prefix="/plm", tags=["plm"])
+
+logger = logging.getLogger(__name__)
+
+
+def _doc_payload_debug_enabled() -> bool:
+    """Opt-in diagnostic for document-generation races (e.g. the nightly
+    TDS properties race): when FORMUNEX_PLM_DEBUG_DOC_PAYLOAD is truthy,
+    generate_document logs the submitted doc payload fields it actually
+    received. Deliberately NOT the full payload: trade_secrets (CAS →
+    generic-name mapping) is commercially sensitive and irrelevant to the
+    race evidence, so it is never logged."""
+    return os.environ.get("FORMUNEX_PLM_DEBUG_DOC_PAYLOAD", "").strip().lower() in ("1", "true", "yes")
 
 # WebSocket router: mounted WITHOUT the /api prefix (see main.py), so the
 # endpoint is /ws/formulations/{id}/compliance. Browsers cannot set an
@@ -492,6 +506,13 @@ def generate_document(revision_id: str, body: DocumentIn,
 
     payload = body.model_dump(exclude={"doc_type", "lang", "pdfa"})
     payload["properties"] = body.properties.model_dump() if body.properties else None
+    if _doc_payload_debug_enabled():
+        # INFO (not DEBUG) on purpose: uvicorn's default log level is INFO,
+        # so a DEBUG line would be invisible in the nightly backend log —
+        # the exact log this flag exists to capture. The flag itself gates it.
+        logger.info("plm doc payload revision=%s doc_type=%s lang=%s properties=%s tds.properties=%s",
+                    revision_id, body.doc_type, body.lang, payload["properties"],
+                    (payload.get("tds") or {}).get("properties"))
     with _session() as session:
         try:
             row = docs.generate_document(session, revision_id, body.doc_type, lang=body.lang, payload=payload,

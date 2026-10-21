@@ -28,6 +28,10 @@ jobs:
       FORMUNEX_PLM_COMPANY_ADDRESS: 上海市浦东新区示例路100号
       FORMUNEX_PLM_EMERGENCY_PHONE: "021-0001"
       FORMUNEX_CELERY_EAGER: "true"
+      # Diagnostic only: log submitted doc payload fields (never trade
+      # secrets) so a future flaky doc-generation race leaves evidence in
+      # the full server-log artifact instead of an empty properties list.
+      FORMUNEX_PLM_DEBUG_DOC_PAYLOAD: "true"
       FX_BASE_URL: http://127.0.0.1:5174
     steps:
       - uses: actions/checkout@v4
