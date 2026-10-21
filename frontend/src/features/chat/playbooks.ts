@@ -20,8 +20,8 @@ export interface BuiltinPlaybook { id: string; icon: string; path: string; quest
 
 export const BUILTIN_PLAYBOOKS: BuiltinPlaybook[] = [
   { id: "recommend", icon: "⭐", path: "/lab/recommend", questionParam: "q" },
-  { id: "doe_classic", icon: "🔬", path: "/lab/doe/classic" },
-  { id: "loop", icon: "🔄", path: "/cockpit/loop" },
+  { id: "doe_classic", icon: "🔬", path: "/lab/doe?tab=classic" },
+  { id: "loop", icon: "🔄", path: "/cockpit/optimization?tab=loop" },
   { id: "inverse_design", icon: "🎯", path: "/lab/inverse-design" },
   { id: "substitution", icon: "🔁", path: "/lab/substitution" },
   { id: "deep_research", icon: "📑", path: "/knowledge/research?tab=deep", questionParam: "q" },

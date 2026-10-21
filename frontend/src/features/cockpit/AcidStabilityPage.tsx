@@ -21,12 +21,15 @@ interface TrendOut {
 
 const STATUS_NUM: Record<string, number> = { pass: 0, warn: 1, infeasible: 2 };
 
-/** 补齐 2-21: 酸稳定性趋势 — 组分编辑器 + pH 扫掠曲线 + 每配方结果表。 */
-export default function AcidStabilityPage() {
+/** 补齐 2-21: 酸稳定性趋势 — 组分编辑器 + pH 扫掠曲线 + 每配方结果表。
+ * ``forms``/``onFormsChange`` 仅供配方物性 hub 使用：hub 把编辑器状态提升到页级，两 tab 共用。 */
+export default function AcidStabilityPage({ forms: controlledForms, onFormsChange }: { forms?: DraftFormulation[]; onFormsChange?: (v: DraftFormulation[]) => void } = {}) {
   const { t } = useTranslation();
-  const [forms, setForms] = useState<DraftFormulation[]>([
+  const [localForms, setLocalForms] = useState<DraftFormulation[]>([
     { name: "配方 1", ingredients: [{ name: "Zinc dust", weight_pct: 10, role: "pigment" }] },
   ]);
+  const forms = controlledForms ?? localForms;
+  const setForms = onFormsChange ?? setLocalForms;
   const [phMin, setPhMin] = useState(2);
   const [phMax, setPhMax] = useState(6);
   const [phStep, setPhStep] = useState(0.5);

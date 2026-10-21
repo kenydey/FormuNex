@@ -26,12 +26,15 @@ export function deltaEab(lab1: [number, number, number], lab2: [number, number, 
   return Math.sqrt(lab1.reduce((s, v, i) => s + (v - lab2[i]) ** 2, 0));
 }
 
-/** 补齐 2-21: 色度 — 组分编辑器 + a*–b* 散点 + ΔE 矩阵（双口径）。 */
-export default function ColorPage() {
+/** 补齐 2-21: 色度 — 组分编辑器 + a*–b* 散点 + ΔE 矩阵（双口径）。
+ * ``forms``/``onFormsChange`` 仅供配方物性 hub 使用：hub 把编辑器状态提升到页级，两 tab 共用。 */
+export default function ColorPage({ forms: controlledForms, onFormsChange }: { forms?: DraftFormulation[]; onFormsChange?: (v: DraftFormulation[]) => void } = {}) {
   const { t } = useTranslation();
-  const [forms, setForms] = useState<DraftFormulation[]>([
+  const [localForms, setLocalForms] = useState<DraftFormulation[]>([
     { name: "配方 1", ingredients: [{ name: "Titanium dioxide", weight_pct: 20, role: "pigment" }] },
   ]);
+  const forms = controlledForms ?? localForms;
+  const setForms = onFormsChange ?? setLocalForms;
   const [refLab, setRefLab] = useState<[number, number, number] | null>(null);
   const materials = useQuery({ queryKey: ["cockpit", "color-materials"], queryFn: () => call<{ count: number; materials: { name: string; cas: string | null; role: string; lab: [number, number, number] }[] }>("GET", "/api/cockpit/color/materials") });
 

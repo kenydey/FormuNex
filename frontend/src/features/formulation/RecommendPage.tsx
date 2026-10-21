@@ -2,7 +2,7 @@ import { PageContainer, ProCard } from "@ant-design/pro-components";
 import { Alert, App, Button, Checkbox, Descriptions, Empty, Input, Progress, Space, Steps, Tag, Typography } from "antd";
 import { StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useState } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { errorText } from "@/shared/feedback";
 import { fx } from "./api";
@@ -18,6 +18,7 @@ import { groundingSources, useWorkspace } from "./workspace";
 export default function RecommendPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const navigate = useNavigate();
   const { projectId, project, ws, requirement, patch } = useWorkspace();
   const task = useResearchTask();
   const openInEditor = useOpenInEditor();
@@ -49,6 +50,8 @@ export default function RecommendPage() {
       setRound(next);
       await patch.mutateAsync({ research: next, leaderboard: forms });
       message.success(t("formulation.rec.done", "推荐完成：{{n}} 个配方已写入项目排行榜", { n: forms.length }));
+      // 推荐 hub 内自动切到排行榜 tab（结果已写入 workspace leaderboard，板上可见）。
+      navigate("/lab/recommend?tab=board");
     } catch (e) {
       const msg = errorText(e);
       setError(/取消|cancel|停止/i.test(msg) ? t("formulation.rec.cancelled", "推荐已取消") : msg);
@@ -59,7 +62,7 @@ export default function RecommendPage() {
   const objectives = requirement?.objectives ?? [];
   return (
     <PageContainer loading={project.isLoading}
-      extra={<Link to="/lab/leaderboard"><Button>{t("formulation.rec.to_board", "查看排行榜")}</Button></Link>}>
+      extra={<Link to="/lab/recommend?tab=board"><Button>{t("formulation.rec.to_board", "查看排行榜")}</Button></Link>}>
       <ProCard gutter={16} ghost wrap>
         <ProCard colSpan={{ xs: 24, lg: 15 }} bordered title={t("formulation.rec.req", "研发需求")}>
           {!requirement ? <Alert type="warning" showIcon message={t("formulation.rec.no_req", "该项目尚未定义研发需求")}

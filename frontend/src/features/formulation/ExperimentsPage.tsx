@@ -11,20 +11,24 @@ import { DOMAINS } from "@/features/spec/types";
 import { fx } from "./api";
 import type { ExperimentSearchHit, ExperimentSummary } from "./types";
 
-/** 训练实验记录 + 跨批次台账检索 (legacy ExperimentsBrowser). */
-export default function ExperimentsPage() {
+/** 训练实验记录 + 跨批次台账检索 (legacy ExperimentsBrowser).
+ * ``tab``/``tabs`` 仅供实验工作记录 hub 使用：hub 以 prop 强制指定 tab 并隐藏页内 tab 条，
+ * 因为页内 tab 本用 ``?tab=``，与 hub 的 ``?tab=`` 冲突；直接访问时行为不变。 */
+export default function ExperimentsPage({ tab: forcedTab, tabs = true }: { tab?: "records" | "search"; tabs?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") === "search" ? "search" : "records";
+  const tab = forcedTab ?? (params.get("tab") === "search" ? "search" : "records");
   return (
     <PageContainer
       content={t("formulation.exp.intro", "浏览已回灌的训练实验记录（QC / 语料审计），或跨批次检索台账行。")}
-      tabActiveKey={tab}
-      onTabChange={(k) => setParams(k === "search" ? { tab: "search" } : {})}
-      tabList={[
-        { key: "records", tab: t("formulation.exp.records", "训练实验记录") },
-        { key: "search", tab: t("formulation.exp.search", "跨批次检索") },
-      ]}
+      {...(tabs ? {
+        tabActiveKey: tab,
+        onTabChange: (k) => setParams(k === "search" ? { tab: "search" } : {}),
+        tabList: [
+          { key: "records", tab: t("formulation.exp.records", "训练实验记录") },
+          { key: "search", tab: t("formulation.exp.search", "跨批次检索") },
+        ],
+      } : {})}
     >
       {tab === "records" ? <Records en={i18n.language === "en-US"} /> : <Search />}
     </PageContainer>

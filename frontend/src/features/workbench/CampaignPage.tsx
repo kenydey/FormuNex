@@ -293,7 +293,7 @@ export default function CampaignPage() {
           : tone === "paused" ? ` · ${t("workbench.loop.paused", "已暂停")}` : tone === "running" ? ` · ${t("workbench.loop.running", "进行中")}` : ""}
       </Tag></Tooltip> : undefined}
       extra={[
-        <Button key="loop" onClick={() => leave(`/cockpit/loop?campaign=${campaignId}`)}>{t("workbench.open_loop", "闭环迭代")}</Button>,
+        <Button key="loop" onClick={() => leave(`/cockpit/optimization?tab=loop&campaign=${campaignId}`)}>{t("workbench.open_loop", "闭环迭代")}</Button>,
         <Button key="rounds" icon={<HistoryOutlined />} onClick={() => setRoundsOpen(true)}>{t("workbench.rounds_btn", "轮次历史")}</Button>,
         <Button key="csv" icon={<DownloadOutlined />} disabled={!rows.length}
           onClick={() => saveText(toCsv(rows, factors, objectives), `DOE-C${campaignId}-${new Date().toISOString().slice(0, 10)}.csv`)}>{t("workbench.export_csv", "导出 CSV")}</Button>,

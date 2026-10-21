@@ -2,7 +2,6 @@ import { PageContainer, ProCard } from "@ant-design/pro-components";
 import { Alert, App, Button, Descriptions, Form, InputNumber, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { useUi } from "@/app/store";
@@ -159,11 +158,7 @@ export default function DoeDesignerPage() {
   const screen = (result?.data.screen as { runs: ScreenRun[]; flagged: number[] } | undefined);
 
   return (
-    <PageContainer subTitle={t("doe.sub", "生成的设计保存为 DOE 计划，可一键下发为实验任务单")} extra={[
-      <Link key="classic" to="/lab/doe/classic"><Button>{t("design.doe.classic_link", "经典设计（CCD / Box-Behnken / LHS …）")}</Button></Link>,
-      <Link key="levers" to="/lab/doe/levers"><Button>{t("design.doe.levers_link", "因子 Levers")}</Button></Link>,
-      <Link key="history" to="/lab/doe/history"><Button>{t("design.doe.history", "DOE 历史")}</Button></Link>,
-    ]}>
+    <PageContainer subTitle={t("doe.sub", "生成的设计保存为 DOE 计划，可一键下发为实验任务单")}>
       <ProCard bordered>
         {pendingNotices.length > 0 && (
           <Alert type="warning" showIcon style={{ marginBottom: 12 }}

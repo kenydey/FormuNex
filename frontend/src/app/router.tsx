@@ -3,6 +3,7 @@ import { Navigate, createBrowserRouter, useLocation } from "react-router-dom";
 import { useSession } from "./session";
 import { Shell } from "./Shell";
 import { PageSpin } from "@/shared/PageSpin";
+import { TabRedirect } from "@/shared/hubTabs";
 import LoginPage from "@/features/auth/LoginPage";
 import { MODULES } from "./modules";
 import { needsSetup, useDesktop } from "@/desktop/runtime";
@@ -31,26 +32,29 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: "dashboard", element: L(() => import("@/features/dashboard/DashboardPage")) },
-      { path: "knowledge/search", element: L(() => import("@/features/knowledge/SearchPage")) },
-      { path: "knowledge/deep", element: L(() => import("@/features/knowledge/DeepSearchPage")) },
+      { path: "knowledge/search", element: L(() => import("@/features/knowledge/SearchHubPage")) },
+      { path: "knowledge/deep", element: <TabRedirect to="/knowledge/search" tab="deep" /> },
       { path: "knowledge/sources", element: L(() => import("@/features/knowledge/SourcesPage")) },
       { path: "knowledge/sources/:sourceId", element: L(() => import("@/features/knowledge/SourceDetailPage")) },
       { path: "spec/projects", element: L(() => import("@/features/spec/ProjectsPage")) },
       { path: "spec/projects/:projectId", element: L(() => import("@/features/spec/SpecStudioPage")) },
-      { path: "lab/formulations", element: L(() => import("@/features/lab/FormulationEditorPage")) },
-      { path: "lab/doe", element: L(() => import("@/features/lab/DoeDesignerPage")) },
-      { path: "lab/tasks", element: L(() => import("@/features/lab/TasksPage")) },
+      { path: "lab/formulations", element: L(() => import("@/features/lab/FormulationsHubPage")) },
+      { path: "lab/doe", element: L(() => import("@/features/lab/DoeHubPage")) },
+      { path: "lab/tasks", element: <TabRedirect to="/lab/work-records" tab="tasks" /> },
       { path: "lab/tasks/:taskId", element: L(() => import("@/features/lab/TaskDetailPage")) },
-      { path: "lab/review", element: L(() => import("@/features/lab/ReviewQueuePage")) },
+      { path: "lab/review", element: <TabRedirect to="/lab/measurements" tab="review" /> },
+      { path: "lab/measurements", element: L(() => import("@/features/lab/MeasurementsHubPage")) },
       { path: "lab/methods", element: L(() => import("@/features/lab/MethodsPage")) },
       { path: "lab/eln", element: L(() => import("@/features/lab/ElnPage")) },
-      { path: "cockpit/pareto", element: L(() => import("@/features/cockpit/ParetoPage")) },
-      { path: "cockpit/conformal", element: L(() => import("@/features/cockpit/ConformalPage")) },
-      { path: "cockpit/acquisition", element: L(() => import("@/features/cockpit/AcquisitionTrendPage")) },
-      { path: "cockpit/point-review", element: L(() => import("@/features/cockpit/PointReviewPage")) },
+      { path: "cockpit/pareto", element: <TabRedirect to="/cockpit/optimization" tab="pareto" /> },
+      { path: "cockpit/conformal", element: <TabRedirect to="/cockpit/uncertainty" tab="conformal" /> },
+      { path: "cockpit/acquisition", element: <TabRedirect to="/cockpit/uncertainty" tab="acquisition" /> },
+      { path: "cockpit/point-review", element: <TabRedirect to="/cockpit/optimization" tab="review" /> },
       { path: "cockpit/rheology", element: L(() => import("@/features/cockpit/RheologyPage")) },
-      { path: "cockpit/color", element: L(() => import("@/features/cockpit/ColorPage")) },
-      { path: "cockpit/acid-stability", element: L(() => import("@/features/cockpit/AcidStabilityPage")) },
+      { path: "cockpit/color", element: <TabRedirect to="/cockpit/properties" tab="color" /> },
+      { path: "cockpit/acid-stability", element: <TabRedirect to="/cockpit/properties" tab="acid" /> },
+      { path: "cockpit/uncertainty", element: L(() => import("@/features/cockpit/UncertaintyHubPage")) },
+      { path: "cockpit/properties", element: L(() => import("@/features/cockpit/PropertiesHubPage")) },
       { path: "plm/products", element: L(() => import("@/features/plm/ProductsPage")) },
       { path: "plm/formula-mappings", element: L(() => import("@/features/plm/FormulaMappingsPage")) },
       { path: "plm/products/:productId", element: L(() => import("@/features/plm/ProductDetailPage")) },

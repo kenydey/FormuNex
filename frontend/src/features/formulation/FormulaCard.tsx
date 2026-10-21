@@ -102,7 +102,7 @@ export function FormulaCard(p: CardProps) {
         ] }}><Button size="small" icon={<ExportOutlined />} loading={pdf.isPending} data-testid="card-export">{t("formulation.card.export", "导出")}</Button></Dropdown>
         <Dropdown menu={{ items: [
           { key: "ip", label: t("formulation.card.ip", "专利 / IP 分析"), onClick: () => navigate("/knowledge/research/ip", { state: { formulation: form } }) },
-          { key: "similar", label: t("formulation.card.similar", "相似历史配方"), onClick: () => navigate("/lab/similar", { state: { formulation: form } }) },
+          { key: "similar", label: t("formulation.card.similar", "相似历史配方"), onClick: () => navigate("/lab/work-records?tab=similar", { state: { formulation: form } }) },
           { key: "substitution", label: t("formulation.card.substitution", "原料替换"),
             onClick: () => navigate(`/lab/substitution?material=${encodeURIComponent(form.ingredients[0]?.name ?? "")}`) },
         ] }}><Button size="small">{t("formulation.card.analyze", "分析")}</Button></Dropdown>

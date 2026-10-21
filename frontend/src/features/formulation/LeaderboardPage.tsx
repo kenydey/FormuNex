@@ -118,7 +118,7 @@ export default function LeaderboardPage() {
       return false;
     }
   };
-  const showCard = (idx: number) => { setFocus(idx); setParams({}); };
+  const showCard = (idx: number) => { setFocus(idx); setParams((prev) => { const next = new URLSearchParams(prev); next.delete("view"); return next; }); };
 
   if (!projectId) return <PageContainer><Alert type="info" showIcon message={t("formulation.need_project", "请先在顶部选择项目")} /></PageContainer>;
   return (
@@ -128,7 +128,7 @@ export default function LeaderboardPage() {
         {ws.research.recommend_engine === "llm" ? t("formulation.rec.llm", "LLM 推荐") : t("formulation.rec.offline", "离线模板")}</Tag> : undefined}
       extra={<Space wrap>
         <TechReportExport kind="formulation" projectId={projectId} />
-        <Segmented value={view} onChange={(v) => setParams(v === "cards" ? {} : { view: String(v) })} options={[
+        <Segmented value={view} onChange={(v) => setParams((prev) => { const next = new URLSearchParams(prev); if (v === "cards") next.delete("view"); else next.set("view", String(v)); return next; })} options={[
           { value: "cards", label: t("formulation.board.cards", "卡片") }, { value: "table", label: t("formulation.board.table", "列表") },
           { value: "pareto", label: t("formulation.board.pareto", "帕累托") }, { value: "parallel", label: t("formulation.board.parallel", "平行坐标") }]} />
         <Dropdown disabled={!draft.length} menu={{ items: [

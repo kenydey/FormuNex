@@ -32,7 +32,7 @@ export default function ArtifactsPage() {
       to: "/knowledge/research?tab=deep" },
     { key: "lb", title: t("research.art.formulations", "配方与推荐"), sub: t("research.art.formulations_sub", "配方编辑与候选"), to: "/lab/formulations" },
     { key: "doe", title: t("research.art.doe", "DOE 实验方案"), sub: t("research.art.doe_sub", "设计与任务"), to: "/lab/doe" },
-    { key: "opt", title: t("research.art.opt", "寻优收敛"), sub: t("research.art.opt_sub", "帕累托与定型"), to: "/cockpit/pareto" },
+    { key: "opt", title: t("research.art.opt", "寻优收敛"), sub: t("research.art.opt_sub", "帕累托与定型"), to: "/cockpit/optimization?tab=pareto" },
   ];
 
   return (

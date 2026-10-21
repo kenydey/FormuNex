@@ -6,8 +6,8 @@ describe("playbooks", () => {
     const t = playbookTarget({ id: "formula_recommend", title: "配方推荐", summary: "s", action: "recommend" }, { question: " 耐盐雾 ", projectId: "p1" });
     expect(t).toEqual({ kind: "navigate", to: "/lab/recommend?q=%E8%80%90%E7%9B%90%E9%9B%BE",
       state: { question: "耐盐雾", projectId: "p1", playbook: "formula_recommend" } });
-    expect(playbookTarget({ id: "x", title: "", summary: "", action: "doe" }, {})).toMatchObject({ to: "/lab/doe/classic" });
-    expect(playbookTarget({ id: "x", title: "", summary: "", action: "optimize" }, {})).toMatchObject({ to: "/cockpit/loop" });
+    expect(playbookTarget({ id: "x", title: "", summary: "", action: "doe" }, {})).toMatchObject({ to: "/lab/doe?tab=classic" });
+    expect(playbookTarget({ id: "x", title: "", summary: "", action: "optimize" }, {})).toMatchObject({ to: "/cockpit/optimization?tab=loop" });
     expect(playbookTarget({ id: "x", title: "", summary: "", action: "deep_research" }, { question: "a b" }))
       .toMatchObject({ to: "/knowledge/research?tab=deep&q=a+b" });
   });

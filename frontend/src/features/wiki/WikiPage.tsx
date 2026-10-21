@@ -176,7 +176,7 @@ export default function WikiPage() {
       subTitle={projectId ? t("wiki.scope", "当前项目的 Wiki（卷宗 / 报告 + 本项目资料编译页）") : undefined}
       extra={[
         embedEnabled === true && <Tag key="embed" color="success">{t("wiki.embed_on", "Embed 已开启")}</Tag>,
-        <Link key="graph" to="/knowledge/wiki-graph"><Button icon={<NodeIndexOutlined />}>{t("wiki.graph", "链接图")}</Button></Link>,
+        <Link key="graph" to="/knowledge/wiki?view=graph"><Button icon={<NodeIndexOutlined />}>{t("wiki.graph", "链接图")}</Button></Link>,
         <Button key="dossier" type="primary" disabled={!projectId || !!busy} loading={busy === "dossier-open"} onClick={openDossier}>{t("wiki.dossier", "项目卷宗")}</Button>,
         <Tooltip key="refresh" title={t("wiki.dossier_refresh_tip", "从 live pack 刷新卷宗各节表（确定性；LLM 叙述默认关）")}>
           <Button disabled={!projectId || !!busy} loading={busy === "dossier-refresh"} onClick={refreshDossier}>{t("wiki.dossier_refresh", "刷新卷宗")}</Button>

@@ -24,8 +24,7 @@ const BASE_NAV: NavItem[] = [
   { path: "/dashboard", key: "nav.dashboard", zh: "我的工作台", icon: <DashboardOutlined />, order: 0 },
   { path: "/knowledge", key: "nav.knowledge", zh: "知识检索", icon: <BookOutlined />, order: 1, children: [
     { path: "/knowledge/search", key: "nav.knowledge.search", zh: "检索", order: 0 },
-    { path: "/knowledge/deep", key: "nav.knowledge.deep", zh: "深度检索", order: 1 },
-    { path: "/knowledge/sources", key: "nav.knowledge.sources", zh: "知识源与目录树", order: 3 },
+    { path: "/knowledge/sources", key: "nav.knowledge.sources", zh: "知识源与目录树", order: 2 },
   ] },
   { path: "/knowledge-library", key: "nav.literature", zh: "文献与研究", icon: <FileTextOutlined />, order: 2, children: [] },
   { path: "/spec", key: "nav.spec", zh: "研发需求", icon: <ControlOutlined />, order: 3, children: [
@@ -34,19 +33,17 @@ const BASE_NAV: NavItem[] = [
   { path: "/lab", key: "nav.lab", zh: "配方与实验", icon: <ExperimentOutlined />, order: 4, children: [
     { path: "/lab/formulations", key: "nav.lab.formulations", zh: "配方编辑", order: 0 },
     { path: "/lab/doe", key: "nav.lab.doe", zh: "DOE 设计", order: 1 },
-    { path: "/lab/tasks", key: "nav.lab.tasks", zh: "实验任务", order: 2 },
-    { path: "/lab/review", key: "nav.lab.review", zh: "测量复核", order: 5 },
-    { path: "/lab/methods", key: "nav.lab.methods", zh: "方法与仪器", order: 6 },
-    { path: "/lab/eln", key: "nav.lab.eln", zh: "外部 ELN", order: 7 },
+    { path: "/lab/measurements", key: "nav.lab.measurements", zh: "测量与复核", order: 3 },
+    { path: "/lab/methods", key: "nav.lab.methods", zh: "方法与仪器", order: 4 },
+    { path: "/lab/eln", key: "nav.lab.eln", zh: "外部 ELN", order: 5 },
   ] },
   { path: "/cockpit", key: "nav.cockpit", zh: "寻优与分析", icon: <SlidersOutlined />, order: 5, children: [
-    { path: "/cockpit/pareto", key: "nav.cockpit.pareto", zh: "帕累托与定型", order: 0 },
-    { path: "/cockpit/conformal", key: "nav.cockpit.conformal", zh: "预测区间与偏差", order: 1 },
-    { path: "/cockpit/acquisition", key: "nav.cockpit.acquisition", zh: "采集函数趋势", order: 2 },
-    { path: "/cockpit/point-review", key: "nav.cockpit.point_review", zh: "逐点审核与规则", order: 3 },
-    { path: "/cockpit/rheology", key: "nav.cockpit.rheology", zh: "流变拟合", order: 4 },
-    { path: "/cockpit/color", key: "nav.cockpit.color", zh: "色度", order: 5 },
-    { path: "/cockpit/acid-stability", key: "nav.cockpit.acid_stability", zh: "酸稳定性趋势", order: 6 },
+    { path: "/cockpit/optimization", key: "nav.cockpit.optimization", zh: "寻优闭环", order: 0 },
+    { path: "/cockpit/uncertainty", key: "nav.cockpit.uncertainty", zh: "不确定性诊断", order: 1 },
+    { path: "/cockpit/rheology", key: "nav.cockpit.rheology", zh: "流变拟合", order: 2 },
+    { path: "/cockpit/properties", key: "nav.cockpit.properties", zh: "配方物性", order: 3 },
+    { path: "/cockpit/models", key: "nav.cockpit.models", zh: "代理模型", order: 4 },
+    { path: "/cockpit/surface", key: "nav.cockpit.surface", zh: "响应曲面", order: 5 },
   ] },
   { path: "/plm", key: "nav.plm", zh: "文档与发布", icon: <FileProtectOutlined />, order: 6, children: [
     { path: "/plm/products", key: "nav.plm.products", zh: "产品与修订", order: 0 },

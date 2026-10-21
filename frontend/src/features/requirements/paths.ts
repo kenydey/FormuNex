@@ -18,7 +18,7 @@ export const PATHS: PathDef[] = [
     { id: "recommend", routes: ["/formulation/recommend", "/lab/recommend", "/lab/formulations"] },
     { id: "doe", routes: ["/lab/doe"] },
     { id: "ledger", routes: ["/cockpit/workbench", "/lab/tasks"] },
-    { id: "loop", routes: ["/cockpit/loop", "/cockpit/pareto"] },
+    { id: "loop", routes: ["/cockpit/optimization?tab=loop", "/cockpit/optimization?tab=pareto"] },
   ] },
   { id: "substitute", maturity: "stable", steps: [
     { id: "materials", routes: ["/materials/raw"] },

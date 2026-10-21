@@ -56,7 +56,7 @@ export default function QualityPage() {
               description={t("library.quality.near_cap_hint", "活跃切块接近 kb_search_scan_limit。建议：在知识源页归档低质文档，再在依赖管理中 dry-run 保留期清理（需确认，默认不物理删除）。")}
               action={<Space direction="vertical">
                 <Button size="small" onClick={() => nav("/knowledge/sources")}>{t("library.quality.to_sources", "打开知识源归档")}</Button>
-                <Button size="small" onClick={() => nav("/knowledge/retrieval")}>{t("library.quality.to_probe", "查看检索探针")}</Button>
+                <Button size="small" onClick={() => nav("/knowledge/quality?tab=probe")}>{t("library.quality.to_probe", "查看检索探针")}</Button>
               </Space>} />
           )}
           <StatisticCard.Group direction="row" style={{ flexWrap: "wrap" }}>

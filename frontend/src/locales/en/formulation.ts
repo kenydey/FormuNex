@@ -7,6 +7,7 @@ const en: Record<string, string> = {
   "formulation.card.analyze": "Analyse",
   "formulation.ing.substitute": "Find substitutes",
   "nav.lab.recommend": "AI recommendation",
+  "nav.lab.work_records": "Work records",
   "nav.lab.leaderboard": "Leaderboard",
   "nav.lab.lineage": "Formulation lineage",
   "nav.lab.experiments": "Experiment records",

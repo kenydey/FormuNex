@@ -275,6 +275,7 @@ const en: Record<string, string> = {
   "nav.lab.inverse": "Inverse design",
   "nav.lab.levers": "DOE levers",
   "nav.lab.qc_report": "QC report extraction",
+  "nav.lab.measurements": "Measurements & review",
   "nav.lab.similar": "Similar formulations",
   "nav.lab.substitution": "Material substitution",
 };

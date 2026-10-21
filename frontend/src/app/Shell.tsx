@@ -66,7 +66,7 @@ export function Shell() {
         <TaskCenter key="tasks" />,
         <Tooltip key="todo" title={t("shell.review_queue", "待复核测量值")}>
           <Badge count={reviewQueue.data?.length ?? 0} size="small">
-            <Button type="text" onClick={() => navigate("/lab/review")}>{t("shell.todo", "待办")}</Button>
+            <Button type="text" onClick={() => navigate("/lab/measurements?tab=review")}>{t("shell.todo", "待办")}</Button>
           </Badge>
         </Tooltip>,
         <Tooltip key="theme" title={t("shell.theme", "明暗主题")}>

@@ -1,16 +1,15 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
 import {
-  Alert, App, Button, Descriptions, Drawer, Empty, Form, InputNumber, List, Progress, Select, Space, Table, Tag, Tooltip, Typography, Upload,
+  Alert, App, Button, Descriptions, Empty, Form, InputNumber, List, Progress, Select, Space, Table, Tag, Tooltip, Typography, Upload,
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
 import { awaitTask, thinkingSteps, type AsyncTaskAccepted, type TaskProgressEvent } from "@/api/stream";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { DispatchButton } from "@/features/lab/DispatchButton";
-import { LeversPanel } from "./LeversPanel";
 import { AI_DESIGN, designsForEngine, strategyForPlan, type DoeEngine } from "./logic";
 import type { ActiveDoeResult, DOEPlan, ModelInfo, TrainingReport, WorkbenchCampaignSummary } from "./types";
 import { useRequirement } from "./useRequirement";
@@ -47,6 +46,7 @@ function ModelCard({ m }: { m: ModelInfo }) {
 export default function ClassicDoePage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const { projectId, requirement, levers } = useRequirement();
   const [engine, setEngine] = useState<DoeEngine>("auto");
@@ -60,7 +60,6 @@ export default function ClassicDoePage() {
   const [campaignState, setCampaignState] = useState<string | null>(null);
   const [plan, setPlan] = useState<DOEPlan | null>(null);
   const [active, setActive] = useState<ActiveDoeResult | null>(null);
-  const [leversOpen, setLeversOpen] = useState(false);
   const [cycleEv, setCycleEv] = useState<TaskProgressEvent | null>(null);
   const [trainMsg, setTrainMsg] = useState("");
 
@@ -160,14 +159,10 @@ export default function ClassicDoePage() {
 
   return (
     <PageContainer
-      subTitle={t("design.doe.sub", "经典 DOE：全因子 / 部分因子 / Plackett-Burman / CCD / LHS / Box-Behnken / Sobol 与 AI 主动选点，基于项目 levers")}
-      extra={[
-        <Link key="h" to="/lab/doe/history"><Button>{t("design.doe.history", "DOE 历史")}</Button></Link>,
-        <Link key="d" to="/lab/doe"><Button>{t("design.doe.designer", "正交 / 混料 / D-最优")}</Button></Link>,
-      ]}>
+      subTitle={t("design.doe.sub", "经典 DOE：全因子 / 部分因子 / Plackett-Burman / CCD / LHS / Box-Behnken / Sobol 与 AI 主动选点，基于项目 levers")}>
       {!projectId && <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t("design.need_project", "请先在顶部选择项目。")} />}
       <ProCard bordered title={t("design.doe.setup", "设计参数")}
-        extra={<Button onClick={() => setLeversOpen(true)} disabled={!projectId}>
+        extra={<Button onClick={() => navigate("/lab/doe?tab=levers")} disabled={!projectId}>
           {t("design.doe.levers", "因子 Levers（{{n}}）", { n: levers.length })}</Button>}>
         {levers.length === 0 && projectId && <Alert type="info" showIcon style={{ marginBottom: 12 }}
           message={t("design.doe.no_levers", "项目未定义 levers，将自动从当前配方推导因子。")} />}
@@ -306,11 +301,6 @@ export default function ClassicDoePage() {
           ? <Empty description={t("design.doe.no_models", "暂无已训练模型")} />
           : shownModels.map((m) => <ModelCard key={`${m.domain}-${m.project_id ?? ""}-${m.metric}`} m={m} />)}
       </ProCard>
-
-      <Drawer open={leversOpen} onClose={() => setLeversOpen(false)} width={Math.min(1100, window.innerWidth - 32)}
-        title={t("design.levers.title", "DOE 因子 · Levers")} destroyOnHidden>
-        <LeversPanel />
-      </Drawer>
     </PageContainer>
   );
 }

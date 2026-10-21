@@ -2,7 +2,7 @@ import { PageContainer, ProCard, ProTable } from "@ant-design/pro-components";
 import { Alert, App, Button, Descriptions, Drawer, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
 import { useUi } from "@/app/store";
@@ -114,8 +114,7 @@ export default function DoeHistoryPage() {
     return <PageContainer><Alert type="info" showIcon message={t("design.hist.need_project", "请先选择项目（DOE 历史按项目隔离）。")} /></PageContainer>;
   }
   return (
-    <PageContainer subTitle={t("design.hist.sub", "DOE 计划按项目隔离，最新优先")}
-      extra={[<Link key="c" to="/lab/doe/classic"><Button>{t("design.hist.classic", "经典 DOE")}</Button></Link>]}>
+    <PageContainer subTitle={t("design.hist.sub", "DOE 计划按项目隔离，最新优先")}>
       <ErrorAlert error={history.error} />
       {campaignId != null && <ProCard bordered size="small" style={{ marginBottom: 16 }}><CyclePause campaignId={campaignId} /></ProCard>}
       <ProTable<DoeHistoryItem>

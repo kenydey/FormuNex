@@ -379,7 +379,7 @@ const en: Record<string, string> = {
   "nav.knowledge.memory": "Agent memory",
   "nav.knowledge.notebooklm": "NotebookLM",
   "nav.knowledge.parsing": "Parsing & structure recognition",
-  "nav.knowledge.quality": "Quality ops",
+  "nav.knowledge.quality": "Retrieval quality ops",
   "nav.knowledge.retrieval": "Retrieval probe",
 };
 
