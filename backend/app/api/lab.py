@@ -36,7 +36,61 @@ def _call(session, fn, *args, **kwargs):
         raise HTTPException(status_code=502, detail=str(exc)) from None
 
 
+def _task_project_id(session, task_id: str) -> str | None:
+    """Project owning a lab task (None when the task is missing or project-less).
+
+    P1-12: task / attachment / measurement / ELN endpoints resolve the
+    project from the stored row instead of checking only the global
+    permission, so a project-scoped role passes for its own project and still
+    fails for any other project (project-less rows stay global-gated).
+    """
+    from ..db.models_lab import LabTaskRow
+
+    task = session.get(LabTaskRow, task_id)
+    return task.project_id if task is not None else None
+
+
+def _require_task_scoped(user: CurrentUser, session, permission: str, task_id: str) -> None:
+    """Permission check scoped to the task's project. A missing task maps to
+    the global check — the service then raises its usual 422, as before."""
+    user.require(permission, _task_project_id(session, task_id))
+
+
+def _require_for_task_ids(user: CurrentUser, session, permission: str, task_ids) -> None:
+    """One scoped check per distinct owning project; a missing task maps to
+    the global check, keeping the old fail-closed behaviour for unknown ids."""
+    for project_id in {_task_project_id(session, task_id) for task_id in task_ids}:
+        user.require(permission, project_id)
+
+
+def _measurement_project_id(session, measurement_id: str) -> str | None:
+    """Project owning a measurement, via its lab task (None when the chain
+    breaks — legacy measurements without a task stay global-gated)."""
+    from ..db.models import MeasurementRow
+
+    m = session.get(MeasurementRow, measurement_id)
+    if m is None or not m.lab_task_id:
+        return None
+    return _task_project_id(session, m.lab_task_id)
+
+
+def _conflict_project_id(session, conflict_id: str) -> str | None:
+    """Project owning an ELN sync conflict, via link → lab task."""
+    from ..db.models_lab import ElnLinkRow, ElnSyncConflictRow
+
+    conflict = session.get(ElnSyncConflictRow, conflict_id)
+    if conflict is None:
+        return None
+    link = session.get(ElnLinkRow, conflict.link_id)
+    if link is None:
+        return None
+    return _task_project_id(session, link.local_id)
+
+
 # --------------------------------------------------------------------------- methods & instruments
+# The method / instrument library is global (rows carry no project_id), so
+# project scoping does not apply here — P1-12 covers the project-owned
+# experiment chain below, not this library. These endpoints stay global-gated.
 
 
 class MethodIn(BaseModel):
@@ -238,8 +292,8 @@ def get_task(task_id: str) -> dict[str, Any]:
 def claim_task(task_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.lab import tasks
 
-    user.require("lab.execute")
     with _session() as session:
+        _require_task_scoped(user, session, "lab.execute", task_id)
         t = _call(session, tasks.claim, task_id, user.id)
         session.commit()
         return tasks.task_dict(session, t)
@@ -249,8 +303,8 @@ def claim_task(task_id: str, user: CurrentUser = Depends(current_user)) -> dict[
 def submit_task(task_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.lab import tasks
 
-    user.require("lab.execute")
     with _session() as session:
+        _require_task_scoped(user, session, "lab.execute", task_id)
         t = _call(session, tasks.submit, task_id, user.id)
         session.commit()
         return tasks.task_dict(session, t)
@@ -260,8 +314,8 @@ def submit_task(task_id: str, user: CurrentUser = Depends(current_user)) -> dict
 def cancel_task(task_id: str, body: ReasonIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.lab import tasks
 
-    user.require("doe.write")
     with _session() as session:
+        _require_task_scoped(user, session, "doe.write", task_id)
         t = _call(session, tasks.cancel, task_id, user.id, body.reason)
         session.commit()
         return tasks.task_dict(session, t)
@@ -312,11 +366,11 @@ async def upload_task_attachment(task_id: str, file: UploadFile = File(...),
     from ..db.models_lab import LabTaskAttachmentRow, LabTaskRow
     from ._uploads import read_upload_capped
 
-    user.require("lab.execute")
     filename = (file.filename or "attachment").rsplit("/", 1)[-1].rsplit("\\", 1)[-1][:255] or "attachment"
     content = await read_upload_capped(file, filename)
     digest = hashlib.sha256(content).hexdigest()
     with _session() as session:
+        _require_task_scoped(user, session, "lab.execute", task_id)
         if session.get(LabTaskRow, task_id) is None:
             raise HTTPException(status_code=404, detail="任务单不存在")
         base = _task_attachments_base()
@@ -356,8 +410,8 @@ def delete_task_attachment(task_id: str, attachment_id: str,
 
     from ..db.models_lab import LabTaskAttachmentRow
 
-    user.require("doe.write")
     with _session() as session:
+        _require_task_scoped(user, session, "doe.write", task_id)
         row = session.get(LabTaskAttachmentRow, attachment_id)
         if row is None or row.task_id != task_id:
             raise HTTPException(status_code=404, detail="附件不存在")
@@ -428,8 +482,8 @@ def _measurement_response(session, rows, warnings) -> dict[str, Any]:
 def record_measurements(task_id: str, body: MeasurementsIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.lab import measurements as meas
 
-    user.require("lab.execute")
     with _session() as session:
+        _require_task_scoped(user, session, "lab.execute", task_id)
         rows, warnings = _call(session, meas.record, task_id, [m.model_dump() for m in body.measurements],
                                user_id=user.id, username=user.username)
         session.commit()
@@ -454,13 +508,12 @@ async def import_instrument_file(
     """Parse an instrument export and record each sample's values on its task (unreviewed)."""
     from sqlalchemy import select
 
-    from ..db.models_lab import SampleRow
+    from ..db.models_lab import LabTaskRow, SampleRow
     from ..services.lab import measurements as meas
     from ..services.lab.methods import LabError
     from ..services.lab.parsers import BUILTIN_TEMPLATES, parse
     from ..services.plm import storage
 
-    user.require("lab.execute")
     data = await file.read(MAX_IMPORT_BYTES + 1)
     if len(data) > MAX_IMPORT_BYTES:
         raise HTTPException(status_code=413, detail="文件过大（上限 10 MB）")
@@ -478,7 +531,6 @@ async def import_instrument_file(
     import uuid
 
     name = (file.filename or "upload").replace("/", "_").replace("\\", "_")[-120:]
-    raw_key = storage.put(f"lab/raw/{uuid.uuid4().hex}/{name}", data)
     by_sample: dict[str, list[dict[str, Any]]] = {}
     for r in readings:
         by_sample.setdefault(r.sample_no, []).append(
@@ -487,6 +539,23 @@ async def import_instrument_file(
              "note": f"仪器文件 {name}" + (f"，{r.readings} 次读数" if r.readings > 1 else "")})
     recorded, errors = [], []
     with _session() as session:
+        # P1-12: scope to the owning projects of the samples' tasks (checked
+        # up front, before any recording). Unknown samples record nothing —
+        # they only yield error entries — so when no sample resolves to a
+        # task, keep the old global gate instead of opening the endpoint.
+        projects: set[str | None] = set()
+        for sample_no in by_sample:
+            s = session.execute(select(SampleRow).where(SampleRow.sample_no == sample_no)).scalar_one_or_none()
+            if s is not None and s.lab_task_id:
+                task = session.get(LabTaskRow, s.lab_task_id)
+                if task is not None:
+                    projects.add(task.project_id)
+        if not projects:
+            user.require("lab.execute")
+        else:
+            for project_id in projects:
+                user.require("lab.execute", project_id)
+        raw_key = storage.put(f"lab/raw/{uuid.uuid4().hex}/{name}", data)
         for sample_no, entries in by_sample.items():
             s = session.execute(select(SampleRow).where(SampleRow.sample_no == sample_no)).scalar_one_or_none()
             if s is None or not s.lab_task_id:
@@ -525,8 +594,8 @@ def review_queue(project_id: str | None = None, limit: int = Query(200, ge=1, le
 def review_measurement(measurement_id: str, body: ReviewIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.lab import measurements as meas
 
-    user.require("lab.review")
     with _session() as session:
+        user.require("lab.review", _measurement_project_id(session, measurement_id))
         m = _call(session, meas.review, measurement_id, decision=body.decision, user_id=user.id, reason=body.reason)
         session.commit()
         return meas.measurement_dict(m)
@@ -536,11 +605,15 @@ def review_measurement(measurement_id: str, body: ReviewIn, user: CurrentUser = 
 def amend_measurement(measurement_id: str, body: AmendIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.lab import measurements as meas
 
-    if not (user.principal.can("lab.execute") or user.principal.can("lab.review")):
-        raise HTTPException(status_code=403, detail="缺少权限 lab.execute")
     with _session() as session:
+        project_id = _measurement_project_id(session, measurement_id)
+        if not (user.principal.can("lab.execute", project_id) or user.principal.can("lab.review", project_id)):
+            raise HTTPException(status_code=403, detail="缺少权限 lab.execute")
+        # The service's can_review must use the same scoped permission: a
+        # project reviewer amending another operator's value in their own
+        # project passes the gate above and must pass the service check too.
         m = _call(session, meas.amend, measurement_id, value=body.value, note=body.note, reason=body.reason,
-                  user_id=user.id, can_review=user.principal.can("lab.review"))
+                  user_id=user.id, can_review=user.principal.can("lab.review", project_id))
         session.commit()
         return meas.measurement_dict(m)
 
@@ -549,8 +622,8 @@ def amend_measurement(measurement_id: str, body: AmendIn, user: CurrentUser = De
 def pick_measurement(measurement_id: str, body: ReasonIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.lab import measurements as meas
 
-    user.require("lab.review")
     with _session() as session:
+        user.require("lab.review", _measurement_project_id(session, measurement_id))
         row = _call(session, meas.pick, measurement_id, user_id=user.id, reason=body.reason)
         session.commit()
         return {"experiment_id": row.experiment_id, "metric": row.metric, "measurement_id": row.measurement_id,
@@ -596,8 +669,8 @@ def eln_connectors() -> list[dict[str, Any]]:
 def eln_push(connector: str, body: PushIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.eln import sync
 
-    user.require("doe.write")
     with _session() as session:
+        _require_for_task_ids(user, session, "doe.write", body.task_ids)
         conn = _call(session, lambda _s: sync.get_connector(connector))
         out = _call(session, sync.push_tasks, conn, body.task_ids, user_id=user.id)
         session.commit()
@@ -608,8 +681,13 @@ def eln_push(connector: str, body: PushIn, user: CurrentUser = Depends(current_u
 def eln_pull(connector: str, body: PullIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.eln import sync
 
-    user.require("lab.review")
     with _session() as session:
+        # An unbounded pull (no task_ids) has no project to scope to and keeps
+        # the old global gate; a scoped pull is checked per owning project.
+        if body.task_ids:
+            _require_for_task_ids(user, session, "lab.review", body.task_ids)
+        else:
+            user.require("lab.review")
         conn = _call(session, lambda _s: sync.get_connector(connector))
         out = _call(session, sync.pull, conn, task_ids=body.task_ids, since=body.since)
         session.commit()
@@ -640,8 +718,8 @@ def eln_conflicts(status: str = "open") -> list[dict[str, Any]]:
 def eln_resolve(conflict_id: str, body: ResolveIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.eln import sync
 
-    user.require("lab.review")
     with _session() as session:
+        user.require("lab.review", _conflict_project_id(session, conflict_id))
         c = _call(session, sync.resolve_conflict, conflict_id, resolution=body.resolution, user_id=user.id)
         session.commit()
         return {"id": c.id, "status": c.status, "resolution": c.resolution}

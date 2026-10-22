@@ -162,7 +162,19 @@ def classify_composition(body: ClassifyRequest) -> dict[str, Any]:
 
 
 @router.post("/ghs/classify/formulation-versions/{version_id}")
-def classify_formulation_version(version_id: str, body: ClassifyVersionRequest) -> dict[str, Any]:
+def classify_formulation_version(version_id: str, body: ClassifyVersionRequest,
+                                 user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
+    """Classify a saved formulation version.
+
+    P1-25 (same redaction as the P0-1 WebSocket fix): the gate stays
+    ``plm.document.write`` (via ``_rbac_guard``), but callers without
+    ``formulation.read_exact`` receive the banded response — no exact pct.
+    Computation and persistence still use the exact values; only the echoed
+    response is banded. A service key / auth-disabled caller (``user`` is
+    None) keeps exact values, mirroring ``_can_read_exact`` in
+    ``api/formulations.py``. The caller-supplied ``/ghs/classify`` endpoint is
+    unaffected: its inputs are the caller's own data, not a saved version.
+    """
     from ..services.plm.ghs import service
 
     with _session() as session:
@@ -176,6 +188,8 @@ def classify_formulation_version(version_id: str, body: ClassifyVersionRequest) 
                                         include_transport=body.include_transport,
                                         bridging=body.bridging.model_dump() if body.bridging else None)
         response = service.to_response(session, result)
+        if user is not None and not user.principal.can("formulation.read_exact"):
+            response = _redact_classification_response(response)
         if body.persist:
             row = service.persist(session, result, formulation_version_id=version_id)
             session.commit()
