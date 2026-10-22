@@ -14,7 +14,8 @@ import type { QCMeasurementView, QCReportResult, WorkbenchCampaign, WorkbenchCam
 const num = (s: string | null) => (s && Number(s) > 0 ? Number(s) : undefined);
 
 /** QC report extraction (legacy QCReportModal): upload a test certificate, extract measurements with unit / method / spec window,
- *  bind them to a workbench row (or a legacy experiment) and fold them into training data. */
+ *  bind them to a workbench row (or a legacy experiment). Values stage as unreviewed rows and reach training
+ *  data only after review (P1-13); the sync switch only folds already-reviewed values. */
 export default function QcReportPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -85,7 +86,7 @@ export default function QcReportPage() {
               <InputNumber min={1} value={experimentId} onChange={(v) => { setParam({ experiment: v ?? undefined }); upload.reset(); }} />
             </Form.Item>
           )}
-          <Form.Item label={t("design.qc.sync", "同步进可训练数据")}><Switch checked={sync} onChange={setSync} /></Form.Item>
+          <Form.Item label={t("design.qc.sync", "复核通过后同步进可训练数据")}><Switch checked={sync} onChange={setSync} /></Form.Item>
         </Form>
         <ErrorAlert error={campaigns.error ?? campaign.error} />
         <Upload.Dragger style={{ marginTop: 16 }} disabled={!target || upload.isPending} showUploadList={false}
@@ -106,7 +107,9 @@ export default function QcReportPage() {
             {result.message && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={result.message} />}
             {result.extraction_error && <Alert type="error" showIcon style={{ marginBottom: 8 }} message={result.extraction_error} />}
             {Object.keys(result.synced_measured).length > 0 && <Alert type="success" showIcon style={{ marginBottom: 8 }}
-              message={t("design.qc.synced", "已同步进可训练数据：{{m}}", { m: Object.keys(result.synced_measured).join("、") })} />}
+              message={t("design.qc.synced", "已同步进可训练数据（仅复核通过值）：{{m}}", { m: Object.keys(result.synced_measured).join("、") })} />}
+            {sync && result.measurement_count > 0 && Object.keys(result.synced_measured).length === 0 && !result.message && <Alert type="info" showIcon style={{ marginBottom: 8 }}
+              message={t("design.qc.staged", "检测值已暂存待复核，复核通过后进入可训练数据")} />}
           </>
         )}
       </ProCard>

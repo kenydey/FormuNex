@@ -28,8 +28,9 @@ export default function SurfacePage() {
   const y = sel.y ?? factors[1];
   const m = sel.m ?? objectives[0]?.metric;
   const points = useMemo(() => (x && y && m ? surfacePoints(rows, x, y, m) : []), [rows, x, y, m]);
+  const predictedCount = useMemo(() => points.filter((p) => p.predicted).length, [points]);
   return (
-    <PageContainer subTitle={t("workbench.surface.sub", "按已完成实验的实际参数与实测值插值（IDW），观察两因子对指标的响应")}>
+    <PageContainer subTitle={t("workbench.surface.sub", "按已完成实验的实际参数与实测值插值（IDW），观察两因子对指标的响应；缺实测值的点以预测值参与插值，图中以空心菱形标注")}>
       <ProCard bordered>
         <Space wrap>
           <span>{t("workbench.campaign", "实验台账")}</span>
@@ -49,7 +50,7 @@ export default function SurfacePage() {
           : factors.length < 2 ? <Empty description={t("workbench.surface.two_factors", "该台账少于 2 个因子，无法绘制响应曲面")} />
             : <>
               <ContourChart points={points} xLabel={x ?? ""} yLabel={y ?? ""} metric={m ?? ""} height={480} />
-              <Typography.Text type="secondary">{t("workbench.surface.n", "{{n}} 个已完成实验点参与插值", { n: points.length })}</Typography.Text>
+              <Typography.Text type="secondary">{t("workbench.surface.n", "{{n}} 个已完成实验点参与插值（实测 {{m}} 个，预测值 {{p}} 个）", { n: points.length, m: points.length - predictedCount, p: predictedCount })}</Typography.Text>
             </>}
       </ProCard>
     </PageContainer>

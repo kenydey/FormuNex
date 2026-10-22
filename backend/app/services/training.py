@@ -180,10 +180,53 @@ class ModelRegistry:
         ``retrain`` is what the caller asked for; the global ``auto_retrain``
         setting (Settings UI "实验自动重训") can veto it, in which case models
         only refresh through ``train()`` / ``POST /api/train`` or a restart.
+
+        Deduplication (P1-9/P1-10/P1-11): a record whose non-empty ``label``
+        already exists is *updated in place* when its training values changed
+        and skipped when identical — never appended a second time. A labelless
+        record identical to one already held is skipped the same way, so a
+        repeated "回灌并训练" click cannot inflate ``n_samples``. The backing
+        store's ``add`` upserts on the same rule, so the persisted set stays
+        in sync with memory across restarts (native/SQL + JSON stores; the
+        Datalab store skips already-indexed labels because it has no remote
+        update path, so a corrected Datalab value updates memory and retrains
+        but reverts to the remote value on restart — flagged, not papered over).
         """
+        from ..db.store import _copy_record_values, _same_training_values
+
         with self._lock:
-            self._store.add(records)
-            self._records.extend(records)
+            # Partition first, persist, then mutate memory — so a store failure
+            # leaves the in-memory set untouched (previously store-first too).
+            new: list[ExperimentRecord] = []
+            changed: list[tuple[ExperimentRecord, ExperimentRecord]] = []
+            pending: dict[str, ExperimentRecord] = {}
+            for rec in records:
+                if rec.label:
+                    existing = pending.get(rec.label) or next(
+                        (r for r in self._records if r.label == rec.label), None
+                    )
+                    if existing is not None:
+                        if _same_training_values(existing, rec):
+                            continue
+                        if rec.label in pending:
+                            # Same batch, twice: keep one entry, latest values win.
+                            _copy_record_values(existing, rec)
+                        else:
+                            changed.append((existing, rec))
+                        continue
+                    pending[rec.label] = rec
+                    new.append(rec)
+                elif any(
+                    not r.label and _same_training_values(r, rec)
+                    for r in (*self._records, *new)
+                ):
+                    continue
+                else:
+                    new.append(rec)
+            self._store.add(new + [rec for _old, rec in changed])
+            for old, rec in changed:
+                _copy_record_values(old, rec)
+            self._records.extend(new)
             if retrain and get_settings().auto_retrain:
                 self._retrain_all()
                 return True

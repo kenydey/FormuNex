@@ -208,10 +208,15 @@ export function strategyForPlan(plan: Pick<DoePlan, "design">, engineHint?: stri
   return plan.design === "ai_active" ? `BayBE-${engineHint ?? "loop"}-next` : `DOE-${plan.design}`;
 }
 
-/** Experiment records (POST /api/experiments) from completed ledger rows with measurements. */
-export function trainingRecords(rows: WorkbenchRow[], metrics: string[], domain: string, projectId?: string | null) {
+/**
+ * Experiment records (POST /api/experiments) from completed ledger rows with measurements.
+ * P1-11: rows that carry an ``item_id`` get the same ``wb:{campaign}:{item_id}`` label the backend
+ * sync path uses, so a repeated "回灌并训练" click upserts instead of appending a duplicate batch.
+ * Rows without an ``item_id`` carry no label; the backend still skips a byte-identical repeat.
+ */
+export function trainingRecords(rows: WorkbenchRow[], metrics: string[], domain: string, projectId?: string | null, campaignId?: number | null) {
   const out: { domain: string; project_id?: string | null; factors: Record<string, number>; cure_temperature_c: number | null;
-    measured: Record<string, number>; source: string }[] = [];
+    measured: Record<string, number>; source: string; label?: string }[] = [];
   for (const r of rows) {
     if (r.status !== "Completed") continue;
     const measured: Record<string, number> = {};
@@ -222,7 +227,8 @@ export function trainingRecords(rows: WorkbenchRow[], metrics: string[], domain:
     if (!Object.keys(measured).length) continue;
     const actual = Object.fromEntries(Object.entries(r.actual_params ?? {}).filter(([, v]) => typeof v === "number")) as Record<string, number>;
     const factors = { ...(r.planned_params ?? {}), ...actual };
-    out.push({ domain, project_id: projectId, factors, cure_temperature_c: factors.cure_temperature_c ?? null, measured, source: "workbench" });
+    out.push({ domain, project_id: projectId, factors, cure_temperature_c: factors.cure_temperature_c ?? null, measured, source: "workbench",
+      ...(campaignId != null && r.item_id ? { label: `wb:${campaignId}:${r.item_id}` } : {}) });
   }
   return out;
 }

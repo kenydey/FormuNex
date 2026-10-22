@@ -24,6 +24,18 @@ describe("response surface", () => {
       { id: 2, campaign_id: 1, status: "Pending", planned_params: { a: 1, b: 2 }, actual_params: {}, measurements: { m: 9 } },
       { id: 3, campaign_id: 1, status: "Completed", planned_params: { a: 1, b: 2 }, actual_params: {}, measurements: {} },
     ], "a", "b", "m");
-    expect(pts).toEqual([{ id: 1, x: 1.5, y: 2, z: 9 }]);
+    expect(pts).toEqual([{ id: 1, x: 1.5, y: 2, z: 9, predicted: false }]);
+  });
+
+  it("flags predicted-fallback points so the chart can tell them apart (P1-19)", () => {
+    const pts = surfacePoints([
+      { id: 1, campaign_id: 1, status: "Completed", planned_params: { a: 1, b: 2 }, actual_params: {}, measurements: {}, predicted: { m: 7 } },
+      { id: 2, campaign_id: 1, status: "Completed", planned_params: { a: 3, b: 4 }, actual_params: {}, measurements: { m: 8 }, predicted: { m: 7 } },
+      { id: 3, campaign_id: 1, status: "Completed", planned_params: { a: 5, b: 6 }, actual_params: {}, measurements: {}, predicted: {} },
+    ], "a", "b", "m");
+    expect(pts).toEqual([
+      { id: 1, x: 1, y: 2, z: 7, predicted: true },
+      { id: 2, x: 3, y: 4, z: 8, predicted: false },
+    ]);
   });
 });

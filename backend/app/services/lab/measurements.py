@@ -309,9 +309,19 @@ def sync_mirror(session: Session, experiment_id: int) -> None:
     values = representative_values(session, experiment_id)
     # Keep values with no native rows (legacy imports, ``legacy`` rows migrated from Datalab) and replace the rest
     # with their reviewed representative — an unreviewed-only metric drops out of the mirror until reviewed.
-    native = set(session.execute(select(MeasurementRow.metric).where(
-        MeasurementRow.experiment_id == experiment_id, MeasurementRow.review_status != "legacy")).scalars())
-    measured = {k: v for k, v in (exp.measured or {}).items() if k not in native}
+    # P1-13(b) exception: a metric whose typed rows are all QC-origin
+    # (``source_document_id`` set by a report upload, no lab row) keeps its
+    # pre-existing mirror value instead of dropping out. The QC value itself
+    # is only staged until reviewed, so dropping the previously known value
+    # on an unrelated review event would silently lose training data; once
+    # the QC value is reviewed it arrives here as the representative and
+    # overwrites, as usual. Lab-origin unreviewed-only metrics still drop out
+    # (amend → back-to-review must unpublish the value).
+    rows = session.execute(select(MeasurementRow).where(
+        MeasurementRow.experiment_id == experiment_id, MeasurementRow.review_status != "legacy")).scalars().all()
+    native = {r.metric for r in rows}
+    qc_staged = {r.metric for r in rows if r.source_document_id} - set(values)
+    measured = {k: v for k, v in (exp.measured or {}).items() if k not in native or k in qc_staged}
     measured.update({k: v["value"] for k, v in values.items()})
     exp.measured = measured
     session.flush()

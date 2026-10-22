@@ -147,30 +147,38 @@ def ingest_qc_report_tx(
 
 
 def sync_measurements_to_experiment(experiment_id: int) -> dict[str, Any]:
-    """Fold typed measurements back into the experiment's flat ``measured`` JSON.
+    """Fold *reviewed* measurements back into the experiment's flat ``measured`` JSON.
 
-    The training pipeline reads that column, so a QC report only becomes
-    training data once this runs. Typed rows win over any pre-existing value:
-    a certificate is more authoritative than a hand-typed cell.
+    P1-13: the old version folded every typed row — including unreviewed and
+    rejected QC values — over the existing column, so a later QC upload
+    silently replaced a reviewed lab value, and a rejected value could be
+    resurrected by re-running the sync. Now only the reviewed representative
+    per metric (same pick/mean/latest rule as the lab mirror) is written, and
+    only for metrics that have one; every other metric is left untouched.
+    Unreviewed QC values stay staged as typed rows (review_status
+    ``unreviewed``) and reach ``measured`` when a reviewer accepts them —
+    the lab review path calls ``sync_mirror``, which writes the same
+    representative. Returns just the metrics actually synced (previously the
+    whole merged column, which made "synced" look larger than it was).
     """
     from ..db.database import default_session_factory
-    from ..db.measurement_store import get_measurement_store
     from ..db.models import ExperimentRow
     from ..db.session_utils import commit_session
+    from .lab.measurements import representative_values
 
-    measurements = get_measurement_store().for_experiment(experiment_id)
-    if not measurements:
-        return {}
     factory = default_session_factory()
     try:
         with commit_session(factory) as session:
             row = session.get(ExperimentRow, experiment_id)
             if row is None:
                 return {}
+            values = representative_values(session, experiment_id)
+            if not values:
+                return {}
             merged = dict(row.measured or {})
-            merged.update({m.metric: m.value for m in measurements})
+            merged.update({k: v["value"] for k, v in values.items()})
             row.measured = merged
-            return merged
+            return {k: v["value"] for k, v in values.items()}
     except Exception as exc:
         logger.warning("measured sync failed for experiment {}: {}", experiment_id, exc)
         return {"_sync_error": str(exc), "experiment_id": experiment_id}

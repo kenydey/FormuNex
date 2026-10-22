@@ -1493,13 +1493,15 @@ class BatchExportIn(BaseModel):
     lang: Literal["zh-CN", "en-US"] = "zh-CN"
     filename_template: str = "{company}_{product}_{doc_type}_{lang}_{version}.{ext}"
     include_docx: bool = False
+    batch_id: str | None = None  # 仅对 COA 起筛选作用：指定批次，否则取跨批次最新 approved 版
 
 
 @router.post("/documents/batch-export", status_code=201)
 def create_batch_export(body: BatchExportIn, user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
     """Batch-export documents (整合方案 §4): latest revision per product × latest version per
     doc_type → one ZIP (files grouped per product + manifest.json). Missing documents are
-    reported in ``missing``, never silently skipped."""
+    reported in ``missing``, never silently skipped. 仅导出已批准或已发布文档；仅有草稿/
+    未批准版的文档不进入导出包，记为 draft_only 缺失。"""
     from ..services.plm.company import default_company
     from ..services.plm.documents import batch_export as batch
 
@@ -1508,7 +1510,7 @@ def create_batch_export(body: BatchExportIn, user: CurrentUser | None = Depends(
         try:
             row = batch.run_batch_export(session, product_ids=body.product_ids, doc_types=list(body.doc_types),
                                          lang=body.lang, filename_template=body.filename_template,
-                                         include_docx=body.include_docx,
+                                         include_docx=body.include_docx, batch_id=body.batch_id,
                                          company_name=company.get("name") or "",
                                          created_by=user.id if user else None)
         except batch.BatchExportError as exc:

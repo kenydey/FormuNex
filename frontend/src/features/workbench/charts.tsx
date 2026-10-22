@@ -9,21 +9,29 @@ import type { BiasTrendPoint } from "./types";
 const RAMP = ["#313695", "#4575b4", "#74add1", "#abd9e9", "#fee090", "#fdae61", "#f46d43", "#d73027"];
 const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(1) : v.toPrecision(3));
 
-/** Response surface (legacy ``charts/ContourPlot``): IDW-interpolated heatmap + measured points. */
+/** Response surface (legacy ``charts/ContourPlot``): IDW-interpolated heatmap + points.
+ * P1-19: predicted-fallback points are drawn as hollow diamonds in the warning colour and labelled
+ * "（预测值）" in the tooltip, so they can no longer be read as measured points. The heatmap itself
+ * still interpolates over all points (that is the point of the surface); the page subtitle states this. */
 export function ContourChart({ points, xLabel, yLabel, metric, height = 420 }: { points: SurfacePoint[]; xLabel: string; yLabel: string; metric: string; height?: number }) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const s = useMemo(() => buildSurface(points), [points]);
-  if (!s) return <Empty description={t("workbench.surface.too_few", "数据点不足（需要 ≥3 个已完成且有测量的实验点）")} />;
+  if (!s) return <Empty description={t("workbench.surface.too_few", "数据点不足（需要 ≥3 个已完成实验点，含预测值点）")} />;
   const half = (d: number) => d / 2;
+  const measuredPts = points.filter((p) => !p.predicted);
+  const predictedPts = points.filter((p) => p.predicted);
   return (
     <Chart height={height} option={{
       title: { text: t("workbench.surface.title", "响应曲面 · {{m}}", { m: metric }), subtext: `${xLabel} × ${yLabel}`, left: "center", textStyle: { fontSize: 14 } },
       tooltip: { formatter: (p: unknown) => {
-        const d = p as { seriesType: string; value: number[] };
+        const d = p as { seriesType: string; seriesName: string; value: number[] };
         if (d.seriesType === "heatmap") return `${xLabel}: ${fmt(s.gridX[d.value[0]])}<br/>${yLabel}: ${fmt(s.gridY[d.value[1]])}<br/>${metric} ≈ ${fmt(d.value[2])}`;
-        return `${xLabel}: ${fmt(d.value[0])}<br/>${yLabel}: ${fmt(d.value[1])}<br/>${metric}: ${fmt(d.value[2])}`;
+        return `${xLabel}: ${fmt(d.value[0])}<br/>${yLabel}: ${fmt(d.value[1])}<br/>${metric}: ${fmt(d.value[2])}${d.seriesName === "predicted" ? "（预测值）" : ""}`;
       } },
+      legend: predictedPts.length ? { data: [
+        { name: "measured", icon: "circle" }, { name: "predicted", icon: "diamond" }], top: 28,
+        formatter: (name: string) => (name === "predicted" ? t("workbench.surface.predicted_legend", "预测值点") : t("workbench.surface.measured_legend", "实测点")) } : undefined,
       grid: { left: 70, right: 90, top: 70, bottom: 50 },
       xAxis: [
         { type: "category", data: s.gridX.map(fmt), show: false },
@@ -38,8 +46,11 @@ export function ContourChart({ points, xLabel, yLabel, metric, height = 420 }: {
       visualMap: { min: s.zMin, max: s.zMax, calculable: true, right: 10, top: "middle", seriesIndex: 0, inRange: { color: RAMP }, text: [fmt(s.zMax), fmt(s.zMin)] },
       series: [
         { type: "heatmap", xAxisIndex: 0, yAxisIndex: 0, data: s.cells, progressive: 0, emphasis: { disabled: true } },
-        { type: "scatter", xAxisIndex: 1, yAxisIndex: 1, symbolSize: 10, data: points.map((p) => [p.x, p.y, p.z]),
+        { type: "scatter", name: "measured", xAxisIndex: 1, yAxisIndex: 1, symbolSize: 10, data: measuredPts.map((p) => [p.x, p.y, p.z]),
           itemStyle: { color: token.colorBgContainer, borderColor: token.colorText, borderWidth: 1.5 } },
+        ...(predictedPts.length ? [{ type: "scatter" as const, name: "predicted", xAxisIndex: 1, yAxisIndex: 1, symbol: "diamond", symbolSize: 12,
+          data: predictedPts.map((p) => [p.x, p.y, p.z]),
+          itemStyle: { color: token.colorBgContainer, borderColor: token.colorWarning, borderWidth: 2 } }] : []),
       ],
     }} />
   );

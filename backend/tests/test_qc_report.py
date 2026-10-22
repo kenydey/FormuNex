@@ -364,7 +364,12 @@ def test_qc_report_binds_workbench_row_placeholder(db, monkeypatch):
 
 
 def test_measurements_sync_into_the_trainable_column(db, experiment, monkeypatch):
-    """A certificate only becomes training data once it reaches `measured`."""
+    """P1-13: a certificate only becomes training data once it is *reviewed*.
+
+    This test previously asserted the buggy behaviour (an unreviewed QC value
+    overwriting ``measured`` on upload). Now the unreviewed value stages only;
+    flipping the row to ``reviewed`` and re-syncing is what lands it.
+    """
     import app.db.database as database_mod
     from app.services.qc_ingest import sync_measurements_to_experiment
 
@@ -372,10 +377,82 @@ def test_measurements_sync_into_the_trainable_column(db, experiment, monkeypatch
     monkeypatch.setattr(database_mod, "default_session_factory", lambda: factory)
     store.add(experiment, [Measurement(metric="salt_spray_hours", value=720, unit="h")])
 
-    merged = sync_measurements_to_experiment(experiment)
-    assert merged["salt_spray_hours"] == 720.0  # overrides the earlier 700.0
+    assert sync_measurements_to_experiment(experiment) == {}
+    with factory() as session:
+        assert session.get(ExperimentRow, experiment).measured["salt_spray_hours"] == 700.0
+
+    with commit_session(factory) as session:
+        row = session.query(MeasurementRow).filter(MeasurementRow.experiment_id == experiment).one()
+        row.review_status = "reviewed"
+    synced = sync_measurements_to_experiment(experiment)
+    assert synced["salt_spray_hours"] == 720.0  # overrides the earlier 700.0
     with factory() as session:
         assert session.get(ExperimentRow, experiment).measured["salt_spray_hours"] == 720.0
+
+
+def _typed_row(session, experiment, metric, value, status, source_document_id=None):
+    import uuid
+
+    row = MeasurementRow(
+        id=str(uuid.uuid4()), experiment_id=experiment, metric=metric, value=value,
+        review_status=status, source_document_id=source_document_id,
+    )
+    session.add(row)
+    return row
+
+
+def test_sync_keeps_reviewed_value_over_unreviewed_qc(db, experiment, monkeypatch):
+    """P1-13(a): a later unreviewed QC value must not overwrite a reviewed lab value."""
+    import app.db.database as database_mod
+    from app.services.qc_ingest import sync_measurements_to_experiment
+
+    factory, store = db
+    monkeypatch.setattr(database_mod, "default_session_factory", lambda: factory)
+    with commit_session(factory) as session:
+        _typed_row(session, experiment, "salt_spray_hours", 800.0, "reviewed")
+    store.add(experiment, [Measurement(metric="salt_spray_hours", value=720, unit="h")])
+
+    synced = sync_measurements_to_experiment(experiment)
+    assert synced["salt_spray_hours"] == 800.0
+    with factory() as session:
+        assert session.get(ExperimentRow, experiment).measured["salt_spray_hours"] == 800.0
+
+
+def test_sync_ignores_rejected_qc(db, experiment, monkeypatch):
+    """P1-13(c): a rejected QC value is never resurrected by re-running the sync."""
+    import app.db.database as database_mod
+    from app.services.qc_ingest import sync_measurements_to_experiment
+
+    factory, store = db
+    monkeypatch.setattr(database_mod, "default_session_factory", lambda: factory)
+    with commit_session(factory) as session:
+        _typed_row(session, experiment, "salt_spray_hours", 720.0, "rejected")
+
+    assert sync_measurements_to_experiment(experiment) == {}
+    with factory() as session:
+        assert session.get(ExperimentRow, experiment).measured["salt_spray_hours"] == 700.0
+
+
+def test_mirror_keeps_qc_staged_metric_value(db, experiment, monkeypatch):
+    """P1-13(b): a review event on one metric must not drop another metric's
+    pre-existing mirror value just because its only typed row is a staged QC row."""
+    from app.services.lab.measurements import sync_mirror
+
+    factory, store = db
+    with commit_session(factory) as session:
+        doc = SourceDocument(id="doc-qc", filename="TR.md", source_kind="qc_report",
+                             full_text="x", content_hash="abc")
+        session.add(doc)
+        session.flush()
+        _typed_row(session, experiment, "salt_spray_hours", 720.0, "unreviewed",
+                   source_document_id="doc-qc")
+        _typed_row(session, experiment, "density_g_cm3", 1.35, "reviewed")
+        session.get(ExperimentRow, experiment).measured = {
+            "salt_spray_hours": 700.0, "density_g_cm3": 1.30}
+    with commit_session(factory) as session:
+        sync_mirror(session, experiment)
+        assert session.get(ExperimentRow, experiment).measured == {
+            "salt_spray_hours": 700.0, "density_g_cm3": 1.35}
 
 
 # ── endpoints ────────────────────────────────────────────────────────────────

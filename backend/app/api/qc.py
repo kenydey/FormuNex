@@ -64,8 +64,11 @@ async def ingest_qc_report(
 
     The report is stored, its measurements extracted with unit / test method /
     spec window, and both bound to the experiment in one transaction. With
-    ``sync_measured`` the values are folded into the experiment's flat
-    ``measured`` column, which is what makes them training data.
+    ``sync_measured`` only already-*reviewed* values are folded into the
+    experiment's flat ``measured`` column (P1-13): a freshly uploaded QC value
+    is staged as an unreviewed typed row and reaches training data only after
+    a reviewer accepts it, so an upload can no longer overwrite a reviewed lab
+    value or resurrect a rejected one.
     """
     from ..config import get_settings
     from ..db.database import default_session_factory
@@ -154,6 +157,10 @@ async def ingest_qc_report(
             "未从报告中提取到检测项——报告已入库并绑定，但没有可用数值"
             "（未配置 LLM API key 时属预期行为）"
         )
+    elif sync_measured and not synced:
+        # P1-13: nothing reviewed yet, so nothing entered training data —
+        # say so instead of leaving the user to assume the upload trained.
+        message = "检测值已暂存待复核，复核通过后进入可训练数据"
     return QCReportResponse(
         experiment_id=experiment_id,
         source_id=result.source_id,

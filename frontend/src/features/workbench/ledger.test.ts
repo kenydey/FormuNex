@@ -76,6 +76,17 @@ describe("ledger helpers", () => {
       ["salt"], "degreaser", "p1");
     expect(recs).toHaveLength(1);
     expect(recs[0]).toMatchObject({ domain: "degreaser", project_id: "p1", factors: { A: 9, B: 20 }, measured: { salt: 700 }, source: "workbench" });
+    expect(recs[0]).not.toHaveProperty("label");
+  });
+
+  it("labels backfilled records wb:{campaign}:{item_id} so a repeat click upserts (P1-11)", () => {
+    const recs = trainingRecords([row(1, { status: "Completed", item_id: "c7_r1", measurements: { salt: 700 } })],
+      ["salt"], "degreaser", "p1", 7);
+    expect(recs).toHaveLength(1);
+    expect(recs[0].label).toBe("wb:7:c7_r1");
+    // Without a campaign id there is no backend-compatible label to emit.
+    expect(trainingRecords([row(1, { status: "Completed", item_id: "c7_r1", measurements: { salt: 700 } })],
+      ["salt"], "degreaser", "p1")[0]).not.toHaveProperty("label");
   });
 });
 

@@ -232,10 +232,17 @@ def _pinned_note(models: list[ModelInfo]) -> str:
 @router.post("/experiments", response_model=TrainingReport)
 def submit_experiments(submission: ExperimentSubmission) -> TrainingReport:
     """Ingest measured DOE results and (optionally) retrain models."""
+    before = registry.total_records
     retrained = registry.add(submission.records, retrain=submission.retrain)
     trained = registry.info()
+    # P1-11: registry.add now dedups/updates, so report what actually changed
+    # instead of echoing the submitted count (a second identical "回灌并训练"
+    # click stores nothing new). Updates keep total_records flat, so the
+    # message states the new total rather than claiming a "skipped" count it
+    # cannot distinguish from an update.
     msg = (
-        f"Ingested {len(submission.records)} record(s); "
+        f"Accepted {len(submission.records)} record(s); training set now holds "
+        f"{registry.total_records} record(s) ({registry.total_records - before} new); "
         f"{len(trained)} model(s) active."
     )
     msg += _retrain_note(submission.retrain, retrained) + _pinned_note(trained)

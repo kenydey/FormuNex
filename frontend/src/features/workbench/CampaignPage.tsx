@@ -180,7 +180,7 @@ export default function CampaignPage() {
   const train = useMutation({
     mutationFn: async () => {
       const req = project.data?.workspace.requirement;
-      const records = trainingRecords(rows, objectives.map((o) => o.metric), req?.domain ?? project.data?.domain ?? "anticorrosion_coating", projectId);
+      const records = trainingRecords(rows, objectives.map((o) => o.metric), req?.domain ?? project.data?.domain ?? "anticorrosion_coating", projectId, campaignId);
       if (!records.length) throw new Error(t("workbench.train_none", "请先在台账中完成至少一行（Completed）并填写实测值"));
       return call<{ message?: string }>("POST", "/api/experiments", { records, retrain: true });
     },

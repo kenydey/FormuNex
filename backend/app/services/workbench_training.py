@@ -263,6 +263,9 @@ def ingest_workbench_rows(
 
     Always persists a SQL lab-ledger mirror for dossier S5 first (even when
     ``workbench_auto_train`` is off or the training store is degraded).
+    A row whose label is already known is skipped only when its values are
+    unchanged; a corrected value updates the training record in place
+    (P1-10) instead of being silently dropped.
     """
     settings = get_settings()
     ledger = persist_workbench_lab_ledger(campaign_id, rows)
@@ -289,10 +292,17 @@ def ingest_workbench_rows(
 
     domain = campaign_domain(campaign)
     project_id = (campaign.project_id or "").strip()
-    known = registry.known_labels()
+    # P1-10: a known label no longer means "skip". Compare against the stored
+    # record: identical → skipped; values changed → updated in place (the
+    # registry upserts by label, so the model stops eating the stale value).
+    from ..db.store import _same_training_values
+
+    existing_by_label = {r.label: r for r in registry.all_records() if r.label}
+    pending: dict[str, ExperimentRecord] = {}
 
     to_add: list[ExperimentRecord] = []
     skipped = 0
+    updated = 0
     report: list[str] = []
     for row in rows:
         rec = row_to_experiment_record(
@@ -300,11 +310,26 @@ def ingest_workbench_rows(
         )
         if rec is None:
             continue
-        if rec.label in known:
-            skipped += 1
+        prior = pending.get(rec.label) or existing_by_label.get(rec.label)
+        if prior is not None:
+            if _same_training_values(prior, rec):
+                skipped += 1
+                continue
+            # Value correction: re-queue so registry.add updates it in place.
+            # Counted once per label even if the batch repeats the correction.
+            if rec.label not in pending:
+                updated += 1
+                to_add.append(rec)
+            else:
+                # Same batch, corrected twice: latest values win, one entry.
+                for i, old in enumerate(to_add):
+                    if old.label == rec.label:
+                        to_add[i] = rec
+                        break
+            pending[rec.label] = rec
             continue
+        pending[rec.label] = rec
         to_add.append(rec)
-        known.add(rec.label)
 
     quality: dict = {"dropped_values": len(report), "dropped": report[:20]}
     if report:
@@ -345,6 +370,7 @@ def ingest_workbench_rows(
             )
             return {
                 "ingested": 0,
+                "updated": 0,
                 "skipped": skipped,
                 "message": (
                     f"台账已写入卷宗镜像 {ledger.get('upserted') or 0} 条；"
@@ -378,11 +404,18 @@ def ingest_workbench_rows(
     else:
         bias = {}
 
-    msg = (
-        f"已回灌 {len(to_add)} 条训练样本"
-        if to_add
-        else ("无新增 Completed 行" if not skipped else f"{skipped} 条已存在，跳过")
-    )
+    # ``ingested`` keeps its old meaning (brand-new rows only) so the
+    # post-sync loop trigger (ingested > 0) is unchanged; corrections are
+    # reported separately and still retrain through registry.add above.
+    new_count = len(to_add) - updated
+    msg_parts: list[str] = []
+    if new_count:
+        msg_parts.append(f"已回灌 {new_count} 条训练样本")
+    if updated:
+        msg_parts.append(f"更新 {updated} 条修正值")
+    if skipped:
+        msg_parts.append(f"{skipped} 条无变化，跳过")
+    msg = "；".join(msg_parts) if msg_parts else "无新增 Completed 行"
     if bias and bias.get("by_metric"):
         # Append concise bias summary to message for API transparency
         parts = []
@@ -390,7 +423,8 @@ def ingest_workbench_rows(
             parts.append(f"{m}: mean_err {s['mean_error']:+g} rmse {s['rmse']:g} (n={s['n']})")
         msg = f"{msg} | 预测偏差 " + "; ".join(parts)
         return {
-            "ingested": len(to_add),
+            "ingested": new_count,
+            "updated": updated,
             "skipped": skipped,
             "message": msg,
             "prediction_bias": bias,
@@ -398,7 +432,8 @@ def ingest_workbench_rows(
             "lab_ledger": ledger,
         }
     return {
-        "ingested": len(to_add),
+        "ingested": new_count,
+        "updated": updated,
         "skipped": skipped,
         "message": msg,
         "prediction_bias": bias if to_add else {},
