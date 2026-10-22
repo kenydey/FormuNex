@@ -95,21 +95,21 @@ def test_scoped_project_dataset_excludes_empty_project_id(tmp_path):
         ExperimentRecord(
             domain=domain,
             project_id="",
-            factors={"Zinc phosphate": 4.0, "Bisphenol-A epoxy (DGEBA)": 38.0, "Polyamide hardener": 14.0},
+            factors={"Zinc phosphate": 4.0 + i, "Bisphenol-A epoxy (DGEBA)": 38.0, "Polyamide hardener": 14.0},
             cure_temperature_c=80.0,
             measured={"salt_spray_hours": 400.0},
         )
-        for _ in range(6)
+        for i in range(6)  # distinct rows: identical records are deduplicated (store.add upsert)
     ]
     proj_rows = [
         ExperimentRecord(
             domain=domain,
             project_id="proj-a",
-            factors={"Zinc phosphate": 8.0, "Bisphenol-A epoxy (DGEBA)": 38.0, "Polyamide hardener": 14.0},
+            factors={"Zinc phosphate": 8.0 + i, "Bisphenol-A epoxy (DGEBA)": 38.0, "Polyamide hardener": 14.0},
             cure_temperature_c=80.0,
             measured={"salt_spray_hours": 800.0},
         )
-        for _ in range(6)
+        for i in range(6)
     ]
     reg.add(empty_rows + proj_rows, retrain=True)
     data = reg._dataset(domain, "salt_spray_hours", project_id="proj-a")

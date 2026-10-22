@@ -24,7 +24,8 @@ def _record(*, zinc: float = 8.0, salt_spray: float = 840.0) -> ExperimentRecord
         cure_temperature_c=80.0,
         measured={"salt_spray_hours": salt_spray},
         source="test",
-        label="unit-test",
+        # label is the record identity (store.add upserts by label), so one per distinct experiment
+        label=f"unit-test-{zinc:g}-{salt_spray:g}",
     )
 
 

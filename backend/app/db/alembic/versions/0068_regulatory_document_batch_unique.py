@@ -50,6 +50,10 @@ def _unique_columns(bind) -> dict[str, list[str]]:
             for c in sa.inspect(bind).get_unique_constraints(_TABLE)}
 
 
+# See 0067: reflect without resolving foreign keys so partial / legacy schemas can be batch-migrated on SQLite.
+_BATCH = {"reflect_kwargs": {"resolve_fks": False}}
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if not _has_table(bind):
@@ -57,7 +61,7 @@ def upgrade() -> None:
     uqs = _unique_columns(bind)
     if _UQ in uqs and uqs[_UQ] == _NEW_COLS:
         return  # fresh database: the baseline already built the new key
-    with op.batch_alter_table(_TABLE) as batch:
+    with op.batch_alter_table(_TABLE, **_BATCH) as batch:
         if _UQ in uqs:
             batch.drop_constraint(_UQ, type_="unique")
         batch.create_unique_constraint(_UQ, _NEW_COLS)
@@ -80,7 +84,7 @@ def downgrade() -> None:
             "per-batch duplicates that the old constraint forbids; delete or renumber them first"
             % len(conflicts)
         )
-    with op.batch_alter_table(_TABLE) as batch:
+    with op.batch_alter_table(_TABLE, **_BATCH) as batch:
         if _UQ in uqs:
             batch.drop_constraint(_UQ, type_="unique")
         batch.create_unique_constraint(_UQ, _OLD_COLS)

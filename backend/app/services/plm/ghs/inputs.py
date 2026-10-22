@@ -189,8 +189,12 @@ def _transport_entries(look: _Lookup, built: BuiltInputs) -> None:
     ids = [c.substance_id for c in built.components if c.substance_id]
     if not ids:
         return
-    for row in look.transport(ids):
-        built.transport_entries[row.substance_id] = {
+    # A substance can have several GB 12268 rows (one per packing group); the transport
+    # engine picks the one matching the packing group it derives.
+    for row in sorted(look.transport(ids), key=lambda r: (r.un_number, r.packing_group or "")):
+        e = {
             "un_number": row.un_number, "proper_shipping_name_zh": row.proper_shipping_name_zh,
-            "proper_shipping_name_en": row.proper_shipping_name_en,
+            "proper_shipping_name_en": row.proper_shipping_name_en, "transport_class": row.transport_class,
+            "subsidiary_risk": row.subsidiary_risk, "packing_group": row.packing_group,
         }
+        built.transport_entries.setdefault(row.substance_id, {**e, "rows": []})["rows"].append(e)

@@ -140,8 +140,8 @@ class SubstanceTransportRow(Base):
     substance_id: Mapped[str | None] = mapped_column(
         ForeignKey("substances.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    proper_shipping_name_zh: Mapped[str] = mapped_column(String(300), default="")
-    proper_shipping_name_en: Mapped[str] = mapped_column(String(300), default="")
+    proper_shipping_name_zh: Mapped[str] = mapped_column(String(500), default="")
+    proper_shipping_name_en: Mapped[str] = mapped_column(String(500), default="")
     transport_class: Mapped[str] = mapped_column(String(8), default="")
     subsidiary_risk: Mapped[str] = mapped_column(String(32), default="")
     packing_group: Mapped[str | None] = mapped_column(String(4), nullable=True)

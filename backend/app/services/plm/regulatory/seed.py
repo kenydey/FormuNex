@@ -21,7 +21,14 @@ Sources (``app/resources/regulatory``, imported from MSDS-Generator):
   CLP does not adopt GHS categories 5 / Skin 3 / Eye 2B / Asp. Tox. 2 / Aquatic
   Acute 3 / Flam. Liq. 4, nor deleted P codes, so those seed codes keep
   ``text_en`` empty until a UN GHS source is provided.
-* ``gb12268_2025.json`` — GB 12268 dangerous-goods entries (a 10-entry subset for now)
+* ``gb12268_2025.json`` — GB 12268-2025 表 1 in full: 2,861 rows / 2,347 UN numbers, one row per
+  packing group, with special provisions and quantities; parsed from the official PDF by
+  ``scripts/gb12268/`` (see its README). Linked to a substance by exact Chinese name, else by
+  an unambiguous simple alias (``乙醇（酒精）或…`` → 乙醇); generic entries stay unlinked.
+* ``iecsc.json.gz`` — CAS numbers of the public 《中国现有化学物质名录》 entries (2013 版 plus
+  every later 生态环境部 增补 / 已登记新化学物质列入 公告), built by
+  ``scripts/build_iecsc_resource.py``. A listed CAS sets ``iecsc_listed = True``; absence
+  leaves it unknown (``None``), because confidential entries are not published.
 
 The run is idempotent: a release whose input digest matches an earlier one is
 skipped unless forced, and re-running replaces only rows this importer owns
@@ -63,7 +70,7 @@ log = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 # Bump when parsing / mapping logic changes, so an unchanged data set is re-imported.
-IMPORTER_VERSION = "3"  # 3: fill text_en from hpstatements_en.json (CLP English H/P)
+IMPORTER_VERSION = "4"  # 4: iecsc_listed from iecsc.json.gz
 OEL_STANDARD = "GBZ 2.1-2019"
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
@@ -74,7 +81,7 @@ SEED_REVIEW_KINDS = (
 _FILES = (
     "common_chemicals.json.gz", "hazard_chemical_info.json", "oel_gbz2_2019.json",
     "hazard_statements.json", "precaution_statements.json", "gb12268_2025.json",
-    "hpstatements_en.json",
+    "hpstatements_en.json", "iecsc.json.gz",
 )
 _CHUNK = 5000
 
@@ -172,6 +179,7 @@ def seed_regulatory_db(
         _replace_generic_entries(conn, resources, release_id, stats)
         _replace_oel(conn, resources, cas_to_id, release_id, review, stats)
         _replace_transport(conn, resources, release_id, review, stats)
+        _mark_iecsc(conn, resources, stats)
         _upsert_statements(conn, resources, stats)
         _replace_review_items(conn, review, stats)
         conn.execute(update(RegulatoryDataRelease).where(RegulatoryDataRelease.id == release_id).values(stats=stats))
@@ -473,32 +481,76 @@ def _replace_oel(conn: Connection, resources: Path, cas_to_id: dict[str, str], r
     stats.update(oel_rows=len(rows), oel_unmatched=unmatched)
 
 
+def _name_aliases(name: str) -> list[str]:
+    """Simple-substance aliases of a GB 12268 name: ``乙醇（酒精）或乙醇溶液（酒精溶液）`` →
+    乙醇, 酒精, 乙醇溶液, 酒精溶液. Generic and descriptive names (未另作规定的, anything with a
+    comma clause) give none — they name no single substance."""
+    if "未另作规定" in name or "，" in name or "," in name:
+        return []
+    out: list[str] = []
+    for part in name.split("或"):
+        for alias in [re.sub(r"（[^）]*）", "", part), *re.findall(r"（([^）]*)）", part)]:
+            alias = alias.strip()
+            if alias and alias != name and alias not in out:
+                out.append(alias)
+    return out
+
+
 def _replace_transport(conn: Connection, resources: Path, release_id: str, review: _Review, stats: dict) -> None:
     conn.execute(delete(SubstanceTransportRow).where(SubstanceTransportRow.standard == TRANSPORT_STANDARD))
     data = _load_json(resources / "gb12268_2025.json")
-    entries = data.get("entries") or {}
-    names = [v.get("name_cn") for v in entries.values() if v.get("name_cn")]
+    entries = data.get("entries") or []
+    if isinstance(entries, dict):  # legacy {UN: entry} subset
+        entries = [{"un": un, **v} for un, v in entries.items()]
+    names = sorted({n for v in entries if v.get("name_cn")
+                    for n in (v["name_cn"], *_name_aliases(v["name_cn"]))})
     by_name: dict[str, list[str]] = {}
-    if names:
-        for r in conn.execute(select(SubstanceRow.id, SubstanceRow.name_zh).where(SubstanceRow.name_zh.in_(names))):
+    for i in range(0, len(names), 900):  # SQLite bound-parameter limit
+        for r in conn.execute(select(SubstanceRow.id, SubstanceRow.name_zh)
+                              .where(SubstanceRow.name_zh.in_(names[i:i + 900]))):
             by_name.setdefault(r.name_zh, []).append(r.id)
-    rows, unlinked = [], 0
-    for un, v in entries.items():
-        ids = by_name.get(v.get("name_cn") or "", [])
+    rows, linked, ambiguous = [], 0, set()
+    for v in entries:
+        name = v.get("name_cn") or ""
+        ids = by_name.get(name, [])
         sid = ids[0] if len(ids) == 1 else None
-        if sid is None:
-            unlinked += 1
-            review.add("transport_unlinked", name=v.get("name_cn") or "", un_number=un, candidates=len(ids))
+        if not ids:  # no exact match: an alias naming exactly one substance
+            sid = next((by_name[a][0] for a in _name_aliases(name) if len(by_name.get(a, [])) == 1), None)
+        if sid:
+            linked += 1
+        elif len(ids) > 1 and (v["un"], name) not in ambiguous:
+            # Generic (未另作规定的 / 类属) entries name no single substance and stay unlinked
+            # without review; only a name shared by several substances needs a person.
+            ambiguous.add((v["un"], name))
+            review.add("transport_unlinked", name=name, un_number=str(v["un"]), candidates=len(ids))
         rows.append({
-            "id": _uid(), "un_number": str(un), "substance_id": sid,
-            "proper_shipping_name_zh": v.get("name_cn") or "", "proper_shipping_name_en": v.get("name_en") or "",
-            "transport_class": str(v.get("class") or ""), "subsidiary_risk": str(v.get("subsidiary") or ""),
+            "id": _uid(), "un_number": str(v["un"]), "substance_id": sid,
+            "proper_shipping_name_zh": name[:500], "proper_shipping_name_en": (v.get("name_en") or "")[:500],
+            "transport_class": str(v.get("class") or ""), "subsidiary_risk": str(v.get("subsidiary") or "")[:32],
             "packing_group": v.get("pg") or None, "marine_pollutant": v.get("marine_pollutant"),
-            "special_provisions": "", "standard": TRANSPORT_STANDARD, "release_id": release_id,
+            "special_provisions": (v.get("special_provisions") or "")[:200], "standard": TRANSPORT_STANDARD,
+            "release_id": release_id,
         })
-    if rows:
-        conn.execute(insert(SubstanceTransportRow), rows)
-    stats.update(transport_rows=len(rows), transport_unlinked=unlinked)
+    for chunk in _chunks(rows):
+        conn.execute(insert(SubstanceTransportRow), chunk)
+    stats.update(transport_rows=len(rows), transport_linked=linked, transport_ambiguous=len(ambiguous))
+
+
+def _mark_iecsc(conn: Connection, resources: Path, stats: dict) -> None:
+    """Set ``iecsc_listed`` from the public IECSC CAS list. Only ``True`` is ever written:
+    a CAS missing from the public list may still be a confidential entry, so it stays unknown.
+    ``True`` flags this importer set earlier are cleared first, so a re-run tracks the list."""
+    path = resources / "iecsc.json.gz"
+    if not path.exists():  # fixture resource sets omit it
+        return
+    listed = set(_load_json(path).get("cas") or {})
+    conn.execute(update(SubstanceRow).where(SubstanceRow.iecsc_listed.is_(True)).values(iecsc_listed=None))
+    marked = 0
+    ordered = sorted(listed)
+    for i in range(0, len(ordered), 900):  # SQLite bound-parameter limit
+        marked += conn.execute(update(SubstanceRow).where(SubstanceRow.cas_no.in_(ordered[i:i + 900]))
+                               .values(iecsc_listed=True)).rowcount or 0
+    stats.update(iecsc_cas=len(listed), iecsc_marked=marked)
 
 
 def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:

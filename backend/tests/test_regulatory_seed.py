@@ -154,7 +154,7 @@ def test_seed_loads_every_table(engine, resources):
         kinds = dict(c.execute(select(RegulatoryReviewItem.kind, func.count()).group_by(RegulatoryReviewItem.kind)).all())
     assert kinds == {
         "invalid_cas": 1, "repaired_cas": 1, "duplicate_catalog_entry": 1, "hazard_text": 1,
-        "oel_unmatched": 1, "transport_unlinked": 1,
+        "oel_unmatched": 1,  # "不存在的物质" (UN 9999) names no substance: unlinked, no review item
     }
 
 
@@ -309,3 +309,93 @@ def test_cli_requires_migrated_database(tmp_path, capsys):
 
     assert main(["--db-url", f"sqlite:///{tmp_path / 'empty.db'}"]) == 2
     assert "alembic upgrade head" in capsys.readouterr().err
+
+
+def test_iecsc_list_marks_listed_cas_and_leaves_the_rest_unknown(engine, resources):
+    _write(resources, "iecsc.json.gz", {"cas": {"64-17-5": "2013", "7664-41-7": "2013"}})
+    stats = seed_regulatory_db(engine, resources=resources)["stats"]
+    assert stats["iecsc_cas"] == 2 and stats["iecsc_marked"] == 2  # ethanol + ammonia (created by the OEL list)
+
+    def listed(cas):
+        with engine.connect() as c:
+            return c.execute(select(SubstanceRow.iecsc_listed).where(SubstanceRow.cas_no == cas)).scalar_one()
+
+    assert listed("64-17-5") is True and listed("7664-41-7") is True
+    assert listed("7732-18-5") is None  # not in the public list: may be confidential, so unknown — never False
+    with engine.begin() as c:
+        c.execute(update(SubstanceRow).where(SubstanceRow.cas_no == "108-95-2").values(iecsc_listed=False))
+    # A re-run follows the list: a CAS dropped from it goes back to unknown; a manual False is not touched.
+    _write(resources, "iecsc.json.gz", {"cas": {"7664-41-7": "2013"}})
+    seed_regulatory_db(engine, resources=resources)
+    assert listed("64-17-5") is None and listed("7664-41-7") is True and listed("108-95-2") is False
+
+
+def test_bundled_iecsc_resource_is_sane():
+    from app.services.plm.regulatory import cas as cas_mod
+    from app.services.plm.regulatory.seed import RESOURCES_DIR, _load_json
+
+    data = _load_json(RESOURCES_DIR / "iecsc.json.gz")
+    listed = data["cas"]
+    assert len(listed) > 38000
+    assert all(cas_mod.is_valid(c) for c in listed)
+    # 2013 版: 42,342 public rows, each either a CAS, a 流水号 or a misprint kept as printed.
+    base = next(s for s in data["meta"]["sources"] if s["id"] == "2013")
+    assert base["entries"] == 42342
+    misprints = [i for i in data["invalid"] if i["source"] == "2013"]
+    assert base["cas"] + sum(1 for v in data["serials"].values() if v == "2013") + len(misprints) == 42342
+    for cas in ("64-17-5", "7732-18-5", "108-95-2", "7664-41-7"):  # ethanol, water, phenol, ammonia
+        assert listed[cas] == "2013"
+    assert any(src != "2013" for src in listed.values())  # later 增补 / 新化学物质 公告 are included
+
+
+def test_sds_section_15_names_iecsc_listed_ingredients(engine, resources):
+    from sqlalchemy.orm import Session
+
+    from app.services.plm.documents.service import _listings
+
+    _write(resources, "iecsc.json.gz", {"cas": {"64-17-5": "2013"}})
+    seed_regulatory_db(engine, resources=resources)
+    with Session(engine) as s:
+        lines = _listings(s, ["64-17-5", "7732-18-5"])
+    assert "乙醇（64-17-5）：列入《中国现有化学物质名录》" in lines
+    assert not any("水" in line and "现有化学物质" in line for line in lines)
+
+
+def test_full_gb12268_rows_link_by_name_and_flag_only_ambiguous_names(engine, resources):
+    _write(resources, "common_chemicals.json.gz", {"rows": [
+        ["64-17-5", "乙醇", "Ethanol", "C2H6O"],
+        ["71-41-0", "戊醇", "1-Pentanol", "C5H12O"],
+        ["6032-29-7", "戊醇", "2-Pentanol", "C5H12O"],
+    ]})
+    _write(resources, "gb12268_2025.json", {"entries": [
+        {"un": "1170", "name_cn": "乙醇", "name_en": "ETHANOL", "class": "3", "subsidiary": "", "pg": "II",
+         "special_provisions": "144 601"},
+        {"un": "1170", "name_cn": "乙醇", "name_en": "ETHANOL", "class": "3", "subsidiary": "", "pg": "III",
+         "special_provisions": "144 223 601"},
+        {"un": "1105", "name_cn": "戊醇", "name_en": "PENTANOLS", "class": "3", "subsidiary": "", "pg": "II"},
+        {"un": "1105", "name_cn": "戊醇", "name_en": "PENTANOLS", "class": "3", "subsidiary": "", "pg": "III"},
+        {"un": "1993", "name_cn": "易燃液体，未另作规定的", "name_en": "FLAMMABLE LIQUID, N.O.S.", "class": "3",
+         "subsidiary": "", "pg": "III"},
+    ]})
+    stats = seed_regulatory_db(engine, resources=resources)["stats"]
+    assert (stats["transport_rows"], stats["transport_linked"], stats["transport_ambiguous"]) == (5, 2, 1)
+    with engine.connect() as c:
+        rows = c.execute(select(SubstanceTransportRow.un_number, SubstanceTransportRow.packing_group,
+                                SubstanceTransportRow.substance_id, SubstanceTransportRow.special_provisions)
+                         .order_by(SubstanceTransportRow.un_number, SubstanceTransportRow.packing_group)).all()
+        reviews = c.execute(select(RegulatoryReviewItem.name).where(
+            RegulatoryReviewItem.kind == "transport_unlinked")).scalars().all()
+    assert [(r.un_number, r.packing_group, r.substance_id is not None) for r in rows] == [
+        ("1105", "II", False), ("1105", "III", False), ("1170", "II", True), ("1170", "III", True),
+        ("1993", "III", False)]
+    assert rows[3].special_provisions == "144 223 601"
+    assert reviews == ["戊醇"]  # two substances share the name; the generic UN 1993 raises nothing
+
+
+def test_gb12268_alias_links_only_unambiguous_simple_names():
+    from app.services.plm.regulatory.seed import _name_aliases
+
+    assert _name_aliases("乙醇（酒精）或乙醇溶液（酒精溶液）") == ["乙醇", "酒精", "乙醇溶液", "酒精溶液"]
+    assert _name_aliases("易燃液体，未另作规定的") == []
+    assert _name_aliases("硝酸，发红烟的除外，含硝酸低于65%") == []
+    assert _name_aliases("丙酮") == []

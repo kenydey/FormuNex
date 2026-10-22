@@ -841,11 +841,11 @@ deploy/helm/formunex/**（新）
 - GB 30000 规则集为 draft：所有阈值 / 换算值需 EHS 专员逐项核对签核后改为 approved；黄金案例（真实配方 + 专员确认结果）尚待建立。
 - 物质库只有《危险化学品目录》分类，目录外物质一律按“危害未知”计入（真实配方冒烟测试中未知占比可达 80%）；需通过供应商 SDS 导入或法规专员标记 `not_classified` 补齐。
 - 桥接原则（`services/plm/ghs/bridging.py`，引擎已调用）与气溶胶分类（`rules/physical.py:aerosol`，8 项测试覆盖类别 1/2/3、点火距离、泡沫试验）已实现；气体分类、有机过氧化物等需试验的物理危害仍未实现计算，只提示数据缺口。
-- 账号登录与签批相关接口已按 RBAC 鉴权；其余既有接口（知识库、配方、DOE 等）仍只校验服务 API Key，逐接口接入账号权限随前端重写（F1）进行；LDAP / OIDC 仍为预留。
-- `ghs_statements` 目前只有中文文本，英文 H/P 语句待补；GB 12268 仅 10 条，全表待补；IECSC 名录未导入（`iecsc_listed` 保持未知）。
+- 全部写接口与敏感读接口均已按 RBAC 鉴权（`api/_rbac_guard.py` 四层：规则表 / 管理员守卫 / 端点内校验 / 有意豁免，`scripts/audit_rbac.py` 校验每条路由恰属一层）；服务 API Key 作为运维凭据保持可用；LDAP / OIDC 仍为预留（附录 B D-6）。
+- `ghs_statements` 英文 H/P 语句已从欧盟 CLP 法规文本导入（`hpstatements_en.json`，CC BY 4.0）；CLP 未采纳的 GHS 类别（急毒 5、皮肤 3、眼 2B、吸入 2、水生急性 3、易燃液体 4）及已删除的 P 代码仍无英文，待引入 UN GHS 文本；GB 12268-2025 表 1 已全量导入（2026-10-22）：2,347 个联合国编号、2,861 行（按包装类别分行，含特殊规定、有限 / 例外数量、包装与罐柜指南），从官方 PDF 经字形哈希 + OCR 投票 + 人工核对解析（`scripts/gb12268/`），单一物质产品按推导的包装类别选条目；IECSC 名录已导入（2026-10-22）：生态环境部 2013 版名录（42,342 条公开条目）+ 此后 28 份增补 / 已登记新化学物质列入公告，共 38,461 个 CAS（`iecsc.json.gz`，由 `scripts/build_iecsc_resource.py` 从官方文件重建，新公告发布后重跑即可）；名录内 CAS 置 `iecsc_listed = True` 并写入 SDS 第 15 部分，不在公开名录中的保持未知（保密条目不公开，不能推断为“未列入”）。
 - PageIndex 节点摘要（`summaries_status`）延迟生成已接线：Celery 任务 `formunex.toc_summaries` + `POST /kb/sources/{id}/toc-tree/summarize`（202，显式触发）；入库自动触发未见。Chat「深度模式」与知识中心目录树界面已随 F2 交付。
 - **M4 偏离方案说明**：方案原定 WeasyPrint 渲染 PDF，但后端镜像无 apt 层、无法安装 pango 等系统库，改用纯 Python 的 ReportLab；中文字体按 `FORMUNEX_PLM_DOC_FONT_PATH` → 系统 TrueType 中文字体 → 内置 CID 字体（不嵌入，带告警）顺序选取，生产镜像需挂载可嵌入的 TrueType 中文字体。
-- 文档引擎：标签已输出 PDF + PNG（`render/label_png.py`，72~600 dpi，6 项测试含下载 API；打印机格式待定）；SDS 第 4~8、10~13、15 部分的模板文本为通用草稿，需 EHS 专员审核；英文版 SDS 的 H/P 语句因法规库缺英文文本而显示为缺项；文档签批与发布门禁已在 M5 接入。
+- 文档引擎：标签已输出 PDF + PNG（`render/label_png.py`，72~600 dpi，6 项测试含下载 API；打印机格式待定）；SDS 第 4~8、10~13、15 部分的模板文本为通用草稿，需 EHS 专员审核；英文版 SDS 仅上述 CLP 未采纳类别的 H/P 语句显示为缺项；文档签批与发布门禁已在 M5 接入。
 - M5：门禁“目标契约”检查读取修订版 `spec_snapshot.acceptance` 与定型实验中已复核的测量值，规格契约编辑界面随 F3 交付；“关键组分”阈值（≥10%，或有危害且 ≥1%）与跨文档容差为代码常量，需 EHS / 质量确认；生产环境必须设置 `FORMUNEX_AUTH_JWT_SECRET`（≥32 位），否则登录返回 503 且启动时告警；交付包只含 PDF / Word，标签打印格式待定。
 - M6：灵敏度分析（Sobol 指数）与流变 / 色度 / 酸稳定性面板沿用原有服务，未新增；共形区间可由调用方提供配对，或经 M7 从任务单预测值与复核实测自动取数；危害评分权重为排序用启发式，不是法规量。
 - M7：工作台（Campaign）在 Datalab 中的行数据未纳入迁移脚本（只迁移训练实验记录），仍在用 Datalab 工作台的部署需保留 `campaign_backend=datalab` 直至工作台迁移完成；仪器文件解析模板需按实验室实际仪器导出格式补充；方法库预置的有效范围与修约位数为通用值，需实验室负责人确认；BayBE 等既有优化代码读取 `measured` 视图，原生任务只在复核后写入，但 Datalab 模式下的旧数据路径未改动。

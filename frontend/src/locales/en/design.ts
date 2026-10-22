@@ -189,6 +189,7 @@ const en: Record<string, string> = {
   "design.qc.unit": "Unit",
   "design.qc.value": "Value",
   "design.qc.verdict": "Verdict",
+  "design.qc.staged": "Measured values staged for review; they become trainable data once the review passes",
   "design.refresh": "Refresh",
   "design.role": "Role",
   "design.sim.add": "Add ingredient",

@@ -47,6 +47,8 @@ const en: Record<string, string> = {
   "research.search.total": "{{n}} so far",
   "research.search.fallback": "Streaming search interrupted ({{e}}); fell back to synchronous search",
   "research.search.seed": "Some results come from the offline sample corpus (external sources unavailable); do not use them as formal evidence.",
+  "research.search.notebook_bound": "Project is bound to Notebook {{id}} (you may enter another ID)",
+  "research.search.notebook_unbound": "The selected project has no NotebookLM Notebook ID bound",
   "research.search.filtered": "Quality filter: kept {{k}}, dropped {{d}}",
 
   "research.kb.building": "Building the knowledge base in the background…",

@@ -44,7 +44,8 @@ def test_sql_store_add_and_all():
 
 def test_sql_store_count():
     store = _sql_store()
-    store.add([_record()] * 5)
+    # distinct experiments: identical labelless records are deduplicated by design (store.add upsert, P1-9)
+    store.add([_record(zinc=float(i)) for i in range(5)])
     assert store.count() == 5
 
 
@@ -72,13 +73,13 @@ def test_sql_store_concurrent_writes(tmp_path):
     store = _sql_store(engine)
     errors: list[Exception] = []
 
-    def _add():
+    def _add(i: int):
         try:
-            store.add([_record()])
+            store.add([_record(zinc=float(i))])
         except Exception as exc:
             errors.append(exc)
 
-    threads = [threading.Thread(target=_add) for _ in range(10)]
+    threads = [threading.Thread(target=_add, args=(i,)) for i in range(10)]
     for t in threads:
         t.start()
     for t in threads:

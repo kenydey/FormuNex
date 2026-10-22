@@ -284,8 +284,18 @@ def _ghs_constraints_for_revision(session: Session, rev: ProductRevisionRow):
     return merged
 
 
+def _classification_properties(docs: list[RegulatoryDocumentRow]) -> dict | None:
+    """Mixture properties (flash point, boiling point, pH …) the package's SDS / label were classified with."""
+    for d in docs:
+        if d.doc_type in ("sds", "label"):
+            props = ((d.content or {}).get("meta") or {}).get("classification_properties")
+            if props:
+                return props
+    return None
+
+
 def _check_red_lines(session: Session, c: Check, rev: ProductRevisionRow, fv: FormulationVersion | None,
-                     components: list, items: list) -> None:
+                     components: list, items: list, properties: dict | None = None) -> None:
     ingredients = (fv.snapshot or {}).get("ingredients") or [] if fv else []
     for ing in ingredients:
         hit = rohs_restricted(ing.get("name") or "", ing.get("cas_no"))
@@ -343,7 +353,9 @@ def _check_red_lines(session: Session, c: Check, rev: ProductRevisionRow, fv: Fo
         try:
             from ...project_redlines import check_redlines
 
-            result, _built = ghs_service.build_and_classify(session, items)
+            # Same properties as the SDS / label classification: without them a flammable solvent always
+            # reads as "flash point missing" and the check would fail closed on data the package has.
+            result, _built = ghs_service.build_and_classify(session, items, properties)
             # Fail-closed: a blocking data gap means the pictograms / signal
             # word cannot be determined — "cannot verify" is not "pass"
             # (red lines are never waivable). Without blocking gaps the
@@ -529,8 +541,8 @@ def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
     _check_total(checks["formula_total"], fv)
     components = _check_substances(session, checks["substance_data"], items)
     _check_objectives(session, checks["objectives"], rev)
-    _check_red_lines(session, checks["red_lines"], rev, fv, components, items)
     docs, problems = select_package_documents(session, rev)
+    _check_red_lines(session, checks["red_lines"], rev, fv, components, items, _classification_properties(docs))
     results = _check_classification(session, checks["classification_current"], docs, items)
     _check_documents(checks["documents"], problems)
     _check_consistency(checks["consistency"], docs)
