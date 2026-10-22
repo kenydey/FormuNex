@@ -20,6 +20,7 @@
    - `FORMUNEX_DB_URL` —— 默认 `sqlite:///./data/formunex.db`；多 worker 生产改 `postgresql://…`
    - `FORMUNEX_DATALAB_API_URL` —— 仅当 `FORMUNEX_DATALAB_REQUIRED=true` 时必需
 3. 可选项：LLM vendor key 缺失时自动降级为离线实现，不阻塞启动。
+4. 文档字体：受控文档（SDS / TDS / COA / 标签）的 PDF 必须嵌入中文字体，否则审核被拒。后端镜像已内置文泉驿微米黑（TrueType，Apache-2.0 / GPLv3 双许可）并设置 `FORMUNEX_PLM_DOC_FONT_PATH`；如需换用企业字体，挂载 TrueType（`.ttf` / TrueType `.ttc`）文件并改此变量即可（CFF 字体如 Noto CJK `.otc` 无法嵌入）。
 
 ## 启动
 
@@ -91,6 +92,7 @@ docker compose start backend worker
 | 日志 `SQLite ... production ... postgresql` 警告 | 单机可忽略；多 worker 生产必须切 Postgres（SQLite 写锁） |
 | 前端 502 / 空白 | 先看 `backend` healthcheck 是否 healthy，再看 `docker compose logs backend` |
 | 401 UNAUTHORIZED（ELN 相关） | `FORMUNEX_DATALAB_API_TOKEN` 缺失或错误，值放 `.env` |
+| 文档审核提示“PDF 未嵌入中文字体” | 后端未找到可嵌入的 TrueType 中文字体：确认用的是当前镜像，或 `FORMUNEX_PLM_DOC_FONT_PATH` 指向的文件存在且为 TrueType |
 | 磁盘满（Errno 28） | 清理 `./data/backups` 旧备份；检查 pytest 临时目录 |
 
 ## 回滚
