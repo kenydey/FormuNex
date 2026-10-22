@@ -22,6 +22,10 @@ Sources (``app/resources/regulatory``, imported from MSDS-Generator):
   Acute 3 / Flam. Liq. 4, nor deleted P codes, so those seed codes keep
   ``text_en`` empty until a UN GHS source is provided.
 * ``gb12268_2025.json`` — GB 12268 dangerous-goods entries (a 10-entry subset for now)
+* ``iecsc.json.gz`` — CAS numbers of the public 《中国现有化学物质名录》 entries (2013 版 plus
+  every later 生态环境部 增补 / 已登记新化学物质列入 公告), built by
+  ``scripts/build_iecsc_resource.py``. A listed CAS sets ``iecsc_listed = True``; absence
+  leaves it unknown (``None``), because confidential entries are not published.
 
 The run is idempotent: a release whose input digest matches an earlier one is
 skipped unless forced, and re-running replaces only rows this importer owns
@@ -63,7 +67,7 @@ log = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 # Bump when parsing / mapping logic changes, so an unchanged data set is re-imported.
-IMPORTER_VERSION = "3"  # 3: fill text_en from hpstatements_en.json (CLP English H/P)
+IMPORTER_VERSION = "4"  # 4: iecsc_listed from iecsc.json.gz
 OEL_STANDARD = "GBZ 2.1-2019"
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
@@ -74,7 +78,7 @@ SEED_REVIEW_KINDS = (
 _FILES = (
     "common_chemicals.json.gz", "hazard_chemical_info.json", "oel_gbz2_2019.json",
     "hazard_statements.json", "precaution_statements.json", "gb12268_2025.json",
-    "hpstatements_en.json",
+    "hpstatements_en.json", "iecsc.json.gz",
 )
 _CHUNK = 5000
 
@@ -172,6 +176,7 @@ def seed_regulatory_db(
         _replace_generic_entries(conn, resources, release_id, stats)
         _replace_oel(conn, resources, cas_to_id, release_id, review, stats)
         _replace_transport(conn, resources, release_id, review, stats)
+        _mark_iecsc(conn, resources, stats)
         _upsert_statements(conn, resources, stats)
         _replace_review_items(conn, review, stats)
         conn.execute(update(RegulatoryDataRelease).where(RegulatoryDataRelease.id == release_id).values(stats=stats))
@@ -499,6 +504,23 @@ def _replace_transport(conn: Connection, resources: Path, release_id: str, revie
     if rows:
         conn.execute(insert(SubstanceTransportRow), rows)
     stats.update(transport_rows=len(rows), transport_unlinked=unlinked)
+
+
+def _mark_iecsc(conn: Connection, resources: Path, stats: dict) -> None:
+    """Set ``iecsc_listed`` from the public IECSC CAS list. Only ``True`` is ever written:
+    a CAS missing from the public list may still be a confidential entry, so it stays unknown.
+    ``True`` flags this importer set earlier are cleared first, so a re-run tracks the list."""
+    path = resources / "iecsc.json.gz"
+    if not path.exists():  # fixture resource sets omit it
+        return
+    listed = set(_load_json(path).get("cas") or {})
+    conn.execute(update(SubstanceRow).where(SubstanceRow.iecsc_listed.is_(True)).values(iecsc_listed=None))
+    marked = 0
+    ordered = sorted(listed)
+    for i in range(0, len(ordered), 900):  # SQLite bound-parameter limit
+        marked += conn.execute(update(SubstanceRow).where(SubstanceRow.cas_no.in_(ordered[i:i + 900]))
+                               .values(iecsc_listed=True)).rowcount or 0
+    stats.update(iecsc_cas=len(listed), iecsc_marked=marked)
 
 
 def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:

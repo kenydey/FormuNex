@@ -842,7 +842,7 @@ deploy/helm/formunex/**（新）
 - 物质库只有《危险化学品目录》分类，目录外物质一律按“危害未知”计入（真实配方冒烟测试中未知占比可达 80%）；需通过供应商 SDS 导入或法规专员标记 `not_classified` 补齐。
 - 桥接原则（`services/plm/ghs/bridging.py`，引擎已调用）与气溶胶分类（`rules/physical.py:aerosol`，8 项测试覆盖类别 1/2/3、点火距离、泡沫试验）已实现；气体分类、有机过氧化物等需试验的物理危害仍未实现计算，只提示数据缺口。
 - 全部写接口与敏感读接口均已按 RBAC 鉴权（`api/_rbac_guard.py` 四层：规则表 / 管理员守卫 / 端点内校验 / 有意豁免，`scripts/audit_rbac.py` 校验每条路由恰属一层）；服务 API Key 作为运维凭据保持可用；LDAP / OIDC 仍为预留（附录 B D-6）。
-- `ghs_statements` 英文 H/P 语句已从欧盟 CLP 法规文本导入（`hpstatements_en.json`，CC BY 4.0）；CLP 未采纳的 GHS 类别（急毒 5、皮肤 3、眼 2B、吸入 2、水生急性 3、易燃液体 4）及已删除的 P 代码仍无英文，待引入 UN GHS 文本；GB 12268 仅 10 条，全表待补；IECSC 名录未导入（`iecsc_listed` 保持未知）。
+- `ghs_statements` 英文 H/P 语句已从欧盟 CLP 法规文本导入（`hpstatements_en.json`，CC BY 4.0）；CLP 未采纳的 GHS 类别（急毒 5、皮肤 3、眼 2B、吸入 2、水生急性 3、易燃液体 4）及已删除的 P 代码仍无英文，待引入 UN GHS 文本；GB 12268 仅 10 条，全表待补；IECSC 名录已导入（2026-10-22）：生态环境部 2013 版名录（42,342 条公开条目）+ 此后 28 份增补 / 已登记新化学物质列入公告，共 38,461 个 CAS（`iecsc.json.gz`，由 `scripts/build_iecsc_resource.py` 从官方文件重建，新公告发布后重跑即可）；名录内 CAS 置 `iecsc_listed = True` 并写入 SDS 第 15 部分，不在公开名录中的保持未知（保密条目不公开，不能推断为“未列入”）。
 - PageIndex 节点摘要（`summaries_status`）延迟生成已接线：Celery 任务 `formunex.toc_summaries` + `POST /kb/sources/{id}/toc-tree/summarize`（202，显式触发）；入库自动触发未见。Chat「深度模式」与知识中心目录树界面已随 F2 交付。
 - **M4 偏离方案说明**：方案原定 WeasyPrint 渲染 PDF，但后端镜像无 apt 层、无法安装 pango 等系统库，改用纯 Python 的 ReportLab；中文字体按 `FORMUNEX_PLM_DOC_FONT_PATH` → 系统 TrueType 中文字体 → 内置 CID 字体（不嵌入，带告警）顺序选取，生产镜像需挂载可嵌入的 TrueType 中文字体。
 - 文档引擎：标签已输出 PDF + PNG（`render/label_png.py`，72~600 dpi，6 项测试含下载 API；打印机格式待定）；SDS 第 4~8、10~13、15 部分的模板文本为通用草稿，需 EHS 专员审核；英文版 SDS 仅上述 CLP 未采纳类别的 H/P 语句显示为缺项；文档签批与发布门禁已在 M5 接入。

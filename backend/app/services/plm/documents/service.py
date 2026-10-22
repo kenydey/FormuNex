@@ -196,6 +196,8 @@ def _listings(session: Session, cas_numbers: list[str]) -> list[str]:
             out.append(f"{name}：易制毒化学品")
         if s.explosive_precursor:
             out.append(f"{name}：易制爆危险化学品")
+        if s.iecsc_listed:
+            out.append(f"{name}（{s.cas_no}）：列入《中国现有化学物质名录》")
     return out
 
 

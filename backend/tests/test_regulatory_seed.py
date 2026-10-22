@@ -309,3 +309,53 @@ def test_cli_requires_migrated_database(tmp_path, capsys):
 
     assert main(["--db-url", f"sqlite:///{tmp_path / 'empty.db'}"]) == 2
     assert "alembic upgrade head" in capsys.readouterr().err
+
+
+def test_iecsc_list_marks_listed_cas_and_leaves_the_rest_unknown(engine, resources):
+    _write(resources, "iecsc.json.gz", {"cas": {"64-17-5": "2013", "7664-41-7": "2013"}})
+    stats = seed_regulatory_db(engine, resources=resources)["stats"]
+    assert stats["iecsc_cas"] == 2 and stats["iecsc_marked"] == 2  # ethanol + ammonia (created by the OEL list)
+
+    def listed(cas):
+        with engine.connect() as c:
+            return c.execute(select(SubstanceRow.iecsc_listed).where(SubstanceRow.cas_no == cas)).scalar_one()
+
+    assert listed("64-17-5") is True and listed("7664-41-7") is True
+    assert listed("7732-18-5") is None  # not in the public list: may be confidential, so unknown — never False
+    with engine.begin() as c:
+        c.execute(update(SubstanceRow).where(SubstanceRow.cas_no == "108-95-2").values(iecsc_listed=False))
+    # A re-run follows the list: a CAS dropped from it goes back to unknown; a manual False is not touched.
+    _write(resources, "iecsc.json.gz", {"cas": {"7664-41-7": "2013"}})
+    seed_regulatory_db(engine, resources=resources)
+    assert listed("64-17-5") is None and listed("7664-41-7") is True and listed("108-95-2") is False
+
+
+def test_bundled_iecsc_resource_is_sane():
+    from app.services.plm.regulatory import cas as cas_mod
+    from app.services.plm.regulatory.seed import RESOURCES_DIR, _load_json
+
+    data = _load_json(RESOURCES_DIR / "iecsc.json.gz")
+    listed = data["cas"]
+    assert len(listed) > 38000
+    assert all(cas_mod.is_valid(c) for c in listed)
+    # 2013 版: 42,342 public rows, each either a CAS, a 流水号 or a misprint kept as printed.
+    base = next(s for s in data["meta"]["sources"] if s["id"] == "2013")
+    assert base["entries"] == 42342
+    misprints = [i for i in data["invalid"] if i["source"] == "2013"]
+    assert base["cas"] + sum(1 for v in data["serials"].values() if v == "2013") + len(misprints) == 42342
+    for cas in ("64-17-5", "7732-18-5", "108-95-2", "7664-41-7"):  # ethanol, water, phenol, ammonia
+        assert listed[cas] == "2013"
+    assert any(src != "2013" for src in listed.values())  # later 增补 / 新化学物质 公告 are included
+
+
+def test_sds_section_15_names_iecsc_listed_ingredients(engine, resources):
+    from sqlalchemy.orm import Session
+
+    from app.services.plm.documents.service import _listings
+
+    _write(resources, "iecsc.json.gz", {"cas": {"64-17-5": "2013"}})
+    seed_regulatory_db(engine, resources=resources)
+    with Session(engine) as s:
+        lines = _listings(s, ["64-17-5", "7732-18-5"])
+    assert "乙醇（64-17-5）：列入《中国现有化学物质名录》" in lines
+    assert not any("水" in line and "现有化学物质" in line for line in lines)
