@@ -212,3 +212,62 @@ def test_downgrade_to_0050_removes_formunex_objects(legacy_url, monkeypatch):
             assert not (set(cols) & {c["name"] for c in insp.get_columns(table)})
     finally:
         engine.dispose()
+
+
+def test_0069_nulls_noncat_catalog_numbers(tmp_path, monkeypatch):
+    """P1-23 data repair: upgrading past 0069 NULLs the file row numbers
+    wrongly seeded as catalogue 序号 for the 29 non-catalogue CAS, leaves
+    a genuine catalogue substance untouched, and re-upgrading is clean."""
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "m0069",
+        Path("app/db/alembic/versions/0069_noncat_catalog_numbers.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    m0069 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m0069)
+
+    url = f"sqlite:///{tmp_path / 'repair.db'}"
+    run_upgrade(url, monkeypatch, "0068")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as conn:
+            for i, cas in enumerate(m0069._NONCATALOGUE_CAS):
+                conn.execute(
+                    text(
+                        "INSERT INTO substances (id, cas_no, name_zh, name_en, aliases, hazardous_catalog_no, created_at, updated_at) "
+                        "VALUES (:id, :cas, :zh, :en, '[]', :no, '2026-01-01', '2026-01-01')"
+                    ),
+                    {"id": f"n{i:02d}", "cas": cas, "zh": f"非目录{i}", "en": "", "no": 2700 + i},
+                )
+            conn.execute(
+                text(
+                    "INSERT INTO substances (id, cas_no, name_zh, name_en, aliases, hazardous_catalog_no, created_at, updated_at) "
+                    "VALUES ('ctl', '8008-60-4', '阿片', '', '[]', 1, '2026-01-01', '2026-01-01')"
+                ),
+            )
+    finally:
+        engine.dispose()
+    run_upgrade(url, monkeypatch)
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            wrong = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM substances WHERE cas_no IN "
+                    "(SELECT cas_no FROM substances) AND hazardous_catalog_no IS NOT NULL "
+                    "AND cas_no != '8008-60-4'"
+                )
+            ).scalar_one()
+            assert wrong == 0
+            assert (
+                conn.execute(
+                    text("SELECT hazardous_catalog_no FROM substances WHERE cas_no = '8008-60-4'")
+                ).scalar_one()
+                == 1
+            )
+    finally:
+        engine.dispose()
+    run_upgrade(url, monkeypatch)
