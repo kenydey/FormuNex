@@ -415,6 +415,24 @@ def test_not_regulated_and_single_substance_entry():
     assert t["un_number"] == "1170" and t["technical_names"] == []
 
 
+def test_single_substance_entry_follows_the_derived_packing_group():
+    from app.services.plm.ghs.model import ClassificationResult
+    from app.services.plm.transport import derive_transport
+
+    rows = [{"un_number": "1105", "proper_shipping_name_zh": "戊醇", "proper_shipping_name_en": "PENTANOLS",
+             "transport_class": "3", "subsidiary_risk": "", "packing_group": pg} for pg in ("II", "III")]
+    entries = {"s-pentanol": {**rows[0], "rows": rows}}
+    pentanol = Component("戊醇", 100, "71-41-0", substance_id="s-pentanol", hazards=[H("flammable_liquid", "3")])
+    result = ClassificationResult("x", hazards=[HazardOutcome("flammable_liquid", "3", [], "measured")])
+    t = derive_transport(result, MixtureProperties(), [pentanol], substance_entries=entries)
+    assert (t["un_number"], t["packing_group"]) == ("1105", "III")
+    assert not any("无包装类别" in n or "不一致" in n for n in t["notes"])
+    # Category 1 → PG I, which the list does not have for this substance: flagged, never silently accepted.
+    result = ClassificationResult("x", hazards=[HazardOutcome("flammable_liquid", "1", [], "measured")])
+    t = derive_transport(result, MixtureProperties(), [pentanol], substance_entries=entries)
+    assert any("无包装类别 I 的条目" in n for n in t["notes"])
+
+
 def test_nos_entry_names_technical_constituents():
     comps = [Component("二甲苯", 40, hazards=[H("flammable_liquid", "3")]), Component("乙酸丁酯", 30,
              hazards=[H("flammable_liquid", "3")]), Component("树脂", 30)]

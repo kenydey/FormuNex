@@ -136,8 +136,14 @@ def derive_transport(result: ClassificationResult, props: MixtureProperties, com
     single = [c for c in components if c.pct >= 99.0]
     if single and substance_entries and single[0].substance_id in substance_entries:
         e = substance_entries[single[0].substance_id]
-        entry = (e["un_number"], e["proper_shipping_name_zh"], e["proper_shipping_name_en"])
+        rows = e.get("rows") or [e]
+        pick = next((r for r in rows if r.get("packing_group") == pg), rows[0])
+        entry = (pick["un_number"], pick["proper_shipping_name_zh"], pick["proper_shipping_name_en"])
         notes.append("单一物质产品，使用该物质的 GB 12268 品名条目")
+        if len(rows) > 1 and pick.get("packing_group") != pg:
+            notes.append(f"品名表中该物质无包装类别 {pg} 的条目，已取第一个条目，需人工确认")
+        if pick.get("transport_class") and pick["transport_class"] != primary:
+            notes.append(f"品名表条目类别 {pick['transport_class']} 与分类推导的 {primary} 不一致，需人工确认")
     if entry is None and props.product_category == "paint" and (primary, subsidiary) in _PAINT:
         entry = _PAINT[(primary, subsidiary)]
     if entry is None:

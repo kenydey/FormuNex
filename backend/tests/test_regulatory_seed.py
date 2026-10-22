@@ -154,7 +154,7 @@ def test_seed_loads_every_table(engine, resources):
         kinds = dict(c.execute(select(RegulatoryReviewItem.kind, func.count()).group_by(RegulatoryReviewItem.kind)).all())
     assert kinds == {
         "invalid_cas": 1, "repaired_cas": 1, "duplicate_catalog_entry": 1, "hazard_text": 1,
-        "oel_unmatched": 1, "transport_unlinked": 1,
+        "oel_unmatched": 1,  # "不存在的物质" (UN 9999) names no substance: unlinked, no review item
     }
 
 
@@ -359,3 +359,34 @@ def test_sds_section_15_names_iecsc_listed_ingredients(engine, resources):
         lines = _listings(s, ["64-17-5", "7732-18-5"])
     assert "乙醇（64-17-5）：列入《中国现有化学物质名录》" in lines
     assert not any("水" in line and "现有化学物质" in line for line in lines)
+
+
+def test_full_gb12268_rows_link_by_name_and_flag_only_ambiguous_names(engine, resources):
+    _write(resources, "common_chemicals.json.gz", {"rows": [
+        ["64-17-5", "乙醇", "Ethanol", "C2H6O"],
+        ["71-41-0", "戊醇", "1-Pentanol", "C5H12O"],
+        ["6032-29-7", "戊醇", "2-Pentanol", "C5H12O"],
+    ]})
+    _write(resources, "gb12268_2025.json", {"entries": [
+        {"un": "1170", "name_cn": "乙醇", "name_en": "ETHANOL", "class": "3", "subsidiary": "", "pg": "II",
+         "special_provisions": "144 601"},
+        {"un": "1170", "name_cn": "乙醇", "name_en": "ETHANOL", "class": "3", "subsidiary": "", "pg": "III",
+         "special_provisions": "144 223 601"},
+        {"un": "1105", "name_cn": "戊醇", "name_en": "PENTANOLS", "class": "3", "subsidiary": "", "pg": "II"},
+        {"un": "1105", "name_cn": "戊醇", "name_en": "PENTANOLS", "class": "3", "subsidiary": "", "pg": "III"},
+        {"un": "1993", "name_cn": "易燃液体，未另作规定的", "name_en": "FLAMMABLE LIQUID, N.O.S.", "class": "3",
+         "subsidiary": "", "pg": "III"},
+    ]})
+    stats = seed_regulatory_db(engine, resources=resources)["stats"]
+    assert (stats["transport_rows"], stats["transport_linked"], stats["transport_ambiguous"]) == (5, 2, 1)
+    with engine.connect() as c:
+        rows = c.execute(select(SubstanceTransportRow.un_number, SubstanceTransportRow.packing_group,
+                                SubstanceTransportRow.substance_id, SubstanceTransportRow.special_provisions)
+                         .order_by(SubstanceTransportRow.un_number, SubstanceTransportRow.packing_group)).all()
+        reviews = c.execute(select(RegulatoryReviewItem.name).where(
+            RegulatoryReviewItem.kind == "transport_unlinked")).scalars().all()
+    assert [(r.un_number, r.packing_group, r.substance_id is not None) for r in rows] == [
+        ("1105", "II", False), ("1105", "III", False), ("1170", "II", True), ("1170", "III", True),
+        ("1993", "III", False)]
+    assert rows[3].special_provisions == "144 223 601"
+    assert reviews == ["戊醇"]  # two substances share the name; the generic UN 1993 raises nothing

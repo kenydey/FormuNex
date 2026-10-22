@@ -481,29 +481,38 @@ def _replace_oel(conn: Connection, resources: Path, cas_to_id: dict[str, str], r
 def _replace_transport(conn: Connection, resources: Path, release_id: str, review: _Review, stats: dict) -> None:
     conn.execute(delete(SubstanceTransportRow).where(SubstanceTransportRow.standard == TRANSPORT_STANDARD))
     data = _load_json(resources / "gb12268_2025.json")
-    entries = data.get("entries") or {}
-    names = [v.get("name_cn") for v in entries.values() if v.get("name_cn")]
+    entries = data.get("entries") or []
+    if isinstance(entries, dict):  # legacy {UN: entry} subset
+        entries = [{"un": un, **v} for un, v in entries.items()]
+    names = sorted({v.get("name_cn") for v in entries if v.get("name_cn")})
     by_name: dict[str, list[str]] = {}
-    if names:
-        for r in conn.execute(select(SubstanceRow.id, SubstanceRow.name_zh).where(SubstanceRow.name_zh.in_(names))):
+    for i in range(0, len(names), 900):  # SQLite bound-parameter limit
+        for r in conn.execute(select(SubstanceRow.id, SubstanceRow.name_zh)
+                              .where(SubstanceRow.name_zh.in_(names[i:i + 900]))):
             by_name.setdefault(r.name_zh, []).append(r.id)
-    rows, unlinked = [], 0
-    for un, v in entries.items():
-        ids = by_name.get(v.get("name_cn") or "", [])
+    rows, linked, ambiguous = [], 0, set()
+    for v in entries:
+        name = v.get("name_cn") or ""
+        ids = by_name.get(name, [])
         sid = ids[0] if len(ids) == 1 else None
-        if sid is None:
-            unlinked += 1
-            review.add("transport_unlinked", name=v.get("name_cn") or "", un_number=un, candidates=len(ids))
+        if sid:
+            linked += 1
+        elif len(ids) > 1 and (v["un"], name) not in ambiguous:
+            # Generic (未另作规定的 / 类属) entries name no single substance and stay unlinked
+            # without review; only a name shared by several substances needs a person.
+            ambiguous.add((v["un"], name))
+            review.add("transport_unlinked", name=name, un_number=str(v["un"]), candidates=len(ids))
         rows.append({
-            "id": _uid(), "un_number": str(un), "substance_id": sid,
-            "proper_shipping_name_zh": v.get("name_cn") or "", "proper_shipping_name_en": v.get("name_en") or "",
-            "transport_class": str(v.get("class") or ""), "subsidiary_risk": str(v.get("subsidiary") or ""),
+            "id": _uid(), "un_number": str(v["un"]), "substance_id": sid,
+            "proper_shipping_name_zh": name[:300], "proper_shipping_name_en": (v.get("name_en") or "")[:300],
+            "transport_class": str(v.get("class") or ""), "subsidiary_risk": str(v.get("subsidiary") or "")[:32],
             "packing_group": v.get("pg") or None, "marine_pollutant": v.get("marine_pollutant"),
-            "special_provisions": "", "standard": TRANSPORT_STANDARD, "release_id": release_id,
+            "special_provisions": (v.get("special_provisions") or "")[:200], "standard": TRANSPORT_STANDARD,
+            "release_id": release_id,
         })
-    if rows:
-        conn.execute(insert(SubstanceTransportRow), rows)
-    stats.update(transport_rows=len(rows), transport_unlinked=unlinked)
+    for chunk in _chunks(rows):
+        conn.execute(insert(SubstanceTransportRow), chunk)
+    stats.update(transport_rows=len(rows), transport_linked=linked, transport_ambiguous=len(ambiguous))
 
 
 def _mark_iecsc(conn: Connection, resources: Path, stats: dict) -> None:
