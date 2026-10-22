@@ -37,13 +37,28 @@ def test_no_unconditional_apt_layer(dockerfile: str) -> None:
     compiler present. An unconditional `apt-get update` makes the build depend
     on the Debian archive being reachable and its release metadata current, and
     it fails with a bare `exit code: 100` when either is not true.
+
+    One exception, and only one: the embeddable CJK font. Controlled PDFs must
+    embed it or document approval is refused, and no pip package ships one — so
+    that step may install exactly ``fonts-wqy-microhei`` and nothing else.
     """
     for step in _run_steps(dockerfile):
         if "apt-get" not in step:
             continue
-        assert "INSTALL_BUILD_TOOLCHAIN" in step, (
-            "apt must stay behind the opt-in build arg:\n" + step
+        if "INSTALL_BUILD_TOOLCHAIN" in step:
+            continue
+        installs = re.findall(r"install -y --no-install-recommends ([^&\\]+)", step)
+        assert installs and all(pkgs.split() == ["fonts-wqy-microhei"] for pkgs in installs), (
+            "apt must stay behind the opt-in build arg (the CJK font step aside):\n" + step
         )
+
+
+def test_the_image_points_the_renderer_at_its_cjk_font(dockerfile: str) -> None:
+    """Approval of controlled PDFs refuses non-embedded fonts; the image must name the font it ships."""
+    arg = re.search(r"^ARG CJK_FONT=(\S+)\s*$", dockerfile, re.M)
+    assert arg and arg.group(1).endswith("wqy-microhei.ttc")
+    assert re.search(r"^ENV FORMUNEX_PLM_DOC_FONT_PATH=\$\{CJK_FONT\}\s*$", dockerfile, re.M)
+    assert 'test -f "$CJK_FONT"' in dockerfile, "a missing font must fail the build, not ship"
 
 
 def test_build_toolchain_is_opt_in_and_defaults_off(dockerfile: str) -> None:
