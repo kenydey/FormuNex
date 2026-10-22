@@ -390,3 +390,12 @@ def test_full_gb12268_rows_link_by_name_and_flag_only_ambiguous_names(engine, re
         ("1993", "III", False)]
     assert rows[3].special_provisions == "144 223 601"
     assert reviews == ["戊醇"]  # two substances share the name; the generic UN 1993 raises nothing
+
+
+def test_gb12268_alias_links_only_unambiguous_simple_names():
+    from app.services.plm.regulatory.seed import _name_aliases
+
+    assert _name_aliases("乙醇（酒精）或乙醇溶液（酒精溶液）") == ["乙醇", "酒精", "乙醇溶液", "酒精溶液"]
+    assert _name_aliases("易燃液体，未另作规定的") == []
+    assert _name_aliases("硝酸，发红烟的除外，含硝酸低于65%") == []
+    assert _name_aliases("丙酮") == []

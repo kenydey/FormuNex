@@ -21,7 +21,10 @@ Sources (``app/resources/regulatory``, imported from MSDS-Generator):
   CLP does not adopt GHS categories 5 / Skin 3 / Eye 2B / Asp. Tox. 2 / Aquatic
   Acute 3 / Flam. Liq. 4, nor deleted P codes, so those seed codes keep
   ``text_en`` empty until a UN GHS source is provided.
-* ``gb12268_2025.json`` — GB 12268 dangerous-goods entries (a 10-entry subset for now)
+* ``gb12268_2025.json`` — GB 12268-2025 表 1 in full: 2,861 rows / 2,347 UN numbers, one row per
+  packing group, with special provisions and quantities; parsed from the official PDF by
+  ``scripts/gb12268/`` (see its README). Linked to a substance by exact Chinese name, else by
+  an unambiguous simple alias (``乙醇（酒精）或…`` → 乙醇); generic entries stay unlinked.
 * ``iecsc.json.gz`` — CAS numbers of the public 《中国现有化学物质名录》 entries (2013 版 plus
   every later 生态环境部 增补 / 已登记新化学物质列入 公告), built by
   ``scripts/build_iecsc_resource.py``. A listed CAS sets ``iecsc_listed = True``; absence
@@ -478,13 +481,29 @@ def _replace_oel(conn: Connection, resources: Path, cas_to_id: dict[str, str], r
     stats.update(oel_rows=len(rows), oel_unmatched=unmatched)
 
 
+def _name_aliases(name: str) -> list[str]:
+    """Simple-substance aliases of a GB 12268 name: ``乙醇（酒精）或乙醇溶液（酒精溶液）`` →
+    乙醇, 酒精, 乙醇溶液, 酒精溶液. Generic and descriptive names (未另作规定的, anything with a
+    comma clause) give none — they name no single substance."""
+    if "未另作规定" in name or "，" in name or "," in name:
+        return []
+    out: list[str] = []
+    for part in name.split("或"):
+        for alias in [re.sub(r"（[^）]*）", "", part), *re.findall(r"（([^）]*)）", part)]:
+            alias = alias.strip()
+            if alias and alias != name and alias not in out:
+                out.append(alias)
+    return out
+
+
 def _replace_transport(conn: Connection, resources: Path, release_id: str, review: _Review, stats: dict) -> None:
     conn.execute(delete(SubstanceTransportRow).where(SubstanceTransportRow.standard == TRANSPORT_STANDARD))
     data = _load_json(resources / "gb12268_2025.json")
     entries = data.get("entries") or []
     if isinstance(entries, dict):  # legacy {UN: entry} subset
         entries = [{"un": un, **v} for un, v in entries.items()]
-    names = sorted({v.get("name_cn") for v in entries if v.get("name_cn")})
+    names = sorted({n for v in entries if v.get("name_cn")
+                    for n in (v["name_cn"], *_name_aliases(v["name_cn"]))})
     by_name: dict[str, list[str]] = {}
     for i in range(0, len(names), 900):  # SQLite bound-parameter limit
         for r in conn.execute(select(SubstanceRow.id, SubstanceRow.name_zh)
@@ -495,6 +514,8 @@ def _replace_transport(conn: Connection, resources: Path, release_id: str, revie
         name = v.get("name_cn") or ""
         ids = by_name.get(name, [])
         sid = ids[0] if len(ids) == 1 else None
+        if not ids:  # no exact match: an alias naming exactly one substance
+            sid = next((by_name[a][0] for a in _name_aliases(name) if len(by_name.get(a, [])) == 1), None)
         if sid:
             linked += 1
         elif len(ids) > 1 and (v["un"], name) not in ambiguous:
@@ -504,7 +525,7 @@ def _replace_transport(conn: Connection, resources: Path, release_id: str, revie
             review.add("transport_unlinked", name=name, un_number=str(v["un"]), candidates=len(ids))
         rows.append({
             "id": _uid(), "un_number": str(v["un"]), "substance_id": sid,
-            "proper_shipping_name_zh": name[:300], "proper_shipping_name_en": (v.get("name_en") or "")[:300],
+            "proper_shipping_name_zh": name[:500], "proper_shipping_name_en": (v.get("name_en") or "")[:500],
             "transport_class": str(v.get("class") or ""), "subsidiary_risk": str(v.get("subsidiary") or "")[:32],
             "packing_group": v.get("pg") or None, "marine_pollutant": v.get("marine_pollutant"),
             "special_provisions": (v.get("special_provisions") or "")[:200], "standard": TRANSPORT_STANDARD,
