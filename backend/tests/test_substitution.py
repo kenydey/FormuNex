@@ -1020,9 +1020,9 @@ def test_2_6_triggers_redline_and_classification_upgrade(tmp_path, monkeypatch):
             break
     assert first_cas, "基线配方应有带 CAS 的材料"
     pid = "proj-trig"
+    # production shape: ProjectRow.payload is the flat workspace dump (see project_store / 7d34b23)
     session.add(ProjectRow(id=pid, title="T", domain="anticorrosion_coating", payload={
-        "workspace": {"spec_contract": {"red_lines": [
-            {"cas": first_cas, "max_pct": 0, "reason": "测试禁用"}]}}}))
+        "spec_contract": {"red_lines": [{"cas": first_cas, "max_pct": 0, "reason": "测试禁用"}]}}))
     session.commit()
     req = _req()
     req.project_id = pid

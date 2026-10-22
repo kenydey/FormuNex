@@ -49,13 +49,18 @@ def _unique_names(bind) -> set[str]:
     return {c["name"] for c in sa.inspect(bind).get_unique_constraints(_TABLE)}
 
 
+# SQLite rebuilds the table in batch mode by reflecting it; don't resolve foreign keys, so a database
+# that lacks a referenced table (partial / legacy schemas upgraded step by step) can still be migrated.
+_BATCH = {"reflect_kwargs": {"resolve_fks": False}}
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if not _has_table(bind):
         return
     cols = _columns(bind)
     uqs = _unique_names(bind)
-    with op.batch_alter_table(_TABLE) as batch:
+    with op.batch_alter_table(_TABLE, **_BATCH) as batch:
         if "content_hash" not in cols:
             batch.add_column(sa.Column("content_hash", sa.String(64), nullable=True))
         if _OLD_UQ in uqs:
@@ -70,7 +75,7 @@ def downgrade() -> None:
         return
     cols = _columns(bind)
     uqs = _unique_names(bind)
-    with op.batch_alter_table(_TABLE) as batch:
+    with op.batch_alter_table(_TABLE, **_BATCH) as batch:
         if _NEW_UQ in uqs:
             batch.drop_constraint(_NEW_UQ, type_="unique")
         if _OLD_UQ not in uqs:

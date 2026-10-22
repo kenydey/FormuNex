@@ -182,14 +182,15 @@ def test_training_status_exposes_readiness():
             {
                 "domain": "anticorrosion_coating",
                 "factors": {
-                    "Zinc phosphate": 4,
+                    "Zinc phosphate": 4 + i,
                     "Bisphenol-A epoxy (DGEBA)": 38,
                     "Polyamide hardener": 14,
                 },
                 "cure_temperature_c": 80,
-                "measured": {"salt_spray_hours": 200},
+                "measured": {"salt_spray_hours": 200 + 10 * i},
             }
-            for _ in range(8)  # 超过默认 min_train_samples=4
+            # 8 distinct experiments (identical records are deduplicated); more than min_train_samples=4
+            for i in range(8)
         ]
         client.post("/api/experiments", json={"records": records, "retrain": True})
 
