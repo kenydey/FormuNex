@@ -63,6 +63,13 @@ jobs:
           npm ci || npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
 
+      # Controlled PDFs must embed a CJK TrueType font: without one the backend falls back
+      # to the non-embedded STSong-Light and document approval is refused by design
+      # ("PDF 未嵌入中文字体"), so the PLM lifecycle test waits for 已审核 until it times out.
+      # wqy-zenhei is the first system candidate in backend/app/services/plm/render/fonts.py.
+      - name: Install embeddable CJK font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends fonts-wqy-zenhei
+
       - name: Seed throw-away database
         run: |
           rm -f /tmp/fx-e2e.db
