@@ -196,10 +196,20 @@ class ReleaseGateWaiverRow(Base):
 
     Only gate checks the plan marks waivable (objective targets, data gaps) accept
     one; every waiver is e-signed and audited and shows up in the gate result.
+
+    The waiver is bound to the exact failure text it waives: ``content_hash``
+    is the sha256 of the gate item message at waiver time (alembic 0067), and
+    evaluation only honours a waiver whose hash still matches the current
+    message. When the underlying limit or measured value changes, the message
+    changes, the old waiver stops matching, and the item fails again until
+    re-waived. Rows written before 0067 have NULL content_hash and therefore
+    never match — historical waivers are intentionally invalidated by the
+    binding change (EHS must be told, see the P0-2 fix note).
     """
 
     __tablename__ = "release_gate_waivers"
-    __table_args__ = (UniqueConstraint("revision_id", "check_code", "item_key", name="uq_gate_waiver"),)
+    __table_args__ = (UniqueConstraint("revision_id", "check_code", "item_key", "content_hash",
+                                       name="uq_gate_waiver_content"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     revision_id: Mapped[str] = mapped_column(
@@ -207,6 +217,7 @@ class ReleaseGateWaiverRow(Base):
     )
     check_code: Mapped[str] = mapped_column(String(32))
     item_key: Mapped[str] = mapped_column(String(200))
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reason: Mapped[str] = mapped_column(Text)
     waived_by: Mapped[str] = mapped_column(String(36))
     signature_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

@@ -80,10 +80,13 @@ class Check:
         self.items.append({"key": item_key, "message": message,
                            "waivable": self.key in WAIVABLE if waivable is None else waivable})
 
-    def to_dict(self, waivers: dict[tuple[str, str], ReleaseGateWaiverRow]) -> dict[str, Any]:
+    def to_dict(self, waivers: dict[tuple[str, str, str | None], ReleaseGateWaiverRow]) -> dict[str, Any]:
         items = []
         for it in self.items:
-            w = waivers.get((self.key, it["key"])) if it["waivable"] else None
+            # A waiver only applies when it was granted for this exact failure
+            # text: a changed limit or measured value changes the message, and
+            # the old waiver must not silently carry over (P0-2).
+            w = waivers.get((self.key, it["key"], waiver_content_hash(it["message"]))) if it["waivable"] else None
             items.append({**it, "waived": w is not None,
                           "waiver": {"id": w.id, "reason": w.reason, "waived_by": w.waived_by,
                                      "at": w.created_at.isoformat()} if w else None})
@@ -91,6 +94,17 @@ class Check:
         status = "pass" if not items else ("waived" if not open_items else "fail")
         return {"key": self.key, "code": self.code, "title": self.title, "status": status,
                 "waivable": self.key in WAIVABLE, "items": items, "notes": self.notes, "evidence": self.evidence}
+
+
+def waiver_content_hash(message: str) -> str:
+    """Bind a waiver to the exact failure text it waives (sha256 of the message).
+
+    The gate item message carries the values that matter (limits, measured
+    values, missing lists); hashing it means any change to those values
+    invalidates the waiver, instead of the old (check_code, item_key) key
+    silently re-applying it.
+    """
+    return hashlib.sha256((message or "").encode()).hexdigest()
 
 
 def item_key(*parts: Any) -> str:
@@ -481,8 +495,13 @@ def _check_gaps(c: Check, results: dict[str, dict]) -> None:
                    waivable=not blocking)
 
 
-def waivers_for(session: Session, revision_id: str) -> dict[tuple[str, str], ReleaseGateWaiverRow]:
-    return {(w.check_code, w.item_key): w for w in session.execute(
+def waivers_for(session: Session, revision_id: str) -> dict[tuple[str, str, str | None], ReleaseGateWaiverRow]:
+    """Waivers keyed by (check_code, item_key, content_hash).
+
+    Pre-0067 rows have content_hash NULL and therefore never match a current
+    item message — they are intentionally invalidated by the binding change.
+    """
+    return {(w.check_code, w.item_key, w.content_hash): w for w in session.execute(
         select(ReleaseGateWaiverRow).where(ReleaseGateWaiverRow.revision_id == revision_id)).scalars()}
 
 

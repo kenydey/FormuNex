@@ -149,6 +149,7 @@ def add_waiver(session: Session, revision_id: str, *, check_key: str, item: str,
                      subject_id=rev.id, object_hash=gate.item_key(check_key, item, reason),
                      detail={"check": check_key, "item": item, "reason": reason})
     row = ReleaseGateWaiverRow(id=str(uuid.uuid4()), revision_id=rev.id, check_code=check_key, item_key=item,
+                               content_hash=gate.waiver_content_hash(target["message"]),
                                reason=reason.strip(), waived_by=user_id, signature_id=sig.id)
     session.add(row)
     session.flush()
