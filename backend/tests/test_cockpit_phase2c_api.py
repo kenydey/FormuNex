@@ -130,3 +130,18 @@ def test_color_api_and_materials():
     assert forms["钛白"]["lab_L"] > forms["炭黑"]["lab_L"]
     assert "delta_e_ab" in forms["钛白"] and "delta_e_00" in forms["钛白"]
     assert forms["钛白"]["delta_e_method"] in ("cie2000", "cie76")
+
+
+def test_color_api_pigment_free_returns_null_fields_not_crash():
+    # P1-15: 无色素配方（含参考色时）也须 200 且字段显式为 null，不 500。
+    from app.main import app
+
+    client = TestClient(app)
+    r = client.post("/api/cockpit/color", json={"formulations": [
+        {"name": "无色素", "ingredients": [{"name": "自由输入名", "weight_pct": 100.0, "role": "solvent"}]},
+    ], "reference_lab": [90.0, 0.0, 0.0]})
+    assert r.status_code == 200
+    f = r.json()["formulations"][0]
+    assert f["L"] is None and f["a"] is None and f["b"] is None
+    assert f["delta_e_ab"] is None and f["delta_e_method"] is None
+    assert f["delta_e_00_vs_reference"] is None and f["delta_e_ab_vs_reference"] is None

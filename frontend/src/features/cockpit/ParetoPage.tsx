@@ -94,8 +94,14 @@ export default function ParetoPage() {
         <Space wrap>
           <span>{t("pareto.objectives", "目标")}</span>
           <Select mode="multiple" style={{ minWidth: 320 }} maxCount={3} value={objectives.map((o) => `${o.metric}:${o.direction}`)}
-            onChange={(vals: string[]) => setObjs(vals.slice(0, 3).map((v) => { const [metric, direction] = v.split(":"); return { metric, direction: direction as Obj["direction"] }; }))}
-            options={metrics.flatMap((m) => [{ value: `${m}:maximize`, label: `${m} ↑` }, { value: `${m}:minimize`, label: `${m} ↓` }])} />
+            onChange={(vals: string[]) => setObjs(vals.slice(0, 3).map((v) => {
+              const [metric, direction] = v.split(":");
+              // P1-16: 目标编辑不得丢 target_value——先从当前目标、再从项目契约找回同 metric 的目标值，
+              // 否则 match_target 在后端静默退化为 maximize 排序。方向切走再切回也能找回。
+              const prev = [...(objs ?? []), ...projectObjs].find((o) => o.metric === metric && o.target_value != null);
+              return { metric, direction: direction as Obj["direction"], ...(prev?.target_value != null ? { target_value: prev.target_value } : {}) };
+            }))}
+            options={metrics.flatMap((m) => [{ value: `${m}:maximize`, label: `${m} ↑` }, { value: `${m}:minimize`, label: `${m} ↓` }, { value: `${m}:match_target`, label: `${m} 目标值` }])} />
           <span>{t("pareto.objectives_hint", "最多 3 个目标；3 个目标时可用 3D 散点")}</span>
           <Switch checked={hazard} onChange={setHazard} /> {t("pareto.hazard", "危害评分作为最小化目标（由组成计算）")}
           <Button type="primary" disabled={!objectives.length} loading={run.isPending} onClick={() => run.mutate()}>{t("pareto.run", "计算前沿")}</Button>
@@ -129,7 +135,11 @@ export default function ParetoPage() {
                       data: otherPoints.map((p) => ({ name: p.id, value: [val(p, xm), val(p, ym)] })) },
                   ],
                 }}
-                onEvents={{ click: (p) => { const id = (p as { name: string }).name; if (id) setSelectedIds([id]); const exp = byNo.get(id)?.experiment_id; if (exp && can("formulation.freeze")) setWinning(exp); }, brushSelected: onBrushSelected }}
+                onEvents={{ click: (p) => { const id = (p as { name: string }).name; if (id) setSelectedIds([id]);
+                  // P1-17: 散点点击复用表格的 rank === 0 门禁——选中任意点仍可看详情，
+                  // 但只有前沿点（rank 0）才能打开“设为定型”弹窗。
+                  const point = (res?.points ?? []).find((pp) => pp.id === id);
+                  const exp = byNo.get(id)?.experiment_id; if (exp && point?.rank === 0 && can("formulation.freeze")) setWinning(exp); }, brushSelected: onBrushSelected }}
               />
             ) : (
               <Empty style={{ padding: 24 }} description={t("pareto.scatter_needs_two", "散点图需要两个目标；当前为单目标，请看平行坐标与下方点表")} />

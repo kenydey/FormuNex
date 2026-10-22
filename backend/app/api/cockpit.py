@@ -479,6 +479,7 @@ def color_page(body: ColorIn) -> dict[str, Any]:
     delta_e_00 为 CIEDE2000（colour-science 未安装时为 null，不静默 fallback）；
     delta_e_ab 为 CIE76 欧氏距离（始终可用）；delta_e 为兼容键，等于
     delta_e_00（有）或 delta_e_ab（无），delta_e_method 说明实际口径。
+    无色素配方返回 L/a/b/delta_e_* 全部为 null、delta_e_method 为 null。
     """
     from ..domain.schemas import Formulation, Ingredient, ProductDomain
     from ..services.colorimetry import color_metrics, delta_e_2000, delta_e_ab
@@ -496,9 +497,14 @@ def color_page(body: ColorIn) -> dict[str, Any]:
         m = color_metrics(form)
         item: dict[str, Any] = {"name": form.name, **m}
         if body.reference_lab is not None:
-            lab = (m["L"], m["a"], m["b"])
-            item["delta_e_00_vs_reference"] = delta_e_2000(lab, tuple(body.reference_lab))
-            item["delta_e_ab_vs_reference"] = delta_e_ab(lab, tuple(body.reference_lab))
+            # P1-15: 无色素配方的 L/a/b 为 null，不可算 ΔE——显式 null 而非 500。
+            if m["L"] is None or m["a"] is None or m["b"] is None:
+                item["delta_e_00_vs_reference"] = None
+                item["delta_e_ab_vs_reference"] = None
+            else:
+                lab = (m["L"], m["a"], m["b"])
+                item["delta_e_00_vs_reference"] = delta_e_2000(lab, tuple(body.reference_lab))
+                item["delta_e_ab_vs_reference"] = delta_e_ab(lab, tuple(body.reference_lab))
         out.append(item)
     return {"formulations": out, "reference_lab": body.reference_lab}
 

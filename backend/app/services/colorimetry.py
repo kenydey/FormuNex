@@ -115,14 +115,25 @@ def mixture_lab(form: Formulation) -> tuple[float, float, float] | None:
 def color_metrics(form: Formulation) -> dict[str, float | str | None]:
     """Color descriptors for a formulation: ``lab_L/a/b`` and ΔE vs white.
 
-    Returns an empty dict when the formulation has no color-bearing pigment,
-    leaving the predictor output unchanged. Keys: L/a/b (aliases of lab_L/a/b),
-    delta_e_00 (None without colour-science), delta_e_ab (always a float),
-    delta_e (compat: delta_e_00 if available else delta_e_ab), delta_e_method.
+    Returns the same keys with ``None`` values when the formulation has no
+    color-bearing pigment (P1-15): callers used to receive ``{}`` and the
+    cockpit ``/color`` endpoint spread it verbatim, so the frontend rendered
+    ``undefined.toFixed(...)`` and the whole color tab crashed. Explicit nulls
+    let the frontend guard and label the row instead. The predictor still
+    drops non-numeric values, so ``predicted`` is unchanged for such formulas.
+    Keys: L/a/b (aliases of lab_L/a/b), delta_e_00 (None without
+    colour-science or without pigment), delta_e_ab (a float only when a Lab
+    value exists), delta_e (compat: delta_e_00 if available else delta_e_ab),
+    delta_e_method.
     """
     lab = mixture_lab(form)
     if lab is None:
-        return {}
+        return {
+            "lab_L": None, "lab_a": None, "lab_b": None,
+            "L": None, "a": None, "b": None,
+            "delta_e_00": None, "delta_e_ab": None, "delta_e": None,
+            "delta_e_method": None,
+        }
     de00 = delta_e_2000(lab, WHITE_LAB)
     deab = delta_e_ab(lab, WHITE_LAB)
     return {

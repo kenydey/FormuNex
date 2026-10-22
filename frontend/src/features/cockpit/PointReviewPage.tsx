@@ -25,8 +25,9 @@ interface Rules {
 }
 
 type Decision = "accept" | "modify" | "reject";
+/** P1-18: decision 可空——只填备注的行不产生决策；提交时空决策行不发送（后端对缺 decision 的行 422）。 */
 interface Edit {
-  decision: Decision;
+  decision?: Decision;
   note: string;
   factors: Record<string, number>;
 }
@@ -60,7 +61,8 @@ export default function PointReviewPage() {
 
   const submit = useMutation({
     mutationFn: () => call("POST", `/api/cockpit/doe/${planId}/points/review`, {
-      reviews: Object.entries(edits).map(([runId, e]) => ({
+      // P1-18: 只发送已显式决策的行——只填备注的行不生成 edit，绝不静默记为 accept。
+      reviews: Object.entries(edits).filter(([, e]) => e.decision != null).map(([runId, e]) => ({
         run_id: Number(runId), decision: e.decision, note: e.note,
         factors: e.decision === "modify" ? e.factors : undefined,
       })),
@@ -98,7 +100,7 @@ export default function PointReviewPage() {
               <Select style={{ width: 120 }} allowClear placeholder={t("review.pending", "待审核")}
                 value={edits[r.run_id]?.decision}
                 options={[{ value: "accept", label: t("review.accept", "采纳") }, { value: "modify", label: t("review.modify", "修改") }, { value: "reject", label: t("review.reject", "驳回") }]}
-                onChange={(v) => setEdits((e) => ({ ...e, [r.run_id]: { decision: v as Decision, note: e[r.run_id]?.note ?? "", factors: e[r.run_id]?.factors ?? { ...(r.natural ?? {}) } } }))} />
+                onChange={(v) => setEdits((e) => ({ ...e, [r.run_id]: { decision: v as Decision | undefined, note: e[r.run_id]?.note ?? "", factors: e[r.run_id]?.factors ?? { ...(r.natural ?? {}) } } }))} />
             ) },
             { title: t("review.modify_factors", "修改后因子（仅修改时）"), render: (_v: unknown, r: DoeRun) => {
               const e = edits[r.run_id];
@@ -110,7 +112,9 @@ export default function PointReviewPage() {
             } },
             { title: t("review.note", "备注"), render: (_v: unknown, r: DoeRun) => (
               <Input style={{ width: 160 }} value={edits[r.run_id]?.note ?? ""}
-                onChange={(e) => setEdits((prev) => ({ ...prev, [r.run_id]: { decision: prev[r.run_id]?.decision ?? "accept", note: e.target.value, factors: prev[r.run_id]?.factors ?? { ...(r.natural ?? {}) } } }))} />
+                // P1-18: 备注输入只写备注，不写 decision——待审核行上只敲备注不再产生一条 accept 编辑；
+                // 备注随已选决策一起提交，未决策时备注仅本地留存、提交时不发送。
+                onChange={(e) => setEdits((prev) => { const cur = prev[r.run_id]; if (!cur) return { ...prev, [r.run_id]: { decision: undefined, note: e.target.value, factors: { ...(r.natural ?? {}) } } }; return { ...prev, [r.run_id]: { ...cur, note: e.target.value } }; })} />
             ) },
           ]} />
           <Button type="primary" style={{ marginTop: 12 }} loading={submit.isPending} onClick={() => submit.mutate()}>{t("review.submit", "提交审核")}</Button>

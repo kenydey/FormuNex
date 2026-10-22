@@ -70,8 +70,13 @@ def test_color_metrics_pigmented_formula_has_both_metrics():
 
 
 def test_color_metrics_empty_for_pigment_free():
+    # P1-15: 无色素配方不再返回 {}（前端曾因此缺字段而白屏），改回显式 null 字段。
     form = knowledge.baseline_formulation(Requirement(domain=ProductDomain.degreaser))
-    assert color_metrics(form) == {}
+    metrics = color_metrics(form)
+    assert metrics["L"] is None and metrics["a"] is None and metrics["b"] is None
+    assert metrics["delta_e_ab"] is None and metrics["delta_e"] is None
+    assert metrics["delta_e_method"] is None
+    assert metrics["lab_L"] is None and metrics["lab_a"] is None and metrics["lab_b"] is None
 
 
 def test_colour_available_is_bool():
