@@ -121,6 +121,8 @@ const en: Record<string, string> = {
   "chat.review.unavailable": "Audit record unavailable: {{e}}",
   "chat.review.unverified": "Freshness unverified",
   "chat.review.up_to_date": "Already up to date; no re-audit needed",
+  "chat.review.need_project": "Select a project first",
+  "chat.review.need_project_desc": "Audit records are isolated per project and cannot be listed without one. Choose a project in the project selector at the top, then reopen this page.",
   "chat.rewritten": "Query rewritten",
   "chat.save_failed": "Could not save the session: {{e}}",
   "chat.seconds": "{{n}} s",

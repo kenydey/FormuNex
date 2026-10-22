@@ -257,6 +257,8 @@ const en: Record<string, string> = {
   "workbench.surface.sub": "IDW interpolation of completed runs' actual parameters and measurements: how two factors drive a metric",
   "workbench.surface.title": "Response surface · {{m}}",
   "workbench.surface.too_few": "Not enough points (needs ≥3 completed runs with measurements)",
+  "workbench.surface.predicted_legend": "Predicted points",
+  "workbench.surface.measured_legend": "Measured points",
   "workbench.surface.two_factors": "This ledger has fewer than 2 factors; no response surface",
   "workbench.synced": "{{n}} rows synced",
   "workbench.tab.attachments": "Attachments",

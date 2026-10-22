@@ -60,6 +60,7 @@ const en: Record<string, string> = {
   "library.coll.sub": "Saved query + filter rules, refreshed by hand or on a schedule; results go into the literature manifest and every refresh keeps a snapshot diff",
   "library.coll.title": "Smart Collections",
   "library.coll.to": "To year",
+  "library.coll.preset_ph": "Preset used to tag new entries with a screening verdict on refresh",
   "library.coll.total": "{{n}} total",
   "library.detail.chunks": "Chunks",
   "library.detail.extract": "Structured extraction",
