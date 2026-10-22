@@ -173,6 +173,16 @@ class ChunkStore:
         self.bump_generation()
         return written
 
+    def count_by_source(self, source_id: str) -> int:
+        """Total chunk rows for one source (P1-2: feeds ChunkListResponse.total)."""
+        with self._session_factory() as session:
+            return (
+                session.query(func.count(DocumentChunk.id))
+                .filter(DocumentChunk.source_id == source_id)
+                .scalar()
+                or 0
+            )
+
     def get_by_source(
         self, source_id: str, *, limit: int | None = None, offset: int = 0
     ) -> list[DocumentChunk]:

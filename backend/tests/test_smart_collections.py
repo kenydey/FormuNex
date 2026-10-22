@@ -50,12 +50,12 @@ def test_crud_lifecycle(data_dir):
         name="Chrome-free conversion coating papers",
         query="waterborne conversion coating",
         filters={"date_from": 2020, "domain_allowlist": ["sciencedirect.com"]},
-        screening_preset="corrosion_coating",
+        screening_preset="anticorrosion_coating",
         schedule={"enabled": True, "interval_hours": 48},
     )
     assert col["collection_id"].startswith("col_")
     assert col["filters"] == {"date_from": 2020, "domain_allowlist": ["sciencedirect.com"]}
-    assert col["screening_preset"] == "corrosion_coating"
+    assert col["screening_preset"] == "anticorrosion_coating"
     assert col["schedule"]["interval_hours"] == 48
 
     listed = sc.list_collections("p1")
@@ -208,3 +208,46 @@ def test_snapshot_cap_keeps_newest_ten(data_dir, search_hits):
     # Newest kept: last snapshot has item id-11, oldest kept has id-2.
     assert snaps[-1]["item_ids"] == ["id-11"]
     assert snaps[0]["item_ids"] == ["id-2"]
+
+
+# ── P1-6: screening_preset is consumed on refresh, not just stored ────────
+
+
+def test_refresh_applies_preset_to_new_items(data_dir, search_hits):
+    """填预设 → 刷新 → 新条目按预设规则得结论，不再是 unset。"""
+    col = sc.create_collection(
+        "p1", name="c", query="q", screening_preset="anticorrosion_coating"
+    )
+    search_hits["evidence"] = [
+        _ev("id-coat", title="Epoxy anticorrosion coating for steel"),
+        _ev("id-food", title="Food flavour chemistry"),
+    ]
+    snap = sc.refresh_collection("p1", col["collection_id"])
+    assert snap["screening_preset"] == "anticorrosion_coating"
+
+    man = lm.load_manifest("p1")
+    by_id = {i["id"]: i for i in man["items"]}
+    assert by_id["id-coat"]["screening"] == "match"
+    assert by_id["id-coat"]["screening_source"] == "collection"
+    assert by_id["id-coat"]["screening_preset"] == "anticorrosion_coating"
+    # 预设 exclude 含 food → no_match；关键是"非 unset"，即预设确实执行了。
+    assert by_id["id-food"]["screening"] == "no_match"
+
+
+def test_refresh_without_preset_still_leaves_unset(data_dir, search_hits):
+    col = sc.create_collection("p1", name="c", query="q")
+    search_hits["evidence"] = [_ev("id-a")]
+    sc.refresh_collection("p1", col["collection_id"])
+    man = lm.load_manifest("p1")
+    assert man["items"][0]["screening"] == "unset"
+
+
+def test_unknown_preset_rejected_at_create_and_update(data_dir):
+    with pytest.raises(ValueError, match="unknown screening preset"):
+        sc.create_collection("p1", name="c", query="q", screening_preset="no_such_preset")
+    col = sc.create_collection("p1", name="c", query="q")
+    with pytest.raises(ValueError, match="unknown screening preset"):
+        sc.update_collection("p1", col["collection_id"], screening_preset="no_such_preset")
+    # 清空预设仍合法（空串 = 不用预设）。
+    updated = sc.update_collection("p1", col["collection_id"], screening_preset="")
+    assert updated["screening_preset"] is None

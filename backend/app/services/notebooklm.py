@@ -31,6 +31,41 @@ logger = logging.getLogger(__name__)
 NOTEBOOKLM_URL = "https://notebooklm.google.com"
 
 
+def resolve_notebook_id(
+    *, project_id: str | None = None, explicit: str | None = None
+) -> str | None:
+    """P1-7 single source for NotebookLM notebook resolution.
+
+    Priority (one function for every caller — external search, smart
+    collections, deep research — instead of three ad-hoc lookups):
+
+    1. ``explicit`` — a caller-supplied id for this call. After the
+       frontend prefill (ExternalSearchTab) this is the project binding
+       unless the user deliberately overrides it for one search.
+    2. The project's workspace binding (``workspace.notebooklm_notebook_id``)
+       — the canonical stored source.
+    3. The legacy global ``FORMUNEX_NOTEBOOKLM_NOTEBOOK_ID`` — migration
+       fallback only, for notebooks bound before workspace binding existed.
+
+    Fail-open on project-store errors (returns the next source), mirroring
+    the previous per-caller behaviour.
+    """
+    if (explicit or "").strip():
+        return explicit.strip()
+    if (project_id or "").strip():
+        try:
+            from ..db.project_store import get_project_store
+
+            detail = get_project_store().get(project_id)
+            if detail is not None and detail.workspace is not None:
+                bound = (detail.workspace.notebooklm_notebook_id or "").strip()
+                if bound:
+                    return bound
+        except Exception:  # noqa: BLE001 - fail-open to legacy fallback
+            pass
+    return _resolve_notebook_id(None)
+
+
 def _resolve_notebook_id(notebook_id: str | None = None) -> str | None:
     """Prefer an explicit (per-project) id; fall back to legacy global settings."""
     explicit = (notebook_id or "").strip()

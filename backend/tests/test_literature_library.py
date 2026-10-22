@@ -87,15 +87,33 @@ def test_library_flag_gate(tmp_data):
 
 
 def test_patch_notes_keeps_freeze(tmp_data):
+    # P1-5 纠正：旧测试只传 {"notes": ...}，恰好绕过了前端真实 payload
+    # （目录页 save() 固定发送全部草稿字段，含未改的 screening），因此
+    # 即使后端按"键存在"清冻结它也全绿，与实现脱节。本测试改发前端
+    # 真实形状：notes 改动 + screening 值未变 → 冻结必须保留。
     _seed()
     lm.freeze("p1", item_ids=["a", "b"], actor="t", settings=_S())
     man = lm.patch_library_item(
-        "p1", "a", {"notes": "updated note"}, settings=_S(), require_library=True
+        "p1", "a",
+        {"title": "Epoxy coating", "doi": "10.1/aaa", "notes": "updated note", "screening": "unset"},
+        settings=_S(), require_library=True,
     )
     assert man["frozen"] is not None
     assert man["items"][0]["notes"] == "updated note" or any(
         i["id"] == "a" and i["notes"] == "updated note" for i in man["items"]
     )
+
+
+def test_patch_changed_screening_clears_freeze(tmp_data):
+    # 对照：screening 值真正变化时冻结仍应清除（P1-5 只改判定为"值变化"，
+    # 不改变"变化即清冻结"的语义）。
+    _seed()
+    lm.freeze("p1", item_ids=["a", "b"], actor="t", settings=_S())
+    man = lm.patch_library_item(
+        "p1", "a", {"screening": "match"}, settings=_S(), require_library=True
+    )
+    assert man["frozen"] is None
+    assert any(i["id"] == "a" and i["screening"] == "match" for i in man["items"])
 
 
 def test_patch_doi_clears_freeze(tmp_data):

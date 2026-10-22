@@ -1132,6 +1132,20 @@ def iter_search(
     """
     from ..config import get_settings
 
+    # P1-7: external search without an explicit notebook id resolves the
+    # project binding (via the single notebooklm resolver) instead of
+    # silently falling back to the legacy global inside search_notebooklm.
+    # Resolving before the cache key also keeps two projects' bindings
+    # from sharing one cache entry.
+    if not (notebooklm_notebook_id or "").strip() and req is not None:
+        try:
+            from .notebooklm import resolve_notebook_id
+
+            notebooklm_notebook_id = resolve_notebook_id(
+                project_id=getattr(req, "project_id", "") or ""
+            )
+        except Exception:  # noqa: BLE001 - fail-open to legacy fallback
+            pass
     _cache_settings = get_settings()
     cache_ttl_s = int(_cache_settings.search_cache_ttl_s or 0)
     domain_hint = getattr(req, "domain", None) if req is not None else None

@@ -2,7 +2,7 @@ import { ProTable } from "@ant-design/pro-components";
 import { Alert, App, Badge, Button, Card, Checkbox, Input, Popconfirm, Progress, Space, Tag, Tooltip, Typography, Upload } from "antd";
 import { CloudDownloadOutlined, DeleteOutlined, ExperimentOutlined, FileTextOutlined, UploadOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
@@ -27,8 +27,19 @@ export default function ExternalSearchTab() {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const qc = useQueryClient();
-  const { projectId, requirement, domain } = useProjectRequirement();
+  const { projectId, requirement, domain, notebookId: boundNotebookId } = useProjectRequirement();
   const s = useResearch();
+  // P1-7: prefill the NotebookLM id from the project binding (the single
+  // source) once per project, as soon as the project loads. A manual edit
+  // after prefill is kept for that session; switching projects re-prefills
+  // from the new project's binding so a stale id is never sent.
+  const prefilledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!projectId || boundNotebookId === undefined) return;
+    if (prefilledFor.current === projectId) return;
+    prefilledFor.current = projectId;
+    useResearch.getState().setNotebookId(boundNotebookId ?? "");
+  }, [projectId, boundNotebookId]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<SearchProgress | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -297,8 +308,15 @@ export default function ExternalSearchTab() {
               };
             })} />
           {s.sourceTypes.includes("notebooklm") && (
-            <Input style={{ width: 260 }} value={s.notebookId} onChange={(e) => s.setNotebookId(e.target.value)}
-              placeholder={t("research.search.notebook", "NotebookLM Notebook ID")} />
+            <Space wrap>
+              <Input style={{ width: 260 }} value={s.notebookId} onChange={(e) => s.setNotebookId(e.target.value)}
+                placeholder={t("research.search.notebook", "NotebookLM Notebook ID")} />
+              {boundNotebookId
+                ? <Typography.Text type="secondary">{t("research.search.notebook_bound", "项目已绑定 Notebook：{{id}}（可改填其他 ID）", { id: boundNotebookId })}</Typography.Text>
+                : boundNotebookId === null && projectId && (
+                  <Alert type="warning" showIcon style={{ padding: "4px 12px" }}
+                    message={<span>{t("research.search.notebook_unbound", "所选项目未绑定 NotebookLM Notebook ID")} <Link to="/knowledge/notebooklm">{t("library.search.bind", "去绑定")}</Link></span>} />)}
+            </Space>
           )}
           <Button disabled={busy || !s.query.trim()} onClick={() => void run(true)}>{t("research.search.append", "追加检索（保留现有资料）")}</Button>
           <Upload multiple showUploadList={false} beforeUpload={(_f, list) => {

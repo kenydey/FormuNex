@@ -430,6 +430,10 @@ def patch_library_item(
     before_identity = {
         k: str(target.get(k) or "").strip().lower() for k in IDENTITY_FIELDS
     }
+    # P1-5: freeze is cleared only when the screening value actually changes.
+    # The library page always sends the full draft (including an unchanged
+    # ``screening``), so "key present" cleared the freeze on every save.
+    before_screening = str(target.get("screening") or "").strip()
     if "screening" in patch:
         scr = str(patch["screening"] or "").strip()
         if scr not in SCREENING_VALUES:
@@ -521,7 +525,13 @@ def patch_library_item(
         k: str(target.get(k) or "").strip().lower() for k in IDENTITY_FIELDS
     }
     identity_changed = before_identity != after_identity
-    screening_changed = "screening" in patch
+    # P1-5: compare old vs new screening value; an unchanged value carried
+    # by the frontend's full-draft save must not clear the freeze. A real
+    # change (including a rollback to an earlier value) still clears it.
+    screening_changed = (
+        "screening" in patch
+        and str(target.get("screening") or "").strip() != before_screening
+    )
     if identity_changed or screening_changed:
         reason = "screening_change" if screening_changed else "identity_change"
         _clear_freeze(man, reason=reason)

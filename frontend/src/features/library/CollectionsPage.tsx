@@ -1,4 +1,4 @@
-import { ModalForm, PageContainer, ProFormDigit, ProFormSwitch, ProFormText, ProTable } from "@ant-design/pro-components";
+import { ModalForm, PageContainer, ProFormDigit, ProFormSelect, ProFormSwitch, ProFormText, ProTable } from "@ant-design/pro-components";
 import { App, Button, Drawer, Empty, Popconfirm, Space, Tag, Timeline, Typography } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +19,18 @@ function CollectionsBody({ projectId }: { projectId: string }) {
   const { message } = App.useApp();
   const qc = useQueryClient();
   const [openId, setOpenId] = useState<string | null>(null);
+  // P1-6: preset names are validated against the known preset list
+  // (backend 422s unknown names); offer them as a select instead of the
+  // previous free-text box that accepted dead names. Falls back to free
+  // text if the preset list cannot be loaded — backend validation still
+  // rejects unknown names on submit.
+  const presets = useQuery({
+    queryKey: ["literature", "screening-presets"],
+    queryFn: () => call<{ presets: { name: string; title: string; description: string }[] }>(
+      "GET", "/api/wiki/literature/screening/presets"),
+    retry: false, staleTime: 300_000,
+  });
+  const presetOptions = (presets.data?.presets ?? []).map((p) => ({ value: p.name, label: p.title ? `${p.title} (${p.name})` : p.name }));
   const listKey = ["collections", projectId];
   const list = useQuery({ queryKey: listKey, queryFn: () => call<{ collections: CollectionSummary[] }>("GET", withProject("/api/collections", projectId)) });
   const detail = useQuery({
@@ -68,7 +80,10 @@ function CollectionsBody({ projectId }: { projectId: string }) {
               <ProFormText name="date_to" label={t("library.coll.to", "截止年份")} placeholder="2026" />
             </Space>
             <ProFormText name="domains" label={t("library.coll.domains", "域名白名单（逗号分隔）")} placeholder="sciencedirect.com" />
-            <ProFormText name="preset" label={t("library.coll.preset", "筛选预设（可选）")} />
+            {presetOptions.length
+              ? <ProFormSelect name="preset" label={t("library.coll.preset", "筛选预设（可选）")} options={presetOptions} fieldProps={{ allowClear: true }}
+                  placeholder={t("library.coll.preset_ph", "刷新时用该预设给新条目打筛选结论")} />
+              : <ProFormText name="preset" label={t("library.coll.preset", "筛选预设（可选）")} />}
             <Space style={{ display: "flex" }}>
               <ProFormSwitch name="sched" label={t("library.coll.sched", "定时刷新")} />
               <ProFormDigit name="interval" label={t("library.coll.interval", "间隔（小时）")} min={1} fieldProps={{ precision: 0 }} />
@@ -78,6 +93,9 @@ function CollectionsBody({ projectId }: { projectId: string }) {
         columns={[
           { title: t("library.coll.name", "名称"), dataIndex: "name", render: (_d, c) => <a onClick={() => setOpenId(c.collection_id)}>{c.name}</a> },
           { title: t("library.coll.query", "查询"), dataIndex: "query", ellipsis: true },
+          { title: t("library.coll.preset", "筛选预设"), width: 170, render: (_d, c) => c.screening_preset
+            ? <Tag>{(presets.data?.presets ?? []).find((p) => p.name === c.screening_preset)?.title ?? c.screening_preset}</Tag>
+            : <Typography.Text type="secondary">—</Typography.Text> },
           { title: t("library.coll.sched", "定时刷新"), width: 130, render: (_d, c) => (c.schedule.enabled
             ? <Tag color="processing">{t("library.coll.every", "每 {{h}} 小时", { h: c.schedule.interval_hours })}</Tag> : <Tag>{t("library.coll.off", "已关闭")}</Tag>) },
           { title: t("library.coll.last_run", "上次运行"), width: 170, render: (_d, c) => fmtEpoch(c.schedule.last_run) },
@@ -97,6 +115,12 @@ function CollectionsBody({ projectId }: { projectId: string }) {
         title={detail.data ? t("library.coll.detail", "集合详情：{{n}}", { n: detail.data.name }) : ""}
         extra={openId && <Button loading={refresh.isPending} onClick={() => refresh.mutate(openId)}>{t("library.coll.refresh", "刷新")}</Button>}>
         <ErrorAlert error={detail.error} />
+        {detail.data && detail.data.screening_preset && (
+          <Typography.Paragraph type="secondary">
+            {t("library.coll.preset", "筛选预设")}：{(presets.data?.presets ?? []).find((p) => p.name === detail.data!.screening_preset)?.title ?? detail.data.screening_preset}
+            （{detail.data.screening_preset}）
+          </Typography.Paragraph>
+        )}
         {detail.data && (detail.data.snapshots.length === 0
           ? <Empty description={t("library.coll.no_snap", "暂无快照，点击“刷新”生成第一次快照")} />
           : <Timeline items={[...detail.data.snapshots].reverse().map((s) => ({

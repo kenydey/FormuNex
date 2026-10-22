@@ -668,15 +668,15 @@ def run_research_graph(
     q = build_research_query(query or topic, req)
 
     # v16: 未显式传入时，从项目工作区解析 per-project notebook（fail-open）。
+    # P1-7: via the single resolver in notebooklm (same function the
+    # external-search and smart-collection paths use).
     if notebooklm_notebook_id is None and req is not None:
         try:
-            from ..db.project_store import get_project_store
+            from ..services.notebooklm import resolve_notebook_id
 
-            pid = getattr(req, "project_id", "") or ""
-            if pid:
-                detail = get_project_store().get(pid)
-                if detail is not None:
-                    notebooklm_notebook_id = detail.workspace.notebooklm_notebook_id
+            notebooklm_notebook_id = resolve_notebook_id(
+                project_id=getattr(req, "project_id", "") or ""
+            )
         except Exception:  # noqa: BLE001 - fail-open
             notebooklm_notebook_id = None
 

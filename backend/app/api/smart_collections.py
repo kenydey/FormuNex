@@ -185,4 +185,8 @@ def refresh_collection(
         raise HTTPException(status_code=404, detail="collection not found")
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        # P1-6: legacy unknown preset stored before validation — fail loudly
+        # (422) rather than refreshing with screening silently dropped.
+        raise HTTPException(status_code=422, detail=str(exc))
     return snap

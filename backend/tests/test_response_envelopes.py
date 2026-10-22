@@ -41,7 +41,8 @@ def test_scaffold_substitutes_answers_an_envelope_with_hits(client):
 
 def test_chunks_by_source_answers_a_chunks_envelope(client):
     body = client.get("/api/kb/chunks/by-source/does-not-exist", params={"limit": 10, "offset": 0}).json()
-    assert body == {"chunks": []}
+    # P1-2: envelope gains total (0 here) so callers can detect truncation.
+    assert body == {"chunks": [], "total": 0}
 
 
 def test_the_chunk_fields_the_viewer_reads_are_the_ones_the_endpoint_sends():

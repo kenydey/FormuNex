@@ -319,6 +319,33 @@ def _summarize(col: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_preset(screening_preset: str | None) -> str | None:
+    """P1-6: a preset name is only valid if it names a known preset.
+
+    Unknown names used to be stored silently and then never applied, so a
+    collection looked configured while its refresh screened nothing. Raises
+    ``ValueError`` (mapped to 422 by the API layer) instead of storing a
+    dead field.
+    """
+    name = (screening_preset or "").strip() or None
+    if name is None:
+        return None
+    from . import screening_presets as _presets
+
+    if _presets.get_preset(name) is None:
+        raise ValueError(f"unknown screening preset: {name!r}")
+    return name
+
+
+def _preset_criteria(screening_preset: str | None) -> dict[str, Any] | None:
+    """Criteria dict for a validated preset name, or None when unset."""
+    if not screening_preset:
+        return None
+    from . import screening_presets as _presets
+
+    return _presets.get_preset(screening_preset)
+
+
 def create_collection(
     project_id: str,
     *,
@@ -334,6 +361,7 @@ def create_collection(
         raise ValueError("name is required")
     if not query:
         raise ValueError("query is required")
+    screening_preset = _validate_preset(screening_preset)
     with _project_txn(project_id) as store:
         col = {
             "collection_id": _new_id("col"),
@@ -407,7 +435,9 @@ def update_collection(
             # B-13：合并而非全量替换，未提供的键保留
             col["filters"] = _merge_filters(col.get("filters"), filters)
         if screening_preset is not None:
-            col["screening_preset"] = screening_preset.strip() or None
+            # P1-6: validate here too — PATCH must not resurrect a dead
+            # preset name that create now rejects. Empty string clears it.
+            col["screening_preset"] = _validate_preset(screening_preset)
         if schedule is not None:
             # Merge over the existing schedule so partial updates (e.g. only
             # toggling `enabled`) keep interval_hours / last_run.
@@ -465,16 +495,21 @@ def _run_search(
 
 
 def _merge_into_manifest(
-    project_id: str, evidence: list[Any], settings: Any = None
+    project_id: str, evidence: list[Any], settings: Any = None, *,
+    screening_preset: str | None = None,
 ) -> tuple[int, int]:
     """Merge evidence hits into the literature manifest.
 
     Returns (added_count, skipped_existing_count). New items get
     ``screening_source="collection"``; existing items (including human
     dispositions per P0-8) are never overwritten.
+    P1-6: when the collection carries a screening preset, new items are
+    classified with the preset criteria instead of staying ``"unset"`` —
+    previously the preset was stored but never consumed on refresh.
     """
     from . import literature_manifest as lm
 
+    criteria = _preset_criteria(screening_preset)
     man = lm.load_manifest(project_id)
     by_id: dict[str, dict[str, Any]] = {
         str(i.get("id")): i for i in (man.get("items") or [])
@@ -489,7 +524,20 @@ def _merge_into_manifest(
         if iid in by_id:
             skipped += 1
             continue
-        item["screening"] = "unset"
+        if criteria is not None:
+            from .literature_screening import classify_item
+
+            item["screening"] = classify_item(
+                item,
+                include_keywords=list(criteria.get("include_keywords") or []),
+                exclude_keywords=list(criteria.get("exclude_keywords") or []),
+                require_doi=bool(criteria.get("require_doi") or False),
+                year_min=criteria.get("year_min"),
+                year_max=criteria.get("year_max"),
+            )
+            item["screening_preset"] = screening_preset
+        else:
+            item["screening"] = "unset"
         item["screening_source"] = "collection"
         by_id[iid] = item
         added += 1
@@ -525,17 +573,20 @@ def refresh_collection(
             raise KeyError(f"collection not found: {collection_id}")
         query = col.get("query") or ""
         filters = dict(col.get("filters") or {})
+        # P1-6: preset is read here (before the search) and validated up
+        # front, so a legacy unknown preset fails loudly instead of
+        # silently refreshing with every new item left "unset".
+        screening_preset = _validate_preset(col.get("screening_preset"))
 
-    # v15: per-project NotebookLM notebook（项目 workspace 配置；失败时降级全局）
-    nb_id: str | None = None
-    try:
-        from ..db.project_store import get_project_store
+    # v15: per-project NotebookLM notebook — resolved by the single source
+    # in notebooklm.resolve_notebook_id (P1-7); see below.
 
-        detail = get_project_store().get(project_id)
-        if detail is not None and detail.workspace is not None:
-            nb_id = detail.workspace.notebooklm_notebook_id
-    except Exception:
-        nb_id = None
+    # P1-7: single-source NotebookLM resolution — the smart-collection
+    # refresh previously did its own project-store lookup here; it now
+    # goes through notebooklm.resolve_notebook_id like every other path.
+    from .notebooklm import resolve_notebook_id
+
+    nb_id = resolve_notebook_id(project_id=project_id)
 
     # 阶段 2：耗时 IO（外部文献搜索），不持有任何 store 锁。
     evidence = _run_search(query, filters, settings=settings, notebooklm_notebook_id=nb_id)
@@ -550,7 +601,8 @@ def refresh_collection(
             prev_ids = set((col["snapshots"][-1] or {}).get("item_ids") or [])
 
         added_to_manifest, skipped_existing = _merge_into_manifest(
-            project_id, evidence, settings=settings
+            project_id, evidence, settings=settings,
+            screening_preset=screening_preset,
         )
 
         # Snapshot reflects the *search result* id set (stable even if manifest
@@ -566,6 +618,7 @@ def refresh_collection(
             "actor": actor,
             "query": col["query"],
             "filters": filters,
+            "screening_preset": screening_preset,
             "item_ids": cur_ids,
             "added": added,
             "removed": removed,

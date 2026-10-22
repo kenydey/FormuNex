@@ -272,10 +272,15 @@ def test_chunks_by_source_pagination(monkeypatch):
                 rows = rows[:limit]
             return rows
 
+        def count_by_source(self, source_id):
+            assert source_id == "s1"
+            return 10
+
     monkeypatch.setattr(chunk_store_mod, "get_chunk_store", lambda: _Store())
 
     default = kb_api.chunks_by_source("s1", limit=200, offset=0)
     assert len(default.chunks) == 10  # 默认 limit=200，10 条全回
+    assert default.total == 10  # P1-2: total 与页窗口无关
 
     page = kb_api.chunks_by_source("s1", limit=3, offset=4)
     assert [c.ord for c in page.chunks] == [4, 5, 6]

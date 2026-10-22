@@ -590,12 +590,15 @@ def chunks_by_source(
     P-6: paginated — previously the endpoint returned every chunk of the
     source in a single response. The default limit keeps existing callers
     working (first page); pass explicit limit/offset for the rest.
+    P1-2: ``total`` is the source's full chunk count, so a caller that only
+    reads the first page can tell it was truncated.
     """
     from ..db.chunk_store import get_chunk_store
 
     store = get_chunk_store()
     rows = store.get_by_source(source_id, limit=limit, offset=offset)
     return ChunkListResponse(
+        total=store.count_by_source(source_id),
         chunks=[
             DocumentChunkResponse(
                 id=row.id,

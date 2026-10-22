@@ -94,6 +94,11 @@ export function ReviewerAuditPanel({ initialRunId, projectId, ctx, onSelect }: {
   const qs = new URLSearchParams({ limit: "30" });
   if (projectId) qs.set("project_id", projectId);
   const runs = useQuery({ queryKey: ["chat", "reviews", "list", projectId ?? null],
+    // P1-3: do not fire the list request without a project — the backend
+    // fail-closed 400s (by design, to avoid cross-project leakage) and the
+    // page previously showed only that error. The no-project branch below
+    // renders the "pick a project" guidance instead.
+    enabled: !!projectId,
     queryFn: async () => (await call<{ items: ReviewRunSummary[] }>("GET", `/api/reviews/runs?${qs}`)).items ?? [] });
   const detail = useQuery({ queryKey: ["chat", "reviews", "run", selected], enabled: !!selected,
     queryFn: () => call<ReviewRunDetail>("GET", runPath(selected!)) });
@@ -106,6 +111,20 @@ export function ReviewerAuditPanel({ initialRunId, projectId, ctx, onSelect }: {
   };
   const d = detail.data;
   const canRerun = !!ctx?.question && !!ctx?.answer;
+  // P1-3: no project selected and no run picked — guide instead of showing
+  // the backend's fail-closed 400. The backend requirement is intentionally
+  // untouched. (A directly opened run id still renders its detail below,
+  // since the detail endpoint is not project-gated.)
+  if (!projectId && !selected) {
+    return (
+      <ProCard bordered>
+        <Alert type="info" showIcon
+          message={t("chat.review.need_project", "请先选择项目")}
+          description={t("chat.review.need_project_desc", "审计记录按项目隔离，未选项目时无法列出。请在顶部项目选择器中选择一个项目后再打开本页。")} />
+        <Empty style={{ marginTop: 16 }} description={t("chat.review.need_project", "请先选择项目")} />
+      </ProCard>
+    );
+  }
   return (
     <ProCard split="vertical" bordered>
       <ProCard colSpan="34%" title={t("chat.review.runs", "审计记录（最新在前）")} loading={runs.isLoading}

@@ -4,7 +4,7 @@ import { call } from "@/api/client";
 import { useUi } from "@/app/store";
 
 export interface Requirement { domain: string; [k: string]: unknown }
-interface ProjectLite { id: string; domain: string; workspace: { requirement: Requirement | null; [k: string]: unknown } }
+interface ProjectLite { id: string; domain: string; workspace: { requirement: Requirement | null; notebooklm_notebook_id?: string | null; [k: string]: unknown } }
 
 /** The current project's R&D requirement (shell header project), used to focus search and deep research. */
 export function useProjectRequirement() {
@@ -15,7 +15,10 @@ export function useProjectRequirement() {
   });
   const requirement = project.data?.workspace?.requirement ?? null;
   const domain = requirement?.domain || project.data?.domain || "anticorrosion_coating";
-  return { projectId, requirement, domain };
+  // P1-7: the project's NotebookLM binding (undefined while loading, null
+  // when unbound) — the single source external search prefills from.
+  const notebookId = project.data ? (project.data.workspace?.notebooklm_notebook_id ?? null) : undefined;
+  return { projectId, requirement, domain, notebookId };
 }
 
 /** Product-domain options of the ``ProductDomain`` enum. */

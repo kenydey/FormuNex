@@ -49,17 +49,33 @@ export default function SourceDetailPage() {
   });
   const chunks = useQuery({
     queryKey: ["kb", "chunks", sourceId],
-    queryFn: () => call<Chunk[] | { chunks: Chunk[] }>("GET", `/api/kb/chunks/by-source/${sourceId}`),
+    // P1-2: page through the whole source — the backend caps one response
+    // at 200 chunks, and a single first page silently truncated long
+    // documents (tree nodes past chunk 200 rendered Empty). Loop until
+    // the page is short or the reported total is reached.
+    queryFn: async () => {
+      const out: Chunk[] = [];
+      const PAGE = 200;
+      let offset = 0;
+      for (;;) {
+        const d = await call<Chunk[] | { chunks: Chunk[]; total?: number }>(
+          "GET", `/api/kb/chunks/by-source/${sourceId}?limit=${PAGE}&offset=${offset}`);
+        const page = Array.isArray(d) ? d : d?.chunks ?? [];
+        out.push(...page);
+        const total = Array.isArray(d) ? undefined : d?.total;
+        if (page.length < PAGE) break;
+        if (total != null && out.length >= total) break;
+        offset += page.length;
+      }
+      return out;
+    },
   });
   const rebuild = useMutation({
     mutationFn: () => call("POST", `/api/kb/sources/${sourceId}/toc-tree/rebuild`),
     onSuccess: () => { message.success(t("knowledge.tree.rebuilt", "目录树已重建")); void tree.refetch(); },
     onError: (e) => message.error(errorText(e)),
   });
-  const allChunks = useMemo(() => {
-    const d = chunks.data;
-    return Array.isArray(d) ? d : d?.chunks ?? [];
-  }, [chunks.data]);
+  const allChunks = useMemo(() => chunks.data ?? [], [chunks.data]);
   const node = selected && tree.data ? find(tree.data.tree, selected) : null;
   const nodeChunks = node ? allChunks.filter((c) => node.chunk_ids.includes(c.id)) : [];
   const detail = useQuery({

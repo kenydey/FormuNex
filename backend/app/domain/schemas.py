@@ -1160,9 +1160,16 @@ class DocumentChunkResponse(BaseModel):
 
 
 class ChunkListResponse(BaseModel):
-    """Wrapper for chunk retrieval responses."""
+    """Wrapper for chunk retrieval responses.
+
+    P1-2: ``total`` is the full chunk count for the source, independent of
+    the page window (``limit``/``offset``). Callers must page until
+    ``len(chunks)`` reaches ``total`` — a first page alone is a truncation,
+    not the whole document.
+    """
 
     chunks: list[DocumentChunkResponse]
+    total: int = 0
 
 
 # ── Inverse design: target properties → composition ──────────────────────────
