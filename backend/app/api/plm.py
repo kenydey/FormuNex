@@ -27,9 +27,12 @@ def _doc_payload_debug_enabled() -> bool:
 
 # WebSocket router: mounted WITHOUT the /api prefix (see main.py), so the
 # endpoint is /ws/formulations/{id}/compliance. Browsers cannot set an
-# Authorization header on a WebSocket handshake; classification is a read-only
-# computation with no persistence, same as POST /api/plm/ghs/classify, so the
-# endpoint carries no auth dependency (parity with the REST endpoint).
+# Authorization header on a WebSocket handshake, so the handshake accepts
+# ?token= (same rationale as the SSE task-stream ?token= in
+# middleware/api_auth.py) with an Authorization-header fallback. BaseHTTPMiddleware
+# never runs for WebSocket, so unlike REST the handler authenticates itself
+# before accept: the same plm.document.write gate the guard applies to
+# POST /api/plm/ghs/*, plus formulation.read_exact redaction (see below).
 
 
 class HazardIn(BaseModel):
@@ -217,9 +220,21 @@ async def formulation_compliance_ws(websocket: WebSocket, formulation_id: str) -
 
     The socket never persists anything: classification results are computed
     in-memory only; saving still goes through the REST endpoints.
+
+    Authentication (P0-1 fix): the handshake is authenticated *before*
+    accept — a missing/invalid token closes the socket with 4401, a token
+    without plm.document.write with 4403. Callers without
+    formulation.read_exact receive a banded response (exact pct values are
+    replaced by concentration bands); computation itself still uses the
+    exact values.
     """
     from ..services.plm.ghs import service
 
+    try:
+        _user, can_read_exact = _ws_authenticate(websocket)
+    except _WsAuthFailure as exc:
+        await websocket.close(code=exc.code, reason=exc.detail)
+        return
     await websocket.accept()
     while True:
         try:
@@ -265,7 +280,107 @@ async def formulation_compliance_ws(websocket: WebSocket, formulation_id: str) -
         except Exception as exc:  # noqa: BLE001 - classification must never kill the socket
             await websocket.send_json({"type": "error", "detail": f"分类失败：{exc}"})
             continue
+        if not can_read_exact:
+            response = _redact_classification_response(response)
         await websocket.send_json({"type": "classification", **response})
+
+
+class _WsAuthFailure(Exception):
+    """Handshake rejection: close code 4401 (unauthenticated) / 4403 (forbidden) / 1011 (server error)."""
+
+    def __init__(self, code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
+def _ws_token(websocket: WebSocket) -> str | None:
+    """Bearer <redacted> or ?token= — browsers cannot set headers on a WS handshake."""
+    query = websocket.query_params.get("token")
+    if query and query.strip():
+        return query.strip()
+    auth = websocket.headers.get("authorization") or ""
+    parts = auth.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1].strip():
+        return parts[1].strip()
+    return None
+
+
+def _ws_authenticate(websocket: WebSocket) -> tuple[CurrentUser | None, bool]:
+    """Authenticate the WS handshake; returns (user, can_read_exact).
+
+    Parity rules (mirroring the REST path):
+    - Auth disabled → open, exact values allowed (same as the middleware
+      passing everything and _can_read_exact(None) == True in formulations).
+    - Operator credential (FORMUNEX_API_TOKEN / multi-user owner token) →
+      open, exact values allowed (the guard's service-key exemption).
+    - Personal access token → must hold plm.document.write (the gate the
+      guard applies to POST /api/plm/ghs/*); exact values only with
+      formulation.read_exact.
+    Raises _WsAuthFailure on rejection; the caller closes the socket.
+    """
+    from ..config import get_settings, multi_user_enabled
+    from ..middleware.api_auth import _owner_of_token, _safe_eq, resolve_api_token
+    from ..services.identity import accounts, tokens
+
+    settings = get_settings()
+    if not settings.api_auth_enabled:
+        return None, True
+    token = _ws_token(websocket)
+    if not token:
+        raise _WsAuthFailure(4401, "需要登录（WebSocket 握手需携带 ?token= 或 Authorization Bearer）")
+    if multi_user_enabled() and _owner_of_token(token) is not None:
+        return None, True
+    configured = resolve_api_token(settings)
+    if configured is not None and _safe_eq(token, configured):
+        return None, True
+    if not tokens.looks_like_access_token(token):
+        raise _WsAuthFailure(4401, "无效的访问令牌")
+    with _session() as session:
+        try:
+            user_row, sid = accounts.active_user_for_token(session, token)
+        except accounts.AuthError as exc:
+            raise _WsAuthFailure(4401, str(exc)) from None
+        except tokens.SigningKeyMissing as exc:
+            raise _WsAuthFailure(1011, str(exc)) from None
+        from ..services.identity.rbac import load_principal
+
+        user = CurrentUser(id=user_row.id, username=user_row.username, display_name=user_row.display_name,
+                           session_id=sid, principal=load_principal(session, user_row.id))
+    if not user.principal.can("plm.document.write"):
+        raise _WsAuthFailure(4403, "缺少权限 plm.document.write")
+    return user, user.principal.can("formulation.read_exact")
+
+
+def _redact_classification_response(response: dict[str, Any]) -> dict[str, Any]:
+    """Band exact percentages for callers without formulation.read_exact.
+
+    Computation still uses exact values; only the echoed response is banded
+    (same banding SDS section 3 uses): disclosure rows, trace contributors
+    and unknown-toxicity percentages lose their exact pct and gain pct_band.
+    """
+    import copy
+
+    from ..services.plm.documents.confidential_ranges import band
+
+    out = copy.deepcopy(response)
+    for row in out.get("disclosure", []) or []:
+        if isinstance(row, dict) and isinstance(row.get("pct"), (int, float)):
+            row["pct_band"] = band(float(row["pct"]))
+            del row["pct"]
+    for entry in out.get("trace", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        for contributor in entry.get("contributors", []) or []:
+            if isinstance(contributor, dict) and isinstance(contributor.get("pct"), (int, float)):
+                contributor["pct_band"] = band(float(contributor["pct"]))
+                del contributor["pct"]
+    tox = out.get("unknown_toxicity_pct")
+    if isinstance(tox, dict):
+        out["unknown_toxicity_pct"] = {
+            k: (band(float(v)) if isinstance(v, (int, float)) else v) for k, v in tox.items()
+        }
+    return out
 
 
 @router.get("/substances")

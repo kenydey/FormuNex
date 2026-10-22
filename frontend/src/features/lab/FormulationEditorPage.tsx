@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { call } from "@/api/client";
+import { getAccessToken } from "@/api/auth";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
@@ -98,7 +99,13 @@ export default function FormulationEditorPage() {
   const wsAliveRef = useRef(false);
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/ws/formulations/${encodeURIComponent(versionId)}/compliance`);
+    // Browsers cannot set an Authorization header on a WebSocket handshake:
+    // the access token (memory-only, see api/auth) travels as ?token=, and the
+    // server closes the socket with 4401/4403 when it is missing or lacks
+    // plm.document.write — the REST fallback below then applies the same gate.
+    const token = getAccessToken();
+    const wsBase = `${proto}//${window.location.host}/ws/formulations/${encodeURIComponent(versionId)}/compliance`;
+    const ws = new WebSocket(token ? `${wsBase}?token=${encodeURIComponent(token)}` : wsBase);
     ws.onopen = () => { wsAliveRef.current = true; };
     ws.onmessage = (ev) => {
       try {
