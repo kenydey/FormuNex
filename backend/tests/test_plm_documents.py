@@ -27,7 +27,7 @@ from app.services.plm.documents.coa_builder import (  # noqa: E402
 from app.services.plm.documents.confidential_ranges import band, disclose  # noqa: E402
 from app.services.plm.documents.label_builder import LabelContext, build_label, check_label_size  # noqa: E402
 from app.services.plm.documents.sds_builder import SECTION_TITLES, SdsContext, build_sds  # noqa: E402
-from app.services.plm.documents.tds_builder import TdsContext, build_tds  # noqa: E402
+from app.services.plm.documents.tds_builder import TdsContext, build_tds, split_list_field  # noqa: E402
 from app.services.plm.ghs.engine import classify  # noqa: E402
 from app.services.plm.ghs.model import Component, ComponentHazard, MixtureProperties  # noqa: E402
 
@@ -322,6 +322,76 @@ def test_label_tds_and_coa(api):
     assert coa["content"]["meta"]["overall"] == "FAIL" and coa["content"]["meta"]["verdicts"] == {"solids": "PASS", "visc": "FAIL"}
     assert coa["batch_id"] == bid
     assert client.post(f"/api/plm/revisions/{rid}/documents", json={"doc_type": "coa", "coa": {}}).status_code == 422
+
+
+def test_tds_features_and_applications_split_string_and_list():
+    """P1-22: a UI text-area string must split, not become one-character items."""
+
+    def _features(doc):
+        fields = doc["sections"][0]["fields"]
+        return {f["key"]: f["value"] for f in fields}
+
+    doc = build_tds(TdsContext(product={**PRODUCT, "description": "底漆",
+                                       "features": "耐腐蚀、耐磨，耐高温；耐酸",
+                                       "applications": "钢结构、桥梁"},
+                               company=COMPANY, properties=[],
+                               application={"method": "喷涂"}))
+    got = _features(doc)
+    assert got["features"] == ["耐腐蚀", "耐磨", "耐高温", "耐酸"]
+    assert got["applications"] == ["钢结构", "桥梁"]
+    doc = build_tds(TdsContext(product={**PRODUCT, "description": "底漆",
+                                       "features": ["耐腐蚀", "耐磨"],
+                                       "applications": ["钢结构"]},
+                               company=COMPANY, properties=[],
+                               application={"method": "喷涂"}))
+    got = _features(doc)
+    assert got["features"] == ["耐腐蚀", "耐磨"] and got["applications"] == ["钢结构"]
+    assert split_list_field("", "features") == [] and split_list_field(None, "features") == []
+    with pytest.raises(ValueError, match="字符串列表"):
+        split_list_field(42, "features")
+    with pytest.raises(ValueError, match="非字符串项"):
+        split_list_field(["耐腐蚀", 7], "features")
+
+
+def test_tds_string_features_via_api_are_split_not_characters(api):
+    """P1-22 API path: string features from a caller must not reach build_tds raw."""
+    client, pid, rid = api
+    r = client.post(f"/api/plm/revisions/{rid}/documents", json={
+        "doc_type": "tds", "tds": {"product": {"description": "双组分环氧底漆", "features": "耐腐蚀、耐磨",
+                                              "applications": "钢结构，桥梁"},
+                                   "properties": [{"key": "density_g_cm3", "label": "密度", "value": 1.35, "unit": "g/cm³"}],
+                                   "application": {"method": "喷涂"}}})
+    assert r.status_code == 201, r.text
+    fields = {f["key"]: f["value"] for f in r.json()["content"]["sections"][0]["fields"]}
+    assert fields["features"] == ["耐腐蚀", "耐磨"]
+    assert fields["applications"] == ["钢结构", "桥梁"]
+    bad = client.post(f"/api/plm/revisions/{rid}/documents", json={
+        "doc_type": "tds", "tds": {"product": {"description": "双组分环氧底漆", "features": 42},
+                                   "properties": [{"key": "density_g_cm3", "label": "密度", "value": 1.35, "unit": "g/cm³"}],
+                                   "application": {"method": "喷涂"}}})
+    assert bad.status_code == 422, bad.text
+
+
+def test_coa_two_batches_each_get_version_one(api):
+    """P1-20 regression: the second batch's first COA used to 500 on the
+    (revision, doc_type, lang, version_no) unique constraint."""
+    client, pid, rid = api
+    ids = []
+    for batch_no in ("B2610-01", "B2610-02"):
+        bid = client.post(f"/api/plm/products/{pid}/batches", json={"batch_no": batch_no}).json()["id"]
+        r = client.post(f"/api/plm/revisions/{rid}/documents", json={"doc_type": "coa", "coa": {"batch_id": bid}})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["version_no"] == 1 and body["batch_id"] == bid
+        ids.append(body["id"])
+    assert ids[0] != ids[1]
+    # A second COA for the first batch still increments within that batch.
+    docs = client.get(f"/api/plm/revisions/{rid}/documents").json()
+    first_batch = next(d for d in docs if d["doc_type"] == "coa" and d["batch_id"] and d["version_no"] == 1)
+    again = client.post(f"/api/plm/revisions/{rid}/documents",
+                        json={"doc_type": "coa", "coa": {"batch_id": first_batch["batch_id"]}})
+    assert again.status_code == 201, again.text
+    assert again.json()["version_no"] == 2 and again.json()["batch_id"] == first_batch["batch_id"]
 
 
 def test_frozen_revision_and_errors(api):

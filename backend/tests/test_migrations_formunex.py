@@ -178,6 +178,28 @@ def test_append_only_guard_also_on_fresh_database(tmp_path, monkeypatch):
     assert {"audit_log_no_update", "audit_log_no_delete"} <= triggers
 
 
+def test_0068_regulatory_document_unique_key_includes_batch_id(legacy_url, monkeypatch):
+    """P1-20: after upgrading past 0068 the regulatory_documents unique key
+    carries batch_id, and downgrading to 0067 + re-upgrading is clean."""
+    run_upgrade(legacy_url, monkeypatch)
+    engine = create_engine(legacy_url)
+    try:
+        insp = inspect(engine)
+        uqs = {c["name"]: list(c["column_names"]) for c in insp.get_unique_constraints("regulatory_documents")}
+        assert uqs["uq_regulatory_document"] == ["revision_id", "doc_type", "lang", "batch_id", "version_no"]
+    finally:
+        engine.dispose()
+    run_downgrade(legacy_url, monkeypatch, "0067")
+    engine = create_engine(legacy_url)
+    try:
+        insp = inspect(engine)
+        uqs = {c["name"]: list(c["column_names"]) for c in insp.get_unique_constraints("regulatory_documents")}
+        assert uqs["uq_regulatory_document"] == ["revision_id", "doc_type", "lang", "version_no"]
+    finally:
+        engine.dispose()
+    run_upgrade(legacy_url, monkeypatch)
+
+
 def test_downgrade_to_0050_removes_formunex_objects(legacy_url, monkeypatch):
     run_upgrade(legacy_url, monkeypatch)
     run_downgrade(legacy_url, monkeypatch, "0050")

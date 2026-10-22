@@ -16,6 +16,10 @@ interface TsIndicator { key: string; label?: string; unit?: string; spec_min?: n
 
 const LABEL_SIZES: [number, number][] = [[50, 75], [75, 100], [100, 150], [150, 200], [200, 300]];
 
+/** P1-22: text-area input is one string; split it the way the backend does (、 ， ； , ;). */
+const splitList = (v: unknown): string[] | undefined =>
+  typeof v === "string" ? v.split(/[、，,；;]+/).map((s) => s.trim()).filter(Boolean) : undefined;
+
 /** Generate a new version of SDS / TDS / COA / label (never edits an existing version). */
 export function GenerateDocModal({ revision, open, onClose }: { revision: Revision; open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
@@ -56,7 +60,7 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
         trade_secrets: Object.fromEntries(secrets.filter((s) => s.cas && s.generic).map((s) => [s.cas, s.generic])),
         product: { recommended_use: v.recommended_use, restricted_use: v.restricted_use, name_en: revision.product.name_en },
         change_summary: v.change_summary,
-        tds: { product: { description: v.description, features: v.features }, properties: tdsProps.filter((p) => p.key && p.value != null),
+        tds: { product: { description: v.description, features: splitList(v.features), applications: splitList(v.applications) }, properties: tdsProps.filter((p) => p.key && p.value != null),
           application: { method: v.app_method, substrates: v.substrates, film_thickness: v.film_thickness, cure: v.cure },
           storage: { shelf_life: v.shelf_life, conditions: v.storage_conditions, packaging: v.packaging } },
         coa: { batch_id: v.batch_id, expiry: v.expiry },
@@ -128,7 +132,8 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
         </>}
         {docType === "tds" && <>
           <Form.Item name="description" label={t("doc.description", "产品说明")} rules={[{ required: true }]}><Input.TextArea rows={2} /></Form.Item>
-          <Form.Item name="features" label={t("doc.features", "特点")}><Input.TextArea rows={2} /></Form.Item>
+          <Form.Item name="features" label={t("doc.features", "特点")}><Input.TextArea rows={2} placeholder="多个特点用顿号、逗号或分号分隔" /></Form.Item>
+          <Form.Item name="applications" label={t("doc.applications", "应用领域")}><Input.TextArea rows={2} placeholder="多个应用领域用顿号、逗号或分号分隔" /></Form.Item>
           <Typography.Text strong>{t("doc.typical", "典型物性")}</Typography.Text>
           <EditableRows<TdsProp> value={tdsProps} onChange={setTdsProps} newRow={() => ({ key: "", value: null })} columns={[
             { title: "key", dataIndex: "key" }, { title: t("doc.item", "项目"), dataIndex: "label" }, { title: t("measure.value", "数值"), dataIndex: "value", valueType: "digit" },

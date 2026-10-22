@@ -6,9 +6,10 @@ import { call } from "@/api/client";
 import { errorText } from "@/shared/feedback";
 import type { Product } from "./types";
 
-interface BatchResult { id: string; status: string; file_count: number; missing: { product_code: string | null; doc_type: string | null; reason: string }[] }
+interface BatchResult { id: string; status: string; file_count: number; missing: { product_code: string | null; doc_type: string | null; reason: string; draft_only?: boolean }[] }
 
-/** 批量文档导出（整合方案 §4）：多产品 × 多文档类型 → 一个 ZIP；缺失文档如实报告。 */
+/** 批量文档导出（整合方案 §4）：多产品 × 多文档类型 → 一个 ZIP；仅导出已批准或已发布
+ * 文档，草稿版被排除并在结果区明确提示，缺失文档如实报告。 */
 export function BatchExportModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -18,7 +19,9 @@ export function BatchExportModal({ open, onClose }: { open: boolean; onClose: ()
     queryFn: () => call<Product[]>("GET", "/api/plm/products?limit=1000") });
   const run = useMutation({
     mutationFn: (v: Record<string, unknown>) => call<BatchResult>("POST", "/api/plm/documents/batch-export", v),
-    onSuccess: (r) => { setResult(r); message.success(t("plm.batch_done", "批量导出完成：{{n}} 个文件", { n: r.file_count })); },
+    onSuccess: (r) => { setResult(r);
+      if (r.missing.some((m) => m.draft_only)) message.warning(t("plm.batch_done_draft", "批量导出完成：{{n}} 个文件，{{d}} 个文档仅有草稿版未导出", { n: r.file_count, d: r.missing.filter((m) => m.draft_only).length }));
+      else message.success(t("plm.batch_done", "批量导出完成：{{n}} 个文件", { n: r.file_count })); },
     onError: (e) => message.error(errorText(e)),
   });
   return (
@@ -43,9 +46,15 @@ export function BatchExportModal({ open, onClose }: { open: boolean; onClose: ()
           <Input placeholder="{company}_{product}_{doc_type}_{lang}_{version}.{ext}" />
         </Form.Item>
       </Form>
-      {result && result.missing.length > 0 && (
+      {result && result.missing.filter((m) => m.draft_only).length > 0 && (
+        <Alert type="error" showIcon style={{ marginBottom: 12 }}
+          message={t("plm.batch_draft_excluded", "以下文档仅有草稿/未批准版本，已排除在导出包之外（批量导出仅导出已批准或已发布文档）：")}
+          description={<ul style={{ margin: 0, paddingLeft: 18 }}>{result.missing.filter((m) => m.draft_only).map((m, i) => (
+            <li key={i}>{m.product_code ?? "—"} · {m.doc_type ?? "—"}：{m.reason}</li>))}</ul>} />
+      )}
+      {result && result.missing.filter((m) => !m.draft_only).length > 0 && (
         <Alert type="warning" showIcon message={t("plm.batch_missing", "以下文档不存在，未导出：")}
-          description={<ul style={{ margin: 0, paddingLeft: 18 }}>{result.missing.map((m, i) => (
+          description={<ul style={{ margin: 0, paddingLeft: 18 }}>{result.missing.filter((m) => !m.draft_only).map((m, i) => (
             <li key={i}>{m.product_code ?? "—"} · {m.doc_type ?? "—"}：{m.reason}</li>))}</ul>} />
       )}
     </Modal>

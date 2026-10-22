@@ -8,10 +8,37 @@ release gate can prove it.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from .common import DocumentContent, t
+
+# P1-22: UI text areas hand over one string ("耐腐蚀、耐磨"), the builder used
+# to do list() on it and produced one-character entries. Split on every
+# separator the UI promises (Chinese 、 ， ； and ASCII , ;).
+_SPLIT_RE = re.compile(r"[、，,；;]+")
+
+
+def split_list_field(value: Any, field_name: str) -> list[str]:
+    """Normalise a TDS list field: string → split, list → validate + strip.
+
+    Raises ValueError for anything else (a non-string item included); the
+    service layer converts it to DocumentError (422) for API callers.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [p.strip() for p in _SPLIT_RE.split(value) if p.strip()]
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError(f"TDS {field_name} 须为字符串列表，含非字符串项：{item!r}")
+            if item.strip():
+                out.append(item.strip())
+        return out
+    raise ValueError(f"TDS {field_name} 须为字符串或字符串列表，收到 {type(value).__name__}")
 
 
 @dataclass
@@ -51,9 +78,10 @@ def build_tds(ctx: TdsContext) -> dict:
     s.add("description", t(lang, "产品说明", "Description"),
           doc.require(ctx.product.get("description"), "产品说明"), "product")
     if ctx.product.get("features"):
-        s.add("features", t(lang, "产品特点", "Features"), list(ctx.product["features"]), "product")
+        s.add("features", t(lang, "产品特点", "Features"), split_list_field(ctx.product["features"], "features"), "product")
     if ctx.product.get("applications"):
-        s.add("applications", t(lang, "应用领域", "Applications"), list(ctx.product["applications"]), "product")
+        s.add("applications", t(lang, "应用领域", "Applications"),
+              split_list_field(ctx.product["applications"], "applications"), "product")
 
     p = doc.section(2, "typical_properties", t(lang, "典型物性", "Typical properties"))
     if not ctx.properties:

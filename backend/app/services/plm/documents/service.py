@@ -40,7 +40,7 @@ from .common import content_hash, field_sources
 from .confidential_ranges import DEFAULT_EDGES
 from .label_builder import LabelContext, build_label
 from .sds_builder import SdsContext, build_sds
-from .tds_builder import TdsContext, build_tds
+from .tds_builder import TdsContext, build_tds, split_list_field
 from .ts_builder import TsContext, build_ts, clean_indicators
 from ..company import resolve_company
 
@@ -320,8 +320,18 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
             content["meta"]["variables"] = {k: v for k, v in (label.get("variables") or {}).items() if v not in (None, "")}
     elif doc_type == "tds":
         tds = payload.get("tds") or {}
+        # P1-22: normalise here so a bad type is a 422 (DocumentError), not a
+        # 500 from inside the builder; build_tds splits strings itself too,
+        # so direct builder callers get the same behaviour.
+        tds_product = {**prod, **(tds.get("product") or {})}
+        try:
+            for _field in ("features", "applications"):
+                if tds_product.get(_field) is not None:
+                    tds_product[_field] = split_list_field(tds_product[_field], _field)
+        except ValueError as exc:
+            raise DocumentError(str(exc)) from None
         content = build_tds(TdsContext(
-            product={**prod, **(tds.get("product") or {})}, company=company, properties=tds.get("properties") or [],
+            product=tds_product, company=company, properties=tds.get("properties") or [],
             performance=tds.get("performance") or [], application=tds.get("application") or {},
             storage=tds.get("storage") or {}, revision=_revision_meta(session, rev, doc_type, lang, None), lang=lang))
     elif doc_type == "ts":

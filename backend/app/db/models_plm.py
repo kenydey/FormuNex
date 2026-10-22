@@ -115,8 +115,16 @@ class DocTemplateRow(Base):
 
 class RegulatoryDocumentRow(Base):
     __tablename__ = "regulatory_documents"
+    # P1-20 (alembic 0068): version numbers increment per batch for COA
+    # (``service._next_version`` filters by batch_id), so the unique key must
+    # include batch_id — otherwise the second batch's first COA (version 1)
+    # collides with the first batch's and generation fails with IntegrityError.
+    # Non-COA documents carry batch_id NULL and keep incrementing globally
+    # (their ``_next_version`` / ``generate_document`` queries do not filter
+    # by batch), so the NULL rows are still ordered by the app-level counter.
     __table_args__ = (
-        UniqueConstraint("revision_id", "doc_type", "lang", "version_no", name="uq_regulatory_document"),
+        UniqueConstraint("revision_id", "doc_type", "lang", "batch_id", "version_no",
+                         name="uq_regulatory_document"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
