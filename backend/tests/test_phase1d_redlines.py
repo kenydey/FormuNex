@@ -41,7 +41,7 @@ def env(tmp_path, monkeypatch):
         pid = f"proj-{uuid.uuid4().hex[:8]}"
         with default_session_factory()() as s:
             s.add(ProjectRow(id=pid, title="T", domain="coating",
-                             payload={"workspace": {"spec_contract": spec_contract}}))
+                             payload={"spec_contract": spec_contract}))
             s.commit()
         return pid
 
@@ -330,7 +330,7 @@ def _gate_env(tmp_path, monkeypatch, spec_snapshot: dict, project_spec: dict | N
                                      {"name": "二甲苯", "cas_no": "1330-20-7", "weight_pct": 30, "role": "solvent"},
                                      {"name": "水", "cas_no": "7732-18-5", "weight_pct": 70, "role": "solvent"}]}))
         proj_id = "proj-gate"
-        payload = {"workspace": {"spec_contract": project_spec}} if project_spec else {}
+        payload = {"spec_contract": project_spec} if project_spec else {}
         s.add(ProjectRow(id=proj_id, title="G", domain="coating", payload=payload))
         s.add(ProductRow(id="prod-g", code="FX-G", name_zh="G", project_id=proj_id))
         s.flush()  # 跨模块 Base 的 flush 排序漏 FK 依赖：先落盘父行，再建修订版
@@ -438,14 +438,14 @@ def test_2_8_winning_derives_release_specs_from_flagged_objectives(tmp_path, mon
     from app.services.identity.rbac import build_principal
     from app.services.plm import winning as winning_mod
 
-    payload = {"workspace": {
+    payload = {
         "requirement": {"objectives": [
             {"metric": "salt_spray_hours", "display_name": "耐盐雾", "is_release_indicator": True,
              "ref_min": 500, "unit": "h"},
             {"metric": "adhesion", "display_name": "附着力", "is_release_indicator": False},
         ]},
         "spec_contract": {"release_specs": [{"metric": "gloss", "label": "光泽", "unit": "GU"}]},
-    }}
+    }
     with default_session_factory()() as s:
         s.add(ProjectRow(id="proj-28", title="W", domain="coating", payload=payload))
         s.add(ProductRow(id="prod-28", code="FX-28", name_zh="W", project_id="proj-28"))
@@ -479,10 +479,10 @@ def test_2_8_winning_explicit_release_spec_beats_derived(tmp_path, monkeypatch):
     from app.services.identity.rbac import build_principal
     from app.services.plm import winning as winning_mod
 
-    payload = {"workspace": {"requirement": {"objectives": [
+    payload = {"requirement": {"objectives": [
         {"metric": "salt_spray_hours", "display_name": "耐盐雾", "is_release_indicator": True,
          "ref_min": 500, "unit": "h"},
-    ]}}}
+    ]}}
     with default_session_factory()() as s:
         s.add(ProjectRow(id="proj-28b", title="W", domain="coating", payload=payload))
         s.add(ProductRow(id="prod-28b", code="FX-28b", name_zh="W", project_id="proj-28b"))

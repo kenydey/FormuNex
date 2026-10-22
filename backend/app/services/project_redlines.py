@@ -90,7 +90,11 @@ def load_project_constraints(session: Session, project_id: str | None) -> GhsCon
         row = session.get(ProjectRow, project_id)
         if row is None:
             return GhsConstraints()
-        ws = (row.payload or {}).get("workspace") or {}
+        # P0-3: ProjectRow.payload IS the flat workspace dict (project_store
+        # writes workspace.model_dump()); it was never nested under a
+        # "workspace" key, so the nested read always returned {} and no
+        # spec-contract constraint ever applied.
+        ws = row.payload or {}
         out = constraints_from_spec_contract(ws.get("spec_contract") or {}, source="spec_contract")
         if out.voc_limit_g_l is None:
             req = ws.get("requirement") or {}

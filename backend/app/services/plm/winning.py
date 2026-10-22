@@ -60,7 +60,9 @@ def select_winning(session: Session, *, product_id: str, formulation_version_id:
     if product.project_id:
         proj = session.get(ProjectRow, product.project_id)
         if proj is not None:
-            ws = (proj.payload or {}).get("workspace", {}) or {}
+            # P0-3: payload 本身就是平铺的 workspace dict（见 project_store），
+            # 旧的嵌套读取恒为空，定型出厂指标派生 COA 一直失效。
+            ws = proj.payload or {}
             objectives = ((ws.get("requirement") or {}).get("objectives") or [])
             contract_specs = ((ws.get("spec_contract") or {}).get("release_specs") or [])
             spec["release_specs"] = derive_release_specs(

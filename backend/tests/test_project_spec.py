@@ -183,7 +183,7 @@ def test_2_10_dispatch_warns_on_window_deviation(tmp_path, monkeypatch):
     session = make_session_factory(engine)()
     pid = str(uuid.uuid4())
     session.add(ProjectRow(id=pid, title="pw", domain="anticorrosion_coating",
-                           payload={"workspace": {"spec_contract": {"process_window": {"cure_temp_c": [120, 180]}}}}))
+                           payload={"spec_contract": {"process_window": {"cure_temp_c": [120, 180]}}}))
     session.commit()
     assert tasks_mod.project_process_window(session, pid) == {"cure_temp_c": [120, 180]}
     assert tasks_mod.project_process_window(session, "missing") is None

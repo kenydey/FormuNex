@@ -31,8 +31,10 @@ ACTIVE = ("open", "in_progress", "pending_review")
 
 
 def project_process_window(session: Session, project_id: str | None) -> dict[str, Any] | None:
-    """补齐计划 2-10: 读项目的规格契约工艺窗口（workspace.spec_contract.process_window）。
+    """补齐计划 2-10: 读项目的规格契约工艺窗口（spec_contract.process_window）。
 
+    ProjectRow.payload 本身就是平铺的 workspace dict（见 project_store），
+    不是嵌套在 "workspace" 键下；旧的嵌套读取恒为空，工艺窗口警告永不触发（P0-3）。
     找不到项目 / 无契约 / 无窗口 → None（调用方按无窗口处理，不报错）。
     """
     if not project_id:
@@ -40,7 +42,7 @@ def project_process_window(session: Session, project_id: str | None) -> dict[str
     row = session.get(ProjectRow, project_id)
     if row is None:
         return None
-    spec = (row.payload or {}).get("workspace", {}).get("spec_contract") or {}
+    spec = (row.payload or {}).get("spec_contract") or {}
     window = spec.get("process_window")
     return dict(window) if isinstance(window, dict) and window else None
 
