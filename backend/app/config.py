@@ -61,6 +61,10 @@ _INFRA_ENV_KEYS = frozenset({
     "FORMUNEX_PDFA_ICC_PATH",
     "FORMUNEX_DEEPEVAL",    # scripts/deepeval_gate.py on/off switch (CI)
     "FORMUNEX_RIGOR_GATE",  # scripts/rigor_gate.py skip switch (CI)
+    # Nightly diagnostic switch, read directly by app/api/plm.py (generate_document
+    # payload logging for the TDS properties race); default off, enabled only in
+    # the nightly workflow env. Not a Settings field, so it must be listed here.
+    "FORMUNEX_PLM_DEBUG_DOC_PAYLOAD",
     # Deployment knobs read by compose / shell scripts, never by the app. They live in the
     # same ``.env`` that ``env_file:`` hands to the backend container, where dev-mode
     # fail-fast used to reject them as typos:
