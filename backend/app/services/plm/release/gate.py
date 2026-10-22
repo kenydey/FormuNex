@@ -299,11 +299,13 @@ def _check_red_lines(session: Session, c: Check, rev: ProductRevisionRow, fv: Fo
     for ing in ingredients:
         if ing.get("cas_no") and ing["cas_no"] not in pct_by_cas:
             pct_by_cas[ing["cas_no"]] = float(ing.get("weight_pct") or 0)
+    unresolved_refs: list[str] = []
+    unmatched_class_refs = 0
     for rl in red_lines:
         # Phase 1D (1-16): list-referenced red lines ({"list_id", "list_entry_id"})
         # check the CLASS total over all the entry's CAS numbers.
         if rl.get("list_id") or rl.get("list_entry_id"):
-            from ...compliance_lists import class_total_for_redline
+            from ...compliance_lists import class_total_for_redline, unresolved_redline_reason
 
             resolved = class_total_for_redline(pct_by_cas, rl)
             if resolved is not None:
@@ -312,6 +314,16 @@ def _check_red_lines(session: Session, c: Check, rev: ProductRevisionRow, fv: Fo
                 if found > limit:
                     c.fail(item_key("red_line", label), f"{label}：合计含量 {found:g}% 超过红线 {limit:g}%"
                            + (f"（{rl['reason']}）" if rl.get("reason") else ""), waivable=False)
+            elif (reason := unresolved_redline_reason(rl)) is not None:
+                # P1-24 fail-closed: an unresolvable reference blocks the
+                # gate instead of silently waiving the red line.
+                ref = f"{rl.get('list_id') or ''}:{rl.get('list_entry_id') or ''}"
+                unresolved_refs.append(ref)
+                c.fail(item_key("red_line", "unresolved", ref), reason, waivable=False)
+            else:
+                # Known no-CAS class entry (reference-only by design): not a
+                # failure, but counted in evidence instead of dropped silently.
+                unmatched_class_refs += 1
             continue
         cas = rl.get("cas")
         limit = float(rl.get("max_pct") or 0)
@@ -320,6 +332,8 @@ def _check_red_lines(session: Session, c: Check, rev: ProductRevisionRow, fv: Fo
             c.fail(item_key("red_line", cas), f"{rl.get('name') or cas}：含量 {found:g}% 超过红线 {limit:g}%"
                    + (f"（{rl['reason']}）" if rl.get("reason") else ""), waivable=False)
     c.evidence["red_lines"] = len(red_lines)
+    c.evidence["red_lines_unresolved"] = unresolved_refs
+    c.evidence["red_lines_unmatched_class"] = unmatched_class_refs
     # Phase 1D (1-14): GHS constraints — forbidden pictograms / signal word /
     # VOC limit. Red lines are never waivable, so these fail the gate outright.
     ghs = _ghs_constraints_for_revision(session, rev)

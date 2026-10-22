@@ -170,6 +170,68 @@ def test_2_10_check_process_window():
     assert check_process_window({"树脂": 50}, window) == []
 
 
+def test_p1_8_process_window_all_items_become_levers_any_domain():
+    """P1-8 对照测试：SpecStudio 工艺窗口（四项）vs 后端杠杆。
+
+    窗口键 → 后端杠杆名的映射：cure_temp_c → cure_temperature_c（既有
+    杠杆名，DOE 链路与别名表均按此名消费）、cure_time_min → 同名、
+    film_thickness_um → 同名、application_method → 同名离散因子。
+    非防腐蚀领域（脱脂剂）此前会静默丢弃全部窗口项。
+    """
+    from app.domain.schemas import ProductDomain, Requirement
+
+    req = Requirement(
+        domain=ProductDomain.degreaser,
+        cure_temperature_c=None,
+        process_window={"cure_temp_c": [120, 180], "cure_time_min": [20, 40],
+                        "film_thickness_um": [40, 80],
+                        "application_method": ["spray", "dip", "brush"]},
+    )
+    levers = derive_process_levers(req)
+    by_name = {l.name: l for l in levers}
+    assert set(by_name) == {"cure_temperature_c", "cure_time_min", "film_thickness_um", "application_method"}
+    assert (by_name["cure_temperature_c"].low, by_name["cure_temperature_c"].high,
+            by_name["cure_temperature_c"].unit) == (120, 180, "C")
+    assert (by_name["cure_time_min"].low, by_name["cure_time_min"].high,
+            by_name["cure_time_min"].unit) == (20, 40, "min")
+    assert (by_name["film_thickness_um"].low, by_name["film_thickness_um"].high,
+            by_name["film_thickness_um"].unit) == (40, 80, "μm")
+    app = by_name["application_method"]
+    assert app.kind == "discrete" and app.levels == ["spray", "dip", "brush"]
+    assert (app.low, app.high) == (0.0, 2.0)
+    # 杠杆 → DOE 因子透传：离散水平与连续区间都不丢。
+    factors = levers_to_doe_factors(levers)
+    by_factor = {f.name: f for f in factors}
+    assert by_factor["application_method"].kind == "discrete"
+    assert by_factor["application_method"].levels == ["spray", "dip", "brush"]
+    assert (by_factor["cure_time_min"].low, by_factor["cure_time_min"].high) == (20, 40)
+
+
+def test_p1_8_process_window_single_numbers_and_degenerate_dropped():
+    """P1-8：单点窗口按 ±10% 展开（与 DoeDesigner fillFromProcessWindow 一致）；
+    单个施工方式不是可调因子；零宽/倒置区间不成杠杆。"""
+    from app.domain.schemas import ProductDomain, Requirement
+
+    req = Requirement(
+        domain=ProductDomain.surface_treatment,
+        cure_temperature_c=None,
+        process_window={"cure_time_min": 30, "film_thickness_um": 50,
+                        "application_method": ["spray"], "cure_temp_c": [150, 150]},
+    )
+    by_name = {l.name: l for l in derive_process_levers(req)}
+    assert set(by_name) == {"cure_time_min", "film_thickness_um"}
+    assert (by_name["cure_time_min"].low, by_name["cure_time_min"].high) == (27.0, 33.0)
+    assert (by_name["film_thickness_um"].low, by_name["film_thickness_um"].high) == (45.0, 55.0)
+
+
+def test_p1_8_no_window_other_domain_gets_no_phantom_cure_lever():
+    """P1-8 边界：无窗口时不展开 Requirement 默认的 80℃——非防腐蚀领域
+    不应凭空多一个从未设过的固化温度因子（既有领域门禁仅在此路径保留）。"""
+    from app.domain.schemas import ProductDomain, Requirement
+
+    assert derive_process_levers(Requirement(domain=ProductDomain.degreaser)) == []
+
+
 def test_2_10_dispatch_warns_on_window_deviation(tmp_path, monkeypatch):
     """补齐计划 2-10：下发任务时因子偏离契约窗口 → 警告随响应返回，任务照常创建。"""
     import uuid

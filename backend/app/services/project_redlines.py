@@ -161,7 +161,7 @@ def check_redlines(
         # ({"list_id", "list_entry_id"}) instead of a single CAS. A list entry
         # is a CLASS: sum the composition over all its CAS numbers.
         if rl.get("list_id") or rl.get("list_entry_id"):
-            from .compliance_lists import class_total_for_redline
+            from .compliance_lists import class_total_for_redline, unresolved_redline_reason
 
             resolved = class_total_for_redline(by_cas, rl)
             if resolved is not None:
@@ -173,6 +173,10 @@ def check_redlines(
                         message=f"{label}：合计 {found:g}% 超过红线 {limit:g}%"
                                 + (f"（{rl['reason']}）" if rl.get("reason") else ""),
                     ))
+            elif (reason := unresolved_redline_reason(rl)) is not None:
+                # P1-24 fail-closed: an unresolvable reference must block,
+                # never silently waive the red line (e.g. a typo'd entry id).
+                hits.append(RedlineHit(code="substance", message=reason))
             continue
         cas = rl.get("cas")
         limit = float(rl.get("max_pct") or 0)

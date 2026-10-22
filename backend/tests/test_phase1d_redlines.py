@@ -103,12 +103,20 @@ def test_check_redlines_list_reference_class_sum():
         {"list_id": "new_pollutants_2023", "list_entry_id": "NP-01", "max_pct": 1.0}])) == []
 
 
-def test_check_redlines_unknown_list_ref_fail_open_and_no_cas_skipped():
+def test_check_redlines_unknown_list_ref_fail_closed_and_no_cas_skipped():
     from app.services.project_redlines import GhsConstraints, check_redlines
 
+    # P1-24 fail-closed：拼写错误 / 未知清单引用必须拦截，不再放行。
     c = GhsConstraints(substances=[{"list_id": "nope", "list_entry_id": "XX", "max_pct": 0}])
-    assert check_redlines([{"name": "X", "cas": "1-2-3", "pct": 50}], c) == []
-    # NP-13 抗生素类无 CAS：无法按 CAS 匹配，跳过（不误报）。
+    hits = check_redlines([{"name": "X", "cas": "1-2-3", "pct": 50}], c)
+    assert len(hits) == 1 and hits[0].code == "substance" and hits[0].severity == "block"
+    assert "引用未解析" in hits[0].message
+    # 清单存在但条目拼写错误同样拦截（即使该物质含量为 0：约束本身无法验证）。
+    c_typo = GhsConstraints(substances=[
+        {"list_id": "new_pollutants_2023", "list_entry_id": "NP-99", "max_pct": 0}])
+    hits_typo = check_redlines([], c_typo)
+    assert len(hits_typo) == 1 and "NP-99" in hits_typo[0].message
+    # NP-13 抗生素类无 CAS：无法按 CAS 匹配，跳过（不误报）——有意保留的引用型语义。
     c2 = GhsConstraints(substances=[{"list_id": "new_pollutants_2023", "list_entry_id": "NP-13", "max_pct": 0}])
     assert check_redlines([{"name": "青霉素", "cas": "61-33-6", "pct": 1}], c2) == []
 

@@ -167,38 +167,100 @@ def derive_levers_from_formulation(
     return levers[:6]
 
 
-def derive_process_levers(req: Requirement) -> list[LeverSpec]:
-    """Process levers from the requirement's cure temperature.
+def _numeric_window(value: Any) -> tuple[float, float] | None:
+    """Normalise one process-window entry to a (lo, hi) range, or None.
 
-    补齐计划 2-10: 契约工艺窗口（process_window.cure_temp_c）优先于单值
+    ``[lo, hi]`` interval → itself; a single number → a ±10% exploration
+    range around it (mirrors DoeDesigner's ``fillFromProcessWindow`` for
+    single-number windows); anything unparseable / zero-width / inverted →
+    None (dropped, never a zero-width factor).
+    """
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        try:
+            lo, hi = float(value[0]), float(value[1])
+        except (TypeError, ValueError):
+            return None
+    elif value is not None:
+        try:
+            point = float(value)
+        except (TypeError, ValueError):
+            return None
+        lo, hi = max(0.0, point * 0.9), point * 1.1
+    else:
+        return None
+    if lo >= hi:
+        return None
+    return round(lo, 4), round(hi, 4)
+
+
+def derive_process_levers(req: Requirement) -> list[LeverSpec]:
+    """Process levers from the requirement's contract process window.
+
+    补齐计划 2-10: 契约工艺窗口（process_window）优先于单值
     cure_temperature_c —— 规格契约是 DOE 的共同依据。
     窗口形状：前端存为 [lo, hi] 区间（Slider range）→ 杠杆即该区间；
-    若为单个数字（API/旧数据）→ 按单值逻辑展开 [cure-30, cure]。
+    若为单个数字（API/旧数据）→ 固化温度按单值逻辑展开 [cure-30, cure]
+    （既有行为），其余数值项按 ±10% 展开（与 DoeDesigner 的
+    fillFromProcessWindow 一致）。
+
+    P1-8: 窗口驱动的杠杆不再限领域、不限固化温度一项。SpecStudio
+    的工艺窗口 Tab 对全部领域开放，窗口里的四项全部进入杠杆：
+    固化温度 cure_temp_c（杠杆名沿用 cure_temperature_c）、固化时间
+    cure_time_min、干膜厚度 film_thickness_um、施用方式
+    application_method（允许多个取值的列表 → 离散因子，low/high 为
+    水平序号占位，与快照重建的离散约定一致；单个定值不是可调因子，
+    不成杠杆）。无窗口时保留既有行为：仅防腐蚀领域的单值固化温度
+    成杠杆——Requirement.cure_temperature_c 默认 80，若对全部领域都
+    展开默认值，会凭空给无关领域加一个从未设过的固化温度因子。
     """
     levers: list[LeverSpec] = []
-    cure = req.cure_temperature_c
     pw = req.process_window or {}
     window_cure = pw.get("cure_temp_c")
+    cure_single: float | None = None  # legacy single-value cure temp to expand, if any
     if isinstance(window_cure, (list, tuple)) and len(window_cure) == 2:
         try:
             lo, hi = float(window_cure[0]), float(window_cure[1])
         except (TypeError, ValueError):
             lo = hi = None
-        if lo is not None and req.domain == ProductDomain.anticorrosion_coating and lo < hi:
-            return [LeverSpec(name="cure_temperature_c", low=lo, high=hi, unit="C")]
+        if lo is not None and lo < hi:
+            # Window interval wins; other window items below still apply.
+            levers.append(LeverSpec(name="cure_temperature_c", low=lo, high=hi, unit="C"))
+        else:
+            # Invalid interval falls back to the single-value path (old behaviour).
+            cure_single = req.cure_temperature_c
     elif window_cure is not None:
         try:
-            cure = float(window_cure)
+            cure_single = float(window_cure)
         except (TypeError, ValueError):
-            pass
-    if cure is not None and req.domain == ProductDomain.anticorrosion_coating:
-        high = float(cure)
-        low = max(20.0, cure - 30)
+            cure_single = req.cure_temperature_c
+    else:
+        cure_single = req.cure_temperature_c
+    if cure_single is not None and (
+            window_cure is not None or req.domain == ProductDomain.anticorrosion_coating):
+        # Window-driven values are domain-free (the window tab is open to all
+        # domains); the no-window field fallback stays anticorrosion-only so
+        # the Requirement default of 80 C never invents a lever for other domains.
+        high = float(cure_single)
+        low = max(20.0, cure_single - 30)
         # A cure target at/below the 20 C floor leaves no range to explore;
         # emitting low>=high produced a zero-width or inverted factor that
         # decode() silently mapped backwards.
         if low < high:
             levers.append(LeverSpec(name="cure_temperature_c", low=low, high=high, unit="C"))
+    for key, name, unit in (("cure_time_min", "cure_time_min", "min"),
+                            ("film_thickness_um", "film_thickness_um", "μm")):
+        bounds = _numeric_window(pw.get(key))
+        if bounds is not None:
+            lo, hi = bounds
+            levers.append(LeverSpec(name=name, low=lo, high=hi, unit=unit))
+    methods = pw.get("application_method")
+    if isinstance(methods, (list, tuple)):
+        levels = [str(m) for m in methods if str(m).strip()]
+        seen: set[str] = set()
+        levels = [m for m in levels if not (m in seen or seen.add(m))]
+        if len(levels) >= 2:
+            levers.append(LeverSpec(name="application_method", low=0.0, high=float(len(levels) - 1),
+                                    unit="", kind="discrete", levels=levels))
     return levers
 
 

@@ -311,6 +311,26 @@ def test_gate_red_lines_unlocked_components_and_label_mismatch(env):
     assert not red["waivable"] and not any(i["waivable"] for i in red["items"])
 
 
+def test_gate_red_line_unresolved_list_ref_fails_closed(env):
+    # P1-24：规约红线引用拼写错误时，门禁必须拦截（失败项 + 证据），不得静默放行。
+    c, rid = env["client"], env["rid"]
+    from app.db.database import default_session_factory
+    from app.db.models_plm import ProductRevisionRow
+
+    _generate_all(env)
+    with default_session_factory()() as s:
+        rev = s.get(ProductRevisionRow, rid)
+        rev.spec_snapshot = {**rev.spec_snapshot, "red_lines": [
+            {"list_id": "new_pollutants_2023", "list_entry_id": "NP-99", "max_pct": 0}]}
+        s.commit()
+    gate = c.get(f"/api/plm/revisions/{rid}/gate").json()
+    failed = _failed(gate)
+    assert any("引用未解析" in m for m in failed["red_lines"])
+    red = next(x for x in gate["checks"] if x["key"] == "red_lines")
+    assert not any(i["waivable"] for i in red["items"])
+    assert "new_pollutants_2023:NP-99" in (red.get("evidence") or {}).get("red_lines_unresolved", [])
+
+
 def test_waivers_only_for_waivable_items(env):
     c, rid, h = env["client"], env["rid"], env["h"]
     from app.db.database import default_session_factory

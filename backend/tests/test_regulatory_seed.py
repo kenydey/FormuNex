@@ -56,6 +56,10 @@ def resources(tmp_path):
          "hazard_category": "急性毒性-经口,类别 2*", "notes": "剧毒"},
         {"index": 5, "chinese_name": "某物", "alias": "", "english_name": "", "cas_number": "7647-01-0",
          "hazard_category": "有毒固体", "notes": "剧毒"},
+        # P1-23：明确标注非目录的条目（行号 2730、真实数据同款标记）永不写序号。
+        {"index": 2730, "chinese_name": "黄樟素", "alias": "黄樟素", "english_name": "Safrole",
+         "cas_number": "94-59-7", "hazard_category": "易燃液体,类别 3", "notes": "易制毒化学品",
+         "source": "非目录条目：不在《危险化学品目录》（2015版）中（本文件附加，待用易制毒/易制爆名录核对）"},
     ]})
     _write(res, "oel_gbz2_2019.json", {"records": [
         {"name_cn": "乙醇", "name_en": "Ethanol", "cas_number": "64-17-5", "mac_mg_m3": "",
@@ -110,6 +114,10 @@ def test_seed_loads_every_table(engine, resources):
     with engine.connect() as c:
         acrylic = c.execute(select(SubstanceRow).where(SubstanceRow.cas_no == "79-10-7")).one()
         assert acrylic.explosive_precursor is True and acrylic.hazardous_catalog_no == 3
+        # P1-23：未标注非目录的缺号条目仍回退行号（既有行为，见 acrylic==3）；
+        # 明确标注非目录的条目即使有行号也不写序号。
+        safrole = c.execute(select(SubstanceRow).where(SubstanceRow.cas_no == "94-59-7")).one()
+        assert safrole.hazardous_catalog_no is None and safrole.precursor_control is True
         ethanol = c.execute(select(SubstanceRow).where(SubstanceRow.cas_no == "64-17-5")).one()
         assert ethanol.aliases == ["酒精"] and ethanol.name_en == "Ethanol"
         water = c.execute(select(SubstanceRow).where(SubstanceRow.cas_no == "7732-18-5")).one()
@@ -148,6 +156,28 @@ def test_seed_loads_every_table(engine, resources):
         "invalid_cas": 1, "repaired_cas": 1, "duplicate_catalog_entry": 1, "hazard_text": 1,
         "oel_unmatched": 1, "transport_unlinked": 1,
     }
+
+
+def test_bundled_non_catalog_entries_never_get_a_catalog_no():
+    """P1-23：真实捆绑文件中的 29 条非目录条目，种子逻辑一律不给序号。
+
+    只读断言（不跑全量种子、不改数据）：逐条核对 source 标记与
+    _catalog_no 回退，29 条全为空；其余 232 条无 catalog_no 条目仍
+    保留行号回退（缺号 ≠ 明确非目录，两情形必须分开）。
+    """
+    from pathlib import Path
+
+    from app.services.plm.regulatory.seed import _catalog_no
+
+    res = Path(__file__).resolve().parents[1] / "app" / "resources" / "regulatory"
+    chemicals = json.loads((res / "hazard_chemical_info.json").read_text(encoding="utf-8"))["chemicals"]
+    non_catalog = [c for c in chemicals if str(c.get("source") or "").startswith("非目录条目")]
+    assert len(non_catalog) == 29
+    assert all(_catalog_no(c) is None for c in non_catalog)
+    assert {c.get("cas_number") for c in non_catalog} >= {"94-59-7"}
+    unnumbered_unmarked = [c for c in chemicals if not c.get("catalog_no") and not c.get("source")]
+    assert len(unnumbered_unmarked) == 232
+    assert all(_catalog_no(c) == c.get("index") for c in unnumbered_unmarked)
 
 
 def test_unchanged_data_is_skipped_and_force_is_idempotent(engine, resources):

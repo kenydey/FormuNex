@@ -188,7 +188,16 @@ def _catalog_no(item: dict) -> int | None:
     ``index`` is the bundled file's own row number (MSDS-Generator ordering, NOT the
     official 序号); ``catalog_no`` is the official 序号 verified against the 2015 版
     catalogue text. Newer entries carry ``catalog_no``; older ones fall back to ``index``.
+
+    P1-23 exception: an entry explicitly marked ``source`` as 非目录条目
+    (not in the 2015 版 catalogue) NEVER gets a number — not even the
+    ``index`` fallback. Writing the file row number there made SDS §15 claim
+    "列入目录，序号 N" for substances that are not listed at all. Such
+    entries seed ``hazardous_catalog_no=None``; fixing rows already seeded
+    under the old logic is a data migration, decided separately.
     """
+    if str(item.get("source") or "").startswith("非目录条目"):
+        return None
     return item.get("catalog_no", item.get("index"))
 
 

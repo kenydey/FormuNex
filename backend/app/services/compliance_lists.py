@@ -26,7 +26,10 @@ Matching semantics (honest limits):
   class total against ``max_pct`` (``max_pct=0`` = banned: any presence hits).
 - Entries with NO CAS (``NP-13`` antibiotics, ``PC029`` dioxins/furans,
   ``PC036`` cyanides) cannot match by CAS and are listed for reference only;
-  the check skips them.
+  the check skips them (but counts them in evidence).
+- A red line whose ``list_id`` / ``list_entry_id`` does not resolve is
+  fail-closed (P1-24): callers record a blocking failure instead of
+  silently skipping the red line, so a typo can never waive a ban.
 - Entries that list only a representative CAS (e.g. ``PC007`` cadmium 7440-43-9
   for "镉及镉化合物", ``PC010`` potassium dichromate for hexavalent chromium)
   match only that CAS. Full class coverage (every cadmium compound) needs the
@@ -184,8 +187,10 @@ def get_entry(list_id: str, entry_id: str) -> ListEntry | None:
 def resolve_list_reference(ref: dict) -> tuple[ListEntry | None, tuple[str, ...]]:
     """Resolve a red-line list reference ``{"list_id", "list_entry_id"}`` to (entry, CAS tuple).
 
-    Returns (None, ()) when the reference is missing / unknown — the caller
-    treats that as "no constraint" (fail-open) and never as a match.
+    Returns (None, ()) when the reference is missing / unknown. Callers must
+    NOT treat that as "no constraint": an unknown reference is fail-closed
+    (see :func:`unresolved_redline_reason`) — the old fail-open reading of
+    this return value was P1-24 and is removed.
     """
     entry = get_entry(str(ref.get("list_id") or ""), str(ref.get("list_entry_id") or ""))
     if entry is None:
@@ -193,11 +198,37 @@ def resolve_list_reference(ref: dict) -> tuple[ListEntry | None, tuple[str, ...]
     return entry, entry.cas_numbers
 
 
+def unresolved_redline_reason(rl: dict) -> str | None:
+    """Fail-closed reason for a list-referenced red line that cannot be checked.
+
+    Returns a human-readable reason when ``rl`` references a list / entry
+    that does not exist (typo, renamed or deleted entry) — the red line
+    cannot be verified, so callers must record a failure, not skip it.
+    Returns None when the reference resolves, when it is a direct-CAS red
+    line (no list fields), or when it resolves to a no-CAS class entry:
+    those entries are documented reference-only (antibiotics / dioxins /
+    cyanides cannot match by CAS) and are still skipped by design, but
+    callers should count them in evidence instead of dropping them silently.
+    """
+    if not (rl.get("list_id") or rl.get("list_entry_id")):
+        return None
+    list_id = str(rl.get("list_id") or "")
+    entry_id = str(rl.get("list_entry_id") or "")
+    if get_list(list_id) is None:
+        return (f"红线引用未解析，红线未生效：未知合规清单 {list_id!r} "
+                f"（条目 {entry_id!r}），请修正引用后重新评估")
+    if get_entry(list_id, entry_id) is None:
+        return (f"红线引用未解析，红线未生效：清单 {list_id!r} 中无条目 {entry_id!r}，"
+                f"请修正引用后重新评估")
+    return None
+
+
 def class_total_for_redline(pct_by_cas: dict[str, float], rl: dict) -> tuple[float, str] | None:
     """For a list-referenced red line, return (class total pct, display label).
 
     Returns None for direct-CAS red lines (caller uses its own check), for
-    unknown references (fail-open: never a match), and for no-CAS class
+    unknown references (callers must fail-closed via
+    :func:`unresolved_redline_reason` — never skip), and for no-CAS class
     entries (antibiotics / dioxins / cyanides — cannot match by CAS).
     """
     if not (rl.get("list_id") or rl.get("list_entry_id")):
