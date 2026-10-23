@@ -399,3 +399,52 @@ def test_gb12268_alias_links_only_unambiguous_simple_names():
     assert _name_aliases("易燃液体，未另作规定的") == []
     assert _name_aliases("硝酸，发红烟的除外，含硝酸低于65%") == []
     assert _name_aliases("丙酮") == []
+
+
+def test_person_decided_gb12268_links_win_over_name_matching(engine, resources):
+    _write(resources, "common_chemicals.json.gz", {"rows": [
+        ["67-56-1", "甲醇", "Methanol", "CH4O"],
+        ["170082-17-4", "甲醇", "METHANOL", "CH4O"],
+        ["12013-55-7", "硅化钙", "Calcium silicide", "CaSi"],
+        ["12013-56-8", "硅化钙", "Calcium silicide", "CaSi2"],
+        ["7553-56-2", "碘", "Iodine", "I2"],
+        ["12190-71-5", "碘", "Iodine", "I2"],
+    ]})
+    _write(resources, "gb12268_2025.json", {"entries": [
+        {"un": "1230", "name_cn": "甲醇", "name_en": "METHANOL", "class": "3", "pg": "II"},
+        {"un": "1405", "name_cn": "硅化钙", "name_en": "CALCIUM SILICIDE", "class": "4.3", "pg": "II"},
+        {"un": "1405", "name_cn": "硅化钙", "name_en": "CALCIUM SILICIDE", "class": "4.3", "pg": "III"},
+        {"un": "3495", "name_cn": "碘", "name_en": "IODINE", "class": "8", "pg": "III"},
+    ]})
+    _write(resources, "gb12268_links.json", {"links": [
+        {"un": "1230", "name_cn": "甲醇", "cas": ["67-56-1"]},
+        {"un": "1405", "name_cn": "硅化钙", "cas": ["12013-55-7", "12013-56-8"]},
+        {"un": "3495", "name_cn": "碘", "cas": ["7553-56-2", "9999-99-9"]},  # second CAS not in the library
+    ]})
+    stats = seed_regulatory_db(engine, resources=resources)["stats"]
+    assert stats["transport_decided"] == 4 and stats["transport_ambiguous"] == 0 and stats["transport_link_missing"] == 1
+    with engine.connect() as c:
+        got = c.execute(select(SubstanceTransportRow.un_number, SubstanceTransportRow.packing_group, SubstanceRow.cas_no)
+                        .join(SubstanceRow, SubstanceRow.id == SubstanceTransportRow.substance_id, isouter=True)
+                        .order_by(SubstanceTransportRow.un_number, SubstanceTransportRow.packing_group,
+                                  SubstanceRow.cas_no)).all()
+        kinds = dict(c.execute(select(RegulatoryReviewItem.kind, func.count()).group_by(RegulatoryReviewItem.kind)).all())
+    assert [tuple(r) for r in got] == [
+        ("1230", "II", "67-56-1"),
+        ("1405", "II", "12013-55-7"), ("1405", "II", "12013-56-8"),     # one row per chosen substance
+        ("1405", "III", "12013-55-7"), ("1405", "III", "12013-56-8"),
+        ("3495", "III", "7553-56-2"),
+    ]
+    assert "transport_unlinked" not in kinds and kinds["transport_link_missing"] == 1
+
+
+def test_an_empty_decision_leaves_the_entry_deliberately_unlinked(engine, resources):
+    _write(resources, "common_chemicals.json.gz", {"rows": [["67-56-1", "甲醇", "Methanol", "CH4O"],
+                                                           ["170082-17-4", "甲醇", "METHANOL", "CH4O"]]})
+    _write(resources, "gb12268_2025.json", {"entries": [{"un": "1230", "name_cn": "甲醇", "class": "3", "pg": "II"}]})
+    _write(resources, "gb12268_links.json", {"links": [{"un": "1230", "name_cn": "甲醇", "cas": []}]})
+    seed_regulatory_db(engine, resources=resources)
+    with engine.connect() as c:
+        assert c.execute(select(SubstanceTransportRow.substance_id)).scalars().all() == [None]
+        assert c.execute(select(func.count()).select_from(RegulatoryReviewItem)
+                         .where(RegulatoryReviewItem.kind == "transport_unlinked")).scalar_one() == 0
