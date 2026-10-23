@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# No apt layer by default. Every package this image installs — core
+# No build-toolchain apt layer by default (the CJK font below is the only apt package). Every package this image installs — core
 # requirements plus the [llm] extras — resolves to a prebuilt wheel on
 # linux/x86_64/cp311. The one exception, jieba, ships only an sdist but is pure
 # Python and builds with no compiler present, so `build-essential` bought
@@ -26,6 +26,21 @@ RUN if [ "$INSTALL_BUILD_TOOLCHAIN" = "true" ]; then \
             build-essential \
         && rm -rf /var/lib/apt/lists/*; \
     fi
+
+# The one apt package the image always needs: an embeddable CJK TrueType font. Controlled
+# PDFs (SDS / TDS / COA / labels) must embed their fonts — without one, rendering falls back
+# to the non-embedded STSong-Light and document approval is refused ("PDF 未嵌入中文字体"),
+# so no release could pass. pip has no font, hence this layer; it sits before every pip
+# layer so it is built once and stays cached. Retries cover a briefly unreachable mirror,
+# and the `test -f` fails the build loudly rather than shipping an image that cannot release.
+# WenQuanYi Micro Hei: TrueType (ReportLab cannot embed CFF fonts such as Noto CJK .otc), dual
+# Apache-2.0 / GPLv3 — permissive, and embedding it in generated PDFs is allowed.
+ARG CJK_FONT=/usr/share/fonts/truetype/wqy/wqy-microhei.ttc
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends fonts-wqy-microhei \
+    && rm -rf /var/lib/apt/lists/* \
+    && test -f "$CJK_FONT"
+ENV FORMUNEX_PLM_DOC_FONT_PATH=${CJK_FONT}
 
 # 1) Install pinned runtime deps first so this layer is cached across app changes.
 COPY requirements.txt ./

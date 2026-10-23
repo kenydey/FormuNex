@@ -360,7 +360,8 @@ test("lab measurement → review → pareto winning", async ({ page, browser }) 
   await page.keyboard.press("Enter");
   await page.keyboard.press("Escape"); // tags 模式下拉选后不自动关闭，先关掉再点确定，避免遮挡
   await dispatchDialog.getByRole("button", { name: /确\s?定|OK/ }).click();
-  await expect(page).toHaveURL(/lab\/tasks/);
+  // The task list lives on the 工作记录 page's tasks tab (/lab/tasks redirects there).
+  await expect(page).toHaveURL(/lab\/work-records\?.*tab=tasks/);
 
   // Claim the first task, enter a measurement, submit for review.
   // The claim action is an <a> without href (TasksPage table actions), so it

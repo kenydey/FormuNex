@@ -39,6 +39,7 @@ case "$1" in
     case "$*" in
       *format_availability*) echo "${FAKE_PARSERS:-{\"pdf\": [\"pymupdf4llm\"], \"docx\": [\"python-docx\"]\}}"; exit 0 ;;
       *"import app.main"*) echo "app.main imports"; exit "${FAKE_IMPORT_RC:-0}" ;;
+      *resolve_font*) echo "${FAKE_FONT:-{\"embedded\": true, \"path\": \"/usr/share/fonts/truetype/wqy/wqy-microhei.ttc\"\}}"; exit 0 ;;
     esac
     exit 0 ;;
   exec) exit 0 ;;
@@ -173,6 +174,12 @@ def test_an_image_without_a_pdf_parser_fails(run_smoke):
     result, _ = run_smoke(FAKE_PARSERS=json.dumps({"pdf": [], "docx": ["python-docx"]}))
     assert result.returncode == 1
     assert "no PDF parser in the image" in result.stderr
+
+
+def test_an_image_without_an_embeddable_cjk_font_fails(run_smoke):
+    result, _ = run_smoke(FAKE_FONT=json.dumps({"embedded": False, "path": None}))
+    assert result.returncode == 1
+    assert "no embeddable CJK font" in result.stderr
 
 
 def test_an_unhealthy_container_fails(run_smoke):

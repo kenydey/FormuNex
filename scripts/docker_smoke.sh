@@ -127,6 +127,15 @@ else
   bad "no PDF parser in the image: uploads would be accepted and nothing indexed"
 fi
 
+step "controlled PDFs embed a CJK font (document approval refuses non-embedded fonts)"
+FONT="$(docker run --rm "$IMAGE" python -c "import json; from app.services.plm.render.fonts import resolve_font; f = resolve_font(); print(json.dumps({'embedded': f.embedded, 'path': f.path}))")"
+echo "    $FONT"
+if printf '%s' "$FONT" | json 'bool(d.get("embedded"))' | grep -qx True; then
+  ok "an embeddable CJK TrueType font is used"
+else
+  bad "no embeddable CJK font: SDS / TDS / COA / label approval would be refused"
+fi
+
 step "migrations run inside the image"
 docker run --rm -e FORMUNEX_DB_URL=sqlite:////tmp/smoke.db "$IMAGE" alembic upgrade head
 ok "alembic upgrade head"
