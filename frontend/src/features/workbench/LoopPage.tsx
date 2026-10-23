@@ -8,6 +8,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { call, download } from "@/api/client";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
+import { HandoffBanner } from "@/shared/handoff";
 import { coldStartMessage, useCampaigns, useEngines, useProjectWorkspace } from "./hooks";
 import { adoptPlan, cancelLoop, runLoop, useLoopRun } from "./loop";
 import { AdaptiveDoeInsights, TrainingDataBanner } from "./panels";
@@ -79,11 +80,12 @@ export default function LoopPage() {
   const paused = !!status.data?.isPaused;
 
   if (!projectId) {
-    return <PageContainer><Alert type="info" showIcon message={t("workbench.loop_need_project", "闭环迭代基于项目的技术需求：请先在顶部选择项目")} /></PageContainer>;
+    return <PageContainer><HandoffBanner /><Alert type="info" showIcon message={t("workbench.loop_need_project", "闭环迭代基于项目的技术需求：请先在顶部选择项目")} /></PageContainer>;
   }
 
   return (
     <PageContainer subTitle={t("workbench.loop_sub", "读取已录入实验数据 → 用最新模型寻优 → 生成下一批主动学习 DOE，形成 实验→数据→优化→新实验 的闭环")}>
+      <HandoffBanner />
       <TrainingDataBanner />
       <ErrorAlert error={project.error ?? patch.error ?? pause.error ?? adopt.error} />
       <ProCard bordered>

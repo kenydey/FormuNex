@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
 import { awaitTask, thinkingSteps, type AsyncTaskAccepted, type TaskProgressEvent } from "@/api/stream";
 import { ErrorAlert, errorText } from "@/shared/feedback";
+import { HandoffBanner } from "@/shared/handoff";
 import { DispatchButton } from "@/features/lab/DispatchButton";
 import { AI_DESIGN, designsForEngine, strategyForPlan, type DoeEngine } from "./logic";
 import type { ActiveDoeResult, DOEPlan, ModelInfo, TrainingReport, WorkbenchCampaignSummary } from "./types";
@@ -160,6 +161,7 @@ export default function ClassicDoePage() {
   return (
     <PageContainer
       subTitle={t("design.doe.sub", "经典 DOE：全因子 / 部分因子 / Plackett-Burman / CCD / LHS / Box-Behnken / Sobol 与 AI 主动选点，基于项目 levers")}>
+      <HandoffBanner />
       {!projectId && <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t("design.need_project", "请先在顶部选择项目。")} />}
       <ProCard bordered title={t("design.doe.setup", "设计参数")}
         extra={<Button onClick={() => navigate("/lab/doe?tab=levers")} disabled={!projectId}>

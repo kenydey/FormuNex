@@ -8,6 +8,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ApiError, call } from "@/api/client";
 import { errorText } from "@/shared/feedback";
+import { HandoffBanner, ingredientInQuestion, useHandoffQuestion } from "@/shared/handoff";
 import { FormulationPicker } from "./FormulationPicker";
 import { deltaDisplay, notFoundCandidates, supplyBadges, surechemblRef } from "./logic";
 import type {
@@ -52,9 +53,13 @@ export default function SubstitutionPage() {
     () => (source === "version" ? formulation?.ingredients ?? [] : []),
     [source, formulation],
   );
+  // A question handed over from chat that names one of the formulation's ingredients picks it.
+  const question = useHandoffQuestion();
   useEffect(() => {
-    if (!material && ingredients.length) setMaterial(ingredients[0].name);
-  }, [ingredients, material]);
+    if (!material && ingredients.length) {
+      setMaterial(ingredientInQuestion(question, ingredients.map((i) => i.name)) || ingredients[0].name);
+    }
+  }, [ingredients, material, question]);
 
   const find = useMutation({
     mutationFn: () => call<SubstitutionReport>("POST", "/api/materials/substitutes", {
@@ -117,6 +122,7 @@ export default function SubstitutionPage() {
 
   return (
     <PageContainer subTitle={t("design.sub.sub", "漏斗：库内预测偏离 → 文献/知识库证据 → 联网结构相似（PubChem）→ SureChEMBL 专利化学相似 → AI/规则扩召回。仅库内项含配方 Δ。")}>
+      <HandoffBanner />
       {atRisk.length > 0 && <Alert type="warning" showIcon style={{ marginBottom: 16 }} message={t("design.sub.supply_risk", "供应风险")}
         description={`${atRisk.map(([n, s]) => `${n}（${s}）`).join("、")}${risk.data?.affected.length
           ? ` · ${t("design.sub.affected", "影响 {{n}} 个配方", { n: risk.data.affected.length })}` : ""}`} />}

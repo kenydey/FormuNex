@@ -15,6 +15,7 @@ const en: Record<string, string> = {
   "acid.run": "Sweep",
   "acid.status": "Status",
   // Menu round 2 hub tab labels.
+  "handoff.title": "Question from chat",
   "hub.search.quick": "Quick search",
   "hub.search.deep": "Deep search",
   "hub.ops.quality": "Quality dashboard",

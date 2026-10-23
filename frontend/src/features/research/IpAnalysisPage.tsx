@@ -9,6 +9,7 @@ import { call } from "@/api/client";
 import { Chart } from "@/shared/Chart";
 import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert } from "@/shared/feedback";
+import { HandoffBanner } from "@/shared/handoff";
 import { noveltyBand } from "./lib";
 import type { Formulation, FormulationIngredient, IPReport, PatentRisk } from "./types";
 import { useDomainOptions, useProjectRequirement } from "./useProjectRequirement";
@@ -106,6 +107,7 @@ export default function IpAnalysisPage() {
   const filled = rows.filter((r) => r.name.trim()).length;
   return (
     <PageContainer subTitle={t("research.ip.sub", "检索相关专利，评估配方新颖性与侵权风险，并给出技术空白区提示")}>
+      <HandoffBanner />
       <ProCard title={t("research.ip.input", "待分析配方")} bordered
         extra={<Button type="primary" icon={<SafetyCertificateOutlined />} loading={analyze.isPending} disabled={!filled} onClick={() => analyze.mutate()}>
           {t("research.ip.run", "运行 IP 分析")}</Button>}>
