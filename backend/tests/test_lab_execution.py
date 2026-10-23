@@ -467,6 +467,69 @@ def test_2_15_legacy_subclass_without_push_plan_fails_loudly():
         Legacy()
 
 
+def test_datalab_campaign_rows_move_inline_and_read_back_identically(lab):
+    """M7 leftover: workbench (campaign) rows living in Datalab items move into ``sample_refs``."""
+    import asyncio
+
+    from app.db.campaign_store import LocalCampaignStore, _blocks_for_row
+    from app.db.database import default_session_factory
+    from app.db.models import Campaign
+    from app.db.models_lab import ElnLinkRow
+    from app.services.lab.datalab_migration import migrate_campaigns
+    from app.services.workbench_training import workbench_record_label
+
+    def item(planned, actual, meas, status, note=None, tags=None):
+        return {"refcode": "fm:abc", "blocks_obj": _blocks_for_row(planned_params=planned, actual_params=actual,
+                                                                   measurements=meas, status=status, note=note,
+                                                                   tags=tags)}
+
+    items = {
+        "fm_c1_r1": item({"T": 150}, {"T": 152}, {"salt_spray_hours": 720}, "Completed", "批次 A", ["复测"]),
+        "fm_c1_r2": item({"T": 170}, {"T": 170}, {}, "Pending"),
+    }
+    factory = default_session_factory()
+    with factory() as s:
+        dl = Campaign(name="Datalab 工作台", sample_refs=[
+            {"id": 1, "item_id": "fm_c1_r1", "parent_campaign_id": 7},
+            {"id": 2, "item_id": "fm_c1_r2"},
+            {"id": 3, "item_id": "fm_c1_gone"},
+        ])
+        native = Campaign(name="原生", sample_refs=[{"id": 1, "item_id": "local_c2_r1", "status": "Pending",
+                                                    "planned_params": {"T": 1}, "actual_params": {}, "measurements": {}}])
+        s.add_all([dl, native])
+        s.commit()
+        dl_id, native_refs = dl.id, list(native.sample_refs)
+
+        dry = migrate_campaigns(s, items.get, dry_run=True)
+        s.rollback()
+        assert (dry["campaigns"], dry["rows"], dry["already_native"]) == (1, 2, 1)
+        assert dry["missing"] == [{"campaign_id": dl_id, "row_id": 3, "item_id": "fm_c1_gone"}]
+        assert s.get(Campaign, dl_id).sample_refs[0] == {"id": 1, "item_id": "fm_c1_r1", "parent_campaign_id": 7}
+
+        report = migrate_campaigns(s, items.get)
+        s.commit()
+        assert (report["rows"], len(report["missing"]), report["pruned"]) == (2, 1, 0)
+        assert s.query(ElnLinkRow).filter_by(connector="datalab", local_type="campaign_row").count() == 2
+
+    rows = asyncio.run(LocalCampaignStore(factory).list_rows(dl_id))
+    by_id = {r.id: r for r in rows}
+    r1 = by_id[1]
+    assert (r1.item_id, r1.status, r1.planned_params, r1.actual_params, r1.measurements, r1.note, r1.tags,
+            r1.parent_campaign_id) == ("fm_c1_r1", "Completed", {"T": 150}, {"T": 152},
+                                       {"salt_spray_hours": 720}, "批次 A", ["复测"], 7)
+    assert by_id[2].status == "Pending" and by_id[2].planned_params == {"T": 170}
+    # item_id is the training records' identity: unchanged label, no duplicate records after the switch
+    assert workbench_record_label(dl_id, r1.item_id) == f"wb:{dl_id}:fm_c1_r1"
+
+    with factory() as s:
+        assert s.query(Campaign).filter_by(name="原生").one().sample_refs == native_refs  # untouched
+        again = migrate_campaigns(s, items.get)  # idempotent: only the missing ref is retried
+        assert again["rows"] == 0 and len(again["missing"]) == 1
+        pruned = migrate_campaigns(s, items.get, prune_missing=True)
+        s.commit()
+        assert pruned["pruned"] == 1 and [r["id"] for r in s.get(Campaign, dl_id).sample_refs] == [1, 2]
+
+
 def test_2_15_datalab_push_plan_read_only():
     """补齐计划 2-15：Datalab push_plan 同样只读报错（别名 push_task 走同一路径）。"""
     import warnings

@@ -73,3 +73,89 @@ def migrate(session: Session, fetch_item: Callable[[str], dict[str, Any] | None]
         hash_chain.append(session, actor=actor, action="lab.datalab_migrate", entity_type="experiment",
                           entity_id="*", detail={k: v for k, v in report.items() if k != "dry_run"})
     return report
+
+
+def _is_inline(ref: dict[str, Any]) -> bool:
+    """A native ``sample_refs`` entry carries the row itself; a Datalab one is only ``{id, item_id}``."""
+    return "planned_params" in ref
+
+
+def migrate_campaigns(session: Session, fetch_item: Callable[[str], dict[str, Any] | None], *,
+                      dry_run: bool = False, prune_missing: bool = False,
+                      actor: str = "migration") -> dict[str, Any]:
+    """Copy Datalab-backed workbench (campaign) rows into ``campaigns.sample_refs``.
+
+    In Datalab mode a campaign's ``sample_refs`` are an index (``{id, item_id}``) and every row —
+    planned / actual parameters, measurements, status, note, tags — lives in a Datalab item. The
+    native store reads the same rows inline from ``sample_refs``. Migration fetches each item and
+    writes the row inline, keeping ``item_id`` unchanged: training records are labelled
+    ``wb:<campaign>:<item_id>`` and that label is their identity, so a new id would duplicate
+    them. Each migrated row gets an ``eln_links`` entry back to its Datalab item. Idempotent: inline
+    rows are skipped. An item Datalab no longer has (404) is reported and its ref kept as it is,
+    unless ``prune_missing`` drops it.
+    """
+    from ...db.campaign_store import _parse_row_from_item
+    from ...db.models import Campaign
+
+    campaigns = session.execute(select(Campaign).order_by(Campaign.id)).scalars().all()
+    report: dict[str, Any] = {"campaigns": 0, "rows": 0, "already_native": 0, "missing": [], "pruned": 0,
+                              "errors": [], "dry_run": dry_run}
+    for campaign in campaigns:
+        refs = [dict(r) for r in (campaign.sample_refs or [])]
+        if not refs or all(_is_inline(r) for r in refs):
+            report["already_native"] += len(refs)
+            continue
+        new_refs: list[dict[str, Any]] = []
+        moved = 0
+        for ref in refs:
+            if _is_inline(ref):
+                report["already_native"] += 1
+                new_refs.append(ref)
+                continue
+            item_id = str(ref.get("item_id") or "")
+            where = {"campaign_id": campaign.id, "row_id": ref.get("id"), "item_id": item_id}
+            try:
+                item = fetch_item(item_id) if item_id else None
+            except Exception as exc:  # noqa: BLE001 — report and carry on with the others
+                report["errors"].append({**where, "error": f"{type(exc).__name__}: {exc}"})
+                new_refs.append(ref)
+                continue
+            if item is None:
+                report["missing"].append(where)
+                if prune_missing:
+                    report["pruned"] += 1
+                else:
+                    new_refs.append(ref)
+                continue
+            try:
+                row = _parse_row_from_item(campaign.id, int(ref["id"]), item_id, item)
+            except Exception as exc:  # noqa: BLE001
+                report["errors"].append({**where, "error": f"无法解析：{exc}"})
+                new_refs.append(ref)
+                continue
+            inline = {
+                **ref,  # parent_* links and any other index fields survive
+                "id": row.id, "item_id": item_id, "status": row.status,
+                "planned_params": row.planned_params, "actual_params": row.actual_params,
+                "measurements": row.measurements, "note": row.note, "tags": row.tags,
+                "migrated_from": "datalab",
+            }
+            if row.refcode:
+                inline["datalab_refcode"] = row.refcode
+            new_refs.append(inline)
+            moved += 1
+            if not dry_run:
+                session.add(ElnLinkRow(id=str(uuid.uuid4()), connector="datalab", external_id=item_id,
+                                       local_type="campaign_row", local_id=f"{campaign.id}:{row.id}",
+                                       last_synced_at=utcnow(), sync_state="ok"))
+        report["rows"] += moved
+        if moved or (prune_missing and len(new_refs) != len(refs)):
+            report["campaigns"] += 1
+            if not dry_run:
+                campaign.sample_refs = new_refs  # a new list: the JSON column sees the change
+                campaign.updated_at = utcnow()
+    if not dry_run:
+        session.flush()
+        hash_chain.append(session, actor=actor, action="lab.datalab_migrate_campaigns", entity_type="campaign",
+                          entity_id="*", detail={k: v for k, v in report.items() if k != "dry_run"})
+    return report
