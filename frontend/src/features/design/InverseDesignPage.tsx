@@ -7,6 +7,7 @@ import { call } from "@/api/client";
 import { awaitTask, cancelTask, type AsyncTaskAccepted, type TaskProgressEvent } from "@/api/stream";
 import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert, errorText } from "@/shared/feedback";
+import { HandoffBanner } from "@/shared/handoff";
 import { defaultConstraints, defaultObjectives, distinctCompositions, frontier, primaryMetric } from "./logic";
 import type { DesignCandidate, HardConstraint, InverseDesignResult, ObjectiveSpec } from "./types";
 import { useRequirement } from "./useRequirement";
@@ -95,6 +96,7 @@ export default function InverseDesignPage() {
 
   return (
     <PageContainer subTitle={t("design.inv.sub", "给定目标性能，反向搜索配方：硬约束必须满足，软目标之间权衡，返回帕累托前沿上成分组成互不相同的候选")}>
+      <HandoffBanner />
       {!projectId && <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t("design.need_project", "请先在顶部选择项目。")} />}
       <ProCard bordered split="vertical" wrap>
         <ProCard colSpan={{ xs: 24, lg: 14 }} title={t("design.inv.hard", "硬约束 · 必须满足")}>

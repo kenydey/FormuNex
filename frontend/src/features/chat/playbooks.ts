@@ -1,8 +1,9 @@
 /**
  * Composer playbooks (legacy ``ChatComposerPlus`` 行动包 + ``ActivePlaybookStrip``). Legacy playbooks opened a modal
  * in the single-page workspace; in the new UI each one is a routed page, so a playbook becomes a navigation entry
- * that carries the current question / project (``?q=`` + location state). Playbooks with no page (installed packs
- * with an unknown action) prefill the composer instead.
+ * that carries the current question / project (``?q=`` + location state). Pages with a question field fill it in;
+ * the others show it in a ``HandoffBanner`` (shared/handoff.tsx). Playbooks with no page (installed packs with an
+ * unknown action) prefill the composer instead.
  */
 import type { UnifiedSkill } from "./types";
 
@@ -20,12 +21,12 @@ export interface BuiltinPlaybook { id: string; icon: string; path: string; quest
 
 export const BUILTIN_PLAYBOOKS: BuiltinPlaybook[] = [
   { id: "recommend", icon: "⭐", path: "/lab/recommend", questionParam: "q" },
-  { id: "doe_classic", icon: "🔬", path: "/lab/doe?tab=classic" },
-  { id: "loop", icon: "🔄", path: "/cockpit/optimization?tab=loop" },
-  { id: "inverse_design", icon: "🎯", path: "/lab/inverse-design" },
-  { id: "substitution", icon: "🔁", path: "/lab/substitution" },
+  { id: "doe_classic", icon: "🔬", path: "/lab/doe?tab=classic", questionParam: "q" },
+  { id: "loop", icon: "🔄", path: "/cockpit/optimization?tab=loop", questionParam: "q" },
+  { id: "inverse_design", icon: "🎯", path: "/lab/inverse-design", questionParam: "q" },
+  { id: "substitution", icon: "🔁", path: "/lab/substitution", questionParam: "q" },
   { id: "deep_research", icon: "📑", path: "/knowledge/research?tab=deep", questionParam: "q" },
-  { id: "ip_analysis", icon: "⚖️", path: "/knowledge/research/ip" },
+  { id: "ip_analysis", icon: "⚖️", path: "/knowledge/research/ip", questionParam: "q" },
 ];
 
 /** Backend playbook ``action`` → built-in entry (``GET /api/skills`` kind=playbook rows). */

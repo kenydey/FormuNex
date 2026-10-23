@@ -30,6 +30,16 @@ describe("playbooks", () => {
     expect(withQuery("/a?tab=deep", "q", "")).toBe("/a?tab=deep");
     expect(withQuery("/a", undefined, "x")).toBe("/a");
     const ip = BUILTIN_PLAYBOOKS.find((b) => b.id === "ip_analysis")!;
-    expect(builtinTarget(ip, { question: "q" })).toMatchObject({ to: "/knowledge/research/ip", state: { question: "q", playbook: "ip_analysis" } });
+    expect(builtinTarget(ip, { question: "q" })).toMatchObject({ to: "/knowledge/research/ip?q=q", state: { question: "q", playbook: "ip_analysis" } });
+    expect(builtinTarget(ip, {})).toMatchObject({ to: "/knowledge/research/ip" });
+  });
+
+  it("every built-in page receives the question in the URL, so a reload keeps it", () => {
+    for (const pb of BUILTIN_PLAYBOOKS) {
+      const t = builtinTarget(pb, { question: "耐盐雾" });
+      expect(t.kind === "navigate" && new URL(t.to, "http://x").searchParams.get("q"), pb.id).toBe("耐盐雾");
+    }
+    expect(playbookTarget({ id: "x", title: "", summary: "", action: "doe" }, { question: "a" }))
+      .toMatchObject({ to: "/lab/doe?tab=classic&q=a" });
   });
 });
