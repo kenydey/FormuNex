@@ -25,6 +25,10 @@ Sources (``app/resources/regulatory``, imported from MSDS-Generator):
   packing group, with special provisions and quantities; parsed from the official PDF by
   ``scripts/gb12268/`` (see its README). Linked to a substance by exact Chinese name, else by
   an unambiguous simple alias (``乙醇（酒精）或…`` → 乙醇); generic entries stay unlinked.
+* ``gb12268_links.json`` (optional) — links decided by a person for GB 12268 names shared by several
+  substances: ``{"links": [{"un", "name_cn", "cas": [...]}]}``. Listed CAS numbers win over name
+  matching (one row per substance); an empty list means "deliberately unlinked". Built from the
+  review sheet by ``scripts/gb12268/apply_link_sheet.py``.
 * ``iecsc.json.gz`` — CAS numbers of the public 《中国现有化学物质名录》 entries (2013 版 plus
   every later 生态环境部 增补 / 已登记新化学物质列入 公告), built by
   ``scripts/build_iecsc_resource.py``. A listed CAS sets ``iecsc_listed = True``; absence
@@ -70,18 +74,18 @@ log = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 # Bump when parsing / mapping logic changes, so an unchanged data set is re-imported.
-IMPORTER_VERSION = "4"  # 4: iecsc_listed from iecsc.json.gz
+IMPORTER_VERSION = "5"  # 5: person-decided GB 12268 links (gb12268_links.json)
 OEL_STANDARD = "GBZ 2.1-2019"
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
 SEED_REVIEW_KINDS = (
     "invalid_cas", "repaired_cas", "hazard_text", "duplicate_catalog_entry", "oel_unmatched",
-    "transport_unlinked",
+    "transport_unlinked", "transport_link_missing",
 )
 _FILES = (
     "common_chemicals.json.gz", "hazard_chemical_info.json", "oel_gbz2_2019.json",
     "hazard_statements.json", "precaution_statements.json", "gb12268_2025.json",
-    "hpstatements_en.json", "iecsc.json.gz",
+    "hpstatements_en.json", "iecsc.json.gz", "gb12268_links.json",
 )
 _CHUNK = 5000
 
@@ -509,9 +513,48 @@ def _replace_transport(conn: Connection, resources: Path, release_id: str, revie
         for r in conn.execute(select(SubstanceRow.id, SubstanceRow.name_zh)
                               .where(SubstanceRow.name_zh.in_(names[i:i + 900]))):
             by_name.setdefault(r.name_zh, []).append(r.id)
-    rows, linked, ambiguous = [], 0, set()
+    links_path = resources / "gb12268_links.json"
+    decided: dict[tuple[str, str], list[str]] = {
+        (str(link["un"]), link["name_cn"]): [c for c in (link.get("cas") or []) if c]
+        for link in (_load_json(links_path).get("links") or [] if links_path.exists() else [])
+    }
+    decided_cas = sorted({c for cas in decided.values() for c in cas})
+    by_cas: dict[str, str] = {}
+    for i in range(0, len(decided_cas), 900):
+        for r in conn.execute(select(SubstanceRow.id, SubstanceRow.cas_no)
+                              .where(SubstanceRow.cas_no.in_(decided_cas[i:i + 900]))):
+            by_cas[r.cas_no] = r.id
+
+    def row(v: dict, name: str, sid: str | None) -> dict:
+        return {
+            "id": _uid(), "un_number": str(v["un"]), "substance_id": sid,
+            "proper_shipping_name_zh": name[:500], "proper_shipping_name_en": (v.get("name_en") or "")[:500],
+            "transport_class": str(v.get("class") or ""), "subsidiary_risk": str(v.get("subsidiary") or "")[:32],
+            "packing_group": v.get("pg") or None, "marine_pollutant": v.get("marine_pollutant"),
+            "special_provisions": (v.get("special_provisions") or "")[:200], "standard": TRANSPORT_STANDARD,
+            "release_id": release_id,
+        }
+
+    rows, linked, ambiguous, by_decision, missing = [], 0, set(), 0, set()
     for v in entries:
         name = v.get("name_cn") or ""
+        key = (str(v["un"]), name)
+        if key in decided:
+            # A person chose the substance(s) for this entry: one row per chosen substance, or one
+            # unlinked row when they decided it names none. A chosen CAS not in the substance table
+            # is reported rather than silently dropped.
+            sids = []
+            for cas in decided[key]:
+                if cas in by_cas:
+                    sids.append(by_cas[cas])
+                elif (key, cas) not in missing:
+                    missing.add((key, cas))
+                    review.add("transport_link_missing", name=name, cas_no=cas, un_number=key[0])
+            for sid in sids or [None]:
+                rows.append(row(v, name, sid))
+            linked += len(sids)
+            by_decision += 1
+            continue
         ids = by_name.get(name, [])
         sid = ids[0] if len(ids) == 1 else None
         if not ids:  # no exact match: an alias naming exactly one substance
@@ -523,17 +566,11 @@ def _replace_transport(conn: Connection, resources: Path, release_id: str, revie
             # without review; only a name shared by several substances needs a person.
             ambiguous.add((v["un"], name))
             review.add("transport_unlinked", name=name, un_number=str(v["un"]), candidates=len(ids))
-        rows.append({
-            "id": _uid(), "un_number": str(v["un"]), "substance_id": sid,
-            "proper_shipping_name_zh": name[:500], "proper_shipping_name_en": (v.get("name_en") or "")[:500],
-            "transport_class": str(v.get("class") or ""), "subsidiary_risk": str(v.get("subsidiary") or "")[:32],
-            "packing_group": v.get("pg") or None, "marine_pollutant": v.get("marine_pollutant"),
-            "special_provisions": (v.get("special_provisions") or "")[:200], "standard": TRANSPORT_STANDARD,
-            "release_id": release_id,
-        })
+        rows.append(row(v, name, sid))
     for chunk in _chunks(rows):
         conn.execute(insert(SubstanceTransportRow), chunk)
-    stats.update(transport_rows=len(rows), transport_linked=linked, transport_ambiguous=len(ambiguous))
+    stats.update(transport_rows=len(rows), transport_linked=linked, transport_ambiguous=len(ambiguous),
+                 transport_decided=by_decision, transport_link_missing=len(missing))
 
 
 def _mark_iecsc(conn: Connection, resources: Path, stats: dict) -> None:
