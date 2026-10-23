@@ -6,12 +6,14 @@ machine::
 
     none -> pending -> done | partial
 
-Summaries are generated lazily, not at ingest — the full tree walk (LLM over
-every node) costs too much for every upload. Generation is scheduled only for
-documents that were actually visited by Stage 2, or that a user opens at
-≥20 pages (the Stage-2 page threshold), plus the explicit trigger
-(``POST /kb/sources/{id}/toc-tree/summarize``). While the summary status is
-"pending" or "generating", the navigator still works — it reads node text directly.
+Summaries are generated in the background, never for every upload — the full
+tree walk (LLM over every node) costs too much for short documents nobody
+navigates. Generation is scheduled for documents of at least
+``pageindex_min_pages`` pages (the Stage-2 threshold) when they are ingested
+(``pageindex_summarize_on_ingest``, only with an LLM configured) or opened,
+for any document Stage 2 visits, and on the explicit trigger
+(``POST /kb/sources/{id}/toc-tree/summarize``). While the status is "pending",
+the navigator still works — it reads node text directly.
 """
 from __future__ import annotations
 
@@ -83,17 +85,17 @@ def _count_summaries(tree: dict[str, Any]) -> tuple[int, int]:
 def maybe_schedule_summaries(source_id: str, *, visited_by_stage2: bool = False) -> bool:
     """Schedule node summaries for one document, if it qualifies (plan §5.1.1).
 
-    Triggers: Stage-2-visited documents, or documents with ≥20 pages (the
-    Stage-2 page threshold). Not at ingest — ingest only builds the tree, and
-    a full-library sweep would pay the LLM cost for documents nobody reads.
-    Only fires when the current status is "none" (idempotent: a document is
-    scheduled at most once). A broker failure only logs: the status stays
+    Triggers: Stage-2-visited documents, or documents with at least
+    ``pageindex_min_pages`` pages (the Stage-2 threshold). Only fires when the
+    current status is "none" (idempotent: a document is scheduled at most once
+    per tree build). A broker failure only logs: the status goes back to
     "none" and the next qualifying visit retries.
     """
     from ...config import get_settings
     from ...db.toc_tree_store import get_toc_tree_store
 
-    if not get_settings().pageindex_enabled:
+    settings = get_settings()
+    if not settings.pageindex_enabled:
         return False
     store = get_toc_tree_store()
     row = store.get(source_id)
@@ -101,7 +103,7 @@ def maybe_schedule_summaries(source_id: str, *, visited_by_stage2: bool = False)
         return False
     if (row.summaries_status or STATUS_NONE) != STATUS_NONE:
         return False
-    if not visited_by_stage2 and (row.page_count or 0) < 20:
+    if not visited_by_stage2 and (row.page_count or 0) < settings.pageindex_min_pages:
         return False
     store.set_summaries_status(source_id, STATUS_PENDING)
     try:
@@ -114,9 +116,32 @@ def maybe_schedule_summaries(source_id: str, *, visited_by_stage2: bool = False)
         from ...api import _dispatch
 
         _dispatch.submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries")
-    except Exception as exc:  # broker down (503) etc: keep "pending", retry on next visit
+    except Exception as exc:  # broker down (503) etc: back to "none", the next qualifying visit retries
         log.warning("pageindex: summary dispatch failed for %s: %s", source_id, exc)
+        store.set_summaries_status(source_id, STATUS_NONE)
+        return False
     return True
+
+
+def _llm_available(settings) -> bool:
+    from ..llm_router import private_llm_configured
+
+    return bool(settings.get_active_api_key()) or private_llm_configured(settings)
+
+
+def schedule_summaries_on_ingest(source_id: str) -> bool:
+    """Ingest trigger: queue summaries for a freshly built long document.
+
+    Skipped without an LLM — every node would fail and park the document in
+    "partial"; leaving it "none" lets the first view or Stage-2 visit after an
+    LLM is configured schedule it instead.
+    """
+    from ...config import get_settings
+
+    settings = get_settings()
+    if not (settings.pageindex_summarize_on_ingest and _llm_available(settings)):
+        return False
+    return maybe_schedule_summaries(source_id)
 
 
 def generate_summaries(source_id: str, *, summarizer: Summarizer | None = None) -> dict[str, Any]:

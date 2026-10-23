@@ -965,6 +965,8 @@ class Settings(BaseSettings):
     # （不调用 LLM），检索第二阶段在长文档上沿目录树做跨章节寻址。
     pageindex_enabled: bool = True
     pageindex_build_on_ingest: bool = True
+    # 入库建树后，对至少 pageindex_min_pages 页的文档自动排队生成节点摘要（Celery 后台、需已配置 LLM）。
+    pageindex_summarize_on_ingest: bool = True
     # 第二阶段只对至少这么多页的文档自动触发（显式 deep=True 时不受限）。
     pageindex_min_pages: int = 20
     # 每篇文档的寻址预算：最多跳数，以及交给 LLM 的节点正文总字符数（约 16k token）。
