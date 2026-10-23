@@ -180,6 +180,23 @@ pub fn create_admin(docker: &Docker, username: &str, display_name: &str, passwor
     Ok(())
 }
 
+/// `docker compose exec` arguments that load the bundled regulatory data (substances, 《危险化学品目录》,
+/// GBZ 2.1, GB 12268, IECSC, H/P statements) into the stack database. The importer is idempotent: an
+/// unchanged data set is skipped in seconds, a new image version with new data is imported, and rows
+/// edited or locked in the application survive.
+pub fn seed_regulatory_args(docker: &Docker, version: &str) -> Vec<String> {
+    let label: String = version.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-')).collect();
+    docker.compose_args(&[
+        "exec",
+        "-T",
+        "api",
+        "python",
+        "scripts/seed_regulatory_db.py",
+        "--label",
+        &format!("desktop-{label}"),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +268,19 @@ mod tests {
         let left = files.list_backups();
         assert_eq!(left.len(), KEEP_BACKUPS);
         assert_eq!(left[0].name, b.name);
+    }
+
+    #[test]
+    fn seed_regulatory_runs_the_importer_in_the_api_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = StackFiles::new(dir.path());
+        let docker = files.docker(PathBuf::from("docker"));
+        let args = seed_regulatory_args(&docker, "0.2.0;rm -rf /").join(" ");
+        assert!(
+            args.ends_with("exec -T api python scripts/seed_regulatory_db.py --label desktop-0.2.0rm-rf"),
+            "{args}"
+        );
+        assert!(args.contains("-p formunex"), "{args}");
     }
 
     #[cfg(unix)]

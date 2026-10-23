@@ -140,6 +140,15 @@ step "migrations run inside the image"
 docker run --rm -e FORMUNEX_DB_URL=sqlite:////tmp/smoke.db "$IMAGE" alembic upgrade head
 ok "alembic upgrade head"
 
+# The desktop setup wizard runs exactly this importer in the api container (stack.rs seed_regulatory_args).
+step "the bundled regulatory data imports inside the image"
+if docker run --rm -e FORMUNEX_DB_URL=sqlite:////tmp/seed.db "$IMAGE" \
+    sh -c 'alembic upgrade head >/dev/null && python scripts/seed_regulatory_db.py --label smoke >/dev/null'; then
+  ok "scripts/seed_regulatory_db.py"
+else
+  bad "the regulatory importer failed inside the image: the desktop wizard's import step would fail"
+fi
+
 # ---------------------------------------------------------------- the server
 
 # No volume, no Redis, no Datalab: tasks run in-process (eager) and the ledger is the local sqlite one. The data directory

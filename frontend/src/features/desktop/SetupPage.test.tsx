@@ -13,8 +13,23 @@ const desktop = {
   saveConfig: vi.fn(async (c: unknown) => c),
   probeHealth: vi.fn(async () => ({ reachable: true, status: "ok", detail: {}, error: null })),
   dockerStatus: vi.fn(async () => ({ installed: false, path: null, client_version: null, server_version: null, compose_version: null, mem_total_bytes: null, cpus: null, message: "未找到 Docker" })),
+  stackUp: vi.fn(async () => undefined),
+  stackStatus: vi.fn(async () => ({
+    health: { reachable: true, status: "ok", detail: {}, error: null },
+    services: ["postgres", "redis", "kg", "api", "worker"].map((service) => ({ service, state: "running", health: "", status: "" })),
+  })),
+  seedRegulatory: vi.fn(async () => {
+    // The importer's log line, then its JSON result, as the shell streams them.
+    for (const l of ["导入法规库…", "{", '  "skipped": false,', '  "stats": {', '    "substances_total": 131552,',
+      '    "transport_rows": 2861,', '    "iecsc_marked": 13717,', '    "oel_rows": 410', "  }", "}"]) logHandler?.(l);
+  }),
 };
-vi.mock("@/desktop/bridge", () => ({ desktop, onStackLog: vi.fn(async () => () => undefined), isDesktop: () => true }));
+let logHandler: ((line: string) => void) | null = null;
+vi.mock("@/desktop/bridge", () => ({
+  desktop,
+  onStackLog: vi.fn(async (h: (line: string) => void) => { logHandler = h; return () => { logHandler = null; }; }),
+  isDesktop: () => true,
+}));
 const applied: DesktopInfo[] = [];
 vi.mock("@/desktop/runtime", () => ({
   useDesktop: (sel: (s: { info: DesktopInfo }) => unknown) => sel({ info }),
@@ -71,4 +86,37 @@ describe("SetupPage", () => {
     expect(desktop.saveConfig).toHaveBeenCalledWith(expect.objectContaining({ mode: "local" }));
     expect(screen.getByRole("button", { name: /下一步/ })).toBeDisabled();
   });
+
+  async function walkToRegulatoryStep() {
+    desktop.dockerStatus.mockResolvedValueOnce({ installed: true, path: "/usr/bin/docker", client_version: "27", server_version: "27",
+      compose_version: "2.29", mem_total_bytes: 16 * 1024 ** 3, cpus: 8, message: null } as never);
+    renderPage();
+    fireEvent.click(screen.getByText("本机单机版"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /下一步/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /跳过（镜像已在本机）/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /启动本机服务/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /下一步/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    return screen.findByRole("button", { name: /导入法规库/ });
+  }
+
+  it("local mode imports the regulatory data after the stack starts and shows what was loaded", async () => {
+    fireEvent.click(await walkToRegulatoryStep());
+    expect(await screen.findByText("法规库导入完成")).toBeInTheDocument();
+    expect(desktop.seedRegulatory).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("131,552")).toBeInTheDocument();
+    expect(screen.getByText("2,861")).toBeInTheDocument();
+    expect(screen.getByText("13,717")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    expect(await screen.findByRole("button", { name: /创建管理员/ })).toBeInTheDocument();
+  }, 60_000); // walks five wizard steps; ~10 s locally, more on a loaded CI runner
+
+  it("the regulatory import can be skipped, with the consequence spelled out", async () => {
+    await walkToRegulatoryStep();
+    expect(screen.getByText(/不导入时所有组分都按“危害未知”处理/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /暂不导入/ }));
+    expect(await screen.findByRole("button", { name: /创建管理员/ })).toBeInTheDocument();
+    expect(desktop.seedRegulatory).not.toHaveBeenCalled();
+  }, 60_000);
 });

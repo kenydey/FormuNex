@@ -6,10 +6,10 @@ import { useTranslation } from "react-i18next";
 import { desktop, onStackLog, type DesktopConfig, type DockerStatus, type StackStatus } from "@/desktop/bridge";
 import { applyDesktopInfo, useDesktop } from "@/desktop/runtime";
 import { errorText } from "@/shared/feedback";
-import { DOCKER_DOWNLOAD, MIN_MEMORY_GB, formatBytes, memoryWarning, stackReady } from "./logic";
+import { DOCKER_DOWNLOAD, MIN_MEMORY_GB, formatBytes, memoryWarning, parseSeedResult, stackReady, type SeedSummary } from "./logic";
 import { LogView } from "./LogView";
 
-type Step = "mode" | "remote" | "docker" | "images" | "start" | "admin" | "done";
+type Step = "mode" | "remote" | "docker" | "images" | "start" | "regulatory" | "admin" | "done";
 
 /** First-run wizard (方案 §2.2 / §3.5): local Docker stack or a FormuNex server. */
 export default function SetupPage() {
@@ -44,12 +44,13 @@ export default function SetupPage() {
     return <Result status="info" title={t("desktop.browser_only", "该页面仅在桌面版中可用")} />;
   }
 
-  const localSteps: Step[] = ["mode", "docker", "images", "start", "admin", "done"];
+  const localSteps: Step[] = ["mode", "docker", "images", "start", "regulatory", "admin", "done"];
   const current = step === "remote" ? 1 : Math.max(0, localSteps.indexOf(step));
   const items = step === "remote" || info.config.mode === "remote"
     ? [{ title: t("desktop.step.mode", "连接方式") }, { title: t("desktop.step.server", "服务器") }]
     : [t("desktop.step.mode", "连接方式"), t("desktop.step.docker", "Docker"), t("desktop.step.images", "镜像"),
-       t("desktop.step.start", "启动"), t("desktop.step.admin", "管理员"), t("desktop.step.done", "完成")].map((title) => ({ title }));
+       t("desktop.step.start", "启动"), t("desktop.step.regulatory", "法规库"), t("desktop.step.admin", "管理员"),
+       t("desktop.step.done", "完成")].map((title) => ({ title }));
 
   return (
     <div style={{ minHeight: "100vh", padding: "32px 16px", display: "flex", justifyContent: "center" }}>
@@ -68,7 +69,8 @@ export default function SetupPage() {
           })} />}
         {step === "docker" && <DockerStep onNext={() => setStep("images")} onBack={() => setStep("mode")} />}
         {step === "images" && <ImagesStep onNext={() => setStep("start")} onBack={() => setStep("docker")} />}
-        {step === "start" && <StartStep onNext={() => setStep("admin")} onBack={() => setStep("images")} />}
+        {step === "start" && <StartStep onNext={() => setStep("regulatory")} onBack={() => setStep("images")} />}
+        {step === "regulatory" && <RegulatoryStep onNext={() => setStep("admin")} onBack={() => setStep("start")} />}
         {step === "admin" && <AdminStep onDone={(username) => run(async () => {
           await save({ setup_complete: true });
           navigate("/login", { replace: true, state: { username } });
@@ -179,11 +181,17 @@ function useStreamed() {
   const [lines, setLines] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Every line of the current run, read synchronously once it ends (state may not have re-rendered yet).
+  const output = useRef<string[]>([]);
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError(null);
     setLines([]);
-    const off = await onStackLog((l) => setLines((prev) => [...prev.slice(-400), l]));
+    output.current = [];
+    const off = await onStackLog((l) => {
+      output.current.push(l);
+      setLines((prev) => [...prev.slice(-400), l]);
+    });
     try {
       await fn();
       return true;
@@ -195,7 +203,7 @@ function useStreamed() {
       setBusy(false);
     }
   };
-  return { lines, busy, error, run };
+  return { lines, busy, error, run, output };
 }
 
 function ImagesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
@@ -288,6 +296,63 @@ export function ServicesTable({ status }: { status: StackStatus }) {
           { title: t("desktop.detail", "详情"), dataIndex: "status" },
         ]} />
     </>
+  );
+}
+
+/** What the regulatory import loaded; shared with the desktop settings page. */
+export function SeedSummaryView({ summary }: { summary: SeedSummary }) {
+  const { t } = useTranslation();
+  const n = (v: number | null) => (v === null ? "—" : v.toLocaleString());
+  return (
+    <Alert type="success" showIcon
+      message={summary.skipped
+        ? t("desktop.seed_skipped", "法规库已是最新，无需重新导入")
+        : t("desktop.seed_done", "法规库导入完成")}
+      description={summary.skipped ? undefined : (
+        <Descriptions size="small" column={2} items={[
+          { key: "s", label: t("desktop.seed_substances", "物质"), children: n(summary.substances) },
+          { key: "t", label: t("desktop.seed_transport", "GB 12268 品名条目"), children: n(summary.transport) },
+          { key: "i", label: t("desktop.seed_iecsc", "列入 IECSC 的物质"), children: n(summary.iecsc) },
+          { key: "o", label: t("desktop.seed_oel", "职业接触限值"), children: n(summary.oel) },
+        ]} />
+      )} />
+  );
+}
+
+function RegulatoryStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const { t } = useTranslation();
+  const s = useStreamed();
+  const [summary, setSummary] = useState<SeedSummary | null>(null);
+  const [done, setDone] = useState(false);
+  const seed = async () => {
+    if (await s.run(() => desktop.seedRegulatory())) {
+      setSummary(parseSeedResult(s.output.current));
+      setDone(true);
+    }
+  };
+  return (
+    <Space direction="vertical" style={{ width: "100%" }}>
+      <Typography.Paragraph type="secondary">
+        {t("desktop.seed_desc", "导入随镜像提供的中国法规数据：约 13 万条物质、《危险化学品目录》分类、GBZ 2.1 职业接触限值、GB 12268 危险货物品名表、《中国现有化学物质名录》（IECSC）与 H/P 语句。GHS 分类、SDS、标签和运输分类都依赖这些数据。通常需要 1–3 分钟。")}
+      </Typography.Paragraph>
+      <Button type="primary" loading={s.busy} disabled={done} onClick={() => void seed()}>
+        {t("desktop.seed_go", "导入法规库")}</Button>
+      {s.error ? <Alert type="error" showIcon message={errorText(s.error)} /> : null}
+      {summary && <SeedSummaryView summary={summary} />}
+      {done && !summary && <Alert type="success" showIcon message={t("desktop.seed_done", "法规库导入完成")} />}
+      <LogView lines={s.lines} />
+      <Space>
+        <Button onClick={onBack} disabled={s.busy}>{t("desktop.back", "上一步")}</Button>
+        {done
+          ? <Button type="primary" onClick={onNext}>{t("desktop.next", "下一步")}</Button>
+          : <Button onClick={onNext} disabled={s.busy}>{t("desktop.seed_skip", "暂不导入")}</Button>}
+      </Space>
+      {!done && !s.busy && (
+        <Typography.Text type="warning">
+          {t("desktop.seed_skip_note", "不导入时所有组分都按“危害未知”处理；之后可在“系统管理 → 桌面端与本机服务”中导入。")}
+        </Typography.Text>
+      )}
+    </Space>
   );
 }
 

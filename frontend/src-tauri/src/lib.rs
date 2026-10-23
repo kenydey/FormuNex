@@ -94,6 +94,7 @@ pub fn run() {
             commands::backup_now,
             commands::list_backups,
             commands::stack_upgrade,
+            commands::seed_regulatory,
             commands::create_admin,
             commands::keychain_get,
             commands::keychain_set,
