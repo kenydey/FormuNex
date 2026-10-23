@@ -14,7 +14,8 @@
    1. **检测 Docker**：查找 `docker`（PATH、Docker Desktop 默认安装位置，或在 `desktop.json` 的 `docker_path` 指定），检查引擎是否运行、`docker compose` v2 插件、Docker 可用内存（建议 ≥ 12 GB，待实测）。未安装时给出下载链接。Windows 需启用 WSL 2；Docker Desktop 对大型企业（> 250 人或年营收 > 1000 万美元）需付费订阅。
    2. **镜像**：联网拉取，或导入离线镜像包 `formunex-images-<版本>.tar.gz`（`docker load`）。
    3. **启动**：写入 `<应用数据目录>/stack/compose.yml` 与 `.env`（首次生成数据库 / 图数据库密码与 JWT 密钥，之后不再改动；文件权限 600），执行 `docker compose -p formunex up -d`，实时显示输出并轮询 `/health` 与各服务状态，直到 postgres、redis、kg、api、worker 都在运行且 API 健康。
-   4. **管理员**：在 api 容器里运行 `scripts/create_user.py`，赋予全部内置角色；密码自动生成，只显示一次，同时存入系统钥匙串（服务名 `com.formunex.desktop`，条目 `admin-password`）。密码经子进程环境变量传入容器，不出现在命令行。
+   4. **法规库**：在 api 容器里运行 `scripts/seed_regulatory_db.py`，导入随镜像提供的物质（约 13 万条）、《危险化学品目录》分类、GBZ 2.1、GB 12268-2025、IECSC 与 H/P 语句，输出实时显示，完成后显示导入数量（通常 1–3 分钟）。可暂不导入（所有组分将按“危害未知”处理），之后在“系统管理 → 桌面端与本机服务”中导入。
+   5. **管理员**：在 api 容器里运行 `scripts/create_user.py`，赋予全部内置角色；密码自动生成，只显示一次，同时存入系统钥匙串（服务名 `com.formunex.desktop`，条目 `admin-password`）。密码经子进程环境变量传入容器，不出现在命令行。
 3. 连接服务器：输入地址 → 探测 `/health` → 保存。
 
 设置保存在应用配置目录的 `desktop.json`（不含任何密钥）。之后可在「系统管理 → 桌面端与本机服务」或登录页的「更改连接」重新选择。
@@ -28,6 +29,7 @@
 ## 日常管理（系统管理 → 桌面端与本机服务）
 
 - 服务状态、启动 / 重启 / 停止（停止不删数据）、按服务查看最近日志。
+- **法规库**：“导入 / 更新法规库”重新运行导入；导入器按数据摘要判断，未变化时几秒内跳过，已锁定或人工编辑的数据保留。升级服务镜像后会自动运行一次（新镜像可能带新的法规数据），失败只提示、不影响升级。
 - **数据库备份**：`pg_dump -Fc` 到 `<应用数据目录>/stack/backups/`，保留最近 10 份。恢复：
   ```bash
   docker compose -p formunex exec -T postgres pg_restore --clean --if-exists -U formunex -d formunex < formunex-XXXX.dump
@@ -66,5 +68,4 @@ Linux 需要 `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev li
 
 - 本环境未接入 Docker 引擎，栈编排只通过模拟的 docker 可执行文件做了单元测试；首次在 Windows / macOS 上安装、拉镜像、启动、导出 PDF、打印的冒烟测试（方案 §7）仍需在真机上完成。
 - 12 GB 内存建议值待实测；backend 镜像体积大（含科学计算与解析依赖），首次拉取耗时较长。
-- 法规库初始化（13 万物质导入）未纳入向导，需按 `backend/scripts/seed_regulatory_db.py` 另行导入。
 - 应用内刷新页面时依赖外壳对单页应用路由的回退；如遇空白页，回到首页即可。

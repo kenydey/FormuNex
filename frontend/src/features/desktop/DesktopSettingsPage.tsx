@@ -1,15 +1,15 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
 import { Alert, App, Button, Descriptions, Input, Result, Select, Space, Table, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { desktop, onStackLog } from "@/desktop/bridge";
 import { applyDesktopInfo, useDesktop } from "@/desktop/runtime";
 import { ErrorAlert, errorText } from "@/shared/feedback";
-import { formatBytes } from "./logic";
+import { formatBytes, parseSeedResult, type SeedSummary } from "./logic";
 import { LogView } from "./LogView";
-import { ServicesTable } from "./SetupPage";
+import { SeedSummaryView, ServicesTable } from "./SetupPage";
 
 async function reveal(path: string) {
   const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
@@ -34,6 +34,7 @@ export default function DesktopSettingsPage() {
         ]} />
       </ProCard>
       {local && <StackCard />}
+      {local && <RegulatoryCard />}
       {local && <BackupCard />}
       {local && <UpgradeCard current={info.config.version} />}
       <ShellUpdateCard />
@@ -45,21 +46,29 @@ function useStreamed() {
   const [lines, setLines] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  // Every line of the current run, read synchronously once it ends (state may not have re-rendered yet).
+  const output = useRef<string[]>([]);
   const run = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(label);
     setError(null);
     setLines([]);
-    const off = await onStackLog((l) => setLines((p) => [...p.slice(-400), l]));
+    output.current = [];
+    const off = await onStackLog((l) => {
+      output.current.push(l);
+      setLines((p) => [...p.slice(-400), l]);
+    });
     try {
       await fn();
+      return true;
     } catch (e) {
       setError(e);
+      return false;
     } finally {
       off();
       setBusy(null);
     }
   };
-  return { lines, busy, error, run };
+  return { lines, busy, error, run, output };
 }
 
 function StackCard() {
@@ -93,6 +102,24 @@ function StackCard() {
       </Space>
       <ErrorAlert error={logs.error} />
       {logs.data !== undefined && <LogView lines={logs.data.split("\n")} height={320} />}
+    </ProCard>
+  );
+}
+
+function RegulatoryCard() {
+  const { t } = useTranslation();
+  const s = useStreamed();
+  const [summary, setSummary] = useState<SeedSummary | null>(null);
+  return (
+    <ProCard bordered style={{ marginTop: 16 }} title={t("desktop.regulatory", "法规库")}
+      subTitle={t("desktop.regulatory_sub", "物质、危险化学品目录、GBZ 2.1、GB 12268、IECSC、H/P 语句；升级镜像后自动更新，已锁定或人工编辑的数据保留")}
+      extra={<Button loading={s.busy === "seed"} disabled={!!s.busy} onClick={() => {
+        setSummary(null);
+        void s.run("seed", desktop.seedRegulatory).then((ok) => setSummary(ok ? parseSeedResult(s.output.current) : null));
+      }}>{t("desktop.seed_again", "导入 / 更新法规库")}</Button>}>
+      {s.error ? <Alert type="error" showIcon message={errorText(s.error)} style={{ marginBottom: 8 }} /> : null}
+      {summary && !s.error && <SeedSummaryView summary={summary} />}
+      {s.lines.length > 0 && <div style={{ marginTop: 8 }}><LogView lines={s.lines} /></div>}
     </ProCard>
   );
 }

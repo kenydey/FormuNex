@@ -234,10 +234,30 @@ pub async fn stack_upgrade(app: AppHandle, version: String) -> Result<DesktopCon
         files.prepare(&cfg)?;
         docker.run_streaming(&docker.compose_args(&["pull", "--ignore-buildable"]), emit)?;
         docker.run_streaming(&docker.compose_args(&["up", "-d", "--remove-orphans"]), emit)?;
+        // A new image may bring new regulatory data; the importer skips an unchanged set in seconds. The
+        // upgrade itself already succeeded, so a failed import is reported, not raised.
+        emit("更新法规库…");
+        if let Err(e) = docker.run_streaming(&stack::seed_regulatory_args(&docker, &cfg.version), emit) {
+            emit(&format!("法规库更新未完成：{e}（可在“系统管理 → 桌面端与本机服务”中重新导入）"));
+        }
         Ok(cfg)
     })
     .await
     .map_err(|e| DesktopError::Config(e.to_string()))?
+}
+
+/// Load (or refresh) the bundled regulatory data into the local stack, streaming the importer's output.
+#[tauri::command]
+pub async fn seed_regulatory(app: AppHandle) -> Result<()> {
+    streamed(app, |state, docker, emit| {
+        let cfg = state.config()?;
+        if cfg.mode != Some(Mode::Local) {
+            return Err(DesktopError::Config("只有本机栈需要导入法规库".into()));
+        }
+        emit("导入法规库（物质、危险化学品目录、职业接触限值、GB 12268、IECSC、H/P 语句）…");
+        docker.run_streaming(&stack::seed_regulatory_args(docker, &cfg.version), emit)
+    })
+    .await
 }
 
 /// Create the first administrator; the generated password goes to the keychain and back to the UI once.

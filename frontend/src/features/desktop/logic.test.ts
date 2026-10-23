@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, memoryWarning, stackReady } from "./logic";
+import { formatBytes, memoryWarning, parseSeedResult, stackReady } from "./logic";
 
 const svc = (service: string, state = "running") => ({ service, state, health: "", status: "" });
 
@@ -20,5 +20,15 @@ describe("desktop logic", () => {
     expect(stackReady({ health: { ...up, reachable: false }, services: all })).toBe(false);
     expect(stackReady({ health: up, services: [...all.slice(0, 4), svc("worker", "restarting")] })).toBe(false);
     expect(stackReady(null)).toBe(false);
+  });
+
+  it("reads the regulatory importer's JSON result after its log lines", () => {
+    const out = ["导入法规库…", "WARNING app.db: x", "{", '  "skipped": false,', '  "release_id": "r1",', '  "stats": {',
+      '    "substances_total": 131552,', '    "transport_rows": 2861,', '    "iecsc_marked": 13717,', '    "oel_rows": 410', "  }", "}"];
+    expect(parseSeedResult(out)).toEqual({ skipped: false, substances: 131552, transport: 2861, iecsc: 13717, oel: 410 });
+    expect(parseSeedResult(["{", '  "skipped": true,', '  "stats": {}', "}"])).toEqual(
+      { skipped: true, substances: null, transport: null, iecsc: null, oel: null });
+    expect(parseSeedResult(["no json here"])).toBeNull();
+    expect(parseSeedResult(["{", "truncated"])).toBeNull();
   });
 });

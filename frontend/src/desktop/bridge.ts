@@ -68,6 +68,7 @@ export const desktop = {
   backupNow: () => invoke<BackupInfo>("backup_now"),
   listBackups: () => invoke<BackupInfo[]>("list_backups"),
   upgrade: (version: string) => invoke<DesktopConfig>("stack_upgrade", { version }),
+  seedRegulatory: () => invoke<void>("seed_regulatory"),
   createAdmin: (username: string, displayName: string) => invoke<string>("create_admin", { username, displayName }),
   keychainGet: (key: string) => invoke<string | null>("keychain_get", { key }),
   keychainSet: (key: string, value: string) => invoke<void>("keychain_set", { key, value }),

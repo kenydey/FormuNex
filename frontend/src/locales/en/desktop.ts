@@ -50,6 +50,7 @@ const en: Record<string, string> = {
   "desktop.step.docker": "Docker",
   "desktop.step.images": "Images",
   "desktop.step.start": "Start",
+  "desktop.step.regulatory": "Regulatory data",
   "desktop.step.admin": "Administrator",
   "desktop.step.done": "Done",
   "desktop.setup": "FormuNex first-run setup",
@@ -97,6 +98,19 @@ const en: Record<string, string> = {
   "desktop.admin_user_rule": "Letters, digits, _ - . only",
   "desktop.admin_display": "Display name",
   "desktop.create_admin": "Create administrator (password generated)",
+  "desktop.seed_desc": "Load the Chinese regulatory data shipped with the images: about 130,000 substances, classifications from the Catalogue of Hazardous Chemicals, GBZ 2.1 occupational exposure limits, the GB 12268 dangerous goods list, the Inventory of Existing Chemical Substances in China (IECSC) and H/P statements. GHS classification, SDS, labels and transport classification all depend on it. Usually takes 1–3 minutes.",
+  "desktop.seed_go": "Import regulatory data",
+  "desktop.seed_done": "Regulatory data imported",
+  "desktop.seed_skipped": "Regulatory data is already up to date; nothing to import",
+  "desktop.seed_substances": "Substances",
+  "desktop.seed_transport": "GB 12268 entries",
+  "desktop.seed_iecsc": "Substances listed in IECSC",
+  "desktop.seed_oel": "Occupational exposure limits",
+  "desktop.seed_skip": "Skip for now",
+  "desktop.seed_skip_note": "Without it every component is treated as \u201chazard unknown\u201d; you can import it later under System administration \u2192 Desktop & local services.",
+  "desktop.regulatory": "Regulatory data",
+  "desktop.regulatory_sub": "Substances, Catalogue of Hazardous Chemicals, GBZ 2.1, GB 12268, IECSC, H/P statements; refreshed automatically after an image upgrade, locked or hand-edited data is kept",
+  "desktop.seed_again": "Import / update regulatory data",
 };
 
 export default en;

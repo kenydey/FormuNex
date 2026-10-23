@@ -26,3 +26,33 @@ export function stackReady(status: StackStatus | null): boolean {
   const running = new Set(status.services.filter((s) => s.state === "running").map((s) => s.service));
   return REQUIRED_SERVICES.every((s) => running.has(s));
 }
+
+export interface SeedSummary {
+  /** The data set was already imported (unchanged digest): nothing was rewritten. */
+  skipped: boolean;
+  substances: number | null;
+  transport: number | null;
+  iecsc: number | null;
+  oel: number | null;
+}
+
+/** The regulatory importer prints its result as indented JSON after any log lines; read the counts. */
+export function parseSeedResult(lines: string[]): SeedSummary | null {
+  const start = lines.lastIndexOf("{");
+  if (start < 0) return null;
+  let doc: { skipped?: boolean; stats?: Record<string, unknown> };
+  try {
+    doc = JSON.parse(lines.slice(start).join("\n"));
+  } catch {
+    return null;
+  }
+  const stats = doc.stats ?? {};
+  const num = (k: string) => (typeof stats[k] === "number" ? (stats[k] as number) : null);
+  return {
+    skipped: !!doc.skipped,
+    substances: num("substances_total"),
+    transport: num("transport_rows"),
+    iecsc: num("iecsc_marked"),
+    oel: num("oel_rows"),
+  };
+}
