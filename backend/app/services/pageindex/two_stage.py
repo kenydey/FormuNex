@@ -219,9 +219,18 @@ def build_tree_on_ingest(source_id: str, tables: list | None = None) -> None:
     if not (settings.pageindex_enabled and settings.pageindex_build_on_ingest):
         return
     try:
-        build_tree_for_source(source_id, tables=tables)
+        built = build_tree_for_source(source_id, tables=tables)
     except Exception as exc:
         log.warning("pageindex: tree build failed for %s: %s", source_id, exc)
+        return
+    if built is None:
+        return
+    try:
+        from .summaries import schedule_summaries_on_ingest
+
+        schedule_summaries_on_ingest(source_id)
+    except Exception as exc:
+        log.warning("pageindex: summary scheduling failed for %s: %s", source_id, exc)
 
 
 def _load_tables(source_id: str) -> list:

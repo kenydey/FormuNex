@@ -25,6 +25,9 @@ os.environ.setdefault("FORMUNEX_SKIP_LIFESPAN_BOOTSTRAP", "1")
 # suite offline/deterministic — tests that exercise it enable it explicitly
 # with stubbed fetchers.
 os.environ.setdefault("FORMUNEX_KB_INGEST_AUTO", "false")
+# Ingest would queue LLM node summaries for every long test document (eager mode runs them in a
+# background thread); tests that exercise it enable it explicitly.
+os.environ.setdefault("FORMUNEX_PAGEINDEX_SUMMARIZE_ON_INGEST", "false")
 # Production defaults celery_eager=False (real worker + Redis). Offline CI has
 # no broker — run tasks in-process so 202/SSE suites stay green. Tests that
 # assert broker-down behaviour monkeypatch celery_eager=False explicitly.

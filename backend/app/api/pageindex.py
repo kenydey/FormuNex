@@ -33,7 +33,7 @@ def get_toc_tree(source_id: str) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="该文档尚无目录树（未入库或未构建）")
     # Viewing a long document's tree is a summary trigger (plan §5.1.1):
-    # ≥20 pages + never summarised → schedule node summaries (fail-open).
+    # ≥ pageindex_min_pages pages + never summarised → schedule node summaries (fail-open).
     try:
         from ..services.pageindex.summaries import maybe_schedule_summaries
 
@@ -74,11 +74,16 @@ def summarize_toc_tree(source_id: str):
         raise HTTPException(status_code=404, detail="该文档尚无目录树（未入库或未构建）")
     if row.summaries_status == "done":
         return {"source_id": source_id, "summaries_status": "done", "detail": "节点摘要已全部生成"}
+    previous = row.summaries_status
     store.set_summaries_status(source_id, "pending")
     from ..worker.tasks import run_toc_summaries_task
     from ._dispatch import submit
 
-    return submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries")
+    try:
+        return submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries")
+    except HTTPException:
+        store.set_summaries_status(source_id, previous)  # not queued: leave it to the next trigger
+        raise
 
 
 @router.post("/pageindex/search")

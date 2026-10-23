@@ -1,7 +1,8 @@
 """PageIndex ToC node summaries: LLM generation + status machine + trigger API.
 
-Summaries are only generated for a document the user explicitly triggers
-(POST /api/kb/sources/{id}/toc-tree/summarize) — never a full-library sweep.
+Summaries are generated per document — on the explicit trigger
+(POST /api/kb/sources/{id}/toc-tree/summarize) or when a long document is
+ingested with an LLM configured — never as a full-library sweep.
 """
 from __future__ import annotations
 
@@ -141,3 +142,100 @@ def test_summarize_endpoint_404_without_tree(kb):
 
     client = TestClient(app)
     assert client.post("/api/kb/sources/no-such-source/toc-tree/summarize").status_code == 404
+
+
+# --------------------------------------------------------------------------- ingest trigger
+
+
+def _ingest(text: str, title: str) -> str:
+    from app.db.source_store import get_source_store
+
+    sid = get_source_store().create(filename=f"{title}.pdf", title=title, source_kind="patent", full_text=text,
+                                    content_hash=hashlib.sha256(text.encode()).hexdigest())
+    assert kb_index.index_source(sid, text, embed=False) > 0
+    return sid
+
+
+def _wait_status(trees, sid, want=("done", "partial")):
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        status = trees.get(sid).summaries_status
+        if status in want:
+            return status
+        time.sleep(0.1)
+    return trees.get(sid).summaries_status
+
+
+def _long_text(tag: str) -> str:
+    """The long fixture patent, made distinct from the copy the ``kb`` fixture already ingested."""
+    p = patent_cn_basic()
+    pages = {n: f"{text}\n（副本{tag}第 {n} 页备注。）" for n, text in p.pages.items()}
+    return "\n".join(f"<!-- page:{n} -->\n{pages[n]}" for n in sorted(pages))
+
+
+@pytest.fixture()
+def on_ingest(kb, monkeypatch):
+    monkeypatch.setenv("FORMUNEX_PAGEINDEX_SUMMARIZE_ON_INGEST", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(summaries_mod, "_llm_available", lambda settings: True)
+    monkeypatch.setattr(summaries_mod, "_default_summarizer", lambda title, text: f"摘要：{title}")
+    return kb
+
+
+def test_ingest_of_long_document_generates_summaries(on_ingest):
+    trees = on_ingest["trees"]
+    sid = _ingest(_long_text("二"), "长篇专利二")
+    assert trees.get(sid).page_count >= get_settings().pageindex_min_pages
+    assert _wait_status(trees, sid) == "done"
+    got = _summaries(trees, sid)
+    assert got and all(v and v.startswith("摘要：") for v in got.values())
+
+
+def test_ingest_skips_short_documents(on_ingest):
+    trees = on_ingest["trees"]
+    text = "\n".join(f"<!-- page:{n} -->\n第 {n} 章\n" + "防腐涂料说明。" * 20 for n in (1, 2, 3))
+    sid = _ingest(text, "短篇技术说明")
+    assert trees.get(sid).summaries_status == "none"
+
+
+def test_ingest_without_llm_leaves_status_for_a_later_trigger(on_ingest, monkeypatch):
+    monkeypatch.setattr(summaries_mod, "_llm_available", lambda settings: False)
+    sid = _ingest(_long_text("三"), "长篇专利三")
+    assert on_ingest["trees"].get(sid).summaries_status == "none"
+
+
+def test_ingest_trigger_off_by_setting(on_ingest, monkeypatch):
+    monkeypatch.setenv("FORMUNEX_PAGEINDEX_SUMMARIZE_ON_INGEST", "false")
+    get_settings.cache_clear()
+    sid = _ingest(_long_text("四"), "长篇专利四")
+    assert on_ingest["trees"].get(sid).summaries_status == "none"
+
+
+def test_failed_dispatch_returns_to_none_and_retries(on_ingest, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api import _dispatch
+
+    def broker_down(*args, **kwargs):
+        raise HTTPException(status_code=503, detail="down")
+
+    real_submit = _dispatch.submit
+    monkeypatch.setattr(_dispatch, "submit", broker_down)
+    sid = _ingest(_long_text("五"), "长篇专利五")
+    trees = on_ingest["trees"]
+    assert trees.get(sid).summaries_status == "none"
+
+    monkeypatch.setattr(_dispatch, "submit", real_submit)  # broker back: the next view schedules it
+    assert summaries_mod.maybe_schedule_summaries(sid) is True
+    assert _wait_status(trees, sid) == "done"
+
+
+def test_explicit_trigger_restores_status_when_not_queued(kb, monkeypatch):
+    from app.api import _dispatch
+    from app.main import app
+
+    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: False)
+    sid, trees = kb["sid"], kb["trees"]
+    r = TestClient(app).post(f"/api/kb/sources/{sid}/toc-tree/summarize")
+    assert r.status_code == 503
+    assert trees.get(sid).summaries_status == "none"
