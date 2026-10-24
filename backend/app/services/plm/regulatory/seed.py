@@ -74,7 +74,7 @@ log = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 # Bump when parsing / mapping logic changes, so an unchanged data set is re-imported.
-IMPORTER_VERSION = "5"  # 5: person-decided GB 12268 links (gb12268_links.json)
+IMPORTER_VERSION = "6"  # 6: catalogue names win over borrowed common-list names
 OEL_STANDARD = "GBZ 2.1-2019"
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
@@ -275,6 +275,7 @@ def _collect_substances(
     # The catalogue lists some substances more than once (e.g. 苯酚 as solid and as
     # solution, with different classifications). Their classifications are merged,
     # which is only right for one form — a person decides which apply.
+    _fix_borrowed_names(subs, catalogue, stats)
     duplicates = {c: nos for c, nos in entries_by_cas.items() if len(nos) > 1}
     for c, nos in duplicates.items():
         review.add("duplicate_catalog_entry", name=subs[c]["name_zh"], cas_no=c, catalog_nos=nos)
@@ -282,6 +283,33 @@ def _collect_substances(
     stats.update(catalog_entries=len(catalogue), catalog_cas_repaired=repaired, catalog_multi_cas=multi,
                  catalog_generic=generic, catalog_parsed_clean=parsed_clean)
     return subs
+
+
+def _fix_borrowed_names(subs: dict[str, dict], catalogue: list[dict], stats: dict) -> None:
+    """Replace a common-list Chinese name that the catalogue gives to a *different* CAS.
+
+    The common list mislabels some substances with a neighbour's name (12030-88-5 KO₂ as 过氧化钾,
+    which is 17014-71-0 K₂O₂). Such a name is wrong, not a synonym: it shows on the SDS and makes
+    GB 12268 name matching link or block the wrong substance. The catalogue name replaces it, and
+    ``name_zh_replaced`` lets an existing row written with the wrong name be corrected on re-import.
+    """
+    names: dict[str, list[str]] = {}  # CAS -> its catalogue names
+    owners: dict[str, set[str]] = {}  # catalogue name -> CAS numbers listed under it
+    for item in catalogue:
+        name = re.sub(r"\s*\n\s*", "", item.get("chinese_name") or "")
+        if not name:
+            continue
+        for _original, cas, _how in catalog_cas_numbers(item.get("cas_number"))[0]:
+            names.setdefault(cas, []).append(name)
+            owners.setdefault(name, set()).add(cas)
+    fixed = 0
+    for cas, own in names.items():
+        e = subs[cas]
+        current = e["name_zh"]
+        if current and current not in own and owners.get(current, set()) - {cas}:
+            e["name_zh"], e["name_zh_replaced"] = own[0], current
+            fixed += 1
+    stats["catalog_borrowed_names_fixed"] = fixed
 
 
 def catalog_cas_numbers(raw: str | None) -> tuple[list[tuple[str, str, str]], list[str]]:
@@ -359,7 +387,7 @@ def _upsert_substances(conn: Connection, subs: dict[str, dict], release_id: str,
             continue
         cas_to_id[cas] = row.id
         patch: dict[str, Any] = {}
-        if not row.name_zh and e["name_zh"]:
+        if e["name_zh"] and (not row.name_zh or row.name_zh == e.get("name_zh_replaced")):
             patch["name_zh"] = e["name_zh"][:300]
         if not row.name_en and e["name_en"]:
             patch["name_en"] = e["name_en"][:300]

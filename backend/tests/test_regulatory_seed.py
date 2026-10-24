@@ -448,3 +448,47 @@ def test_an_empty_decision_leaves_the_entry_deliberately_unlinked(engine, resour
         assert c.execute(select(SubstanceTransportRow.substance_id)).scalars().all() == [None]
         assert c.execute(select(func.count()).select_from(RegulatoryReviewItem)
                          .where(RegulatoryReviewItem.kind == "transport_unlinked")).scalar_one() == 0
+
+
+def test_a_name_borrowed_from_another_catalogue_substance_is_replaced(engine, resources):
+    # The common list calls KO₂ (12030-88-5) 过氧化钾, the catalogue name of K₂O₂ (17014-71-0).
+    _write(resources, "common_chemicals.json.gz", {"rows": [
+        ["12030-88-5", "过氧化钾", "Potassium superoxide", "KO2"],
+        ["17014-71-0", "过氧化钾", "Potassium peroxide", "K2O2"],
+        ["111-40-0", "二乙烯三胺", "Diethylenetriamine", "C4H13N3"],  # a synonym, not borrowed: kept
+    ]})
+    _write(resources, "hazard_chemical_info.json", {"chemicals": [
+        {"index": 160, "catalog_no": 159, "chinese_name": "超氧化钾", "alias": "", "english_name": "potassium superoxide",
+         "cas_number": "12030-88-5", "hazard_category": "氧化性固体,类别 1", "notes": ""},
+        {"index": 888, "catalog_no": 894, "chinese_name": "过氧化钾", "alias": "", "english_name": "potassium peroxide",
+         "cas_number": "17014-71-0", "hazard_category": "氧化性固体,类别 1", "notes": ""},
+        {"index": 637, "catalog_no": 636, "chinese_name": "二亚乙基三胺", "alias": "", "english_name": "diethylenetriamine",
+         "cas_number": "111-40-0", "hazard_category": "皮肤腐蚀/刺激,类别 1B", "notes": ""},
+    ]})
+    _write(resources, "gb12268_2025.json", {"entries": [
+        {"un": "1491", "name_cn": "过氧化钾", "name_en": "POTASSIUM PEROXIDE", "class": "5.1", "pg": "I"},
+        {"un": "2466", "name_cn": "超氧化钾", "name_en": "POTASSIUM SUPEROXIDE", "class": "5.1", "pg": "I"},
+    ]})
+
+    def names():
+        with engine.connect() as c:
+            return dict(c.execute(select(SubstanceRow.cas_no, SubstanceRow.name_zh).where(
+                SubstanceRow.cas_no.in_(["12030-88-5", "17014-71-0", "111-40-0"]))).all())
+
+    stats = seed_regulatory_db(engine, resources=resources)["stats"]
+    assert stats["catalog_borrowed_names_fixed"] == 1
+    assert names() == {"12030-88-5": "超氧化钾", "17014-71-0": "过氧化钾", "111-40-0": "二乙烯三胺"}
+    with engine.connect() as c:
+        linked = dict(c.execute(select(SubstanceTransportRow.un_number, SubstanceRow.cas_no)
+                                .join(SubstanceRow, SubstanceRow.id == SubstanceTransportRow.substance_id)).all())
+        unlinked = c.execute(select(func.count()).select_from(RegulatoryReviewItem)
+                             .where(RegulatoryReviewItem.kind == "transport_unlinked")).scalar_one()
+    assert linked == {"1491": "17014-71-0", "2466": "12030-88-5"} and unlinked == 0
+
+    # A database written by an earlier import still carries the wrong name: re-import corrects it,
+    # while a name a person edited in the application stays.
+    with engine.begin() as c:
+        c.execute(update(SubstanceRow).where(SubstanceRow.cas_no == "12030-88-5").values(name_zh="过氧化钾"))
+        c.execute(update(SubstanceRow).where(SubstanceRow.cas_no == "111-40-0").values(name_zh="二乙撑三胺"))
+    seed_regulatory_db(engine, resources=resources, force=True)
+    assert names()["12030-88-5"] == "超氧化钾" and names()["111-40-0"] == "二乙撑三胺"

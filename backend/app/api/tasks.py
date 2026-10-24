@@ -79,7 +79,8 @@ def list_tasks(
     """The caller's recent background tasks, newest first, from the durable on-disk task snapshots.
 
     Ownership follows ``assert_owner``: in single-user mode (owner ``default``) every task is listed; with
-    ``FORMUNEX_MULTI_USER`` only tasks whose ``owner_id`` is the caller's.
+    ``FORMUNEX_MULTI_USER`` the caller's own tasks plus those without an owner (written before ownership was
+    recorded), which ``GET /tasks/{id}`` already serves to anyone.
     """
     from ..middleware.api_auth import get_current_owner
 
@@ -89,7 +90,7 @@ def list_tasks(
         status = load_persisted_task(task_id)
         if status is None:
             continue
-        if current != "default" and status.owner_id != current:
+        if current != "default" and status.owner_id and status.owner_id != current:
             continue
         if status.state not in _TERMINAL_STATES:
             # A pending/running snapshot may be stale: refresh it from the live progress meta.

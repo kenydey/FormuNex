@@ -60,7 +60,7 @@ def test_state_kind_and_limit_filters():
     assert c.get("/api/tasks?state=bogus").status_code == 422
 
 
-def test_multi_user_only_own_tasks(monkeypatch):
+def test_multi_user_own_and_ownerless_tasks(monkeypatch):
     monkeypatch.setenv("FORMUNEX_MULTI_USER", "true")
     monkeypatch.setenv("FORMUNEX_API_TOKENS_JSON", '{"alice":"tok_alice","bob":"tok_bob"}')
     monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "true")
@@ -69,10 +69,13 @@ def test_multi_user_only_own_tasks(monkeypatch):
     _snap("bo-1", "recommend", TaskState.completed, "bob", 10)
     _snap("pub-1", "recommend", TaskState.completed, None, 5)
     c = TestClient(app)
+    # Ownerless tasks predate ownership; like GET /tasks/{id}, the list shows them to everyone.
     alice = c.get("/api/tasks", headers={"Authorization": "Bearer tok_alice"}).json()["items"]
-    assert [i["task_id"] for i in alice] == ["al-1"]
+    assert [(i["task_id"], i["owner_id"]) for i in alice] == [("pub-1", None), ("al-1", "alice")]
     bob = c.get("/api/tasks", headers={"Authorization": "Bearer tok_bob"}).json()["items"]
-    assert [i["task_id"] for i in bob] == ["bo-1"]
+    assert [i["task_id"] for i in bob] == ["pub-1", "bo-1"]
+    assert c.get("/api/tasks/pub-1", headers={"Authorization": "Bearer tok_bob"}).status_code == 200
+    assert c.get("/api/tasks/al-1", headers={"Authorization": "Bearer tok_bob"}).status_code == 403
 
 
 def test_empty_when_no_task_dir():
