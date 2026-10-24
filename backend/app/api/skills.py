@@ -238,7 +238,10 @@ class UpdateSkillBody(BaseModel):
 @router.post("/installed/{skill_id}/update")
 def update_skill(skill_id: str, body: UpdateSkillBody | None = None) -> dict:
     dry = True if body is None else body.dry_run
-    result = install_svc.update_skill_from_upstream(skill_id, dry_run=dry)
+    try:
+        result = install_svc.update_skill_from_upstream(skill_id, dry_run=dry)
+    except FileNotFoundError as exc:  # not installed — same answer as GET .../check-update
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     payload = install_svc.result_to_dict(result)
     if not result.ok:
         raise _install_error(payload)
