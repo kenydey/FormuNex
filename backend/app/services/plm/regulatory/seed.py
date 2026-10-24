@@ -19,8 +19,11 @@ Sources (``app/resources/regulatory``, imported from MSDS-Generator):
   EUR-Lex), CC BY 4.0, sample-verified against legislation.gov.uk Annex III/IV.
   Six MSDS-Generator hand-added entries are excluded (see that file's ``_formunex``).
   CLP does not adopt GHS categories 5 / Skin 3 / Eye 2B / Asp. Tox. 2 / Aquatic
-  Acute 3 / Flam. Liq. 4, nor deleted P codes, so those seed codes keep
-  ``text_en`` empty until a UN GHS source is provided.
+  Acute 3 / Flam. Liq. 4, nor deleted P codes.
+* ``hpstatements_en_ghs.json`` — English texts for those codes, verbatim from UN GHS Rev.4 annex 3
+  (the edition GB 30000-2013 follows; source URL, sha256 and Rev.10 status recorded in the file).
+  Used only where the CLP file has no text. H361E (not a GHS code) and P281 (deleted before
+  Rev.4) stay without English.
 * ``gb12268_2025.json`` — GB 12268-2025 表 1 in full: 2,861 rows / 2,347 UN numbers, one row per
   packing group, with special provisions and quantities; parsed from the official PDF by
   ``scripts/gb12268/`` (see its README). Linked to a substance by exact Chinese name, else by
@@ -74,7 +77,7 @@ log = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 # Bump when parsing / mapping logic changes, so an unchanged data set is re-imported.
-IMPORTER_VERSION = "6"  # 6: catalogue names win over borrowed common-list names
+IMPORTER_VERSION = "7"  # 7: UN GHS English texts for codes CLP lacks; misnumbered P220 rows
 OEL_STANDARD = "GBZ 2.1-2019"
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
@@ -85,7 +88,7 @@ SEED_REVIEW_KINDS = (
 _FILES = (
     "common_chemicals.json.gz", "hazard_chemical_info.json", "oel_gbz2_2019.json",
     "hazard_statements.json", "precaution_statements.json", "gb12268_2025.json",
-    "hpstatements_en.json", "iecsc.json.gz", "gb12268_links.json",
+    "hpstatements_en.json", "hpstatements_en_ghs.json", "iecsc.json.gz", "gb12268_links.json",
 )
 _CHUNK = 5000
 
@@ -642,8 +645,19 @@ def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:
         raw = _load_json(en_path).get("statements", {})
         for key, text in raw.items():
             en_map[_code(key.split("/")[-1])] = re.sub(r"\s+", " ", str(text or "")).strip()
+    # UN GHS texts fill the codes CLP does not cover (categories CLP never adopted, deleted P codes).
+    ghs_path = resources / "hpstatements_en_ghs.json"
+    if ghs_path.exists():
+        for key, item in (_load_json(ghs_path).get("statements") or {}).items():
+            en_map.setdefault(_code(key), re.sub(r"\s+", " ", str(item.get("text") or "")).strip())
     for v in fresh.values():
         v["text_en"] = en_map.get(v["code"], "")
+    # A row whose Chinese text is another code's text came from a misnumbered source row (P221
+    # once carried P220's text); it is corrected. Any other text differing from the file was
+    # edited in the application and stays.
+    owner_of_zh: dict[str, set[str]] = {}
+    for code, v in fresh.items():
+        owner_of_zh.setdefault(v["text_zh"], set()).add(code)
     new = [v for k, v in fresh.items() if k not in existing]
     if new:
         conn.execute(insert(GhsStatementRow), new)
@@ -652,7 +666,8 @@ def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:
         row = existing.get(code)
         if row is None:
             continue
-        if not row.text_zh and v["text_zh"]:
+        borrowed = row.text_zh != v["text_zh"] and bool(owner_of_zh.get(row.text_zh or "", set()) - {code})
+        if v["text_zh"] and (not row.text_zh or borrowed):
             conn.execute(update(GhsStatementRow).where(GhsStatementRow.code == code).values(text_zh=v["text_zh"]))
             filled += 1
         # Never overwrite a human-edited English text; only fill blanks.

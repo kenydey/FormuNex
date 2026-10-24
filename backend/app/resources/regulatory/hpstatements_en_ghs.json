@@ -1,0 +1,133 @@
+{
+ "_source": {
+  "document": "ST/SG/AC.10/30/Rev.4 — Globally Harmonized System of Classification and Labelling of Chemicals (GHS), fourth revised edition, United Nations, New York and Geneva, 2011, annex 3",
+  "url": "https://digitallibrary.un.org/record/660120/files/ST-SG-AC10-30-Rev4e%2520%281%29.pdf?version=1",
+  "sha256": "7d2f8db5d31e1172b9de78d5cc8892f24ba52bec1b951838859835de8d8b9014",
+  "why_rev4": "GB 30000.2~29-2013 follow GHS Rev.4; the Chinese H/P texts in hazard_statements.json / precaution_statements.json are that edition's statements, so their English counterparts come from the same edition.",
+  "cross_check": {
+   "document": "ST/SG/AC.10/30/Rev.10 (2023), annex 3",
+   "url": "https://ls-fts.unog.ch/sites/default/files/2024-04/GHS%20Rev10e.pdf",
+   "sha256": "50de2327a559fcc4654b078a78acfaac3d1e5b0d32d0e8b29c084f44904ad4da",
+   "note": "rev10: same = identical text in Rev.10; removed = not listed in Rev.10 (deleted or merged into another combination in a later revision, e.g. P335+P334 into P302+P335+P334)."
+  },
+  "copyright": "© United Nations. Statement texts quoted verbatim from the GHS for labelling and safety data sheets, their intended use.",
+  "extracted": "2026-10-24",
+  "scope": "Only codes the CLP dataset (hpstatements_en.json) does not cover; CLP texts take precedence where both exist.",
+  "not_covered": {
+   "H361E": "not a GHS code (the Chinese text 怀疑对胎儿造成伤害 corresponds to CLP H361d); left without English text",
+   "P281": "deleted from the GHS before Rev.4 (merged into P280); no UN source text retrieved; left without English text"
+  }
+ },
+ "statements": {
+  "H227": {
+   "text": "Combustible liquid",
+   "table": "Table A3.1.1",
+   "rev10": "same"
+  },
+  "H303": {
+   "text": "May be harmful if swallowed",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H305": {
+   "text": "May be harmful if swallowed and enters airways",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H313": {
+   "text": "May be harmful in contact with skin",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H316": {
+   "text": "Causes mild skin irritation",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H320": {
+   "text": "Causes eye irritation",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H333": {
+   "text": "May be harmful if inhaled",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H303+H313": {
+   "text": "May be harmful if swallowed or in contact with skin",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H303+H333": {
+   "text": "May be harmful if swallowed or if inhaled",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H313+H333": {
+   "text": "May be harmful in contact with skin or if inhaled",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H303+H313+H333": {
+   "text": "May be harmful if swallowed, in contact with skin or if inhaled",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H315+H320": {
+   "text": "Causes skin and eye irritation",
+   "table": "Table A3.1.2",
+   "rev10": "same"
+  },
+  "H401": {
+   "text": "Toxic to aquatic life",
+   "table": "Table A3.1.3",
+   "rev10": "same"
+  },
+  "H402": {
+   "text": "Harmful to aquatic life",
+   "table": "Table A3.1.3",
+   "rev10": "same"
+  },
+  "P221": {
+   "text": "Take any precaution to avoid mixing with combustibles/...",
+   "table": "Table A3.2.2",
+   "rev10": "removed"
+  },
+  "P235+P410": {
+   "text": "Keep cool. Protect from sunlight.",
+   "table": "Table A3.2.4",
+   "rev10": "removed"
+  },
+  "P304+P312": {
+   "text": "IF INHALED: Call a POISON CENTER/doctor/…/if you feel unwell.",
+   "table": "Table A3.2.3",
+   "rev10": "removed"
+  },
+  "P335+P334": {
+   "text": "Brush off loose particles from skin. Immerse in cool water/wrap in wet bandages.",
+   "table": "Table A3.2.3",
+   "rev10": "removed"
+  },
+  "P370+P380": {
+   "text": "In case of fire: Evacuate area.",
+   "table": "Table A3.2.3",
+   "rev10": "removed"
+  },
+  "P374": {
+   "text": "Fight fire with normal precautions from a reasonable distance.",
+   "table": "Table A3.2.3",
+   "rev10": "removed"
+  },
+  "P411+P235": {
+   "text": "Store at temperatures not exceeding …°C/…°F. Keep cool.",
+   "table": "Table A3.2.4",
+   "rev10": "removed"
+  },
+  "P422": {
+   "text": "Store contents under ...",
+   "table": "Table A3.2.4",
+   "rev10": "removed"
+  }
+ }
+}
