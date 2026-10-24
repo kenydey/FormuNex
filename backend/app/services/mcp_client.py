@@ -8,6 +8,7 @@ W5-5: 单 server 单连接缓存（_acquire_session）+ 配置 generation 屏障
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import logging
@@ -235,6 +236,12 @@ class _StdioSession:
         self._started = False
         self._pending: dict[int, queue.SimpleQueue] = {}
         self._reader: threading.Thread | None = None
+        # stderr is drained continuously: a server that logs more than the pipe buffer (~64 KB)
+        # would otherwise block on its next stderr write and stop answering. Only the tail is kept
+        # for error messages.
+        self._stderr_buf: collections.deque[str] = collections.deque()
+        self._stderr_len = 0
+        self._stderr_drain: threading.Thread | None = None
 
     def start(self, timeout_s: float = 8.0) -> None:
         import os
@@ -250,6 +257,7 @@ class _StdioSession:
             env=env,
             bufsize=1,
         )
+        self._start_stderr_drain()
         self._start_reader()
         self._request(
             "initialize",
@@ -274,6 +282,29 @@ class _StdioSession:
             daemon=True,
         )
         self._reader = t
+        t.start()
+
+    _STDERR_KEEP = 8192
+
+    def _start_stderr_drain(self) -> None:
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        stderr = proc.stderr
+
+        def drain() -> None:
+            try:
+                for chunk in iter(lambda: stderr.read(1024), ""):
+                    with self._lock:
+                        self._stderr_buf.append(chunk)
+                        self._stderr_len += len(chunk)
+                        while self._stderr_len - len(self._stderr_buf[0]) >= self._STDERR_KEEP:
+                            self._stderr_len -= len(self._stderr_buf.popleft())
+            except (OSError, ValueError):
+                pass  # pipe closed by close()
+
+        t = threading.Thread(target=drain, name=f"mcp-stderr-{self.command}", daemon=True)
+        self._stderr_drain = t
         t.start()
 
     def _reader_loop(self) -> None:
@@ -316,9 +347,10 @@ class _StdioSession:
         return proc is None or proc.poll() is None
 
     def close(self) -> None:
-        proc, reader = self._proc, self._reader
+        proc, reader, drain = self._proc, self._reader, self._stderr_drain
         self._proc = None
         self._reader = None
+        self._stderr_drain = None
         self._started = False
         # 先唤醒所有等待中的请求（按连接死亡处理），再回收进程/线程
         with self._lock:
@@ -336,31 +368,31 @@ class _StdioSession:
                         proc.kill()
             except Exception:  # noqa: BLE001
                 pass
-        if (
-            reader is not None
-            and reader.is_alive()
-            and reader is not threading.current_thread()
-        ):
-            reader.join(timeout=2)
+        for t in (reader, drain):
+            if t is not None and t.is_alive() and t is not threading.current_thread():
+                t.join(timeout=2)
+        if proc is not None:
+            # A pipe whose reader thread is still blocked (a grandchild, e.g. under npx, can hold
+            # it open) is left to that daemon thread: closing it would wait on the reader's lock.
+            for pipe, t in ((proc.stdin, None), (proc.stdout, reader), (proc.stderr, drain)):
+                if pipe is None or (t is not None and t.is_alive()):
+                    continue
+                try:
+                    pipe.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _stderr_tail(self, limit: int = 500) -> str:
-        """进程已死时尽力读取残留 stderr（脱敏后返回）。
+        """进程已死时返回 stderr 末尾（脱敏后）。
 
-        用 select 限时等待，避免卡在"stdout 已 EOF 但 stderr 写端尚未关闭"
-        的极窄窗口上。
+        stderr 由 drain 线程持续读取；限时等它读完残留（避免卡在"stdout 已 EOF
+        但 stderr 写端尚未关闭"的极窄窗口上）。
         """
-        try:
-            proc = self._proc
-            if proc is None or proc.stderr is None:
-                return ""
-            import select
-
-            readable, _, _ = select.select([proc.stderr], [], [], 0.5)
-            if not readable:
-                return ""
-            data = proc.stderr.read() or ""
-        except Exception:  # noqa: BLE001
-            return ""
+        drain = self._stderr_drain
+        if drain is not None and drain is not threading.current_thread():
+            drain.join(timeout=0.5)
+        with self._lock:
+            data = "".join(self._stderr_buf)
         tail = _redact_secrets(data[-limit:]).strip()
         return f"; stderr: {tail}" if tail else ""
 
@@ -581,6 +613,7 @@ def _acquire_session(server: dict[str, Any], *, timeout_s: float = 8.0) -> _Stdi
     try:
         sess.start(timeout_s=timeout_s)
     except Exception:
+        _close_quietly(sess)  # a failed handshake must not leave the server process running
         with _CLIENT_LOCK:
             if _CLIENT_CACHE.get(server_id) is _CREATING:
                 del _CLIENT_CACHE[server_id]

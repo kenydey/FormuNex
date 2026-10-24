@@ -401,3 +401,34 @@ def test_b12_shutdown_all_sessions_reaps_process():
             )
     finally:
         mcp_client._reset_client_cache()
+
+
+def test_a_server_logging_heavily_to_stderr_keeps_answering():
+    """A server that writes more than the pipe buffer to stderr must not block (stderr is drained)."""
+    noisy = "import sys\nsys.stderr.write('x' * 262144)\nsys.stderr.flush()\n" + _ECHO_SERVER
+    sess = mcp_client._StdioSession(sys.executable, ["-c", noisy])
+    try:
+        sess.start(timeout_s=10)
+        assert sess._request("tools/list", {}, timeout_s=10) == {"tools": []}
+    finally:
+        sess.close()
+
+
+def test_a_failed_handshake_reaps_the_server_process(monkeypatch):
+    """start() timing out must not leave the spawned server running."""
+    mcp_client._reset_client_cache()
+    spawned = []
+    real_start = mcp_client._StdioSession.start
+
+    def start(self, timeout_s=8.0):
+        spawned.append(self)
+        return real_start(self, timeout_s=0.5)
+
+    monkeypatch.setattr(mcp_client._StdioSession, "start", start)
+    silent = "import time\ntime.sleep(60)\n"  # never answers initialize
+    try:
+        with pytest.raises(Exception):
+            mcp_client._acquire_session({"id": "s-silent", "command": sys.executable, "args": ["-c", silent]})
+        assert spawned and spawned[0]._proc is None  # closed
+    finally:
+        mcp_client._reset_client_cache()

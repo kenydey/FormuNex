@@ -106,3 +106,12 @@ body v1
     assert upd.json()["installed"] is True
     text = (tmp_path / "data" / "skills" / "remote-skill" / "SKILL.md").read_text(encoding="utf-8")
     assert "v2" in text
+
+
+def test_update_of_a_skill_that_is_not_installed_is_404(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    for path in ("/api/skills/installed/no-such-skill/update",):
+        r = client.post(path, json={"dry_run": True})
+        assert r.status_code == 404, r.text
+        assert "no-such-skill" in r.json()["detail"]
+    assert client.get("/api/skills/installed/no-such-skill/check-update").status_code == 404
