@@ -1,0 +1,288 @@
+{
+ "meta": {
+  "standard": "GB 12268-2025",
+  "note": "人工确认的品名—物质关联（名称对应多个物质时使用）；由 scripts/gb12268/apply_link_sheet.py 从核对表生成。cas 为空表示确认不关联。"
+ },
+ "links": [
+  {
+   "un": "1153",
+   "name_cn": "乙二醇二乙醚",
+   "cas": [
+    "629-14-1"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1161",
+   "name_cn": "碳酸二甲酯",
+   "cas": [
+    "616-38-6"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1230",
+   "name_cn": "甲醇",
+   "cas": [
+    "67-56-1"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1298",
+   "name_cn": "三甲基氯硅烷",
+   "cas": [
+    "75-77-4"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1405",
+   "name_cn": "硅化钙",
+   "cas": [
+    "12013-55-7",
+    "12013-56-8"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1415",
+   "name_cn": "锂",
+   "cas": [
+    "7439-93-2"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1473",
+   "name_cn": "溴酸镁",
+   "cas": [
+    "7789-36-8"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1486",
+   "name_cn": "硝酸钾",
+   "cas": [
+    "7757-79-1"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1491",
+   "name_cn": "过氧化钾",
+   "cas": [
+    "17014-71-0"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1514",
+   "name_cn": "硝酸锌",
+   "cas": [
+    "7779-88-6"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1551",
+   "name_cn": "酒石酸氧锑钾",
+   "cas": [
+    "11071-15-1",
+    "28300-74-5"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1617",
+   "name_cn": "砷酸铅",
+   "cas": [
+    "3687-31-8",
+    "7645-25-2"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1638",
+   "name_cn": "碘化汞",
+   "cas": [
+    "15385-57-6",
+    "7774-29-0"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1685",
+   "name_cn": "砷酸钠",
+   "cas": [
+    "13464-38-5",
+    "7778-43-0"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1753",
+   "name_cn": "氯苯基三氯硅烷",
+   "cas": [
+    "26571-79-9"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "1895",
+   "name_cn": "硝酸苯汞",
+   "cas": [
+    "55-68-5",
+    "8003-05-2"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2013",
+   "name_cn": "磷化锶",
+   "cas": [
+    "12504-13-1"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2579",
+   "name_cn": "哌嗪",
+   "cas": [
+    "110-85-0"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2624",
+   "name_cn": "硅化镁",
+   "cas": [
+    "22831-39-6"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2647",
+   "name_cn": "丙二腈",
+   "cas": [
+    "109-77-3"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2680",
+   "name_cn": "氢氧化锂",
+   "cas": [
+    "1310-65-2",
+    "1310-66-3"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2682",
+   "name_cn": "氢氧化铯",
+   "cas": [
+    "21351-79-1"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2728",
+   "name_cn": "硝酸锆",
+   "cas": [
+    "13746-89-9"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2854",
+   "name_cn": "氟硅酸铵",
+   "cas": [
+    "1309-32-6",
+    "16919-19-0"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2855",
+   "name_cn": "氟硅酸锌",
+   "cas": [
+    "16871-71-9",
+    "18433-42-6"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "2934",
+   "name_cn": "2-氯丙酸异丙酯",
+   "cas": [
+    "40058-87-5",
+    "79435-04-4"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  },
+  {
+   "un": "3495",
+   "name_cn": "碘",
+   "cas": [
+    "7553-56-2"
+   ],
+   "decided_by": "kenydey",
+   "decided_at": "2026-10-23",
+   "note": ""
+  }
+ ]
+}
