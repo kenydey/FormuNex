@@ -244,18 +244,18 @@ def test_reseed_backfills_english_and_never_overwrites_human_text_en(engine, res
         "Keep away from heat, hot surfaces, sparks, open flames and other ignition sources. No smoking.")
 
 
-# Codes in the bundled Chinese seed files with no trustworthy English text.
-# All are GHS-only (CLP does not adopt Cat 5 / Skin 3 / Eye 2B / Asp. Tox. 2 /
-# Aquatic Acute 3 / Flam. Liq. 4), deleted P codes, or non-standard codes
-# (H361E is not a GHS code — its Chinese text duplicates H361d). They keep
-# text_en empty until a UN GHS source is provided; this set must be updated
-# deliberately, never by inventing text.
-KNOWN_MISSING_EN = {
+# Codes in the bundled Chinese seed files the CLP file does not cover: GHS-only categories (CLP does
+# not adopt Cat 5 / Skin 3 / Eye 2B / Asp. Tox. 2 / Aquatic Acute 3 / Flam. Liq. 4) and P codes
+# deleted after GHS Rev.4. hpstatements_en_ghs.json supplies them from UN GHS Rev.4 annex 3.
+CLP_GAP = {
     "H227", "H303", "H303+H313", "H303+H313+H333", "H303+H333", "H305", "H313",
     "H313+H333", "H315+H320", "H316", "H320", "H333", "H361E", "H401", "H402",
-    "P221", "P224", "P225", "P226", "P235+P410", "P281", "P304+P312", "P335+P334",
+    "P221", "P235+P410", "P281", "P304+P312", "P335+P334",
     "P370+P380", "P374", "P411+P235", "P422",
 }
+# Still without trustworthy English text: H361E is not a GHS code (its Chinese text duplicates
+# H361d); P281 was deleted before Rev.4. This set must be updated deliberately, never by inventing text.
+KNOWN_MISSING_EN = {"H361E", "P281"}
 # MSDS-Generator hand-added entries, excluded from the vendored English file:
 # their provenance is a maintainer edit, not the EUR-Lex extraction.
 EXCLUDED_EN = {"H303", "H313", "H350I", "H360E", "H401", "P281"}
@@ -278,7 +278,17 @@ def test_english_resource_covers_seed_codes_except_known_gap():
     for fname in ("hazard_statements.json", "precaution_statements.json"):
         for s in json.loads((res / fname).read_text(encoding="utf-8"))["statements"]:
             seed_codes.add(_code(s.get("code") or ""))
-    assert seed_codes - en_codes == KNOWN_MISSING_EN
+    assert seed_codes - en_codes == CLP_GAP
+    ghs = json.loads((res / "hpstatements_en_ghs.json").read_text(encoding="utf-8"))
+    ghs_codes = {_code(k) for k in ghs["statements"]}
+    assert not (ghs_codes & en_codes)  # only fills gaps
+    assert seed_codes - en_codes - ghs_codes == KNOWN_MISSING_EN
+    assert set(ghs["_source"]["not_covered"]) == KNOWN_MISSING_EN
+    # Spot pairs, verified against ST/SG/AC.10/30/Rev.4 annex 3 (and Rev.10 where still listed).
+    g = {k: v["text"] for k, v in ghs["statements"].items()}
+    assert g["H303+H313+H333"] == "May be harmful if swallowed, in contact with skin or if inhaled"
+    assert g["H401"] == "Toxic to aquatic life"
+    assert g["P374"] == "Fight fire with normal precautions from a reasonable distance."
     # Spot pairs, verified against legislation.gov.uk CLP Annex III/IV.
     texts = {_code(k.split("/")[-1]): v for k, v in en["statements"].items()}
     assert texts["H200"] == "Unstable explosives."
@@ -492,3 +502,39 @@ def test_a_name_borrowed_from_another_catalogue_substance_is_replaced(engine, re
         c.execute(update(SubstanceRow).where(SubstanceRow.cas_no == "111-40-0").values(name_zh="二乙撑三胺"))
     seed_regulatory_db(engine, resources=resources, force=True)
     assert names()["12030-88-5"] == "超氧化钾" and names()["111-40-0"] == "二乙撑三胺"
+
+
+def test_un_ghs_english_fills_clp_gaps_and_a_misnumbered_chinese_text_is_corrected(engine, resources):
+    _write(resources, "hazard_statements.json", {"statements": [
+        {"code": "H225", "statement": "高度易燃液体和蒸气", "hazard_type": "易燃液体", "hazard_category": "类别 2"},
+        {"code": "H303", "statement": "吞咽可能有害", "hazard_type": "急性毒性-经口", "hazard_category": "5"},
+    ]})
+    _write(resources, "precaution_statements.json", {"statements": [
+        {"code": "P220", "statement": "避开/贮存处远离服装/……/可燃材料"},
+        {"code": "P221", "statement": "采取一切防范措施，避免与可燃物/……混合"},
+    ]})
+    _write(resources, "hpstatements_en_ghs.json", {"statements": {
+        "H303": {"text": "May be harmful if swallowed"},
+        "H225": {"text": "never used: the CLP text wins"},
+    }})
+    seed_regulatory_db(engine, resources=resources)
+
+    def texts():
+        with engine.connect() as c:
+            return {r.code: (r.text_zh, r.text_en) for r in c.execute(select(GhsStatementRow))}
+
+    got = texts()
+    assert got["H303"] == ("吞咽可能有害", "May be harmful if swallowed")
+    assert got["H225"][1] == "Highly flammable liquid and vapour."
+    assert got["P221"][0] == "采取一切防范措施，避免与可燃物/……混合"
+
+    # An earlier import wrote P220's text under P221 (misnumbered source row): corrected on re-import.
+    # A Chinese text edited in the application (not another code's text) stays.
+    with engine.begin() as c:
+        c.execute(update(GhsStatementRow).where(GhsStatementRow.code == "P221")
+                  .values(text_zh="避开/贮存处远离服装/……/可燃材料"))
+        c.execute(update(GhsStatementRow).where(GhsStatementRow.code == "H303").values(text_zh="人工修改"))
+    seed_regulatory_db(engine, resources=resources, force=True)
+    got = texts()
+    assert got["P221"][0] == "采取一切防范措施，避免与可燃物/……混合"
+    assert got["H303"][0] == "人工修改"

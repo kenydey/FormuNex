@@ -248,11 +248,12 @@
     {
       "index": 28,
       "precaution_category": "预防措施",
-      "code": "P221",
+      "code": "P220",
       "statement": "避开/贮存处远离服装/……/可燃材料",
       "hazard_type": "自反应物质和混合物",
       "hazard_category": "A、B、C、D、E、F\n型",
-      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料"
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料",
+      "code_original": "P221"
     },
     {
       "index": 29,
@@ -275,29 +276,32 @@
     {
       "index": 31,
       "precaution_category": "预防措施",
-      "code": "P224",
+      "code": "P220",
       "statement": "避开/贮存处远离服装/……/可燃材料",
       "hazard_type": "有机过氧化物",
       "hazard_category": "A、B、C、D、E、F\n型",
-      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料"
+      "usage_condition": "生产商/ 供应商或主管当局列明其他不相容材料",
+      "code_original": "P224"
     },
     {
       "index": 32,
       "precaution_category": "预防措施",
-      "code": "P225",
+      "code": "P220",
       "statement": "避开/贮存处远离服装/……/可燃材料",
       "hazard_type": "氧化性液体",
       "hazard_category": "1",
-      "usage_condition": "规定远离衣服和\n其他不相容材料"
+      "usage_condition": "规定远离衣服和\n其他不相容材料",
+      "code_original": "P225"
     },
     {
       "index": 33,
       "precaution_category": "预防措施",
-      "code": "P226",
+      "code": "P220",
       "statement": "避开/贮存处远离服装/……/可燃材料",
       "hazard_type": "氧化性固体",
       "hazard_category": "1",
-      "usage_condition": ""
+      "usage_condition": "",
+      "code_original": "P226"
     },
     {
       "index": 34,
