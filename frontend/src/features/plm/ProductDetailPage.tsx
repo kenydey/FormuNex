@@ -1,5 +1,5 @@
 import { PageContainer, ProCard, ProTable } from "@ant-design/pro-components";
-import { App, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Space } from "antd";
+import { App, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Tag } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -53,7 +53,11 @@ export default function ProductDetailPage() {
   if (p.error) return <PageContainer><ErrorAlert error={p.error} /></PageContainer>;
   const d = p.data;
   return (
-    <PageContainer loading={!d} title={d ? `${d.code} · ${d.name_zh}` : ""} subTitle={d && <StatusTag status={d.lifecycle_state} />}>
+    <PageContainer loading={!d} title={d ? `${d.code} · ${d.name_zh}` : ""} subTitle={d && <Space>
+      <StatusTag status={d.lifecycle_state} />
+      {d.category_identifier && <Tag>编码 Category：{d.category_identifier}</Tag>}
+      {d.legacy_code && <Tag>旧码：{d.legacy_code}</Tag>}
+    </Space>}>
       <ProCard gutter={16} ghost wrap>
         <ProCard colSpan={{ xs: 24, md: 14 }} bordered title={t("plm.revisions", "修订版")}
           extra={<Button type="primary" onClick={() => setRevOpen(true)}>{t("plm.new_revision", "新建修订版")}</Button>}>

@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ...config import get_settings
 from ...db.models_plm import CompanyRow
 from . import storage
+from .coding import normalize_rules, validate_coding_rules
 from .ghs.regulations import validate_regulations
 
 MAX_LOGO_BYTES = 2 * 1024 * 1024
@@ -62,6 +63,8 @@ def company_dict(row: CompanyRow) -> dict[str, Any]:
             "logo_key": row.logo_key, "has_logo": bool(row.logo_key), "is_default": row.is_default,
             # G2: [] = no default (generation must select explicitly); never None.
             "applicable_regulations": list(row.applicable_regulations or []),
+            # G8: {} = no coding rules (manual codes only); never None.
+            "coding_rules": normalize_rules(row.coding_rules),
             "created_at": row.created_at, "updated_at": row.updated_at}
 
 
@@ -98,12 +101,16 @@ def create_company(session: Session, data: dict[str, Any], *, created_by: str | 
         regulations = validate_regulations(data.get("applicable_regulations") or [])
     except ValueError as exc:
         raise ValueError(str(exc)) from None
+    try:
+        coding_rules = validate_coding_rules(data.get("coding_rules"))
+    except ValueError as exc:
+        raise ValueError(str(exc)) from None
     row = CompanyRow(id=str(uuid.uuid4()), name=name, name_en=str(data.get("name_en") or ""),
                      address=str(data.get("address") or ""), address_en=str(data.get("address_en") or ""),
                      phone=str(data.get("phone") or ""), fax=str(data.get("fax") or ""),
                      email=str(data.get("email") or ""), emergency_phone=emergency,
                      unified_credit_code=str(data.get("unified_credit_code") or ""), created_by=created_by,
-                     applicable_regulations=regulations)
+                     applicable_regulations=regulations, coding_rules=coding_rules)
     session.add(row)
     session.flush()
     if data.get("is_default") or default_company(session) is None:
@@ -122,6 +129,11 @@ def update_company(session: Session, company_id: str, data: dict[str, Any]) -> C
     if "applicable_regulations" in data and data["applicable_regulations"] is not None:
         try:
             row.applicable_regulations = validate_regulations(data["applicable_regulations"])
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
+    if "coding_rules" in data and data["coding_rules"] is not None:
+        try:
+            row.coding_rules = validate_coding_rules(data["coding_rules"])
         except ValueError as exc:
             raise ValueError(str(exc)) from None
     if not row.name.strip():

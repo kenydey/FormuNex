@@ -1,5 +1,5 @@
 import { PageContainer, ProTable, type ProColumns } from "@ant-design/pro-components";
-import { App, Button, Checkbox, Form, Input, Modal, Tag, Upload } from "antd";
+import { App, Button, Checkbox, Divider, Form, Input, InputNumber, Modal, Space, Tag, Upload } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,7 +7,7 @@ import { call } from "@/api/client";
 import { useSession } from "@/app/session";
 import { Forbidden, errorText } from "@/shared/feedback";
 
-interface Company { id: string; name: string; name_en: string; address: string; phone: string; email: string; emergency_phone: string; unified_credit_code: string; has_logo: boolean; is_default: boolean; applicable_regulations: string[]; updated_at: string }
+interface Company { id: string; name: string; name_en: string; address: string; phone: string; email: string; emergency_phone: string; unified_credit_code: string; has_logo: boolean; is_default: boolean; applicable_regulations: string[]; coding_rules: { categories: { name_zh: string; name_en: string; identifier: string }[]; code_digits: number | null }; updated_at: string }
 interface Regulation { code: string; name: string; name_en: string; standard: string }
 
 /** 公司配置（整合方案 §5）：SDS 第 1 节 / TDS / 标签的供应商信息来源，需 admin.companies。 */
@@ -59,6 +59,8 @@ export default function CompaniesPage() {
     { title: t("common.status", "状态"), dataIndex: "is_default", render: (_d, r) => r.is_default ? <Tag color="green">默认</Tag> : "—" },
     { title: "适用法规", dataIndex: "applicable_regulations", render: (_d, r) => (r.applicable_regulations ?? []).length
       ? <span>{(r.applicable_regulations ?? []).map((code) => <Tag key={code}>{regName(code)}</Tag>)}</span> : "—" },
+    { title: "产品编码规则", render: (_d, r) => (r.coding_rules?.categories ?? []).length
+      ? <span>{r.coding_rules.code_digits} 位 · {r.coding_rules.categories.map((c) => `${c.identifier} ${c.name_zh}`).join("、")}</span> : "—" },
     { title: t("common.actions", "操作"), valueType: "option", render: (_d, r) => [
       <a key="edit" onClick={() => { setEditing(r); form.setFieldsValue(r); }}>编辑</a>,
       !r.is_default && <a key="default" onClick={() => setDefault.mutate(r.id)}>设为默认</a>,
@@ -88,6 +90,21 @@ export default function CompaniesPage() {
           <Form.Item name="applicable_regulations" label="适用法规（新建文档的默认值）">
             <Checkbox.Group options={(regulations.data ?? []).map((r) => ({ label: `${r.name} (${r.code})`, value: r.code }))} />
           </Form.Item>
+          <Divider orientation="left" plain>产品编码规则（G8：新建产品自动编码）</Divider>
+          <Form.Item name={["coding_rules", "code_digits"]} label="产品数字编码位数（含识别码总位数）"><InputNumber min={2} max={16} /></Form.Item>
+          <Form.List name={["coding_rules", "categories"]}>
+            {(fields, { add, remove }) => (<>
+              {fields.map(({ key, name, ...rest }) => (
+                <Space key={key} align="baseline">
+                  <Form.Item {...rest} name={[name, "name_zh"]} rules={[{ required: true, message: "请填写中文名称" }]}><Input placeholder="中文名称" /></Form.Item>
+                  <Form.Item {...rest} name={[name, "name_en"]}><Input placeholder="英文名称" /></Form.Item>
+                  <Form.Item {...rest} name={[name, "identifier"]} rules={[{ required: true, pattern: /^[A-Za-z0-9]{1,8}$/, message: "识别码为 1-8 位数字或字母" }]}><Input placeholder="识别码" style={{ width: 110 }} /></Form.Item>
+                  <Button type="link" danger onClick={() => remove(name)}>删除</Button>
+                </Space>
+              ))}
+              <Form.Item><Button type="dashed" onClick={() => add()}>添加 Category</Button></Form.Item>
+            </>)}
+          </Form.List>
           <Form.Item name="is_default" valuePropName="checked"><Checkbox>设为默认公司</Checkbox></Form.Item>
         </Form>
       </Modal>

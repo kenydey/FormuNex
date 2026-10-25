@@ -1,5 +1,5 @@
 import { PageContainer, ProTable } from "@ant-design/pro-components";
-import { App, Button, Form, Input, Modal } from "antd";
+import { App, Button, Form, Input, Modal, Select } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -10,6 +10,8 @@ import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
 import type { Product } from "./types";
 import { BatchExportModal } from "./BatchExportModal";
+
+interface CodingCompany { id: string; is_default: boolean; coding_rules: { categories: { name_zh: string; name_en: string; identifier: string }[]; code_digits: number | null } }
 
 export default function ProductsPage() {
   const { t } = useTranslation();
@@ -22,11 +24,20 @@ export default function ProductsPage() {
   const [batchOpen, setBatchOpen] = useState(false);
   const [form] = Form.useForm();
   const products = useQuery({ queryKey: ["plm", "products", q], queryFn: () => call<Product[]>("GET", `/api/plm/products${q ? `?q=${encodeURIComponent(q)}` : ""}`) });
+  const companies = useQuery({ queryKey: ["companies"], queryFn: () => call<CodingCompany[]>("GET", "/api/plm/companies") });
+  const categories = companies.data?.find((c) => c.is_default)?.coding_rules?.categories ?? [];
+  const chosenCategory = Form.useWatch("category_identifier", form);
   const create = useMutation({
-    mutationFn: (v: { code: string; name_zh: string; name_en?: string }) => call<{ id: string }>("POST", "/api/plm/products", { ...v, project_id: projectId }),
+    mutationFn: (v: { code?: string; category_identifier?: string; legacy_code?: string; name_zh: string; name_en?: string }) => call<{ id: string }>("POST", "/api/plm/products", { ...v, project_id: projectId }),
     onSuccess: (p) => { void qc.invalidateQueries({ queryKey: ["plm", "products"] }); navigate(`/plm/products/${p.id}`); },
     onError: (e) => message.error(errorText(e)),
   });
+  const submitNew = async () => {
+    const v = await form.validateFields();
+    if (v.code && v.category_identifier) { message.error("产品代码与自动编码 Category 二选一"); return; }
+    if (!v.code && !v.category_identifier) { message.error("请填写产品代码或选择自动编码 Category"); return; }
+    create.mutate(v);
+  };
   return (
     <PageContainer>
       <ErrorAlert error={products.error} />
@@ -45,9 +56,15 @@ export default function ProductsPage() {
         ]} />
       <BatchExportModal open={batchOpen} onClose={() => setBatchOpen(false)} />
       <Modal open={open} title={t("plm.new_product", "新建产品")} onCancel={() => setOpen(false)} confirmLoading={create.isPending}
-        onOk={async () => create.mutate(await form.validateFields())} destroyOnHidden>
+        onOk={submitNew} destroyOnHidden>
         <Form form={form} layout="vertical">
-          <Form.Item name="code" label={t("plm.code", "产品代码")} rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="code" label={t("plm.code", "产品代码")}><Input disabled={!!chosenCategory} placeholder={chosenCategory ? "按编码规则自动生成" : undefined} /></Form.Item>
+          {categories.length > 0 && <Form.Item name="category_identifier" label="自动编码 Category">
+            <Select allowClear placeholder="选择后按默认公司编码规则自动生成代码"
+              options={categories.map((c) => ({ label: `${c.name_zh} (${c.identifier})`, value: c.identifier }))}
+              onChange={(v) => { if (v) form.setFieldsValue({ code: undefined }); }} />
+          </Form.Item>}
+          <Form.Item name="legacy_code" label="旧码对照（手工维护，不自动映射）"><Input /></Form.Item>
           <Form.Item name="name_zh" label={t("plm.name", "名称")} rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="name_en" label="English"><Input /></Form.Item>
         </Form>

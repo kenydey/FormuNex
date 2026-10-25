@@ -1,6 +1,7 @@
 export interface Product { id: string; code: string; name_zh: string; name_en: string; project_id: string | null; lifecycle_state: string; revisions: number; updated_at: string }
 export interface ProductDetail {
   id: string; code: string; name_zh: string; name_en: string; lifecycle_state: string; project_id: string | null;
+  category_identifier: string | null; legacy_code: string | null;
   revisions: { id: string; rev: string; state: string; formulation_version_id: string | null; frozen_at: string | null }[];
   batches: { id: string; batch_no: string; status: string }[];
 }

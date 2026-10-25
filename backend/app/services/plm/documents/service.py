@@ -82,12 +82,62 @@ def generate_coa_number(rule: str, *, product_code: str, batch_no: str, n: int, 
 # --------------------------------------------------------------------------- products / revisions / batches
 
 
-def create_product(session: Session, *, code: str, name_zh: str, name_en: str = "", project_id: str | None = None,
-                   created_by: str | None = None) -> ProductRow:
+def create_product(session: Session, *, code: str = "", name_zh: str, name_en: str = "", project_id: str | None = None,
+                   created_by: str | None = None, category_identifier: str | None = None,
+                   legacy_code: str = "") -> ProductRow:
+    """Create a product, manually coded or auto-coded under the G8 scheme.
+
+    ``category_identifier`` + ``code`` together is ambiguous (422);
+    a category without configured default-company rules is 422; without
+    either, a manual code is required (previous behaviour). Auto-codes
+    retry on unique-constraint races (fresh row per attempt; the rollback
+    only discards the failed row because callers use a fresh session).
+    The code belongs to the product: revisions never change it.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from ..coding import default_company_rules, generate_product_code
+
+    code = (code or "").strip()
+    category_identifier = (category_identifier or "").strip() or None
+    legacy_code = (legacy_code or "").strip()
+    if len(legacy_code) > 64:
+        raise DocumentError("旧码长度不能超过 64 字符")
+    if category_identifier and code:
+        raise DocumentError("产品代码与自动编码 Category 二选一，不能同时提供")
+    if category_identifier:
+        rules = default_company_rules(session)
+        if rules is None or not rules.get("categories"):
+            raise DocumentError("默认公司未配置产品编码规则，无法自动编码")
+        try:
+            auto_code = generate_product_code(session, rules, category_identifier)
+        except ValueError as exc:
+            raise DocumentError(str(exc)) from None
+        last_error: Exception | None = None
+        for _ in range(5):
+            row = ProductRow(id=str(uuid.uuid4()), code=auto_code, name_zh=name_zh, name_en=name_en,
+                             project_id=project_id, lifecycle_state="rd", created_by=created_by,
+                             category_identifier=category_identifier,
+                             legacy_code=legacy_code or None)
+            session.add(row)
+            try:
+                session.flush()
+                return row
+            except IntegrityError as exc:
+                # A concurrent creation won this serial; recompute and retry.
+                session.rollback()
+                last_error = exc
+                try:
+                    auto_code = generate_product_code(session, rules, category_identifier)
+                except ValueError as exc2:
+                    raise DocumentError(str(exc2)) from None
+        raise DocumentError(f"自动编码失败（并发冲突重试耗尽）: {last_error}")
+    if not code:
+        raise DocumentError("产品代码不能为空（或选择自动编码 Category）")
     if session.execute(select(ProductRow.id).where(ProductRow.code == code)).first():
         raise DocumentError(f"产品代码 {code} 已存在")
     row = ProductRow(id=str(uuid.uuid4()), code=code, name_zh=name_zh, name_en=name_en, project_id=project_id,
-                     lifecycle_state="rd", created_by=created_by)
+                     lifecycle_state="rd", created_by=created_by, legacy_code=legacy_code or None)
     session.add(row)
     session.flush()
     return row

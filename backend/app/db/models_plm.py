@@ -29,6 +29,11 @@ class ProductRow(Base):
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name_zh: Mapped[str] = mapped_column(String(200), default="")
     name_en: Mapped[str] = mapped_column(String(200), default="")
+    # G8: category identifier the code was auto-generated from (snapshot of
+    # the company coding rule); NULL = manually coded or pre-G8 product.
+    category_identifier: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # G8: manual reference to a legacy (e.g. MYH) code. Never auto-mapped.
+    legacy_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     # concept | rd | candidate | under_review | released | superseded | obsolete
     lifecycle_state: Mapped[str] = mapped_column(String(16), default="concept", index=True)
@@ -347,6 +352,10 @@ class CompanyRow(Base):
     # for new documents. [] means "no default: generation must select
     # explicitly". Existing rows are backfilled ["CN"] by alembic 0071.
     applicable_regulations: Mapped[list] = mapped_column(_json, default=list)
+    # G8: generic product coding rules ({"categories": [{"name_zh", "name_en",
+    # "identifier"}], "code_digits": int | None}). {} = not configured:
+    # auto-coding disabled, manual codes only. Backfilled {} by alembic 0072.
+    coding_rules: Mapped[dict] = mapped_column(_json, default=dict)
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)

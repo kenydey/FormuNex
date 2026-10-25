@@ -486,7 +486,11 @@ def regulatory_ask(body: RegulatoryAskIn) -> dict[str, Any]:
 
 
 class ProductIn(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
+    # G8: code XOR category_identifier (auto-code under the default
+    # company's rules); neither means the old behaviour (manual code required).
+    code: str = ""
+    category_identifier: str | None = None
+    legacy_code: str = ""
     name_zh: str = Field(min_length=1, max_length=200)
     name_en: str = ""
     project_id: str | None = None
@@ -560,7 +564,8 @@ def create_product(body: ProductIn) -> dict[str, Any]:
     with _session() as session:
         try:
             row = docs.create_product(session, code=body.code, name_zh=body.name_zh, name_en=body.name_en,
-                                      project_id=body.project_id)
+                                      project_id=body.project_id, category_identifier=body.category_identifier,
+                                      legacy_code=body.legacy_code)
         except docs.DocumentError as exc:
             raise _doc_error(exc) from None
         session.commit()
@@ -582,6 +587,7 @@ def get_product(product_id: str) -> dict[str, Any]:
         batches = session.execute(select(BatchRow).where(BatchRow.product_id == p.id)).scalars().all()
         return {"id": p.id, "code": p.code, "name_zh": p.name_zh, "name_en": p.name_en,
                 "lifecycle_state": p.lifecycle_state, "project_id": p.project_id,
+                "category_identifier": p.category_identifier, "legacy_code": p.legacy_code,
                 "revisions": [{"id": r.id, "rev": r.rev, "state": r.state, "formulation_version_id": r.formulation_version_id,
                                "frozen_at": r.frozen_at} for r in revs],
                 "batches": [{"id": b.id, "batch_no": b.batch_no, "status": b.status} for b in batches]}
@@ -1358,6 +1364,8 @@ class CompanyIn(BaseModel):
     is_default: bool = False
     # G2: default applicable regulations for new documents ([] = no default).
     applicable_regulations: list[str] = Field(default_factory=list)
+    # G8: generic product coding rules ({} = not configured).
+    coding_rules: dict = Field(default_factory=dict)
 
 
 def _company_out(row) -> dict[str, Any]:
