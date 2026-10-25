@@ -17,7 +17,7 @@ const module: FeatureModule = {
       { path: "/knowledge/wiki", key: "nav.knowledge.wiki", zh: "Wiki 知识库", order: 5 },
     ],
     "/materials": [
-      { path: "/knowledge/graph", key: "nav.knowledge.graph", zh: "材料知识图谱", order: 2 },
+      { path: "/knowledge/graph", key: "nav.knowledge.graph", zh: "材料知识图谱", order: 3 },
     ],
   },
 };

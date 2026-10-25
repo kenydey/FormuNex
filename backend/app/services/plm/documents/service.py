@@ -225,14 +225,26 @@ def _classify_revision(session: Session, rev: ProductRevisionRow, properties: di
 
 
 def _oel(session: Session, cas_numbers: list[str]) -> dict[str, dict]:
+    """SDS §8 limits: GBZ only. EH40 rows share the table (standard
+    EH40/2005) and would otherwise collapse into the same CAS key
+    nondeterministically; they are queryable via the OEL endpoint."""
+    from ..regulatory.seed import OEL_STANDARD
+
     if not cas_numbers:
         return {}
     rows = session.execute(
         select(SubstanceRow.cas_no, SubstanceOELRow.mac, SubstanceOELRow.pc_twa, SubstanceOELRow.pc_stel)
         .join(SubstanceOELRow, SubstanceOELRow.substance_id == SubstanceRow.id)
-        .where(SubstanceRow.cas_no.in_(cas_numbers))
+        .where(SubstanceRow.cas_no.in_(cas_numbers), SubstanceOELRow.standard == OEL_STANDARD)
     ).all()
     return {r.cas_no: {"mac": r.mac, "pc_twa": r.pc_twa, "pc_stel": r.pc_stel} for r in rows}
+
+
+def _tox_eco(session: Session, cas_numbers: list[str]) -> dict[str, dict]:
+    """G6 measured test records by CAS (same shape as _oel, for SDS 11/12)."""
+    from ..test_records import records_by_cas
+
+    return records_by_cas(session, cas_numbers)
 
 
 def _listings(session: Session, cas_numbers: list[str]) -> list[str]:
@@ -362,9 +374,11 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
             for k, v in (payload.get("properties") or {}).items():
                 if k in ("flash_point_c", "initial_boiling_point_c", "ph", "kinematic_viscosity_40c") and v is not None:
                     props.setdefault(k, {"value": v, "source": (payload.get("properties") or {}).get("sources", {}).get(k, "manual")})
+            tox_eco = _tox_eco(session, cas)
             content = build_sds(SdsContext(
                 product=prod, company=company, classification=cls, statements=cls["statements"], properties=props,
                 components=_components(cls["disclosure"], payload.get("trade_secrets")), oel=_oel(session, cas),
+                tox_records=tox_eco["tox"], eco_records=tox_eco["eco"], eco_profiles=tox_eco["profiles"],
                 # Ingredient listings are China-jurisdiction data (hazard
                 # catalogue / IECSC); other regulations render their own
                 # core legislation lines only (per-jurisdiction listings

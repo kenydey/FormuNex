@@ -77,16 +77,17 @@ log = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 # Bump when parsing / mapping logic changes, so an unchanged data set is re-imported.
-IMPORTER_VERSION = "7"  # 7: UN GHS English texts for codes CLP lacks; misnumbered P220 rows
+IMPORTER_VERSION = "8"  # 8: EH40/2005 OEL seeding alongside GBZ
 OEL_STANDARD = "GBZ 2.1-2019"
+EH40_STANDARD = "EH40/2005"
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
 SEED_REVIEW_KINDS = (
     "invalid_cas", "repaired_cas", "hazard_text", "duplicate_catalog_entry", "oel_unmatched",
-    "transport_unlinked", "transport_link_missing",
+    "eh40_unmatched", "transport_unlinked", "transport_link_missing",
 )
 _FILES = (
-    "common_chemicals.json.gz", "hazard_chemical_info.json", "oel_gbz2_2019.json",
+    "common_chemicals.json.gz", "hazard_chemical_info.json", "oel_gbz2_2019.json", "oel_eh40.json",
     "hazard_statements.json", "precaution_statements.json", "gb12268_2025.json",
     "hpstatements_en.json", "hpstatements_en_ghs.json", "iecsc.json.gz", "gb12268_links.json",
 )
@@ -185,6 +186,7 @@ def seed_regulatory_db(
         _replace_catalog_classifications(conn, subs, cas_to_id, release_id, stats)
         _replace_generic_entries(conn, resources, release_id, stats)
         _replace_oel(conn, resources, cas_to_id, release_id, review, stats)
+        _replace_oel_eh40(conn, resources, cas_to_id, release_id, review, stats)
         _replace_transport(conn, resources, release_id, review, stats)
         _mark_iecsc(conn, resources, stats)
         _upsert_statements(conn, resources, stats)
@@ -514,6 +516,72 @@ def _replace_oel(conn: Connection, resources: Path, cas_to_id: dict[str, str], r
     for chunk in _chunks(rows):
         conn.execute(insert(SubstanceOELRow), chunk)
     stats.update(oel_rows=len(rows), oel_unmatched=unmatched)
+
+
+def _eh40_value_text(rec: dict) -> str:
+    """All present EH40 values of a record as compact text."""
+    bits = []
+    for key, label, unit in (("oel_8h_mg_m3", "8h TWA", "mg/m³"), ("oel_15m_mg_m3", "15min STEL", "mg/m³"),
+                             ("oel_8h_ppm", "8h TWA", "ppm"), ("oel_15m_ppm", "15min STEL", "ppm")):
+        raw = (rec.get(key) or "").strip()
+        if raw:
+            bits.append(f"{label} {raw} {unit}")
+    return "、".join(bits)
+
+
+def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, str], release_id: str,
+                      review: _Review, stats: dict) -> None:
+    """G4: EH40/2005 limits into SubstanceOELRow (standard EH40/2005).
+
+    Same row shape as GBZ (mg/m³ in pc_twa/pc_stel; EH40 has no MAC
+    concept). ppm values and mg strings _float cannot parse ride in
+    notes. One row per substance per standard: when several EH40 rows
+    share a CAS (inhalable vs respirable dust), the first wins
+    numerically and later variants append a compact note to the kept row,
+    so no limit value is silently dropped. A missing file (fixture
+    resource dirs) seeds nothing.
+    """
+    path = resources / "oel_eh40.json"
+    if not path.exists():
+        stats.update(eh40_rows=0, eh40_unmatched=0)
+        return
+    conn.execute(delete(SubstanceOELRow).where(SubstanceOELRow.standard == EH40_STANDARD))
+    rows, by_sid, unmatched = [], {}, 0
+    for rec in _load_json(path)["records"]:
+        cas_list = [c for c, _ in (cas_mod.repair(x) for x in cas_mod.split_many(rec.get("cas_number"))) if c]
+        if not cas_list:
+            unmatched += 1
+            review.add("eh40_unmatched", name=rec.get("name_cn") or "", cas_no=None,
+                       raw_cas=rec.get("cas_number"), record=rec)
+            continue
+        for cas in cas_list:
+            sid = _ensure_substance(conn, cas, rec.get("name_cn") or "", rec.get("name_en") or "",
+                                    cas_to_id, release_id)
+            if sid in by_sid:
+                kept = by_sid[sid]
+                text = _eh40_value_text(rec)
+                if text:
+                    note = f"另：{rec.get('name_en') or rec.get('name_cn') or ''}：{text}"
+                    kept["notes"] = (kept["notes"] + "；" + note)[:200] if kept["notes"] else note[:200]
+                continue
+            notes = []
+            for key, label, unit in (("oel_8h_ppm", "8h TWA", "ppm"), ("oel_15m_ppm", "15min STEL", "ppm")):
+                raw = (rec.get(key) or "").strip()
+                if raw:
+                    notes.append(f"{label} {raw} {unit}")
+            for key, label in (("oel_8h_mg_m3", "8h TWA"), ("oel_15m_mg_m3", "15min STEL")):
+                raw = (rec.get(key) or "").strip()
+                if raw and _float(raw) is None:
+                    notes.append(f"{label} {raw}")
+            row = {"id": _uid(), "substance_id": sid, "standard": EH40_STANDARD,
+                   "mac": None, "pc_twa": _float(rec.get("oel_8h_mg_m3")),
+                   "pc_stel": _float(rec.get("oel_15m_mg_m3")),
+                   "critical_effect": "", "notes": "；".join(notes)[:200], "release_id": release_id}
+            rows.append(row)
+            by_sid[sid] = row
+    for chunk in _chunks(rows):
+        conn.execute(insert(SubstanceOELRow), chunk)
+    stats.update(eh40_rows=len(rows), eh40_unmatched=unmatched)
 
 
 def _name_aliases(name: str) -> list[str]:

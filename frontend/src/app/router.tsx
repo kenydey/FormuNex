@@ -65,6 +65,7 @@ export const router = createBrowserRouter([
       { path: "plm/label-designer", element: L(() => import("@/features/plm/LabelDesignerPage")) },
       { path: "plm/regulatory", element: L(() => import("@/features/regulatory/RegulatoryAgentPage")) },
       { path: "materials/substances", element: L(() => import("@/features/materials/SubstancesPage")) },
+      { path: "materials/test-records", element: L(() => import("@/features/materials/TestRecordsPage")) },
       { path: "materials/raw", element: L(() => import("@/features/materials/MaterialsPage")) },
       { path: "admin/users", element: L(() => import("@/features/admin/UsersPage")) },
       { path: "admin/companies", element: L(() => import("@/features/admin/CompaniesPage")) },

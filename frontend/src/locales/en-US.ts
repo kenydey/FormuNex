@@ -546,6 +546,7 @@ const en: Record<string, string> = {
   "nav.materials": "Materials & Regulations",
   "nav.materials.raw": "Raw materials",
   "nav.materials.substances": "Substances",
+  "nav.materials.test_records": "Test records",
   "nav.plm": "Documents & Release",
   "nav.plm.labels": "Label designer",
   "nav.plm.formula_mappings": "Formula database mappings",

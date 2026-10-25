@@ -89,6 +89,7 @@ const EXPECTED: Group[] = [
     zh: "物料与法规",
     leaves: [
       { path: "/materials/substances", zh: "物质与法规数据" },
+      { path: "/materials/test-records", zh: "试验记录" },
       { path: "/materials/raw", zh: "原料" },
       { path: "/knowledge/graph", zh: "材料知识图谱" },
     ],
@@ -146,10 +147,10 @@ describe("nav (menu checklist, scheme A)", () => {
     }
   });
 
-  it("46 group leaves + dashboard = 47 entries, no duplicate paths or keys", () => {
+  it("47 group leaves + dashboard = 48 entries, no duplicate paths or keys", () => {
     const leaves = flatLeaves(NAV);
-    expect(leaves).toHaveLength(47);
-    expect(new Set(leaves.map((l) => l.path)).size).toBe(47);
+    expect(leaves).toHaveLength(48);
+    expect(new Set(leaves.map((l) => l.path)).size).toBe(48);
     const keys = NAV.flatMap((g) => [g.key, ...(g.children ?? []).map((l) => l.key)]);
     expect(keys.every((k) => k.length > 0)).toBe(true);
     expect(new Set(keys).size).toBe(keys.length);

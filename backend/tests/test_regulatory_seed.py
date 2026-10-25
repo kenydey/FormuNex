@@ -69,6 +69,16 @@ def resources(tmp_path):
         {"name_cn": "某混合物", "name_en": "", "cas_number": "", "mac_mg_m3": "1", "pc_twa_mg_m3": "",
          "pc_stel_mg_m3": "", "critical_effect": "", "remark": ""},
     ]})
+    _write(res, "oel_eh40.json", {"records": [
+        {"name_cn": "乙醛", "name_en": "Acetaldehyde", "cas_number": "75-07-0", "oel_8h_ppm": "20",
+         "oel_8h_mg_m3": "37", "oel_15m_ppm": "50", "oel_15m_mg_m3": "92"},
+        {"name_cn": "铝金属可吸入粉尘", "name_en": "Aluminium metal inhalable dust", "cas_number": "7429-90-5",
+         "oel_8h_ppm": "", "oel_8h_mg_m3": "10", "oel_15m_ppm": "", "oel_15m_mg_m3": ""},
+        {"name_cn": "铝金属可吸入性粉尘", "name_en": "Aluminium metal respirable dust", "cas_number": "7429-90-5",
+         "oel_8h_ppm": "", "oel_8h_mg_m3": "4", "oel_15m_ppm": "", "oel_15m_mg_m3": ""},
+        {"name_cn": "无号物质", "name_en": "", "cas_number": "", "oel_8h_ppm": "", "oel_8h_mg_m3": "1",
+         "oel_15m_ppm": "", "oel_15m_mg_m3": ""},
+    ]})
     _write(res, "hazard_statements.json", {"statements": [
         {"code": "H225", "statement": "高度易燃液体和蒸气", "hazard_type": "易燃液体", "hazard_category": "类别 2"},
         {"code": "H300+H310+H3 30", "statement": "吞咽、皮肤接触或吸入致命", "hazard_type": "", "hazard_category": ""},
@@ -140,6 +150,19 @@ def test_seed_loads_every_table(engine, resources):
             .where(SubstanceRow.cas_no == "7664-41-7")
         ).one()
         assert tuple(ammonia_oel) == (20.0, 30.0)  # substance created from the OEL list itself
+        # G4: EH40 rows seed under their own standard; ppm rides in notes and
+        # a same-CAS variant (respirable dust) appends to the kept row.
+        eh40 = c.execute(
+            select(SubstanceOELRow.standard, SubstanceOELRow.pc_twa, SubstanceOELRow.pc_stel,
+                   SubstanceOELRow.notes)
+            .join(SubstanceRow, SubstanceRow.id == SubstanceOELRow.substance_id)
+            .where(SubstanceRow.cas_no.in_(["75-07-0", "7429-90-5"]))
+            .order_by(SubstanceRow.cas_no)
+        ).all()
+        assert eh40[0][0] == "EH40/2005" and eh40[0][1] == 10.0
+        assert "respirable dust" in eh40[0][3] and "4 mg/m³" in eh40[0][3]
+        assert eh40[1] == ("EH40/2005", 37.0, 92.0, "8h TWA 20 ppm；15min STEL 50 ppm")
+        assert stats["eh40_rows"] == 2 and stats["eh40_unmatched"] == 1
         codes = set(c.execute(select(GhsStatementRow.code)).scalars())
         assert {"H225", "H300+H310+H330", "P210", "P301+P330+P331"} <= codes
         en_texts = dict(c.execute(select(GhsStatementRow.code, GhsStatementRow.text_en)).all())
@@ -155,6 +178,7 @@ def test_seed_loads_every_table(engine, resources):
     assert kinds == {
         "invalid_cas": 1, "repaired_cas": 1, "duplicate_catalog_entry": 1, "hazard_text": 1,
         "oel_unmatched": 1,  # "不存在的物质" (UN 9999) names no substance: unlinked, no review item
+        "eh40_unmatched": 1,
     }
 
 

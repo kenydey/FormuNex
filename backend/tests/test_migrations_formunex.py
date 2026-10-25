@@ -23,6 +23,7 @@ NEW_TABLES = [
     "document_toc_trees",
     "material_compositions",
     "regulatory_review_queue", "substance_generic_entries", "ghs_statements", "substance_transport",
+    "substance_tox_records", "substance_eco_records", "substance_eco_profiles",
     "substance_oel", "substance_classifications", "substances", "regulatory_data_releases",
     "user_roles", "project_members", "roles", "users",
 ]

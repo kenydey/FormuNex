@@ -407,6 +407,135 @@ def search_substances(q: str = Query(..., min_length=1, max_length=200), limit: 
         return reg_agent.lookup_substance(session, q, limit=limit)
 
 
+class ToxRecordIn(BaseModel):
+    endpoint: str = "LD50"
+    route: str = "oral"
+    value: str = ""
+    unit: str = "mg/kg"
+    species: str = "大鼠"
+    method: str = ""
+    source: str = "manual"
+    source_ref: str = ""
+
+
+class EcoRecordIn(BaseModel):
+    organism_group: str = ""
+    endpoint: str = "LC50"
+    value: str = ""
+    unit: str = "mg/L"
+    duration: str = ""
+    species: str = ""
+    method: str = ""
+    source: str = "manual"
+    source_ref: str = ""
+
+
+class EcoProfileIn(BaseModel):
+    persistence: str = ""
+    bioaccum: str = ""
+    mobility: str = ""
+
+
+@router.get("/substances/{substance_id}/test-records")
+def get_test_records(substance_id: str) -> dict[str, Any]:
+    """G6: a substance's measured tox / eco records and eco profile."""
+    from ..services.plm import test_records
+
+    with _session() as session:
+        try:
+            return test_records.list_records(session, substance_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@router.get("/substances/{substance_id}/oel")
+def get_substance_oel(substance_id: str) -> list[dict[str, Any]]:
+    """G4: all OEL rows for a substance, every standard (GBZ + EH40)."""
+    from sqlalchemy import select
+
+    from ..db.models_regulatory import SubstanceOELRow, SubstanceRow
+
+    with _session() as session:
+        if session.get(SubstanceRow, substance_id) is None:
+            raise HTTPException(status_code=404, detail="物质不存在")
+        rows = session.execute(select(SubstanceOELRow)
+                               .where(SubstanceOELRow.substance_id == substance_id)
+                               .order_by(SubstanceOELRow.standard)).scalars().all()
+        return [{"standard": r.standard, "mac": r.mac, "pc_twa": r.pc_twa, "pc_stel": r.pc_stel,
+                 "critical_effect": r.critical_effect, "notes": r.notes} for r in rows]
+
+
+@router.post("/substances/{substance_id}/tox-records", status_code=201)
+def create_tox_record(substance_id: str, body: ToxRecordIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm import test_records
+
+    user.require("plm.document.write")
+    with _session() as session:
+        try:
+            row = test_records.add_tox(session, substance_id, body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return test_records.tox_dict(row)
+
+
+@router.delete("/substances/{substance_id}/tox-records/{record_id}")
+def delete_tox_record(substance_id: str, record_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm import test_records
+
+    user.require("plm.document.write")
+    with _session() as session:
+        try:
+            test_records.delete_tox(session, substance_id, record_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        session.commit()
+        return {"ok": True}
+
+
+@router.post("/substances/{substance_id}/eco-records", status_code=201)
+def create_eco_record(substance_id: str, body: EcoRecordIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm import test_records
+
+    user.require("plm.document.write")
+    with _session() as session:
+        try:
+            row = test_records.add_eco(session, substance_id, body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return test_records.eco_dict(row)
+
+
+@router.delete("/substances/{substance_id}/eco-records/{record_id}")
+def delete_eco_record(substance_id: str, record_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    from ..services.plm import test_records
+
+    user.require("plm.document.write")
+    with _session() as session:
+        try:
+            test_records.delete_eco(session, substance_id, record_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        session.commit()
+        return {"ok": True}
+
+
+@router.put("/substances/{substance_id}/eco-profile")
+def put_eco_profile(substance_id: str, body: EcoProfileIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Upsert the substance's fate descriptions (at least one required)."""
+    from ..services.plm import test_records
+
+    user.require("plm.document.write")
+    with _session() as session:
+        try:
+            row = test_records.upsert_profile(session, substance_id, body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+        return test_records.profile_dict(row) or {}
+
+
 @router.post("/substances/sds-import", status_code=201)
 async def import_supplier_sds(
     file: UploadFile = File(...),
@@ -591,6 +720,46 @@ def get_product(product_id: str) -> dict[str, Any]:
                 "revisions": [{"id": r.id, "rev": r.rev, "state": r.state, "formulation_version_id": r.formulation_version_id,
                                "frozen_at": r.frozen_at} for r in revs],
                 "batches": [{"id": b.id, "batch_no": b.batch_no, "status": b.status} for b in batches]}
+
+
+@router.post("/products/{product_id}/archive")
+def archive_product_route(product_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """G9: archive a product (lifecycle_state -> withdrawn). Withdrawal-grade
+    action: requires release.publish on the product's project."""
+    from ..db.models_plm import ProductRow
+    from ..services.plm import archive
+
+    with _session() as session:
+        product = session.get(ProductRow, product_id)
+        if product is None:
+            raise HTTPException(status_code=404, detail="产品不存在")
+        user.require("release.publish", product.project_id)
+        try:
+            archive.archive_product(session, product_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        session.commit()
+        return {"id": product.id, "code": product.code, "lifecycle_state": product.lifecycle_state}
+
+
+@router.post("/products/{product_id}/restore")
+def restore_product_route(product_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """G9: restore an archived product (lifecycle_state -> rd). The
+    pre-archive state is not stored; a restored product re-enters as rd."""
+    from ..db.models_plm import ProductRow
+    from ..services.plm import archive
+
+    with _session() as session:
+        product = session.get(ProductRow, product_id)
+        if product is None:
+            raise HTTPException(status_code=404, detail="产品不存在")
+        user.require("release.publish", product.project_id)
+        try:
+            archive.restore_product(session, product_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        session.commit()
+        return {"id": product.id, "code": product.code, "lifecycle_state": product.lifecycle_state}
 
 
 @router.post("/products/{product_id}/revisions", status_code=201)
@@ -1657,6 +1826,93 @@ def import_formula_mappings(body: FormulaImportIn, user: CurrentUser = Depends(c
         if not body.dry_run:
             session.commit()
         return report
+
+
+@router.post("/import/formulas")
+async def import_formulas_excel(
+    file: UploadFile = File(...),
+    dry_run: bool = Query(default=True),
+    user: CurrentUser = Depends(current_user),
+) -> dict[str, Any]:
+    """G7: import formulation records from a .xlsx file (Chinese headers; see
+    the template endpoint). ``dry_run`` (default) validates without writing;
+    errors carry spreadsheet row numbers."""
+    from ..api._uploads import read_upload_capped
+    from ..services import material_io
+    from ..services.plm import excel_import
+
+    user.require("plm.document.write")
+    filename = file.filename or "upload.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
+    content = await read_upload_capped(file, filename)
+    try:
+        rows = material_io.parse_xlsx_bytes(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    mapped = excel_import.map_rows(rows, excel_import.FORMULA_HEADERS, excel_import.FORMULA_ALIASES)
+    with _session() as session:
+        report = excel_import.import_formula_rows(session, mapped, created_by=user.id, dry_run=dry_run)
+        if not dry_run:
+            session.commit()
+    report["total"] = len(mapped)
+    return report
+
+
+@router.post("/import/companies")
+async def import_companies_excel(
+    file: UploadFile = File(...),
+    dry_run: bool = Query(default=True),
+    user: CurrentUser = Depends(current_user),
+) -> dict[str, Any]:
+    """G7: import company records from a .xlsx file. Existing names are
+    skipped, never overwritten; import never flips ``is_default``."""
+    from ..api._uploads import read_upload_capped
+    from ..services import material_io
+    from ..services.plm import excel_import
+
+    user.require("plm.document.write")
+    filename = file.filename or "upload.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
+    content = await read_upload_capped(file, filename)
+    try:
+        rows = material_io.parse_xlsx_bytes(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    mapped = excel_import.map_rows(rows, excel_import.COMPANY_HEADERS, excel_import.COMPANY_ALIASES)
+    with _session() as session:
+        report = excel_import.import_company_rows(session, mapped, dry_run=dry_run)
+        if not dry_run:
+            session.commit()
+    report["total"] = len(mapped)
+    return report
+
+
+@router.get("/import/templates/formulas")
+def import_formulas_template(user: CurrentUser = Depends(current_user)) -> Any:
+    """Header-only .xlsx template for formulation import."""
+    from fastapi.responses import Response
+
+    from ..services.plm import excel_import
+
+    user.require("plm.document.write")
+    return Response(content=excel_import.build_template(excel_import.FORMULA_HEADERS),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="formulas_template.xlsx"'})
+
+
+@router.get("/import/templates/companies")
+def import_companies_template(user: CurrentUser = Depends(current_user)) -> Any:
+    """Header-only .xlsx template for company import."""
+    from fastapi.responses import Response
+
+    from ..services.plm import excel_import
+
+    user.require("plm.document.write")
+    return Response(content=excel_import.build_template(excel_import.COMPANY_HEADERS),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="companies_template.xlsx"'})
 
 
 @router.post("/formula-mappings/{mapping_id}/create-revision", status_code=201)

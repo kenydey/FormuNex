@@ -1,0 +1,4456 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-01-30T10:55:32.880496",
+  "records": [
+    {
+      "index": 1,
+      "name_cn": "乙醛",
+      "name_en": "Acetaldehyde",
+      "cas_number": "75-07-0",
+      "oel_8h_ppm": "20",
+      "oel_8h_mg_m3": "37",
+      "oel_15m_ppm": "50",
+      "oel_15m_mg_m3": "92"
+    },
+    {
+      "index": 2,
+      "name_cn": "乙酸酐",
+      "name_en": "Acetic anhydride",
+      "cas_number": "108-24-7",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "2.5",
+      "oel_15m_ppm": "2",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 3,
+      "name_cn": "丙酮",
+      "name_en": "Acetone",
+      "cas_number": "67-64-1",
+      "oel_8h_ppm": "500",
+      "oel_8h_mg_m3": "1210",
+      "oel_15m_ppm": "1500",
+      "oel_15m_mg_m3": "3620"
+    },
+    {
+      "index": 4,
+      "name_cn": "乙腈",
+      "name_en": "Acetonitrile",
+      "cas_number": "75-05-8",
+      "oel_8h_ppm": "40",
+      "oel_8h_mg_m3": "68",
+      "oel_15m_ppm": "60",
+      "oel_15m_mg_m3": "102"
+    },
+    {
+      "index": 5,
+      "name_cn": "邻乙酰水杨酸",
+      "name_en": "o-Acetylsalicylic acid",
+      "cas_number": "50-78-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 6,
+      "name_cn": "丙烯醛",
+      "name_en": "Acrylaldehyde (Acrolein)",
+      "cas_number": "107-02-8",
+      "oel_8h_ppm": "0.1",
+      "oel_8h_mg_m3": "0.23",
+      "oel_15m_ppm": "0.3",
+      "oel_15m_mg_m3": "0.7"
+    },
+    {
+      "index": 7,
+      "name_cn": "丙烯酰胺",
+      "name_en": "Acrylamide",
+      "cas_number": "79-06-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.3",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 8,
+      "name_cn": "丙烯腈",
+      "name_en": "Acrylonitrile",
+      "cas_number": "107-13-1",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "4.4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 9,
+      "name_cn": "烯丙醇",
+      "name_en": "Allyl alcohol",
+      "cas_number": "107-18-6",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "4.8",
+      "oel_15m_ppm": "4",
+      "oel_15m_mg_m3": "9.7"
+    },
+    {
+      "index": 10,
+      "name_cn": "烷基铝化合物",
+      "name_en": "Aluminium alkyl compounds",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 11,
+      "name_cn": "铝金属可吸入粉尘",
+      "name_en": "Aluminium metal inhalable dust",
+      "cas_number": "7429-90-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 12,
+      "name_cn": "铝金属可吸入性粉尘",
+      "name_en": "Aluminium metal respirable dust",
+      "cas_number": "7429-90-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 13,
+      "name_cn": "氧化铝可吸入粉尘",
+      "name_en": "Aluminium oxides inhalable dust",
+      "cas_number": "1344-28-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 14,
+      "name_cn": "氧化铝可吸入性粉尘",
+      "name_en": "Aluminium oxides respirable dust",
+      "cas_number": "1344-28-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 15,
+      "name_cn": "可溶性铝盐",
+      "name_en": "Aluminium salts, soluble",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 16,
+      "name_cn": "2-氨基乙醇",
+      "name_en": "2-Aminoethanol",
+      "cas_number": "141-43-5",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "2.5",
+      "oel_15m_ppm": "3",
+      "oel_15m_mg_m3": "7.6"
+    },
+    {
+      "index": 17,
+      "name_cn": "无水氨",
+      "name_en": "Ammonia, anhydrous",
+      "cas_number": "7664-41-7",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "18",
+      "oel_15m_ppm": "35",
+      "oel_15m_mg_m3": "25"
+    },
+    {
+      "index": 18,
+      "name_cn": "氯化铵烟雾",
+      "name_en": "Ammonium chloride, fume",
+      "cas_number": "12125-02-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 19,
+      "name_cn": "氨基磺酸铵",
+      "name_en": "Ammonium sulphamidate",
+      "cas_number": "7773-06-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 20,
+      "name_cn": "苯胺",
+      "name_en": "Aniline",
+      "cas_number": "62-53-3",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 21,
+      "name_cn": "锑及其化合物（除锑化氢外）（以 Sb 计）",
+      "name_en": "Antimony and compounds except stibine (as Sb)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 22,
+      "name_cn": "r-芳纶可吸入纤维",
+      "name_en": "r-Aramid respirable fibres",
+      "cas_number": "26125-61-1",
+      "oel_8h_ppm": "0.5 fibres/ml",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 23,
+      "name_cn": "砷及其化合物（除砷化氢外）（以 As 计）",
+      "name_en": "Arsenic and arsenic compounds except arsine (as As)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 24,
+      "name_cn": "砷化氢",
+      "name_en": "Arsine",
+      "cas_number": "7784-42-1",
+      "oel_8h_ppm": "0.05",
+      "oel_8h_mg_m3": "0.16",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 25,
+      "name_cn": "沥青、石油烟雾",
+      "name_en": "Asphalt, petroleum fumes",
+      "cas_number": "8052-42-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 26,
+      "name_cn": "偶氮二甲酰胺",
+      "name_en": "Azodicarbonamide",
+      "cas_number": "123-77-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "3"
+    },
+    {
+      "index": 27,
+      "name_cn": "可溶性钡化合物（以 Ba 计）",
+      "name_en": "Barium compounds, soluble (as Ba)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 28,
+      "name_cn": "硫酸钡可吸入粉尘",
+      "name_en": "Barium sulphate inhalable dust",
+      "cas_number": "7727-43-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 29,
+      "name_cn": "硫酸钡可吸入性粉尘",
+      "name_en": "Barium sulphate respirable dust",
+      "cas_number": "7727-43-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 30,
+      "name_cn": "苯",
+      "name_en": "Benzene",
+      "cas_number": "71-43-2",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "3.25",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 31,
+      "name_cn": "邻苯二甲酸苄基丁酯",
+      "name_en": "Benzyl butyl phthalate",
+      "cas_number": "85-68-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 32,
+      "name_cn": "氯化苄",
+      "name_en": "Benzyl chloride",
+      "cas_number": "100-44-7",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "2.6",
+      "oel_15m_ppm": "1.5",
+      "oel_15m_mg_m3": "7.9"
+    },
+    {
+      "index": 33,
+      "name_cn": "铍及其化合物（以 Be 计）",
+      "name_en": "Beryllium and beryllium compounds (as Be)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.002",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 34,
+      "name_cn": "邻苯二甲酸二(2-乙基己基)酯",
+      "name_en": "Bis(2-ethylhexyl) phthalate",
+      "cas_number": "117-81-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 35,
+      "name_cn": "双(氯甲基)醚",
+      "name_en": "Bis(chloromethyl) ether",
+      "cas_number": "542-88-1",
+      "oel_8h_ppm": "0.001",
+      "oel_8h_mg_m3": "0.005",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 36,
+      "name_cn": "双酚 A 可吸入粉尘",
+      "name_en": "Bisphenol A inhalable dust",
+      "cas_number": "80-05-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 37,
+      "name_cn": "樟脑",
+      "name_en": "Bornan-2-one",
+      "cas_number": "77-22-2",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "13",
+      "oel_15m_ppm": "3",
+      "oel_15m_mg_m3": "19"
+    },
+    {
+      "index": 38,
+      "name_cn": "三溴化硼",
+      "name_en": "Boron tribromide",
+      "cas_number": "10294-33-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "1",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 39,
+      "name_cn": "溴代嘧啶（ISO）",
+      "name_en": "Bromacil (ISO)",
+      "cas_number": "314-40-9",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "11",
+      "oel_15m_ppm": "2",
+      "oel_15m_mg_m3": "22"
+    },
+    {
+      "index": 40,
+      "name_cn": "溴",
+      "name_en": "Bromine",
+      "cas_number": "7726-95-6",
+      "oel_8h_ppm": "0.1",
+      "oel_8h_mg_m3": "0.66",
+      "oel_15m_ppm": "0.2",
+      "oel_15m_mg_m3": "1.3"
+    },
+    {
+      "index": 41,
+      "name_cn": "溴甲烷",
+      "name_en": "Bromomethane",
+      "cas_number": "74-83-9",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "20",
+      "oel_15m_ppm": "15",
+      "oel_15m_mg_m3": "59"
+    },
+    {
+      "index": 42,
+      "name_cn": "丁烷",
+      "name_en": "Butane",
+      "cas_number": "106-97-8",
+      "oel_8h_ppm": "600",
+      "oel_8h_mg_m3": "1450",
+      "oel_15m_ppm": "750",
+      "oel_15m_mg_m3": "1810"
+    },
+    {
+      "index": 43,
+      "name_cn": "1,3-丁二烯",
+      "name_en": "Buta-1,3-diene",
+      "cas_number": "106-99-0",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "22",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 44,
+      "name_cn": "1-丁醇",
+      "name_en": "Butan-1-ol",
+      "cas_number": "71-36-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "50",
+      "oel_15m_mg_m3": "154"
+    },
+    {
+      "index": 45,
+      "name_cn": "2-丁醇",
+      "name_en": "Butan-2-ol",
+      "cas_number": "78-92-2",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "308",
+      "oel_15m_ppm": "150",
+      "oel_15m_mg_m3": "462"
+    },
+    {
+      "index": 46,
+      "name_cn": "2-丁酮（甲基乙基酮）",
+      "name_en": "Butan-2-one (methyl ethyl ketone)",
+      "cas_number": "78-93-3",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "600",
+      "oel_15m_ppm": "300",
+      "oel_15m_mg_m3": "899"
+    },
+    {
+      "index": 47,
+      "name_cn": "2-丁氧基乙醇",
+      "name_en": "2-Butoxyethanol",
+      "cas_number": "111-76-2",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "123",
+      "oel_15m_ppm": "50",
+      "oel_15m_mg_m3": "246"
+    },
+    {
+      "index": 48,
+      "name_cn": "2-(2-丁氧基乙氧基)乙醇",
+      "name_en": "2-(2-Butoxyethoxy)ethanol",
+      "cas_number": "112-34-5",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "67.5",
+      "oel_15m_ppm": "15",
+      "oel_15m_mg_m3": "101.2"
+    },
+    {
+      "index": 49,
+      "name_cn": "乙酸2-丁氧基乙酯",
+      "name_en": "2-Butoxyethyl acetate",
+      "cas_number": "112-07-2",
+      "oel_8h_ppm": "20",
+      "oel_8h_mg_m3": "133",
+      "oel_15m_ppm": "50",
+      "oel_15m_mg_m3": "332"
+    },
+    {
+      "index": 50,
+      "name_cn": "丙烯酸正丁酯",
+      "name_en": "n-Butyl acrylate",
+      "cas_number": "141-32-2",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "5",
+      "oel_15m_mg_m3": "26"
+    },
+    {
+      "index": 51,
+      "name_cn": "氯甲酸正丁酯",
+      "name_en": "n-Butyl chloroformate",
+      "cas_number": "592-34-7",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "5.7",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 52,
+      "name_cn": "乙酸仲丁酯",
+      "name_en": "sec-Butyl acetate",
+      "cas_number": "105-46-4",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "966",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "1210"
+    },
+    {
+      "index": 53,
+      "name_cn": "乙酸叔丁酯",
+      "name_en": "tert-Butyl acetate",
+      "cas_number": "540-88-5",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "966",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "1210"
+    },
+    {
+      "index": 54,
+      "name_cn": "乙酸丁酯",
+      "name_en": "Butyl acetate",
+      "cas_number": "123-86-4",
+      "oel_8h_ppm": "150",
+      "oel_8h_mg_m3": "724",
+      "oel_15m_ppm": "200",
+      "oel_15m_mg_m3": "966"
+    },
+    {
+      "index": 55,
+      "name_cn": "乳酸丁酯",
+      "name_en": "Butyl lactate",
+      "cas_number": "138-22-7",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "30",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 56,
+      "name_cn": "2-仲丁基苯酚",
+      "name_en": "2-sec-Butylphenol",
+      "cas_number": "89-72-5",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "31",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 57,
+      "name_cn": "镉及其化合物（除氧化镉烟雾、硫化镉和硫化镉颜料外）（以 Cd 计）",
+      "name_en": "Cadmium and cadmium compounds except cadmium oxide fume, cadmium sulphide and cadmium sulphide pigments (as Cd)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.025",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 58,
+      "name_cn": "氧化镉烟雾（以 Cd 计） Cd)",
+      "name_en": "Cadmium oxide fume (as Cd)",
+      "cas_number": "1306-19-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.025",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.05"
+    },
+    {
+      "index": 59,
+      "name_cn": "硫化镉和硫化镉颜料（可吸入粉尘（以 Cd 计））",
+      "name_en": "Cadmium sulphide and cadmium sulphide pigments (respirable dust (as Cd))",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.03",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 60,
+      "name_cn": "氢氧化铯",
+      "name_en": "Caesium hydroxide",
+      "cas_number": "21351-79-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 61,
+      "name_cn": "碳酸钙可吸入粉尘",
+      "name_en": "Calcium carbonate inhalable dust",
+      "cas_number": "1317-65-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 62,
+      "name_cn": "碳酸钙可吸入颗粒物",
+      "name_en": "Calcium carbonate respirable",
+      "cas_number": "1317-65-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 63,
+      "name_cn": "氰胺化钙",
+      "name_en": "Calcium cyanamide",
+      "cas_number": "156-62-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "1"
+    },
+    {
+      "index": 64,
+      "name_cn": "氢氧化钙",
+      "name_en": "Calcium hydroxide",
+      "cas_number": "1305-62-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 65,
+      "name_cn": "氧化钙",
+      "name_en": "Calcium oxide",
+      "cas_number": "1305-78-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 66,
+      "name_cn": "硅酸钙",
+      "name_en": "Calcium silicate inhalable dust",
+      "cas_number": "1344-95-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 67,
+      "name_cn": "硅酸钙",
+      "name_en": "Calcium silicate respirable",
+      "cas_number": "1344-95-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 68,
+      "name_cn": "克菌丹 (ISO)",
+      "name_en": "Captan (ISO)",
+      "cas_number": "133-06-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "15"
+    },
+    {
+      "index": 69,
+      "name_cn": "炭黑",
+      "name_en": "Carbon black",
+      "cas_number": "1333-86-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "3.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "7"
+    },
+    {
+      "index": 70,
+      "name_cn": "二氧化碳",
+      "name_en": "Carbon dioxide",
+      "cas_number": "124-38-9",
+      "oel_8h_ppm": "5000",
+      "oel_8h_mg_m3": "9150",
+      "oel_15m_ppm": "15000",
+      "oel_15m_mg_m3": "27400"
+    },
+    {
+      "index": 71,
+      "name_cn": "二硫化碳",
+      "name_en": "Carbon disulphide",
+      "cas_number": "75-15-0",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "15",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 72,
+      "name_cn": "一氧化碳",
+      "name_en": "Carbon monoxide",
+      "cas_number": "630-08-0",
+      "oel_8h_ppm": "30",
+      "oel_8h_mg_m3": "35",
+      "oel_15m_ppm": "200",
+      "oel_15m_mg_m3": "232"
+    },
+    {
+      "index": 73,
+      "name_cn": "四氯化碳",
+      "name_en": "Carbon tetrachloride",
+      "cas_number": "56-23-5",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "13",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 74,
+      "name_cn": "纤维素",
+      "name_en": "Cellulose inhalable dust",
+      "cas_number": "9004-34-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 75,
+      "name_cn": "纤维素",
+      "name_en": "Cellulose respirable",
+      "cas_number": "9004-34-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 76,
+      "name_cn": "氯气",
+      "name_en": "Chlorine",
+      "cas_number": "7782-50-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.5",
+      "oel_15m_mg_m3": "1.5"
+    },
+    {
+      "index": 77,
+      "name_cn": "二氧化氯",
+      "name_en": "Chlorine dioxide",
+      "cas_number": "10049-04-4",
+      "oel_8h_ppm": "0.1",
+      "oel_8h_mg_m3": "0.28",
+      "oel_15m_ppm": "0.3",
+      "oel_15m_mg_m3": "0.84"
+    },
+    {
+      "index": 78,
+      "name_cn": "氯乙醛",
+      "name_en": "Chloroacetaldehyde",
+      "cas_number": "107-20-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "1",
+      "oel_15m_mg_m3": "3.3"
+    },
+    {
+      "index": 79,
+      "name_cn": "2-氯苯乙酮",
+      "name_en": "2-Chloroacetophenone",
+      "cas_number": "532-27-4",
+      "oel_8h_ppm": "0.05",
+      "oel_8h_mg_m3": "0.32",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 80,
+      "name_cn": "氯苯",
+      "name_en": "Chlorobenzene",
+      "cas_number": "108-90-7",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "4.7",
+      "oel_15m_ppm": "3",
+      "oel_15m_mg_m3": "14"
+    },
+    {
+      "index": 81,
+      "name_cn": "二氟氯甲烷",
+      "name_en": "Chlorodifluoromethane",
+      "cas_number": "75-45-6",
+      "oel_8h_ppm": "1000",
+      "oel_8h_mg_m3": "3590",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 82,
+      "name_cn": "氯乙烷",
+      "name_en": "Chloroethane",
+      "cas_number": "75-00-3",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "134",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 83,
+      "name_cn": "2-氯乙醇",
+      "name_en": "2-Chloroethanol",
+      "cas_number": "107-07-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "1",
+      "oel_15m_mg_m3": "3.4"
+    },
+    {
+      "index": 84,
+      "name_cn": "1-氯-2,3-环氧丙烷（表氯醇）",
+      "name_en": "1-Chloro-2,3-epoxypropane (Epichlorohydrin)",
+      "cas_number": "106-89-8",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "1.9",
+      "oel_15m_ppm": "1.5",
+      "oel_15m_mg_m3": "5.8"
+    },
+    {
+      "index": 85,
+      "name_cn": "氯仿",
+      "name_en": "Chloroform",
+      "cas_number": "67-66-3",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "9.9",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 86,
+      "name_cn": "氯甲烷",
+      "name_en": "Chloromethane",
+      "cas_number": "74-87-3",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "105",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "210"
+    },
+    {
+      "index": 87,
+      "name_cn": "1-氯-4-硝基苯",
+      "name_en": "1-Chloro-4-nitrobenzene",
+      "cas_number": "100-00-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 88,
+      "name_cn": "氯磺酸",
+      "name_en": "Chlorosulphonic acid",
+      "cas_number": "7790-94-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 89,
+      "name_cn": "毒死蜱 (ISO)",
+      "name_en": "Chlorpyrifos (ISO)",
+      "cas_number": "2921-88-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.6"
+    },
+    {
+      "index": 90,
+      "name_cn": "铬",
+      "name_en": "Chromium",
+      "cas_number": "7440-47-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 91,
+      "name_cn": "铬(II)化合物（以 Cr 计）",
+      "name_en": "Chromium (II) compounds (as Cr)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 92,
+      "name_cn": "铬(III)化合物（以 Cr 计）",
+      "name_en": "Chromium (III) compounds (as Cr)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 93,
+      "name_cn": "铬(VI)化合物（以 Cr 计）",
+      "name_en": "Chromium (VI) compounds (as Cr)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.05",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 94,
+      "name_cn": "钴和钴化合物（以 Co 计）",
+      "name_en": "Cobalt and Cobalt compounds (as Co)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 95,
+      "name_cn": "铜烟（以 Cu 计）",
+      "name_en": "Copper fume (as Cu)",
+      "cas_number": "7440-50-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 96,
+      "name_cn": "铜及其化合物：粉尘和雾（以 Cu 计）",
+      "name_en": "Copper and compounds: dust and mists (as Cu)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 97,
+      "name_cn": "棉尘",
+      "name_en": "Cotton dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 98,
+      "name_cn": "氟烷 (INN)",
+      "name_en": "Cryofluorane (INN)",
+      "cas_number": "76-14-2",
+      "oel_8h_ppm": "1000",
+      "oel_8h_mg_m3": "7110",
+      "oel_15m_ppm": "1250",
+      "oel_15m_mg_m3": "8890"
+    },
+    {
+      "index": 99,
+      "name_cn": "异丙苯",
+      "name_en": "Cumene",
+      "cas_number": "98-82-8",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "125",
+      "oel_15m_ppm": "50",
+      "oel_15m_mg_m3": "250"
+    },
+    {
+      "index": 100,
+      "name_cn": "氰胺",
+      "name_en": "Cyanamide",
+      "cas_number": "420-04-2",
+      "oel_8h_ppm": "0.58",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 101,
+      "name_cn": "氰化物，HCN 和氯化物除外（以 Cn 计）",
+      "name_en": "Cyanides, except HCN, chloride (as Cn)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 102,
+      "name_cn": "氯化氰",
+      "name_en": "Cyanogen chloride",
+      "cas_number": "506-77-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.3",
+      "oel_15m_mg_m3": "0.77"
+    },
+    {
+      "index": 103,
+      "name_cn": "环己烷",
+      "name_en": "Cyclohexane",
+      "cas_number": "110-82-7",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "350",
+      "oel_15m_ppm": "300",
+      "oel_15m_mg_m3": "1050"
+    },
+    {
+      "index": 104,
+      "name_cn": "环己醇",
+      "name_en": "Cyclohexanol",
+      "cas_number": "108-93-0",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "208",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 105,
+      "name_cn": "环己酮",
+      "name_en": "Cyclohexanone",
+      "cas_number": "108-94-1",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "41",
+      "oel_15m_ppm": "20",
+      "oel_15m_mg_m3": "82"
+    },
+    {
+      "index": 106,
+      "name_cn": "环己胺",
+      "name_en": "Cyclohexylamine",
+      "cas_number": "108-91-8",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "41",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 107,
+      "name_cn": "2,4-D (ISO)",
+      "name_en": "2,4-D (ISO)",
+      "cas_number": "94-75-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 108,
+      "name_cn": "二烷基 79 邻苯二甲酸酯",
+      "name_en": "Dialkyl 79 phthalate",
+      "cas_number": "83968-18-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 109,
+      "name_cn": "邻苯二甲酸二烯丙酯",
+      "name_en": "Diallyl phthalate",
+      "cas_number": "131-17-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 110,
+      "name_cn": "天然硅藻土，可吸入粉尘",
+      "name_en": "Diatomaceous earth, natural, respirable dust",
+      "cas_number": "61790-53-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1.2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 111,
+      "name_cn": "过氧化二苯甲酰",
+      "name_en": "Dibenzoyl peroxide",
+      "cas_number": "94-36-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 112,
+      "name_cn": "三碲化二铋",
+      "name_en": "Dibismuth tritelluride",
+      "cas_number": "1304-82-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 113,
+      "name_cn": "三氧化二硼",
+      "name_en": "Diboron trioxide",
+      "cas_number": "1303-86-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 114,
+      "name_cn": "1,2-二溴乙烷（二溴乙烷）",
+      "name_en": "1,2-Dibromoethane (Ethylene dibromide)",
+      "cas_number": "106-93-4",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "3.9",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 115,
+      "name_cn": "磷酸二丁酯",
+      "name_en": "Dibutyl hydrogen phosphate",
+      "cas_number": "107-66-4",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "8.7",
+      "oel_15m_ppm": "2",
+      "oel_15m_mg_m3": "17"
+    },
+    {
+      "index": 116,
+      "name_cn": "二丁基邻苯二甲酸酯",
+      "name_en": "Dibutyl phthalate",
+      "cas_number": "84-74-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 117,
+      "name_cn": "二氯乙炔",
+      "name_en": "Dichloroacetylene",
+      "cas_number": "7572-29-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.1",
+      "oel_15m_mg_m3": "0.39"
+    },
+    {
+      "index": 118,
+      "name_cn": "1,2-二氯苯（邻二氯苯）",
+      "name_en": "1,2-Dichlorobenzene (ortho-dichlorobenzene)",
+      "cas_number": "95-50-1",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "153",
+      "oel_15m_ppm": "50",
+      "oel_15m_mg_m3": "306"
+    },
+    {
+      "index": 119,
+      "name_cn": "1,4-二氯苯（对二氯苯）",
+      "name_en": "1,4 Dichlorobenzene (para-dichlorobenzene)",
+      "cas_number": "106-46-7",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "153",
+      "oel_15m_ppm": "50",
+      "oel_15m_mg_m3": "306"
+    },
+    {
+      "index": 120,
+      "name_cn": "1,3-二氯-5,5-二甲基乙内酰脲",
+      "name_en": "1,3-Dichloro-5,5-dimethyl-hydantoin",
+      "cas_number": "118-52-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.4"
+    },
+    {
+      "index": 121,
+      "name_cn": "1,1-二氯乙烷",
+      "name_en": "1,1-Dichloroethane",
+      "cas_number": "75-34-3",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 122,
+      "name_cn": "1,2-二氯乙烷（二氯化乙烯）",
+      "name_en": "1,2-Dichloroethane (Ethylene dichloride)",
+      "cas_number": "107-06-2",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "21",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 123,
+      "name_cn": "1,2-二氯乙烯，顺式：反式异构体 60:40",
+      "name_en": "1,2-Dichloroethylene, cis:trans isomers 60:40",
+      "cas_number": "540-59-0",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "806",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "1010"
+    },
+    {
+      "index": 124,
+      "name_cn": "二氯氟甲烷",
+      "name_en": "Dichlorofluoromethane",
+      "cas_number": "75-43-4",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "43",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 125,
+      "name_cn": "二氯甲烷",
+      "name_en": "Dichloromethane",
+      "cas_number": "75-09-2",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "350",
+      "oel_15m_ppm": "300",
+      "oel_15m_mg_m3": "1060"
+    },
+    {
+      "index": 126,
+      "name_cn": "2,2’-二氯-4,4’-亚甲基二苯胺 (MbOCA)",
+      "name_en": "2,2’-Dichloro-4,4’-methylene dianiline (MbOCA)",
+      "cas_number": "101-14-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.005",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 127,
+      "name_cn": "邻苯二甲酸二环己酯",
+      "name_en": "Dicyclohexyl phthalate",
+      "cas_number": "84-61-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 128,
+      "name_cn": "二环戊二烯",
+      "name_en": "Dicyclopentadiene",
+      "cas_number": "77-73-6",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "27",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 129,
+      "name_cn": "二乙胺",
+      "name_en": "Diethylamine",
+      "cas_number": "109-89-7",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "15",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "30"
+    },
+    {
+      "index": 130,
+      "name_cn": "二乙醚",
+      "name_en": "Diethyl ether",
+      "cas_number": "60-29-7",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "310",
+      "oel_15m_ppm": "200",
+      "oel_15m_mg_m3": "620"
+    },
+    {
+      "index": 131,
+      "name_cn": "邻苯二甲酸二乙酯",
+      "name_en": "Diethyl phthalate",
+      "cas_number": "84-66-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 132,
+      "name_cn": "硫酸二乙酯",
+      "name_en": "Diethyl sulphate",
+      "cas_number": "64-67-5",
+      "oel_8h_ppm": "0.05",
+      "oel_8h_mg_m3": "0.32",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 133,
+      "name_cn": "硒化氢（以 Se 计）",
+      "name_en": "Dihydrogen selenide (as Se)",
+      "cas_number": "7/5/7783",
+      "oel_8h_ppm": "0.02",
+      "oel_8h_mg_m3": "0.07",
+      "oel_15m_ppm": "0.05",
+      "oel_15m_mg_m3": "0.17"
+    },
+    {
+      "index": 134,
+      "name_cn": "邻苯二甲酸二异丁酯",
+      "name_en": "Diisobutyl phthalate",
+      "cas_number": "84-69-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 135,
+      "name_cn": "邻苯二甲酸二异癸酯",
+      "name_en": "Diisodecyl phthalate",
+      "cas_number": "26761-40-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 136,
+      "name_cn": "邻苯二甲酸二异壬酯",
+      "name_en": "Diisononyl phthalate",
+      "cas_number": "28553-12-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 137,
+      "name_cn": "邻苯二甲酸二异辛酯",
+      "name_en": "Diisooctyl phthalate",
+      "cas_number": "27554-26-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 138,
+      "name_cn": "二异丙胺",
+      "name_en": "Diisopropylamine",
+      "cas_number": "108-18-9",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "21",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 139,
+      "name_cn": "二异丙醚",
+      "name_en": "Diisopropyl ether",
+      "cas_number": "108-20-3",
+      "oel_8h_ppm": "250",
+      "oel_8h_mg_m3": "1060",
+      "oel_15m_ppm": "310",
+      "oel_15m_mg_m3": "1310"
+    },
+    {
+      "index": 140,
+      "name_cn": "N,N-二甲基乙酰胺",
+      "name_en": "N,N-Dimethylacetamide",
+      "cas_number": "127-19-5",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "36",
+      "oel_15m_ppm": "20",
+      "oel_15m_mg_m3": "72"
+    },
+    {
+      "index": 141,
+      "name_cn": "N,N-二甲基苯胺",
+      "name_en": "N,N-Dimethylaniline",
+      "cas_number": "121-69-7",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "25",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "50"
+    },
+    {
+      "index": 142,
+      "name_cn": "N,N-二甲基乙胺",
+      "name_en": "N,N-Dimethylethylamine",
+      "cas_number": "598-56-1",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "30",
+      "oel_15m_ppm": "15",
+      "oel_15m_mg_m3": "46"
+    },
+    {
+      "index": 143,
+      "name_cn": "二甲氧基甲烷",
+      "name_en": "Dimethoxymethane",
+      "cas_number": "109-87-5",
+      "oel_8h_ppm": "1000",
+      "oel_8h_mg_m3": "3160",
+      "oel_15m_ppm": "1250",
+      "oel_15m_mg_m3": "3950"
+    },
+    {
+      "index": 144,
+      "name_cn": "二甲胺",
+      "name_en": "Dimethylamine",
+      "cas_number": "124-40-3",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "3.8",
+      "oel_15m_ppm": "6",
+      "oel_15m_mg_m3": "11"
+    },
+    {
+      "index": 145,
+      "name_cn": "2-二甲氨基乙醇",
+      "name_en": "2-Dimethylaminoethanol",
+      "cas_number": "108-01-0",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "7.4",
+      "oel_15m_ppm": "6",
+      "oel_15m_mg_m3": "22"
+    },
+    {
+      "index": 146,
+      "name_cn": "二甲醚",
+      "name_en": "Dimethyl ether",
+      "cas_number": "115-10-6",
+      "oel_8h_ppm": "400",
+      "oel_8h_mg_m3": "766",
+      "oel_15m_ppm": "500",
+      "oel_15m_mg_m3": "958"
+    },
+    {
+      "index": 147,
+      "name_cn": "N,N-二甲基甲酰胺",
+      "name_en": "N,N-Dimethylformamide",
+      "cas_number": "68-12-2",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "15",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "30"
+    },
+    {
+      "index": 148,
+      "name_cn": "2,6-二甲基庚-4-酮",
+      "name_en": "2,6-Dimethylheptan-4-one",
+      "cas_number": "108-83-8",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "148",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 149,
+      "name_cn": "邻苯二甲酸二甲酯",
+      "name_en": "Dimethyl phthalate",
+      "cas_number": "131-11-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 150,
+      "name_cn": "硫酸二甲酯",
+      "name_en": "Dimethyl sulphate",
+      "cas_number": "77-78-1",
+      "oel_8h_ppm": "0.05",
+      "oel_8h_mg_m3": "0.26",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 151,
+      "name_cn": "二硝基苯，所有异构体",
+      "name_en": "Dinitrobenzene, all isomers",
+      "cas_number": "25154-54-5",
+      "oel_8h_ppm": "0.15",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "0.5",
+      "oel_15m_mg_m3": "3.5"
+    },
+    {
+      "index": 152,
+      "name_cn": "邻苯二甲酸二壬酯",
+      "name_en": "Dinonyl phthalate",
+      "cas_number": "84-76-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 153,
+      "name_cn": "1,4-二噁烷",
+      "name_en": "1,4-Dioxane",
+      "cas_number": "123-91-1",
+      "oel_8h_ppm": "20",
+      "oel_8h_mg_m3": "73",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 154,
+      "name_cn": "二苯胺",
+      "name_en": "Diphenylamine",
+      "cas_number": "122-39-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 155,
+      "name_cn": "二苯醚（蒸汽）",
+      "name_en": "Diphenyl ether (vapour)",
+      "cas_number": "101-84-8",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "7.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 156,
+      "name_cn": "五硫化二磷",
+      "name_en": "Diphosphorus pentasulphide",
+      "cas_number": "1314-80-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 157,
+      "name_cn": "五氧化二磷",
+      "name_en": "Disphosphorus pentoxide",
+      "cas_number": "1314-56-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 158,
+      "name_cn": "敌草快二溴化物 (ISO)",
+      "name_en": "Diquat dibromide (ISO)",
+      "cas_number": "85-00-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "1"
+    },
+    {
+      "index": 159,
+      "name_cn": "二亚硫酸钠",
+      "name_en": "Disodium disulphite",
+      "cas_number": "7681-57-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 160,
+      "name_cn": "无水四硼酸二钠",
+      "name_en": "Disodium tetraborate, anhydrous",
+      "cas_number": "1330-43-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 161,
+      "name_cn": "十水合四硼酸二钠",
+      "name_en": "Disodium tetraborate, decahydrate",
+      "cas_number": "1330-96-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 162,
+      "name_cn": "五水合四硼酸二钠",
+      "name_en": "Disodium tetraborate, pentahydrate",
+      "cas_number": "11130-12-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 163,
+      "name_cn": "二硫二氯化物",
+      "name_en": "Disulphur dichloride",
+      "cas_number": "10025-67-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "1",
+      "oel_15m_mg_m3": "5.6"
+    },
+    {
+      "index": 164,
+      "name_cn": "2,6-二叔丁基对甲酚",
+      "name_en": "2,6-Di-tert-butyl-p-cresol",
+      "cas_number": "128-37-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 165,
+      "name_cn": "6,6’-二叔丁基-4,4’-硫代二间甲酚",
+      "name_en": "6,6’-Di-tert-butyl-4,4’-thiodi-m-cresol",
+      "cas_number": "96-69-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 166,
+      "name_cn": "敌草隆 (ISO)",
+      "name_en": "Diuron (ISO)",
+      "cas_number": "330-54-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 167,
+      "name_cn": "金刚砂可吸入粉尘",
+      "name_en": "Emery inhalable dust",
+      "cas_number": "1302-74-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 168,
+      "name_cn": "金刚砂可吸入颗粒物",
+      "name_en": "Emery respirable",
+      "cas_number": "1302-74-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 169,
+      "name_cn": "硫丹 (ISO)",
+      "name_en": "Endosulfan (ISO)",
+      "cas_number": "115-29-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 170,
+      "name_cn": "恩氟烷",
+      "name_en": "Enflurane",
+      "cas_number": "13838-16-9",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "383",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 171,
+      "name_cn": "乙烷-1,2-二醇颗粒物",
+      "name_en": "Ethane-1,2-diol particulate",
+      "cas_number": "107-21-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 172,
+      "name_cn": "乙烷-1,2-二醇蒸气",
+      "name_en": "Ethane-1,2-diol vapour",
+      "cas_number": "107-21-1",
+      "oel_8h_ppm": "20",
+      "oel_8h_mg_m3": "52",
+      "oel_15m_ppm": "40",
+      "oel_15m_mg_m3": "104"
+    },
+    {
+      "index": 173,
+      "name_cn": "乙硫醇",
+      "name_en": "Ethanethiol",
+      "cas_number": "75-08-1",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "1.3",
+      "oel_15m_ppm": "2",
+      "oel_15m_mg_m3": "5.2"
+    },
+    {
+      "index": 174,
+      "name_cn": "乙醇",
+      "name_en": "Ethanol",
+      "cas_number": "64-17-5",
+      "oel_8h_ppm": "1000",
+      "oel_8h_mg_m3": "1920",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 175,
+      "name_cn": "2-乙氧基乙醇",
+      "name_en": "2-Ethoxyethanol",
+      "cas_number": "110-80-5",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "8",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 176,
+      "name_cn": "2-乙氧基乙酸乙酯",
+      "name_en": "2-Ethoxyethyl acetate",
+      "cas_number": "111-15-9",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "11",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 177,
+      "name_cn": "2-乙基己基氯甲酸酯",
+      "name_en": "2-Ethylhexyl chloroformate",
+      "cas_number": "24468-13-1",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "8",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 178,
+      "name_cn": "乙酸乙酯",
+      "name_en": "Ethyl acetate",
+      "cas_number": "141-78-6",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "400",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 179,
+      "name_cn": "丙烯酸乙酯",
+      "name_en": "Ethyl acrylate",
+      "cas_number": "140-88-5",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "21",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "42"
+    },
+    {
+      "index": 180,
+      "name_cn": "乙胺",
+      "name_en": "Ethylamine",
+      "cas_number": "75-04-7",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "3.8",
+      "oel_15m_ppm": "6",
+      "oel_15m_mg_m3": "11"
+    },
+    {
+      "index": 181,
+      "name_cn": "乙苯",
+      "name_en": "Ethylbenzene",
+      "cas_number": "100-41-4",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "441",
+      "oel_15m_ppm": "125",
+      "oel_15m_mg_m3": "552"
+    },
+    {
+      "index": 182,
+      "name_cn": "氯甲酸乙酯",
+      "name_en": "Ethyl chloroformate",
+      "cas_number": "541-41-3",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "4.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 183,
+      "name_cn": "氰基丙烯酸乙酯",
+      "name_en": "Ethyl cyanoacrylate",
+      "cas_number": "7085-85-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.3",
+      "oel_15m_mg_m3": "1.5"
+    },
+    {
+      "index": 184,
+      "name_cn": "甲酸乙酯",
+      "name_en": "Ethyl formate",
+      "cas_number": "109-94-4",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "308",
+      "oel_15m_ppm": "150",
+      "oel_15m_mg_m3": "462"
+    },
+    {
+      "index": 185,
+      "name_cn": "环氧乙烷",
+      "name_en": "Ethylene oxide",
+      "cas_number": "75-21-8",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "9.2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 186,
+      "name_cn": "4-乙基吗啉",
+      "name_en": "4-Ethylmorpholine",
+      "cas_number": "100-74-3",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "24",
+      "oel_15m_ppm": "20",
+      "oel_15m_mg_m3": "96"
+    },
+    {
+      "index": 187,
+      "name_cn": "黑色金属铸造厂可吸入粉尘",
+      "name_en": "Ferrous foundry particulate inhalable dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 188,
+      "name_cn": "黑色金属铸造厂可吸入颗粒物",
+      "name_en": "Ferrous foundry particulate respirable dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 189,
+      "name_cn": "面粉粉尘",
+      "name_en": "Flour dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "30"
+    },
+    {
+      "index": 190,
+      "name_cn": "氟化物（无机物，以F计）",
+      "name_en": "Fluoride (inorganic as F)",
+      "cas_number": "16984-48-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 191,
+      "name_cn": "氟",
+      "name_en": "Fluorine",
+      "cas_number": "7782-41-4",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "1.6",
+      "oel_15m_ppm": "1",
+      "oel_15m_mg_m3": "1.6"
+    },
+    {
+      "index": 192,
+      "name_cn": "甲醛",
+      "name_en": "Formaldehyde",
+      "cas_number": "50-00-0",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "2.5",
+      "oel_15m_ppm": "2",
+      "oel_15m_mg_m3": "2.5"
+    },
+    {
+      "index": 193,
+      "name_cn": "甲酰胺",
+      "name_en": "Formamide",
+      "cas_number": "75-12-7",
+      "oel_8h_ppm": "20",
+      "oel_8h_mg_m3": "37",
+      "oel_15m_ppm": "30",
+      "oel_15m_mg_m3": "56"
+    },
+    {
+      "index": 194,
+      "name_cn": "甲酸",
+      "name_en": "Formic acid",
+      "cas_number": "64-18-6",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "9.6",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 195,
+      "name_cn": "2-糠醛（糠醛）",
+      "name_en": "2-Furaldehyde (furfural)",
+      "cas_number": "98-01-1",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "8",
+      "oel_15m_ppm": "5",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 196,
+      "name_cn": "锗烷",
+      "name_en": "Germane",
+      "cas_number": "7782-65-2",
+      "oel_8h_ppm": "0.2",
+      "oel_8h_mg_m3": "0.64",
+      "oel_15m_ppm": "0.6",
+      "oel_15m_mg_m3": "1.9"
+    },
+    {
+      "index": 197,
+      "name_cn": "戊二醛",
+      "name_en": "Glutaraldehyde",
+      "cas_number": "111-30-8",
+      "oel_8h_ppm": "0.05",
+      "oel_8h_mg_m3": "0.2",
+      "oel_15m_ppm": "0.05",
+      "oel_15m_mg_m3": "0.2"
+    },
+    {
+      "index": 198,
+      "name_cn": "甘油，雾状",
+      "name_en": "Glycerol, mist",
+      "cas_number": "56-81-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 199,
+      "name_cn": "谷物粉尘",
+      "name_en": "Grain dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 200,
+      "name_cn": "石墨可吸入粉尘",
+      "name_en": "Graphite inhalable dust",
+      "cas_number": "7440-44-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 201,
+      "name_cn": "石墨可吸入颗粒物",
+      "name_en": "Graphite respirable",
+      "cas_number": "7440-44-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 202,
+      "name_cn": "石膏可吸入粉尘",
+      "name_en": "Gypsum inhalable dust",
+      "cas_number": "10101-41-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 203,
+      "name_cn": "石膏可吸入颗粒物",
+      "name_en": "Gypsum respirable",
+      "cas_number": "10101-41-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 204,
+      "name_cn": "卤代铂化合物（铂原子直接与卤化物基团配位的络合物）（以Pt计）",
+      "name_en": "Halogeno-platinum compounds (complex co-ordination compounds in which the platinum atom is directly co-ordinated to halide groups) (as Pt)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.002",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 205,
+      "name_cn": "氟烷",
+      "name_en": "Halothane",
+      "cas_number": "151-67-7",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "82",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 206,
+      "name_cn": "硬木粉尘",
+      "name_en": "Hardwood dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 207,
+      "name_cn": "正庚烷",
+      "name_en": "n-Heptane",
+      "cas_number": "142-82-5",
+      "oel_8h_ppm": "500",
+      "oel_8h_mg_m3": "2085",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 208,
+      "name_cn": "庚烷-2-酮",
+      "name_en": "Heptan-2-one",
+      "cas_number": "110-43-0",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "237",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "475"
+    },
+    {
+      "index": 209,
+      "name_cn": "庚烷-3-酮",
+      "name_en": "Heptan-3-one",
+      "cas_number": "106-35-4",
+      "oel_8h_ppm": "35",
+      "oel_8h_mg_m3": "166",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "475"
+    },
+    {
+      "index": 210,
+      "name_cn": "正己烷",
+      "name_en": "n-Hexane",
+      "cas_number": "110-54-3",
+      "oel_8h_ppm": "20",
+      "oel_8h_mg_m3": "72",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 211,
+      "name_cn": "1,6-己内酰胺粉尘",
+      "name_en": "1,6-Hexanolactam dust only",
+      "cas_number": "105-60-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "3"
+    },
+    {
+      "index": 212,
+      "name_cn": "1,6-己内酰胺粉尘和蒸气",
+      "name_en": "1,6-Hexanolactam dust and vapour",
+      "cas_number": "105-60-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 213,
+      "name_cn": "己烷-2-酮",
+      "name_en": "Hexan-2-one",
+      "cas_number": "591-78-6",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "21",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 214,
+      "name_cn": "肼",
+      "name_en": "Hydrazine",
+      "cas_number": "302-01-2",
+      "oel_8h_ppm": "0.02",
+      "oel_8h_mg_m3": "0.03",
+      "oel_15m_ppm": "0.1",
+      "oel_15m_mg_m3": "0.13"
+    },
+    {
+      "index": 215,
+      "name_cn": "溴化氢",
+      "name_en": "Hydrogen bromide",
+      "cas_number": "10035-10-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "3",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 216,
+      "name_cn": "氯化氢（气体和气溶胶）",
+      "name_en": "Hydrogen chloride (gas and aerosol mists)",
+      "cas_number": "7647-01-0",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "5",
+      "oel_15m_mg_m3": "8"
+    },
+    {
+      "index": 217,
+      "name_cn": "氰化氢",
+      "name_en": "Hydrogen cyanide",
+      "cas_number": "74-90-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "11"
+    },
+    {
+      "index": 218,
+      "name_cn": "氟化氢（以 F 计）",
+      "name_en": "Hydrogen fluoride (as F)",
+      "cas_number": "7664-39-3",
+      "oel_8h_ppm": "1.8",
+      "oel_8h_mg_m3": "1.5",
+      "oel_15m_ppm": "3",
+      "oel_15m_mg_m3": "2.5"
+    },
+    {
+      "index": 219,
+      "name_cn": "过氧化氢",
+      "name_en": "Hydrogen peroxide",
+      "cas_number": "7722-84-1",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "1.4",
+      "oel_15m_ppm": "2",
+      "oel_15m_mg_m3": "2.8"
+    },
+    {
+      "index": 220,
+      "name_cn": "硫化氢",
+      "name_en": "Hydrogen sulphide",
+      "cas_number": "6/4/7783",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "7",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "14"
+    },
+    {
+      "index": 221,
+      "name_cn": "对苯二酚",
+      "name_en": "Hydroquinone",
+      "cas_number": "123-31-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 222,
+      "name_cn": "4-羟基-4-甲基戊-2-酮",
+      "name_en": "4-Hydroxy-4-methylpentan-2-one",
+      "cas_number": "123-42-2",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "241",
+      "oel_15m_ppm": "75",
+      "oel_15m_mg_m3": "362"
+    },
+    {
+      "index": 223,
+      "name_cn": "丙烯酸-2-羟丙酯",
+      "name_en": "2-Hydroxypropyl acrylate",
+      "cas_number": "999-61-1",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "2.7",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 224,
+      "name_cn": "2,2’-亚氨基二乙胺",
+      "name_en": "2,2’-Iminodi(ethylamine)",
+      "cas_number": "111-40-0",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "4.3",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 225,
+      "name_cn": "茚",
+      "name_en": "Indene",
+      "cas_number": "95-13-6",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "48",
+      "oel_15m_ppm": "15",
+      "oel_15m_mg_m3": "72"
+    },
+    {
+      "index": 226,
+      "name_cn": "铟及其化合物（以 In 计）",
+      "name_en": "Indium and compounds (as In)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "0",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 227,
+      "name_cn": "碘",
+      "name_en": "Iodine",
+      "cas_number": "7553-56-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.1",
+      "oel_15m_mg_m3": "1.1"
+    },
+    {
+      "index": 228,
+      "name_cn": "碘仿",
+      "name_en": "Iodoform",
+      "cas_number": "75-47-8",
+      "oel_8h_ppm": "0.6",
+      "oel_8h_mg_m3": "9.8",
+      "oel_15m_ppm": "1",
+      "oel_15m_mg_m3": "16"
+    },
+    {
+      "index": 229,
+      "name_cn": "碘甲烷",
+      "name_en": "Iodomethane",
+      "cas_number": "74-88-4",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "12",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 230,
+      "name_cn": "氧化铁烟尘（以 Fe 计）",
+      "name_en": "Iron oxide, fume (as Fe)",
+      "cas_number": "1309-37-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 231,
+      "name_cn": "铁盐（以 Fe 计）",
+      "name_en": "Iron salts (as Fe)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 232,
+      "name_cn": "乙酸异丁酯",
+      "name_en": "Isobutyl acetate",
+      "cas_number": "110-19-0",
+      "oel_8h_ppm": "150",
+      "oel_8h_mg_m3": "724",
+      "oel_15m_ppm": "187",
+      "oel_15m_mg_m3": "903"
+    },
+    {
+      "index": 233,
+      "name_cn": "所有异氰酸酯（以 –NCO 计），但不包括异氰酸甲酯",
+      "name_en": "Isocyanates, all (as –NCO) Except methyl isocyanate",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.02",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.07"
+    },
+    {
+      "index": 234,
+      "name_cn": "异氟烷",
+      "name_en": "Isoflurane",
+      "cas_number": "26675-46-7",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "383",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 235,
+      "name_cn": "异辛醇",
+      "name_en": "Isoocytl alcohol",
+      "cas_number": "26952-21-6",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "271",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 236,
+      "name_cn": "异戊烷",
+      "name_en": "Isopentane",
+      "cas_number": "78-78-4",
+      "oel_8h_ppm": "600",
+      "oel_8h_mg_m3": "1800",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 237,
+      "name_cn": "乙酸异丙酯",
+      "name_en": "Isopropyl acetate",
+      "cas_number": "108-21-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "200",
+      "oel_15m_mg_m3": "849"
+    },
+    {
+      "index": 238,
+      "name_cn": "氯甲酸异丙酯",
+      "name_en": "Isopropyl chloroformate",
+      "cas_number": "108-23-6",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "5.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 239,
+      "name_cn": "高岭土，可吸入粉尘",
+      "name_en": "Kaolin, respirable dust",
+      "cas_number": "1332-58-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 240,
+      "name_cn": "乙烯酮",
+      "name_en": "Ketene",
+      "cas_number": "463-51-4",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "0.87",
+      "oel_15m_ppm": "1.5",
+      "oel_15m_mg_m3": "2.6"
+    },
+    {
+      "index": 241,
+      "name_cn": "石灰石，总可吸入颗粒物",
+      "name_en": "Limestone total inhalable",
+      "cas_number": "1317-65-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 242,
+      "name_cn": "石灰石，可吸入粉尘",
+      "name_en": "Limestone respirable",
+      "cas_number": "1317-65-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 243,
+      "name_cn": "液化石油气",
+      "name_en": "Liquefied petroleum gas",
+      "cas_number": "68476-85-7",
+      "oel_8h_ppm": "1000",
+      "oel_8h_mg_m3": "1750",
+      "oel_15m_ppm": "1250",
+      "oel_15m_mg_m3": "2180"
+    },
+    {
+      "index": 244,
+      "name_cn": "氢化锂",
+      "name_en": "Lithium hydride",
+      "cas_number": "7580-67-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.025",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 245,
+      "name_cn": "氢氧化锂",
+      "name_en": "Lithium hydroxide",
+      "cas_number": "1310-65-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "1"
+    },
+    {
+      "index": 246,
+      "name_cn": "菱镁矿，可吸入粉尘",
+      "name_en": "Magnesite inhalable dust",
+      "cas_number": "546-93-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 247,
+      "name_cn": "菱镁矿，可吸入粉尘",
+      "name_en": "Magnesite respirable dust",
+      "cas_number": "546-93-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 248,
+      "name_cn": "氧化镁（以 Mg 计），可吸入粉尘",
+      "name_en": "Magnesium oxide (as Mg) inhalable dust",
+      "cas_number": "1309-48-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 249,
+      "name_cn": "氧化镁（以 Mg 计），烟尘和可吸入粉尘",
+      "name_en": "Magnesium oxide (as Mg) fume and respirable dust",
+      "cas_number": "1309-48-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 250,
+      "name_cn": "马拉硫磷 (ISO)",
+      "name_en": "Malathion (ISO)",
+      "cas_number": "121-75-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 251,
+      "name_cn": "马来酸酐",
+      "name_en": "Maleic anhydride",
+      "cas_number": "108-31-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "3"
+    },
+    {
+      "index": 252,
+      "name_cn": "锰及其无机化合物（以 Mn 计）",
+      "name_en": "Manganese and its inorganic compounds (as Mn)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 253,
+      "name_cn": "大理石，总可吸入颗粒物",
+      "name_en": "Marble total inhalable",
+      "cas_number": "1317-65-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 254,
+      "name_cn": "大理石，可吸入粉尘",
+      "name_en": "Marble respirable",
+      "cas_number": "1317-65-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 255,
+      "name_cn": "巯基乙酸",
+      "name_en": "Mercaptoacetic acid",
+      "cas_number": "68-11-1",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "3.8",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 256,
+      "name_cn": "汞和二价无机化合物，包括氧化汞和氯化汞（以汞计）",
+      "name_en": "Mercury and divalent inorganic compounds including mercuric oxide and mercuric chloride (measured as mercury)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.02",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 257,
+      "name_cn": "甲基丙烯酸",
+      "name_en": "Methacrylic acid",
+      "cas_number": "79-41-4",
+      "oel_8h_ppm": "20",
+      "oel_8h_mg_m3": "72",
+      "oel_15m_ppm": "40",
+      "oel_15m_mg_m3": "143"
+    },
+    {
+      "index": 258,
+      "name_cn": "甲基丙烯腈",
+      "name_en": "Methacrylonitrile",
+      "cas_number": "126-98-7",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "2.8",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 259,
+      "name_cn": "甲硫醇",
+      "name_en": "Methanethiol",
+      "cas_number": "74-93-1",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 260,
+      "name_cn": "甲醇",
+      "name_en": "Methanol",
+      "cas_number": "67-56-1",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "266",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "333"
+    },
+    {
+      "index": 261,
+      "name_cn": "2-甲氧基乙醇",
+      "name_en": "2-Methoxyethanol",
+      "cas_number": "109-86-4",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "3",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 262,
+      "name_cn": "2-(2-甲氧基乙氧基)乙醇",
+      "name_en": "2-(2-Methoxyethoxy)ethanol",
+      "cas_number": "111-77-3",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "50.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 263,
+      "name_cn": "乙酸-2-甲氧基乙酯",
+      "name_en": "2-Methoxyethyl acetate",
+      "cas_number": "110-49-6",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 264,
+      "name_cn": "(2-甲氧基甲基乙氧基)丙醇",
+      "name_en": "(2-methoxymethylethoxy)propanol",
+      "cas_number": "34590-94-8",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "308",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 265,
+      "name_cn": "1-甲氧基丙-2-醇",
+      "name_en": "1-Methoxypropan-2-ol",
+      "cas_number": "107-98-2",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "375",
+      "oel_15m_ppm": "150",
+      "oel_15m_mg_m3": "560"
+    },
+    {
+      "index": 266,
+      "name_cn": "乙酸-1-甲氧基丙酯",
+      "name_en": "1-Methoxypropyl acetate",
+      "cas_number": "108-65-6",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "274",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "548"
+    },
+    {
+      "index": 267,
+      "name_cn": "乙酸甲酯",
+      "name_en": "Methyl acetate",
+      "cas_number": "79-20-9",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "616",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "770"
+    },
+    {
+      "index": 268,
+      "name_cn": "丙烯酸甲酯",
+      "name_en": "Methyl acrylate",
+      "cas_number": "96-33-3",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "18",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "36"
+    },
+    {
+      "index": 269,
+      "name_cn": "3-甲基丁-1-醇",
+      "name_en": "3-Methylbutan-1-ol",
+      "cas_number": "123-51-3",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "366",
+      "oel_15m_ppm": "125",
+      "oel_15m_mg_m3": "458"
+    },
+    {
+      "index": 270,
+      "name_cn": "氰基丙烯酸甲酯",
+      "name_en": "Methyl cyanoacrylate",
+      "cas_number": "137-05-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.3",
+      "oel_15m_mg_m3": "1.4"
+    },
+    {
+      "index": 271,
+      "name_cn": "4,4’-亚甲基二苯胺",
+      "name_en": "4,4’-Methylenedianiline",
+      "cas_number": "101-77-9",
+      "oel_8h_ppm": "0.01",
+      "oel_8h_mg_m3": "0.08",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 272,
+      "name_cn": "甲基乙基酮过氧化物 (MEKP)",
+      "name_en": "Methyl ethyl ketone peroxides (MEKP)",
+      "cas_number": "1338-23-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.2",
+      "oel_15m_mg_m3": "1.5"
+    },
+    {
+      "index": 273,
+      "name_cn": "甲基甲基丙烯酸酯",
+      "name_en": "Methyl methacrylate",
+      "cas_number": "80-62-6",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "208",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "416"
+    },
+    {
+      "index": 274,
+      "name_cn": "2-甲基环己酮",
+      "name_en": "2-Methylcyclohexanone",
+      "cas_number": "583-60-8",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "233",
+      "oel_15m_ppm": "75",
+      "oel_15m_mg_m3": "350"
+    },
+    {
+      "index": 275,
+      "name_cn": "甲基环己醇",
+      "name_en": "Methylcyclohexanol",
+      "cas_number": "25639-42-3",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "237",
+      "oel_15m_ppm": "75",
+      "oel_15m_mg_m3": "356"
+    },
+    {
+      "index": 276,
+      "name_cn": "异氰酸甲酯（以 –NCO 计）",
+      "name_en": "Methyl isocyanate (as –NCO)",
+      "cas_number": "624-83-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.02",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 277,
+      "name_cn": "N-甲基苯胺",
+      "name_en": "N-Methylaniline",
+      "cas_number": "100-61-8",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "2.2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 278,
+      "name_cn": "N-甲基-2-吡咯烷酮",
+      "name_en": "n-Methyl-2-pyrrolidone",
+      "cas_number": "872-50-4",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "40",
+      "oel_15m_ppm": "20",
+      "oel_15m_mg_m3": "80"
+    },
+    {
+      "index": 279,
+      "name_cn": "5-甲基庚烷-3-酮",
+      "name_en": "5-Methylheptan-3-one",
+      "cas_number": "541-85-5",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "53",
+      "oel_15m_ppm": "20",
+      "oel_15m_mg_m3": "107"
+    },
+    {
+      "index": 280,
+      "name_cn": "5-甲基己烷-2-酮",
+      "name_en": "5-Methylhexan-2-one",
+      "cas_number": "110-12-3",
+      "oel_8h_ppm": "20",
+      "oel_8h_mg_m3": "95",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "475"
+    },
+    {
+      "index": 281,
+      "name_cn": "2-甲基戊烷-2,4-二醇",
+      "name_en": "2-Methylpentane-2,4-diol",
+      "cas_number": "107-41-5",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "123",
+      "oel_15m_ppm": "25",
+      "oel_15m_mg_m3": "123"
+    },
+    {
+      "index": 282,
+      "name_cn": "4-甲基戊烷-2-醇",
+      "name_en": "4-Methylpentan-2-ol",
+      "cas_number": "108-11-2",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "106",
+      "oel_15m_ppm": "40",
+      "oel_15m_mg_m3": "170"
+    },
+    {
+      "index": 283,
+      "name_cn": "4-甲基戊烷-2-酮",
+      "name_en": "4-Methylpentan-2-one",
+      "cas_number": "108-10-1",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "208",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "416"
+    },
+    {
+      "index": 284,
+      "name_cn": "2-甲基丙烷-1-醇",
+      "name_en": "2-Methylpropan-1-ol",
+      "cas_number": "78-83-1",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "154",
+      "oel_15m_ppm": "75",
+      "oel_15m_mg_m3": "231"
+    },
+    {
+      "index": 285,
+      "name_cn": "2-甲基丙烷-2-醇",
+      "name_en": "2-Methylpropan-2-ol",
+      "cas_number": "75-65-0",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "308",
+      "oel_15m_ppm": "150",
+      "oel_15m_mg_m3": "462"
+    },
+    {
+      "index": 286,
+      "name_cn": "甲基叔丁基醚",
+      "name_en": "Methyl-tert-butyl-ether",
+      "cas_number": "1634-04-4",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "183.5",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "367"
+    },
+    {
+      "index": 287,
+      "name_cn": "云母（总可吸入颗粒物）",
+      "name_en": "Mica total inhalable",
+      "cas_number": "12001-26-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 288,
+      "name_cn": "云母（可吸入颗粒物）",
+      "name_en": "Mica respirable",
+      "cas_number": "12001-26-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.8",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 289,
+      "name_cn": "人造矿物纤维（MMMF）（耐火陶瓷纤维和特殊用途纤维除外）",
+      "name_en": "MMMF (Machine-made mineral fibre) (except for refractory ceramic fibres and special purpose fibres)",
+      "cas_number": "",
+      "oel_8h_ppm": "5mg.m3 and 2 fibres/millilitre",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 290,
+      "name_cn": "钼化合物（以 Mo 计），可溶性化合物",
+      "name_en": "Molybdenum compounds (as Mo) soluble compounds",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 291,
+      "name_cn": "钼化合物（以 Mo 计），不溶性化合物",
+      "name_en": "Molybdenum compounds (as Mo)insoluble compounds",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 292,
+      "name_cn": "一氯乙酸",
+      "name_en": "Monochloroacetic acid",
+      "cas_number": "79-11-8",
+      "oel_8h_ppm": "0.3",
+      "oel_8h_mg_m3": "1.2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 293,
+      "name_cn": "吗啉",
+      "name_en": "Morpholine",
+      "cas_number": "110-91-8",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "36",
+      "oel_15m_ppm": "20",
+      "oel_15m_mg_m3": "72"
+    },
+    {
+      "index": 294,
+      "name_cn": "新戊烷",
+      "name_en": "Neopentane",
+      "cas_number": "463-82-1",
+      "oel_8h_ppm": "600",
+      "oel_8h_mg_m3": "1800",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 295,
+      "name_cn": "镍及其无机化合物（四羰基镍除外）：水溶性镍化合物（以 Ni 计）",
+      "name_en": "Nickel and its inorganic compounds (except nickel tetracarbonyl): water-soluble nickel compounds (as Ni) nickel and water-",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 296,
+      "name_cn": "镍及其无机化合物（四羰基镍除外）：不溶性镍化合物（以 Ni 计）",
+      "name_en": "Nickel and its inorganic compounds (except nickel tetracarbonyl): insoluble nickel compounds (as Ni)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 297,
+      "name_cn": "尼古丁",
+      "name_en": "Nicotine",
+      "cas_number": "54-11-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "1.5"
+    },
+    {
+      "index": 298,
+      "name_cn": "硝酸",
+      "name_en": "Nitric acid",
+      "cas_number": "7697-37-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "1",
+      "oel_15m_mg_m3": "2.6"
+    },
+    {
+      "index": 299,
+      "name_cn": "硝基苯",
+      "name_en": "Nitrobenzene",
+      "cas_number": "98-95-3",
+      "oel_8h_ppm": "0.2",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 300,
+      "name_cn": "硝基甲烷",
+      "name_en": "Nitromethane",
+      "cas_number": "75-52-5",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "254",
+      "oel_15m_ppm": "150",
+      "oel_15m_mg_m3": "381"
+    },
+    {
+      "index": 301,
+      "name_cn": "2-硝基丙烷",
+      "name_en": "2-Nitropropane",
+      "cas_number": "79-46-9",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "19",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 302,
+      "name_cn": "一氧化二氮",
+      "name_en": "Nitrous oxide",
+      "cas_number": "10024-97-2",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "183",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 303,
+      "name_cn": "正磷酸",
+      "name_en": "Orthophosphoric acid",
+      "cas_number": "7664-38-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 304,
+      "name_cn": "四氧化锇（以 Os 计）",
+      "name_en": "Osmium tetraoxide (as Os)",
+      "cas_number": "20816-12-0",
+      "oel_8h_ppm": "0.0002",
+      "oel_8h_mg_m3": "0.002",
+      "oel_15m_ppm": "0.0006",
+      "oel_15m_mg_m3": "0.006"
+    },
+    {
+      "index": 305,
+      "name_cn": "草酸",
+      "name_en": "Oxalic acid",
+      "cas_number": "144-62-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 306,
+      "name_cn": "2,2’-二羟基二乙醚",
+      "name_en": "2,2’-Oxydiethanol",
+      "cas_number": "111-46-6",
+      "oel_8h_ppm": "23",
+      "oel_8h_mg_m3": "101",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 307,
+      "name_cn": "臭氧",
+      "name_en": "Ozone",
+      "cas_number": "10028-15-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.2",
+      "oel_15m_mg_m3": "0.4"
+    },
+    {
+      "index": 308,
+      "name_cn": "对乙酰氨基酚，可吸入粉尘",
+      "name_en": "Paracetamol, inhalable dust",
+      "cas_number": "103-90-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 309,
+      "name_cn": "石蜡，烟雾",
+      "name_en": "Paraffin wax, fume",
+      "cas_number": "8002-74-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "6"
+    },
+    {
+      "index": 310,
+      "name_cn": "百草枯二氯化物（ISO），可吸入粉尘",
+      "name_en": "Paraquat dichloride (ISO), respirable dust",
+      "cas_number": "1910-42-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.08",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 311,
+      "name_cn": "五羰基铁（以 Fe 计）",
+      "name_en": "Pentacarbonyliron (as Fe)",
+      "cas_number": "13463-40-6",
+      "oel_8h_ppm": "0.01",
+      "oel_8h_mg_m3": "0.08",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 312,
+      "name_cn": "季戊四醇，可吸入粉尘",
+      "name_en": "Pentaerythritol inhalable dust",
+      "cas_number": "115-77-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 313,
+      "name_cn": "季戊四醇，可吸入颗粒物",
+      "name_en": "Pentaerythritol respirable dust",
+      "cas_number": "115-77-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 314,
+      "name_cn": "戊烷-2-酮",
+      "name_en": "Pentan-2-one",
+      "cas_number": "107-87-9",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "716",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "895"
+    },
+    {
+      "index": 315,
+      "name_cn": "戊烷-3-酮",
+      "name_en": "Pentan-3-one",
+      "cas_number": "96-22-0",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "716",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "895"
+    },
+    {
+      "index": 316,
+      "name_cn": "戊烷",
+      "name_en": "Pentane",
+      "cas_number": "109-66-0",
+      "oel_8h_ppm": "600",
+      "oel_8h_mg_m3": "1800",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 317,
+      "name_cn": "乙酸戊酯（所有异构体）",
+      "name_en": "Pentyl acetates (all isomers)",
+      "cas_number": "",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "270",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "541"
+    },
+    {
+      "index": 318,
+      "name_cn": "2-苯基丙烯",
+      "name_en": "2-Phenylpropene",
+      "cas_number": "98-83-9",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "246",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "491"
+    },
+    {
+      "index": 319,
+      "name_cn": "苯酚",
+      "name_en": "Phenol",
+      "cas_number": "108-95-2",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "7.8",
+      "oel_15m_ppm": "4",
+      "oel_15m_mg_m3": "16"
+    },
+    {
+      "index": 320,
+      "name_cn": "对苯二胺",
+      "name_en": "p-Phenylenediamine",
+      "cas_number": "106-50-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 321,
+      "name_cn": "福拉特（ISO）",
+      "name_en": "Phorate (ISO)",
+      "cas_number": "298-02-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.05",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.2"
+    },
+    {
+      "index": 322,
+      "name_cn": "光气",
+      "name_en": "Phosgene",
+      "cas_number": "75-44-5",
+      "oel_8h_ppm": "0.02",
+      "oel_8h_mg_m3": "0.08",
+      "oel_15m_ppm": "0.06",
+      "oel_15m_mg_m3": "0.25"
+    },
+    {
+      "index": 323,
+      "name_cn": "磷化氢",
+      "name_en": "Phosphine",
+      "cas_number": "7803-51-2",
+      "oel_8h_ppm": "0.1",
+      "oel_8h_mg_m3": "0.14",
+      "oel_15m_ppm": "0.2",
+      "oel_15m_mg_m3": "0.28"
+    },
+    {
+      "index": 324,
+      "name_cn": "五氯化磷",
+      "name_en": "Phosphorus pentachloride",
+      "cas_number": "10026-13-8",
+      "oel_8h_ppm": "0.1",
+      "oel_8h_mg_m3": "0.87",
+      "oel_15m_ppm": "0.2",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 325,
+      "name_cn": "三氯化磷",
+      "name_en": "Phosphorus trichloride",
+      "cas_number": "12/2/7719",
+      "oel_8h_ppm": "0.2",
+      "oel_8h_mg_m3": "1.1",
+      "oel_15m_ppm": "0.5",
+      "oel_15m_mg_m3": "2.9"
+    },
+    {
+      "index": 326,
+      "name_cn": "黄磷",
+      "name_en": "Phosphorus, yellow",
+      "cas_number": "7723-14-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 327,
+      "name_cn": "三氯氧磷",
+      "name_en": "Phosphoryl trichloride",
+      "cas_number": "10025-87-3",
+      "oel_8h_ppm": "0.2",
+      "oel_8h_mg_m3": "1.3",
+      "oel_15m_ppm": "0.6",
+      "oel_15m_mg_m3": "3.8"
+    },
+    {
+      "index": 328,
+      "name_cn": "邻苯二甲酸酐",
+      "name_en": "Phthalic anhydride",
+      "cas_number": "85-44-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "12"
+    },
+    {
+      "index": 329,
+      "name_cn": "吡虫啉 (ISO)",
+      "name_en": "Picloram (ISO)",
+      "cas_number": "2/1/1918",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 330,
+      "name_cn": "苦味酸",
+      "name_en": "Picric acid",
+      "cas_number": "88-89-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 331,
+      "name_cn": "哌嗪",
+      "name_en": "Piperazine",
+      "cas_number": "110-85-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 332,
+      "name_cn": "二盐酸哌嗪",
+      "name_en": "Piperazine dihydrochloride",
+      "cas_number": "142-64-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 333,
+      "name_cn": "哌啶",
+      "name_en": "Piperidine",
+      "cas_number": "110-89-4",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "3.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 334,
+      "name_cn": "石膏可吸入粉尘",
+      "name_en": "Plaster of Paris inhalable dust",
+      "cas_number": "26499-65-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 335,
+      "name_cn": "石膏可吸入性粉尘",
+      "name_en": "Plaster of Paris respirable dust",
+      "cas_number": "26499-65-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 336,
+      "name_cn": "可溶性铂化合物（某些卤代铂化合物除外）（以 Pt 计）铂金属",
+      "name_en": "Platinum compounds, soluble(except certain halogeno-Pt compounds) (as Pt)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.002",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 337,
+      "name_cn": "多氯联苯 (PCB)",
+      "name_en": "Platinum metal",
+      "cas_number": "6/4/7440",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 338,
+      "name_cn": "聚氯乙烯可吸入粉尘",
+      "name_en": "Polychlorinated biphenyls (PCB)",
+      "cas_number": "1336-36-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 339,
+      "name_cn": "聚氯乙烯可吸入性粉尘",
+      "name_en": "Polyvinyl chloride inhalable dust",
+      "cas_number": "9002-86-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 340,
+      "name_cn": "",
+      "name_en": "Polyvinyl chloride respirable dust",
+      "cas_number": "9002-86-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 341,
+      "name_cn": "波特兰水泥可吸入粉尘",
+      "name_en": "",
+      "cas_number": "65997-15-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 342,
+      "name_cn": "波特兰水泥可吸入性粉尘",
+      "name_en": "Portland cement inhalable dust",
+      "cas_number": "65997-15-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 343,
+      "name_cn": "氢氧化钾",
+      "name_en": "Portland cement respirable dust",
+      "cas_number": "65997-15-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 344,
+      "name_cn": "丙烷-1,2-二醇总蒸汽和颗粒物",
+      "name_en": "Potassium hydroxide",
+      "cas_number": "1310-58-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 345,
+      "name_cn": "丙烷-1,2-二醇总颗粒物",
+      "name_en": "Propane-1,2-diol total vapour and particulates",
+      "cas_number": "57-55-6",
+      "oel_8h_ppm": "150",
+      "oel_8h_mg_m3": "474",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 346,
+      "name_cn": "丙-1-醇",
+      "name_en": "Propane-1,2-diol total particulates",
+      "cas_number": "57-55-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 347,
+      "name_cn": "丙-2-醇",
+      "name_en": "Propan-1-ol",
+      "cas_number": "71-23-8",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "500",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "625"
+    },
+    {
+      "index": 348,
+      "name_cn": "丙酸",
+      "name_en": "Propan-2-ol",
+      "cas_number": "67-63-0",
+      "oel_8h_ppm": "400",
+      "oel_8h_mg_m3": "999",
+      "oel_15m_ppm": "500",
+      "oel_15m_mg_m3": "1250"
+    },
+    {
+      "index": 349,
+      "name_cn": "丙氧威 (ISO)",
+      "name_en": "Propionic acid",
+      "cas_number": "79-09-4",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "31",
+      "oel_15m_ppm": "15",
+      "oel_15m_mg_m3": "46"
+    },
+    {
+      "index": 350,
+      "name_cn": "普萘洛尔",
+      "name_en": "Propoxur (ISO)",
+      "cas_number": "114-26-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 351,
+      "name_cn": "乙酸正丙酯",
+      "name_en": "Propranolol",
+      "cas_number": "525-66-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "6"
+    },
+    {
+      "index": 352,
+      "name_cn": "环氧丙烷",
+      "name_en": "n-Propyl acetate",
+      "cas_number": "109-60-4",
+      "oel_8h_ppm": "200",
+      "oel_8h_mg_m3": "849",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "1060"
+    },
+    {
+      "index": 353,
+      "name_cn": "丙-2-炔-1-醇",
+      "name_en": "Propylene oxide",
+      "cas_number": "75-56-9",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "12",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 354,
+      "name_cn": "粉煤灰可吸入粉尘",
+      "name_en": "Prop-2-yn-1-ol",
+      "cas_number": "107-19-7",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "2.3",
+      "oel_15m_ppm": "3",
+      "oel_15m_mg_m3": "7"
+    },
+    {
+      "index": 355,
+      "name_cn": "粉煤灰可吸入性粉尘",
+      "name_en": "Pulverised fuel ash inhalable dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 356,
+      "name_cn": "除虫菊（已去除致敏内酯）",
+      "name_en": "Pulverised fuel ash respirable dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 357,
+      "name_cn": "吡啶",
+      "name_en": "Pyrethrum (purified of sensitising lactones)",
+      "cas_number": "8003-34-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 358,
+      "name_cn": "2-吡啶胺",
+      "name_en": "Pyridine",
+      "cas_number": "110-86-1",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "16",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "33"
+    },
+    {
+      "index": 359,
+      "name_cn": "邻苯二酚",
+      "name_en": "2-Pyridylamine",
+      "cas_number": "504-29-0",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "2",
+      "oel_15m_mg_m3": "7.8"
+    },
+    {
+      "index": 360,
+      "name_cn": "耐火陶瓷纤维和特种纤维",
+      "name_en": "Pyrocatechol",
+      "cas_number": "102-80-9",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "23",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 361,
+      "name_cn": "间苯二酚",
+      "name_en": "Refractory ceramic fibres and special purpose fibres",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1 fibre/millilitre or 5mg.m3",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 362,
+      "name_cn": "铑（以 Rh 计）金属烟尘和粉尘",
+      "name_en": "Resorcinol",
+      "cas_number": "108-46-3",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "46",
+      "oel_15m_ppm": "20",
+      "oel_15m_mg_m3": "92"
+    },
+    {
+      "index": 363,
+      "name_cn": "铑（以 Rh 计）可溶性盐",
+      "name_en": "Rhodium (as Rh) metal fume and dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.1",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 364,
+      "name_cn": "松香基焊剂烟尘",
+      "name_en": "Rhodium (as Rh) soluble salts",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.001",
+      "oel_15m_mg_m3": "0.003"
+    },
+    {
+      "index": 365,
+      "name_cn": "鱼藤酮 (ISO)",
+      "name_en": "Rosin-based solder flux fume",
+      "cas_number": "9/7/8050",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.05",
+      "oel_15m_mg_m3": "0.15"
+    },
+    {
+      "index": 366,
+      "name_cn": "氧化铁红总可吸入粉尘",
+      "name_en": "Rotenone (ISO)",
+      "cas_number": "83-79-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "5",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 367,
+      "name_cn": "氧化铁红可吸入性粉尘",
+      "name_en": "Rouge total inhalable",
+      "cas_number": "1309-37-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 368,
+      "name_cn": "橡胶烟尘",
+      "name_en": "Rouge respirable",
+      "cas_number": "1309-37-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "4",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 369,
+      "name_cn": "橡胶加工粉尘",
+      "name_en": "Rubber fume",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.6",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 370,
+      "name_cn": "硒及其化合物，氢化硒除外（以 Se 计）",
+      "name_en": "Rubber process dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "6",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 371,
+      "name_cn": "硅烷",
+      "name_en": "Selenium and compounds, except hydrogen selenide (as Se)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.1",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 372,
+      "name_cn": "无定形二氧化硅可吸入粉尘",
+      "name_en": "Silane",
+      "cas_number": "7803-62-5",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.67",
+      "oel_15m_mg_m3": "1.3"
+    },
+    {
+      "index": 373,
+      "name_cn": "无定形二氧化硅可吸入性粉尘",
+      "name_en": "Silica, amorphous inhalable dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "6",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 374,
+      "name_cn": "可吸入结晶二氧化硅",
+      "name_en": "Silica, amorphous respirable dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "2.4",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 375,
+      "name_cn": "熔融二氧化硅可吸入性粉尘粉尘",
+      "name_en": "Silica, respirable crystalline",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.1",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 376,
+      "name_cn": "可吸入性硅尘",
+      "name_en": "Silica, fused respirable dust",
+      "cas_number": "60676-86-0",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.08",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 377,
+      "name_cn": "可吸入性二氧化硅粉尘",
+      "name_en": "Silicon inhalable dust",
+      "cas_number": "7440-21-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 378,
+      "name_cn": "碳化硅（非晶须）总可吸入颗粒物",
+      "name_en": "Silicon respirable dust",
+      "cas_number": "7440-21-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "4",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 379,
+      "name_cn": "碳化硅（非晶须）可吸入颗粒物",
+      "name_en": "Silicon carbide (not whiskers) total inhalable",
+      "cas_number": "409-21-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 380,
+      "name_cn": "银（可溶性化合物，以 Ag 计）",
+      "name_en": "Silicon carbide (not whiskers) respirable",
+      "cas_number": "409-21-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "4",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 381,
+      "name_cn": "银（可溶性化合物，以 Ag 计） 金属银",
+      "name_en": "Silver (soluble compounds as Ag)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.01",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 382,
+      "name_cn": "叠氮化钠（以 NaN3 计）",
+      "name_en": "Silver (soluble compounds as Ag) Silver, metallic",
+      "cas_number": "7440-22-4",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 383,
+      "name_cn": "2-(2,4-二氯苯氧基)乙基硫酸钠",
+      "name_en": "Sodium azide (as NaN3)",
+      "cas_number": "26628-22-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 384,
+      "name_cn": "亚硫酸氢钠",
+      "name_en": "Sodium 2-(2,4-dichlorophenoxy)ethyl sulphate",
+      "cas_number": "136-78-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 385,
+      "name_cn": "氢氧化钠",
+      "name_en": "Sodium hydrogen sulphite",
+      "cas_number": "7631-90-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 386,
+      "name_cn": "氢氧化钠",
+      "name_en": "Sodium hydroxide",
+      "cas_number": "1310-73-2",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 387,
+      "name_cn": "淀粉总可吸入颗粒物",
+      "name_en": "Softwood dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 388,
+      "name_cn": "淀粉可吸入颗粒物",
+      "name_en": "Starch total inhalable",
+      "cas_number": "9005-25-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 389,
+      "name_cn": "苯乙烯",
+      "name_en": "Starch respirable",
+      "cas_number": "9005-25-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 390,
+      "name_cn": "枯草杆菌蛋白酶",
+      "name_en": "Styrene",
+      "cas_number": "100-42-5",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "430",
+      "oel_15m_ppm": "250",
+      "oel_15m_mg_m3": "1080"
+    },
+    {
+      "index": 391,
+      "name_cn": "蔗糖",
+      "name_en": "Subtilisins",
+      "cas_number": "1395-21-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.00004",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 392,
+      "name_cn": "硫代磷酸酯 (ISO)",
+      "name_en": "Sucrose",
+      "cas_number": "57-50-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 393,
+      "name_cn": "六氟化硫",
+      "name_en": "Sulfotep (ISO)",
+      "cas_number": "3689-24-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 394,
+      "name_cn": "硫酸（雾）",
+      "name_en": "Sulphur hexafluoride",
+      "cas_number": "2551-62-4",
+      "oel_8h_ppm": "1000",
+      "oel_8h_mg_m3": "6070",
+      "oel_15m_ppm": "1250",
+      "oel_15m_mg_m3": "7590"
+    },
+    {
+      "index": 395,
+      "name_cn": "二氟化硫酰",
+      "name_en": "Sulphuric acid (mist)",
+      "cas_number": "7664-93-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.05",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 396,
+      "name_cn": "滑石粉，可吸入粉尘",
+      "name_en": "Sulphuryl difluoride",
+      "cas_number": "2699-79-8",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "21",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "42"
+    },
+    {
+      "index": 397,
+      "name_cn": "钽",
+      "name_en": "Talc, respirable dust",
+      "cas_number": "14807-96-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 398,
+      "name_cn": "碲及其化合物，氢化碲除外（以 Te 计）",
+      "name_en": "Tantalum",
+      "cas_number": "7440-25-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 399,
+      "name_cn": "三联苯，所有异构体",
+      "name_en": "Tellurium and compounds, except hydrogen telluride (as Te)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 400,
+      "name_cn": "1,1,2,2-四溴乙烷",
+      "name_en": "Terphenyls, all isomers",
+      "cas_number": "26140-60-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.5",
+      "oel_15m_mg_m3": "4.8"
+    },
+    {
+      "index": 401,
+      "name_cn": "叔丁基甲基醚",
+      "name_en": "1,1,2,2-Tetrabromoethane",
+      "cas_number": "79-27-6",
+      "oel_8h_ppm": "0.5",
+      "oel_8h_mg_m3": "7.2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 402,
+      "name_cn": "四羰基镍（以 Ni 计）",
+      "name_en": "Tertiary-butyl-methyl-ether",
+      "cas_number": "1634-04-4",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "183.5",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "367"
+    },
+    {
+      "index": 403,
+      "name_cn": "四氯乙烯",
+      "name_en": "Tetracarbonylnickel (as Ni)",
+      "cas_number": "13463-39-3",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "0.1",
+      "oel_15m_mg_m3": "0.24"
+    },
+    {
+      "index": 404,
+      "name_cn": "1,1,1,2-四氟乙烷 (HFC 134a)",
+      "name_en": "Tetrachloroethylene",
+      "cas_number": "127-18-4",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "345",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "689"
+    },
+    {
+      "index": 405,
+      "name_cn": "四氢呋喃",
+      "name_en": "1,1,1,2-Tetrafluoroethane (HFC 134a)",
+      "cas_number": "811-97-2",
+      "oel_8h_ppm": "1000",
+      "oel_8h_mg_m3": "4240",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 406,
+      "name_cn": "焦磷酸四钠",
+      "name_en": "Tetrahydrofuran",
+      "cas_number": "109-99-9",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "150",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "300"
+    },
+    {
+      "index": 407,
+      "name_cn": "铊，可溶性化合物（以 Tl 计）",
+      "name_en": "Tetrasodium pyrophosphate",
+      "cas_number": "7722-88-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 408,
+      "name_cn": "亚硫酰氯",
+      "name_en": "Thallium, soluble compounds (as TI)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 409,
+      "name_cn": "锡无机化合物，SnH4 除外（以 Sn 计）",
+      "name_en": "Thionyl chloride",
+      "cas_number": "9/7/7719",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "1",
+      "oel_15m_mg_m3": "4.9"
+    },
+    {
+      "index": 410,
+      "name_cn": "锡有机化合物，环己基锡除外 (ISO)",
+      "name_en": "Tin compounds, inorganic except SnH4, (as Sn)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "2",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "4"
+    },
+    {
+      "index": 411,
+      "name_cn": "有机锡化合物，环己基锡除外（以 Sn 计）",
+      "name_en": "Tin compounds, organic, except Cyhexatin (ISO), (as Sn)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.2"
+    },
+    {
+      "index": 412,
+      "name_cn": "二氧化钛（总可吸入颗粒物）",
+      "name_en": "Titanium dioxide total inhalable",
+      "cas_number": "13463-67-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 413,
+      "name_cn": "二氧化钛（可吸入颗粒物）",
+      "name_en": "Titanium dioxide respirable",
+      "cas_number": "13463-67-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 414,
+      "name_cn": "甲苯",
+      "name_en": "Toluene",
+      "cas_number": "108-88-3",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "191",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "384"
+    },
+    {
+      "index": 415,
+      "name_cn": "对甲苯磺酰氯",
+      "name_en": "p-Toluenesulphonyl chloride",
+      "cas_number": "98-59-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "5"
+    },
+    {
+      "index": 416,
+      "name_cn": "邻甲苯胺",
+      "name_en": "o-Toluidine",
+      "cas_number": "95-53-4",
+      "oel_8h_ppm": "0.2",
+      "oel_8h_mg_m3": "0.89",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 417,
+      "name_cn": "磷酸三丁酯，所有异构体",
+      "name_en": "Tributyl phosphate, all isomers",
+      "cas_number": "126-73-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "5"
+    },
+    {
+      "index": 418,
+      "name_cn": "1,2,4-三氯苯",
+      "name_en": "1,2,4-Trichlorobenzene",
+      "cas_number": "120-82-1",
+      "oel_8h_ppm": "1",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "5",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 419,
+      "name_cn": "1,1,1-三氯乙烷",
+      "name_en": "1,1,1-Trichloroethane",
+      "cas_number": "71-55-6",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "555",
+      "oel_15m_ppm": "200",
+      "oel_15m_mg_m3": "1110"
+    },
+    {
+      "index": 420,
+      "name_cn": "三氯乙烯",
+      "name_en": "Trichloroethylene",
+      "cas_number": "79-01-6",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "550",
+      "oel_15m_ppm": "150",
+      "oel_15m_mg_m3": "820"
+    },
+    {
+      "index": 421,
+      "name_cn": "三氯硝基甲烷",
+      "name_en": "Trichloronitromethane",
+      "cas_number": "76-06-2",
+      "oel_8h_ppm": "0.1",
+      "oel_8h_mg_m3": "0.68",
+      "oel_15m_ppm": "0.3",
+      "oel_15m_mg_m3": "2.1"
+    },
+    {
+      "index": 422,
+      "name_cn": "三乙胺",
+      "name_en": "Triethylamine",
+      "cas_number": "121-44-8",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "8",
+      "oel_15m_ppm": "4",
+      "oel_15m_mg_m3": "17"
+    },
+    {
+      "index": 423,
+      "name_cn": "三缩水甘油异氰尿酸酯 (TGIC)",
+      "name_en": "Triglycidyl isocyanurate (TGIC)",
+      "cas_number": "2451-62-9",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 424,
+      "name_cn": "偏苯三酸酐",
+      "name_en": "Trimellitic anhydride",
+      "cas_number": "552-30-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.04",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.12"
+    },
+    {
+      "index": 425,
+      "name_cn": "三甲苯，所有异构体或混合物",
+      "name_en": "Trimethylbenzenes, all isomers or mixtures",
+      "cas_number": "25551-13-7",
+      "oel_8h_ppm": "25",
+      "oel_8h_mg_m3": "125",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 426,
+      "name_cn": "3,5,5-三甲基环己-2-烯酮",
+      "name_en": "3,5,5-trimethylcyclohex-2-enone",
+      "cas_number": "78-59-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "5",
+      "oel_15m_mg_m3": "29"
+    },
+    {
+      "index": 427,
+      "name_cn": "亚磷酸三甲酯",
+      "name_en": "Trimethyl phosphite",
+      "cas_number": "121-45-9",
+      "oel_8h_ppm": "2",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 428,
+      "name_cn": "2,4,6-三硝基甲苯",
+      "name_en": "2,4,6-Trinitrotoluene",
+      "cas_number": "118-96-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 429,
+      "name_cn": "磷酸三邻甲苯酯",
+      "name_en": "Tri-o-tolyl phosphate",
+      "cas_number": "78-30-8",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "0.3"
+    },
+    {
+      "index": 430,
+      "name_cn": "磷酸三苯酯",
+      "name_en": "Triphenyl phosphate",
+      "cas_number": "115-86-6",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "3",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "6"
+    },
+    {
+      "index": 431,
+      "name_cn": "钨及其化合物（以 W 计）",
+      "name_en": "Tungsten and compounds (as W)",
+      "cas_number": "7440-33-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 432,
+      "name_cn": "钨及其化合物（以 W 计）可溶性化合物",
+      "name_en": "Tungsten and compounds (as W) soluble compounds",
+      "cas_number": "7440-33-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "3"
+    },
+    {
+      "index": 433,
+      "name_cn": "钨及其化合物（以 W 计）不溶性化合物及其他",
+      "name_en": "Tungsten and compounds (as W) insoluble compounds and others",
+      "cas_number": "7440-33-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    },
+    {
+      "index": 434,
+      "name_cn": "松节油",
+      "name_en": "Turpentine",
+      "cas_number": "8006-64-2",
+      "oel_8h_ppm": "100",
+      "oel_8h_mg_m3": "566",
+      "oel_15m_ppm": "150",
+      "oel_15m_mg_m3": "850"
+    },
+    {
+      "index": 435,
+      "name_cn": "五氧化二钒",
+      "name_en": "Vanadium pentoxide",
+      "cas_number": "1314-62-1",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "0.05",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 436,
+      "name_cn": "乙酸乙烯酯",
+      "name_en": "Vinyl acetate",
+      "cas_number": "108-05-4",
+      "oel_8h_ppm": "5",
+      "oel_8h_mg_m3": "17.6",
+      "oel_15m_ppm": "10",
+      "oel_15m_mg_m3": "35.2"
+    },
+    {
+      "index": 437,
+      "name_cn": "氯乙烯",
+      "name_en": "Vinyl chloride",
+      "cas_number": "75-01-4",
+      "oel_8h_ppm": "3",
+      "oel_8h_mg_m3": "7.8",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 438,
+      "name_cn": "偏二氯乙烯",
+      "name_en": "Vinylidene chloride",
+      "cas_number": "75-35-4",
+      "oel_8h_ppm": "10",
+      "oel_8h_mg_m3": "40",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 439,
+      "name_cn": "羊毛加工粉尘",
+      "name_en": "Wool process dust",
+      "cas_number": "See para 43",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 440,
+      "name_cn": "二甲苯，邻位、间位、对位或混合异构体",
+      "name_en": "Xylene, o-,m-,p- or mixed isomers",
+      "cas_number": "1330-20-7",
+      "oel_8h_ppm": "50",
+      "oel_8h_mg_m3": "220",
+      "oel_15m_ppm": "100",
+      "oel_15m_mg_m3": "441"
+    },
+    {
+      "index": 441,
+      "name_cn": "钇",
+      "name_en": "Yttrium",
+      "cas_number": "7440-65-5",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "3"
+    },
+    {
+      "index": 442,
+      "name_cn": "氯化锌烟尘",
+      "name_en": "Zinc chloride, fume",
+      "cas_number": "7646-85-7",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "1",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "2"
+    },
+    {
+      "index": 443,
+      "name_cn": "硬脂酸锌（可吸入粉尘）",
+      "name_en": "Zinc distearate inhalable dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "10",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "20"
+    },
+    {
+      "index": 444,
+      "name_cn": "硬脂酸锌（可吸入颗粒物）",
+      "name_en": "Zinc distearate respirable dust",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "4",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": ""
+    },
+    {
+      "index": 445,
+      "name_cn": "锆化合物（以 Zr 计）",
+      "name_en": "Zirconium compounds (as Zr)",
+      "cas_number": "",
+      "oel_8h_ppm": "",
+      "oel_8h_mg_m3": "5",
+      "oel_15m_ppm": "",
+      "oel_15m_mg_m3": "10"
+    }
+  ]
+}

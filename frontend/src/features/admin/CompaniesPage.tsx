@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { useSession } from "@/app/session";
 import { Forbidden, errorText } from "@/shared/feedback";
+import ExcelImportModal from "@/features/plm/ExcelImportModal";
 
 interface Company { id: string; name: string; name_en: string; address: string; phone: string; email: string; emergency_phone: string; unified_credit_code: string; has_logo: boolean; is_default: boolean; applicable_regulations: string[]; coding_rules: { categories: { name_zh: string; name_en: string; identifier: string }[]; code_digits: number | null }; updated_at: string }
 interface Regulation { code: string; name: string; name_en: string; standard: string }
@@ -19,6 +20,7 @@ export default function CompaniesPage() {
   const [form] = Form.useForm();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Company | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const companies = useQuery({ queryKey: ["companies"], queryFn: () => call<Company[]>("GET", "/api/plm/companies"), enabled: can("admin.companies") });
   const regulations = useQuery({ queryKey: ["regulations"], queryFn: () => call<Regulation[]>("GET", "/api/plm/regulations"), enabled: can("admin.companies") });
   const regName = (code: string) => regulations.data?.find((r) => r.code === code)?.name ?? code;
@@ -74,8 +76,10 @@ export default function CompaniesPage() {
   return (
     <PageContainer>
       <ProTable<Company> rowKey="id" search={false} columns={columns} dataSource={companies.data} loading={companies.isLoading}
-        toolBarRender={() => [<Button key="new" type="primary" onClick={() => { form.resetFields(); setCreating(true); }}>新建公司</Button>]}
+        toolBarRender={() => [<Button key="import" onClick={() => setImportOpen(true)}>Excel 导入</Button>,
+          <Button key="new" type="primary" onClick={() => { form.resetFields(); setCreating(true); }}>新建公司</Button>]}
         options={{ reload: () => void companies.refetch() }} />
+      <ExcelImportModal open={importOpen} onClose={() => setImportOpen(false)} kind="companies" />
       <Modal open={open} title={editing ? "编辑公司" : "新建公司"} destroyOnHidden
         onCancel={() => { setCreating(false); setEditing(null); }} confirmLoading={save.isPending}
         onOk={async () => save.mutate(await form.validateFields())}>

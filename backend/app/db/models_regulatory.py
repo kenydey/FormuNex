@@ -130,6 +130,75 @@ class SubstanceOELRow(Base):
     release_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
+class SubstanceToxRecordRow(Base):
+    """One measured toxicology endpoint for a substance (MSDS ToxRecord).
+
+    ``value`` stays a string, as in MSDS: it may carry a comparator or a
+    range (">2000", "3 - 3.25"). The route is explicit here — MSDS passes
+    the endpoint at render time, but a stored record needs it.
+    """
+
+    __tablename__ = "substance_tox_records"
+    __table_args__ = (UniqueConstraint("substance_id", "endpoint", "route", "species", "source",
+                                       name="uq_substance_tox"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    substance_id: Mapped[str] = mapped_column(
+        ForeignKey("substances.id", ondelete="CASCADE"), index=True
+    )
+    endpoint: Mapped[str] = mapped_column(String(16), default="LD50")  # LD50 / LC50
+    route: Mapped[str] = mapped_column(String(16), default="oral")  # oral / dermal / inhalation / other
+    value: Mapped[str] = mapped_column(String(64))
+    unit: Mapped[str] = mapped_column(String(16), default="mg/kg")
+    species: Mapped[str] = mapped_column(String(64), default="大鼠")
+    method: Mapped[str] = mapped_column(String(200), default="")
+    source: Mapped[str] = mapped_column(String(16), default="manual")
+    source_ref: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class SubstanceEcoRecordRow(Base):
+    """One measured ecotoxicity endpoint (MSDS EcoTestRecord)."""
+
+    __tablename__ = "substance_eco_records"
+    __table_args__ = (UniqueConstraint("substance_id", "organism_group", "endpoint", "species", "source",
+                                       name="uq_substance_eco"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    substance_id: Mapped[str] = mapped_column(
+        ForeignKey("substances.id", ondelete="CASCADE"), index=True
+    )
+    organism_group: Mapped[str] = mapped_column(String(16))  # fish / daphnia / algae
+    endpoint: Mapped[str] = mapped_column(String(16), default="LC50")  # LC50 / EC50 / ErC50 / NOEC / LOEC
+    value: Mapped[str] = mapped_column(String(64))
+    unit: Mapped[str] = mapped_column(String(16), default="mg/L")
+    duration: Mapped[str] = mapped_column(String(32), default="")  # e.g. 96h
+    species: Mapped[str] = mapped_column(String(64), default="")
+    method: Mapped[str] = mapped_column(String(200), default="")
+    source: Mapped[str] = mapped_column(String(16), default="manual")
+    source_ref: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class SubstanceEcoProfileRow(Base):
+    """Per-substance fate descriptions (MSDS EcoDataDetailed, non-test part)."""
+
+    __tablename__ = "substance_eco_profiles"
+    __table_args__ = (UniqueConstraint("substance_id", name="uq_substance_eco_profile"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    substance_id: Mapped[str] = mapped_column(
+        ForeignKey("substances.id", ondelete="CASCADE"), index=True
+    )
+    persistence: Mapped[str] = mapped_column(String(300), default="")
+    bioaccum: Mapped[str] = mapped_column(String(300), default="")
+    mobility: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
 class SubstanceTransportRow(Base):
     """GB 12268 dangerous-goods list entry linked to a substance (or generic)."""
 

@@ -87,6 +87,10 @@ class SdsContext:
     properties: dict[str, dict[str, Any]] = field(default_factory=dict)  # key → {"value", "source", "method"}
     components: list[dict[str, Any]] = field(default_factory=list)  # disclosure rows (+ generic_name)
     oel: dict[str, dict[str, Any]] = field(default_factory=dict)  # CAS → {"mac", "pc_twa", "pc_stel"}
+    # G6: measured test records by CAS (additive: never replaces ATE text).
+    tox_records: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    eco_records: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    eco_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
     regulations: list[str] = field(default_factory=list)  # ingredient-specific section 15 entries
     revision: dict[str, Any] = field(default_factory=dict)  # version, date, change_summary
     band_edges: tuple[float, ...] = DEFAULT_EDGES
@@ -368,6 +372,22 @@ def build_sds(ctx: SdsContext) -> dict:
             s.add(f"ate_{tr['hazard_class']}", t(lang, f"{_cls_name(tr['hazard_class'], lang)} ATEmix",
                                                 f"{_cls_name(tr['hazard_class'], lang)} ATEmix"),
                   f"{n['ate_mix']:.4g} {n['unit']}（{t(lang, '计算值', 'calculated')}）", "computed")
+    # G6: measured component records, additive to the ATE calculation above.
+    _route_zh = {"oral": "经口", "dermal": "经皮", "inhalation": "吸入", "other": "其他"}
+    _route_en = {"oral": "oral", "dermal": "dermal", "inhalation": "inhalation", "other": "other"}
+    for i, c in enumerate(ctx.components):
+        recs = ctx.tox_records.get(c.get("cas") or "")
+        if not recs:
+            continue
+        name = c.get("generic_name") or c.get("name") or c.get("cas")
+        lines = []
+        for r in recs:
+            route = _route_zh[r["route"]] if lang != "en-US" else _route_en[r["route"]]
+            line = f"{r['endpoint']}（{route}）: {r['value']} {r['unit']}"
+            line += t(lang, f"，物种：{r['species']}", f", species: {r['species']}") if r["species"] else ""
+            line += t(lang, f"，方法：{r['method']}", f", method: {r['method']}") if r["method"] else ""
+            lines.append(line)
+        s.add(f"tox_{i}", t(lang, f"{name} 毒理试验数据", f"{name} toxicological test data"), lines, "measured")
     s.add("classification", t(lang, "健康危害分类", "Health hazard classification"),
           [f"{_cls_name(h['hazard_class'], lang)}，{_cat(h['category'], lang)}" for h in health]
           or t(lang, "根据组分数据计算，健康危害不分类。", "Not classified for health hazards (calculation method)."),
@@ -385,6 +405,34 @@ def build_sds(ctx: SdsContext) -> dict:
         s.paragraphs.append(t(lang, f"混合物中 {unknown['aquatic']:g}% 的组分对水生环境的危害未知。",
                               f"{unknown['aquatic']:g}% of the mixture consists of ingredients of unknown hazards to "
                               "the aquatic environment."))
+    # G6: measured component records, additive to the classification above.
+    _group_zh = {"fish": "鱼类", "daphnia": "水蚤", "algae": "藻类"}
+    _group_en = {"fish": "Fish", "daphnia": "Daphnia", "algae": "Algae"}
+    for i, c in enumerate(ctx.components):
+        cas = c.get("cas") or ""
+        recs = ctx.eco_records.get(cas)
+        name = c.get("generic_name") or c.get("name") or cas
+        if recs:
+            lines = []
+            for r in recs:
+                group = _group_zh[r["organism_group"]] if lang != "en-US" else _group_en[r["organism_group"]]
+                line = f"{group} {r['endpoint']}"
+                line += f"（{r['duration']}）" if r["duration"] else ""
+                line += f": {r['value']} {r['unit']}"
+                line += t(lang, f"，物种：{r['species']}", f", species: {r['species']}") if r["species"] else ""
+                line += t(lang, f"，方法：{r['method']}", f", method: {r['method']}") if r["method"] else ""
+                lines.append(line)
+            s.add(f"eco_{i}", t(lang, f"{name} 生态毒性试验数据", f"{name} ecotoxicity test data"), lines, "measured")
+        prof = ctx.eco_profiles.get(cas)
+        if prof:
+            lines = []
+            for key, zh, en in (("persistence", "持久性和降解性", "Persistence and degradability"),
+                                ("bioaccum", "潜在的生物累积性", "Bioaccumulative potential"),
+                                ("mobility", "土壤中的迁移性", "Mobility in soil")):
+                if prof.get(key):
+                    lines.append(f"{t(lang, zh, en)}：{prof[key]}")
+            if lines:
+                s.add(f"eco_profile_{i}", t(lang, f"{name} 环境归趋", f"{name} environmental fate"), lines, "measured")
     for key, zh, en in (("persistence", "持久性和降解性", "Persistence and degradability"),
                         ("bioaccumulation", "潜在的生物累积性", "Bioaccumulative potential"),
                         ("mobility", "土壤中的迁移性", "Mobility in soil")):

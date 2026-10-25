@@ -53,7 +53,8 @@ const BASE_NAV: NavItem[] = [
   ] },
   { path: "/materials", key: "nav.materials", zh: "物料与法规", icon: <DatabaseOutlined />, order: 7, children: [
     { path: "/materials/substances", key: "nav.materials.substances", zh: "物质与法规数据", order: 0 },
-    { path: "/materials/raw", key: "nav.materials.raw", zh: "原料", order: 1 },
+    { path: "/materials/test-records", key: "nav.materials.test_records", zh: "试验记录", order: 1 },
+    { path: "/materials/raw", key: "nav.materials.raw", zh: "原料", order: 2 },
   ] },
   { path: "/admin", key: "nav.admin", zh: "系统管理", icon: <SettingOutlined />, order: 8, children: [
     { path: "/admin/users", key: "nav.admin.users", zh: "用户与角色", permission: "admin.users", order: 0 },
