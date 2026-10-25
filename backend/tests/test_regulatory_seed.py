@@ -278,8 +278,10 @@ CLP_GAP = {
     "P370+P380", "P374", "P411+P235", "P422",
 }
 # Still without trustworthy English text: H361E is not a GHS code (its Chinese text duplicates
-# H361d); P281 was deleted before Rev.4. This set must be updated deliberately, never by inventing text.
-KNOWN_MISSING_EN = {"H361E", "P281"}
+# H361d). P281 left this set 2026-10-26: its historical GHS text ("Use personal protective
+# equipment as required.") was filled into hpstatements_en_ghs.json; MSDS-Generator's P281 text
+# was NOT used — it duplicates P280 and the vendored file's note already rejects it.
+KNOWN_MISSING_EN = {"H361E"}
 # MSDS-Generator hand-added entries, excluded from the vendored English file:
 # their provenance is a maintainer edit, not the EUR-Lex extraction.
 EXCLUDED_EN = {"H303", "H313", "H350I", "H360E", "H401", "P281"}
@@ -313,6 +315,10 @@ def test_english_resource_covers_seed_codes_except_known_gap():
     assert g["H303+H313+H333"] == "May be harmful if swallowed, in contact with skin or if inhaled"
     assert g["H401"] == "Toxic to aquatic life"
     assert g["P374"] == "Fight fire with normal precautions from a reasonable distance."
+    # P281 predates Rev.4 (deleted before it, merged into P280); its historical GHS text,
+    # consistent with the Chinese seed text 使用所需的个人防护设备. MSDS-Generator's P281
+    # text duplicates P280 and was deliberately not used.
+    assert g["P281"] == "Use personal protective equipment as required."
     # Spot pairs, verified against legislation.gov.uk CLP Annex III/IV.
     texts = {_code(k.split("/")[-1]): v for k, v in en["statements"].items()}
     assert texts["H200"] == "Unstable explosives."

@@ -14,8 +14,7 @@
   "extracted": "2026-10-24",
   "scope": "Only codes the CLP dataset (hpstatements_en.json) does not cover; CLP texts take precedence where both exist.",
   "not_covered": {
-   "H361E": "not a GHS code (the Chinese text 怀疑对胎儿造成伤害 corresponds to CLP H361d); left without English text",
-   "P281": "deleted from the GHS before Rev.4 (merged into P280); no UN source text retrieved; left without English text"
+   "H361E": "not a GHS code (the Chinese text 怀疑对胎儿造成伤害 corresponds to CLP H361d); left without English text"
   }
  },
  "statements": {
@@ -97,6 +96,11 @@
   "P235+P410": {
    "text": "Keep cool. Protect from sunlight.",
    "table": "Table A3.2.4",
+   "rev10": "removed"
+  },
+  "P281": {
+   "text": "Use personal protective equipment as required.",
+   "table": "Table A3.2.2",
    "rev10": "removed"
   },
   "P304+P312": {
