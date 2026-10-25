@@ -521,6 +521,10 @@ class QcResultsIn(BaseModel):
 class DocumentIn(BaseModel):
     doc_type: Literal["sds", "tds", "coa", "label", "ts"]
     lang: Literal["zh-CN", "en-US"] = "zh-CN"
+    # G2: regulations to generate for (SDS / label only). None = the default
+    # company's applicable_regulations, or ["CN"] when the company has no
+    # default; [] = explicit empty selection, rejected with 422.
+    regulations: list[str] | None = None
     properties: PropertiesIn | None = None  # mixture properties for classification (sds / label)
     sds_properties: dict[str, Any] = Field(default_factory=dict)  # section 9 values: key → value or {value, source, method}
     trade_secrets: dict[str, str] = Field(default_factory=dict)  # CAS or name → generic name
@@ -538,7 +542,8 @@ class DocumentIn(BaseModel):
 def _doc_summary(row) -> dict[str, Any]:
     v = (row.content or {}).get("validation") or {}
     return {"id": row.id, "revision_id": row.revision_id, "batch_id": row.batch_id, "doc_type": row.doc_type,
-            "lang": row.lang, "version_no": row.version_no, "status": row.status, "content_hash": row.content_hash,
+            "lang": row.lang, "regulation": getattr(row, "regulation", None) or "CN",
+            "version_no": row.version_no, "status": row.status, "content_hash": row.content_hash,
             "supersedes_id": row.supersedes_id, "created_at": row.created_at, "created_by": row.created_by,
             "has_pdf": bool(row.rendered_pdf_key), "has_docx": bool(row.rendered_docx_key),
             "missing": v.get("missing", []), "warnings": v.get("warnings", [])}
@@ -629,23 +634,43 @@ def add_qc_results(batch_id: str, body: QcResultsIn) -> dict[str, Any]:
 @router.post("/revisions/{revision_id}/documents", status_code=201)
 def generate_document(revision_id: str, body: DocumentIn,
                       user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
-    """Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version)."""
+    """Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).
+
+    G2: for SDS / label, ``body.regulations`` selects the versions to
+    generate (one per regulation); omitted means the default company's
+    applicable_regulations, or ["CN"] when the company has no default.
+    A single version keeps the historical single-document response shape;
+    multiple versions return {"documents": [...]}.
+    """
     from ..services.plm.documents import service as docs
     from ..services.plm.render import MissingRenderDependency, PdfaError
 
-    payload = body.model_dump(exclude={"doc_type", "lang", "pdfa"})
+    payload = body.model_dump(exclude={"doc_type", "lang", "pdfa", "regulations"})
     payload["properties"] = body.properties.model_dump() if body.properties else None
     if _doc_payload_debug_enabled():
         # INFO (not DEBUG) on purpose: uvicorn's default log level is INFO,
         # so a DEBUG line would be invisible in the nightly backend log —
         # the exact log this flag exists to capture. The flag itself gates it.
-        logger.info("plm doc payload revision=%s doc_type=%s lang=%s properties=%s tds.properties=%s",
-                    revision_id, body.doc_type, body.lang, payload["properties"],
+        logger.info("plm doc payload revision=%s doc_type=%s lang=%s regulations=%s properties=%s tds.properties=%s",
+                    revision_id, body.doc_type, body.lang, body.regulations, payload["properties"],
                     (payload.get("tds") or {}).get("properties"))
     with _session() as session:
         try:
-            row = docs.generate_document(session, revision_id, body.doc_type, lang=body.lang, payload=payload,
-                                         created_by=user.id if user else None, pdfa=body.pdfa)
+            if body.doc_type in ("sds", "label"):
+                regs = body.regulations
+                if regs is None:
+                    from ..services.plm import company as company_svc
+
+                    default = company_svc.default_company(session)
+                    regs = (default or {}).get("applicable_regulations") or ["CN"]
+                rows = docs.generate_documents(session, revision_id, body.doc_type, lang=body.lang,
+                                               payload=payload, created_by=user.id if user else None,
+                                               pdfa=body.pdfa, regulations=regs)
+            else:
+                if body.regulations is not None:
+                    raise docs.DocumentError("适用法规仅适用于 SDS / 标签")
+                rows = [docs.generate_document(session, revision_id, body.doc_type, lang=body.lang, payload=payload,
+                                               created_by=user.id if user else None, pdfa=body.pdfa)]
         except PdfaError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         except MissingRenderDependency as exc:
@@ -654,7 +679,9 @@ def generate_document(revision_id: str, body: DocumentIn,
         except (docs.DocumentError, KeyError) as exc:
             raise _doc_error(exc) from None
         session.commit()
-        return {**_doc_summary(row), "content": row.content}
+        if len(rows) == 1:
+            return {**_doc_summary(rows[0]), "content": rows[0].content}
+        return {"documents": [{**_doc_summary(r), "content": r.content} for r in rows]}
 
 
 @router.get("/revisions/{revision_id}/documents")
@@ -666,7 +693,7 @@ def list_documents(revision_id: str) -> list[dict[str, Any]]:
     with _session() as session:
         rows = session.execute(select(RegulatoryDocumentRow).where(RegulatoryDocumentRow.revision_id == revision_id)
                                .order_by(RegulatoryDocumentRow.doc_type, RegulatoryDocumentRow.lang,
-                                         RegulatoryDocumentRow.version_no)).scalars().all()
+                                         RegulatoryDocumentRow.regulation, RegulatoryDocumentRow.version_no)).scalars().all()
         return [_doc_summary(r) for r in rows]
 
 
@@ -706,6 +733,8 @@ def download_document(document_id: str, fmt: Literal["pdf", "docx", "png"],
             except LabelPngError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from None
             name = f"{row.doc_type}-{row.lang}-v{row.version_no}.png"
+            if (getattr(row, "regulation", None) or "CN") != "CN":
+                name = f"{row.doc_type}-{row.lang}-{row.regulation}-v{row.version_no}.png"
             return Response(data, media_type="image/png",
                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
         key = row.rendered_pdf_key if fmt == "pdf" else row.rendered_docx_key
@@ -714,6 +743,8 @@ def download_document(document_id: str, fmt: Literal["pdf", "docx", "png"],
         media = "application/pdf" if fmt == "pdf" else \
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         name = f"{row.doc_type}-{row.lang}-v{row.version_no}.{fmt}"
+        if (getattr(row, "regulation", None) or "CN") != "CN":
+            name = f"{row.doc_type}-{row.lang}-{row.regulation}-v{row.version_no}.{fmt}"
         return Response(storage.get(key), media_type=media,
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
@@ -1325,12 +1356,28 @@ class CompanyIn(BaseModel):
     emergency_phone: str = Field(min_length=1, max_length=64)
     unified_credit_code: str = ""
     is_default: bool = False
+    # G2: default applicable regulations for new documents ([] = no default).
+    applicable_regulations: list[str] = Field(default_factory=list)
 
 
 def _company_out(row) -> dict[str, Any]:
     from ..services.plm.company import company_dict
 
     return company_dict(row)
+
+
+@router.get("/regulations")
+def list_regulations() -> list[dict[str, Any]]:
+    """G2: applicable-regulation registry for the company-config checkboxes
+    and the document-generation regulation selector."""
+    from ..services.plm.ghs.regulations import REGULATIONS, regulation_codes
+
+    out = []
+    for code in regulation_codes():
+        info = REGULATIONS[code]
+        out.append({"code": code, "name": info["name"], "name_en": info["name_en"],
+                    "ruleset": info["ruleset"], "standard": info["standard"]})
+    return out
 
 
 @router.get("/companies")

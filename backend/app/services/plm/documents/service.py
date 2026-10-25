@@ -1,9 +1,9 @@
 """Generate, version and render PLM documents for a product revision.
 
 ``generate_document`` assembles the context a builder needs from the database
-(product, the revision's formulation version, a fresh GB 30000 classification,
-GBZ 2.1 limits, ingredient listings, batch QC results), builds the structured
-content, renders PDF / Word, stores the files and writes a *new*
+(product, the revision's formulation version, a fresh per-regulation
+classification, GBZ 2.1 limits, ingredient listings, batch QC results), builds
+the structured content, renders PDF / Word, stores the files and writes a *new*
 ``regulatory_documents`` row — an earlier version is never modified, so a
 released document stays exactly what was signed.
 """
@@ -43,6 +43,8 @@ from .sds_builder import SdsContext, build_sds
 from .tds_builder import TdsContext, build_tds, split_list_field
 from .ts_builder import TsContext, build_ts, clean_indicators
 from ..company import resolve_company
+from ..ghs.regulations import DEFAULT_REGULATION, ruleset_for, standard_for, validate_regulations
+from ..ghs.ruleset import DEFAULT_RULESET
 
 DOC_TYPES = ("sds", "tds", "coa", "label", "ts")
 
@@ -162,11 +164,12 @@ def _product_dict(product: ProductRow, extra: dict | None) -> dict[str, Any]:
     return {"name_zh": product.name_zh, "name_en": product.name_en, "code": product.code, **(extra or {})}
 
 
-def _classify_revision(session: Session, rev: ProductRevisionRow, properties: dict | None) -> tuple[dict, str]:
+def _classify_revision(session: Session, rev: ProductRevisionRow, properties: dict | None,
+                       ruleset: str | None = None) -> tuple[dict, str]:
     if not rev.formulation_version_id:
-        raise DocumentError("产品修订版未关联配方版本，无法进行 GB 30000 分类")
+        raise DocumentError("产品修订版未关联配方版本，无法分类")
     items = ghs_service.formulation_version_items(session, rev.formulation_version_id)
-    result = ghs_service.classify_items(session, items, properties)
+    result = ghs_service.classify_items(session, items, properties, ruleset=ruleset or DEFAULT_RULESET)
     row = ghs_service.persist(session, result, formulation_version_id=rev.formulation_version_id, revision_id=rev.id)
     return ghs_service.to_response(session, result), row.id
 
@@ -211,15 +214,17 @@ def _components(disclosure: list[dict], trade_secrets: dict[str, str] | None) ->
     return out
 
 
-def _revision_meta(session: Session, rev: ProductRevisionRow, doc_type: str, lang: str, batch_id: str | None) -> dict:
-    n = _next_version(session, rev.id, doc_type, lang, batch_id)
+def _revision_meta(session: Session, rev: ProductRevisionRow, doc_type: str, lang: str, batch_id: str | None,
+                   regulation: str = DEFAULT_REGULATION) -> dict:
+    n = _next_version(session, rev.id, doc_type, lang, batch_id, regulation)
     return {"version": f"{rev.rev}.{n}", "date": utcnow().date().isoformat()}
 
 
-def _next_version(session: Session, revision_id: str, doc_type: str, lang: str, batch_id: str | None) -> int:
+def _next_version(session: Session, revision_id: str, doc_type: str, lang: str, batch_id: str | None,
+                  regulation: str = DEFAULT_REGULATION) -> int:
     q = select(func.max(RegulatoryDocumentRow.version_no)).where(
         RegulatoryDocumentRow.revision_id == revision_id, RegulatoryDocumentRow.doc_type == doc_type,
-        RegulatoryDocumentRow.lang == lang)
+        RegulatoryDocumentRow.lang == lang, RegulatoryDocumentRow.regulation == regulation)
     if batch_id:
         q = q.where(RegulatoryDocumentRow.batch_id == batch_id)
     return (session.execute(q).scalar() or 0) + 1
@@ -283,14 +288,20 @@ def _template(session: Session, doc_type: str, lang: str) -> tuple[str | None, b
 # --------------------------------------------------------------------------- generation
 
 
-def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang: str, payload: dict) -> tuple[dict, dict]:
-    """Return (content, extra row fields)."""
+def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang: str, payload: dict,
+                  regulation: str = DEFAULT_REGULATION) -> tuple[dict, dict]:
+    """Return (content, extra row fields). ``regulation`` applies to SDS /
+    label only (their classification); other doc types ignore it."""
     product = session.get(ProductRow, rev.product_id)
     prod = _product_dict(product, payload.get("product"))
     company = _company(session, payload.get("company"))
     extra: dict[str, Any] = {}
     if doc_type in ("sds", "label"):
-        cls, classification_id = _classify_revision(session, rev, payload.get("properties"))
+        try:
+            ruleset = ruleset_for(regulation)
+        except KeyError:
+            raise DocumentError(f"未知适用法规：{regulation}") from None
+        cls, classification_id = _classify_revision(session, rev, payload.get("properties"), ruleset=ruleset)
         extra["classification_id"] = classification_id
         extra["classification_properties"] = payload.get("properties") or {}
         cas = [d["cas"] for d in cls["disclosure"] if d.get("cas")]
@@ -304,8 +315,14 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
             content = build_sds(SdsContext(
                 product=prod, company=company, classification=cls, statements=cls["statements"], properties=props,
                 components=_components(cls["disclosure"], payload.get("trade_secrets")), oel=_oel(session, cas),
-                regulations=_listings(session, cas), revision={**_revision_meta(session, rev, doc_type, lang, None),
-                                                               "change_summary": payload.get("change_summary")},
+                # Ingredient listings are China-jurisdiction data (hazard
+                # catalogue / IECSC); other regulations render their own
+                # core legislation lines only (per-jurisdiction listings
+                # are follow-up work, not silently copied from CN).
+                regulations=_listings(session, cas) if regulation == "CN" else [],
+                regulation=regulation, regulation_standard=standard_for(regulation),
+                revision={**_revision_meta(session, rev, doc_type, lang, None, regulation),
+                          "change_summary": payload.get("change_summary")},
                 band_edges=tuple(payload.get("band_edges") or DEFAULT_EDGES), lang=lang))
         else:
             label = payload.get("label") or {}
@@ -391,11 +408,18 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
 
 def generate_document(session: Session, revision_id: str, doc_type: str, *, lang: str = "zh-CN",
                       payload: dict | None = None, created_by: str | None = None,
-                      pdfa: bool = False) -> RegulatoryDocumentRow:
+                      pdfa: bool = False, regulation: str = DEFAULT_REGULATION) -> RegulatoryDocumentRow:
     if doc_type not in DOC_TYPES:
         raise DocumentError(f"未知文档类型 {doc_type}")
     if lang not in ("zh-CN", "en-US"):
         raise DocumentError("lang 仅支持 zh-CN / en-US")
+    if doc_type not in ("sds", "label") and regulation != DEFAULT_REGULATION:
+        raise DocumentError("适用法规仅适用于 SDS / 标签")
+    if doc_type in ("sds", "label"):
+        try:
+            ruleset_for(regulation)
+        except KeyError:
+            raise DocumentError(f"未知适用法规：{regulation}") from None
     rev = session.get(ProductRevisionRow, revision_id)
     if rev is None:
         raise DocumentError("产品修订版不存在")
@@ -404,12 +428,13 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     if rev.state == "under_review" and doc_type != "coa":
         raise DocumentError("修订版正在签批，签批结束（发布或驳回）前不能重新生成文档")
     payload = payload or {}
-    content, extra = build_content(session, rev, doc_type, lang, payload)
+    content, extra = build_content(session, rev, doc_type, lang, payload, regulation=regulation)
+    content["meta"]["regulation"] = regulation
     batch_id = extra.get("batch_id")
     prev = session.execute(
         select(RegulatoryDocumentRow).where(
             RegulatoryDocumentRow.revision_id == rev.id, RegulatoryDocumentRow.doc_type == doc_type,
-            RegulatoryDocumentRow.lang == lang,
+            RegulatoryDocumentRow.lang == lang, RegulatoryDocumentRow.regulation == regulation,
             *( [RegulatoryDocumentRow.batch_id == batch_id] if batch_id else [] ))
         .order_by(RegulatoryDocumentRow.version_no.desc()).limit(1)
     ).scalar_one_or_none()
@@ -423,6 +448,10 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
         content["meta"]["diff_from_previous"] = {k: v for k, v in diff_documents(prev.content, content).items()
                                                  if k in ("major", "count")}
 
+    # File stem carries the regulation for non-CN versions (CN keeps the
+    # historical name, so existing downloads / links do not change).
+    stem = f"{doc_type}-{lang}-v{version_no}" if regulation == "CN" \
+        else f"{doc_type}-{lang}-{regulation}-v{version_no}"
     if doc_type == "label":
         layout_id = content["meta"].get("layout_template_id")
         _id, layout = label_layout(session, lang, layout_id) if layout_id else (None, None)
@@ -430,7 +459,8 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
             from ..render.label_layout import render_layout_pdf
 
             pdf, info = render_layout_pdf(content, layout, content["meta"].get("variables"), pdfa=pdfa)
-            if info["missing_elements"]:
+            # The layout-element check is GB 15258-specific: only warn for CN labels.
+            if regulation == "CN" and info["missing_elements"]:
                 content["validation"]["warnings"].append(
                     "标签版式缺少 GB 15258 要素：" + "、".join(info["missing_elements"]))
         else:
@@ -441,7 +471,7 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     else:
         pdf, info = render_pdf(content, pdfa=pdfa)
         template_id, template = _template(session, doc_type, lang)
-        docx_key = storage.put(f"documents/{doc_id}/{doc_type}-{lang}-v{version_no}.docx",
+        docx_key = storage.put(f"documents/{doc_id}/{stem}.docx",
                                render_docx(content, template))
         extra["template_id"] = template_id
     content["meta"]["render"] = info
@@ -451,10 +481,11 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
         content["validation"]["warnings"].append(
             "PDF/A-2b 输出缺少 OutputIntent（未获得 sRGB ICC 配置文件）：仅为 PDF/A-2b-ready，"
             "配置 FORMUNEX_PDFA_ICC_PATH 或安装 liblcms2 后才是完整 PDF/A-2b")
-    pdf_key = storage.put(f"documents/{doc_id}/{doc_type}-{lang}-v{version_no}.pdf", pdf)
+    pdf_key = storage.put(f"documents/{doc_id}/{stem}.pdf", pdf)
 
     row = RegulatoryDocumentRow(
-        id=doc_id, revision_id=rev.id, batch_id=batch_id, doc_type=doc_type, lang=lang, version_no=version_no,
+        id=doc_id, revision_id=rev.id, batch_id=batch_id, doc_type=doc_type, lang=lang,
+        regulation=regulation, version_no=version_no,
         status="draft", template_id=extra.get("template_id"), content=content, field_sources=field_sources(content),
         rendered_pdf_key=pdf_key, rendered_docx_key=docx_key, content_hash=content_hash(content),
         supersedes_id=prev.id if prev else None, created_by=created_by,
@@ -465,6 +496,29 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     link_many_in_session(session, [("product_revision", rev.id, "document", row.id, "documented_as")],
                          created_by=created_by)
     return row
+
+
+def generate_documents(session: Session, revision_id: str, doc_type: str, *, lang: str = "zh-CN",
+                       payload: dict | None = None, created_by: str | None = None,
+                       pdfa: bool = False, regulations: list[str] | None = None) -> list[RegulatoryDocumentRow]:
+    """G2: one document version per selected regulation (SDS / label only).
+
+    Each version classifies with its own regulation's rule set and stores
+    its own classification row, so versions never overwrite each other.
+    An explicitly empty selection is a 422 (the caller must select); the
+    company-default resolution lives in the API route, not here.
+    """
+    if doc_type not in ("sds", "label"):
+        raise DocumentError("多法规生成仅适用于 SDS / 标签")
+    try:
+        regs = validate_regulations(regulations if regulations is not None else [])
+    except ValueError as exc:
+        raise DocumentError(str(exc)) from None
+    if not regs:
+        raise DocumentError("请至少选择一个适用法规")
+    return [generate_document(session, revision_id, doc_type, lang=lang, payload=payload,
+                              created_by=created_by, pdfa=pdfa, regulation=r)
+            for r in regs]
 
 
 def save_template(session: Session, *, doc_type: str, lang: str, name: str, data: bytes, is_default: bool = True,

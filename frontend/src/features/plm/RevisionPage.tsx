@@ -47,7 +47,7 @@ export default function RevisionPage() {
   const r = rev.data;
   const editable = !!r && ["draft", "candidate"].includes(r.state);
   const latest = Object.values((docs.data ?? []).reduce<Record<string, DocSummary>>((acc, d) => {
-    const k = `${d.doc_type}|${d.lang}|${d.batch_id ?? ""}`;
+    const k = `${d.doc_type}|${d.lang}|${d.regulation ?? "CN"}|${d.batch_id ?? ""}`;
     if (!acc[k] || acc[k].version_no < d.version_no) acc[k] = d;
     return acc;
   }, {}));
@@ -101,6 +101,7 @@ export default function RevisionPage() {
             columns={[
               { title: t("doc.type", "类型"), dataIndex: "doc_type", render: (_d, d) => <Link to={`/plm/documents/${d.id}`}>{DOC_NAMES[d.doc_type]}</Link> },
               { title: t("doc.lang", "语言"), dataIndex: "lang" },
+              { title: t("doc.regulation", "适用法规"), render: (_d, d) => ["sds", "label"].includes(d.doc_type) ? (d.regulation ?? "CN") : "—" },
               { title: t("doc.version", "版本"), dataIndex: "version_no", render: (_d, d) => `v${d.version_no}` },
               { title: t("plm.state", "状态"), dataIndex: "status", render: (_d, d) => <StatusTag status={d.status} /> },
               { title: t("doc.missing_col", "缺项"), render: (_d, d) => d.missing.length ? <Tag color="red">{d.missing.length}</Tag> : <Tag color="green">0</Tag> },

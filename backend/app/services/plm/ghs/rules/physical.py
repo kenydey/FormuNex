@@ -47,7 +47,9 @@ def flammable_liquid(components: list[Component], props: MixtureProperties, rs: 
                                         f"{note}，持续燃烧试验（L.2）为否 → 可不划为类别 3"))
             return out
         cat = "3"
-    elif p["cat4"]["flash_point_gt"] < fp <= p["cat4"]["flash_point_le"]:
+    elif p.get("cat4") is not None and p["cat4"]["flash_point_gt"] < fp <= p["cat4"]["flash_point_le"]:
+        # CLP has no category 4 (categories 1-3 only): a ruleset without cat4
+        # simply never assigns it; GB / OSHA rulesets keep cat4 and behave as before.
         cat = "4"
     out.trace.append(TraceEntry("flammable_liquid", cat, "measured", "GB 30000.7",
                                 f"{note} → " + (f"类别 {cat}" if cat else "不分类"),

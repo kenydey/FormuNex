@@ -122,8 +122,11 @@ class RegulatoryDocumentRow(Base):
     # Non-COA documents carry batch_id NULL and keep incrementing globally
     # (their ``_next_version`` / ``generate_document`` queries do not filter
     # by batch), so the NULL rows are still ordered by the app-level counter.
+    # G2 (alembic 0071): the key also includes regulation — one version
+    # series per (revision, doc_type, lang, batch, regulation), so a CN SDS
+    # v1 and an EU SDS v1 coexist instead of colliding.
     __table_args__ = (
-        UniqueConstraint("revision_id", "doc_type", "lang", "batch_id", "version_no",
+        UniqueConstraint("revision_id", "doc_type", "lang", "batch_id", "regulation", "version_no",
                          name="uq_regulatory_document"),
     )
 
@@ -134,6 +137,9 @@ class RegulatoryDocumentRow(Base):
     batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)  # COA only
     doc_type: Mapped[str] = mapped_column(String(16), index=True)
     lang: Mapped[str] = mapped_column(String(8), default="zh-CN")
+    # G2: regulation this document version was generated for (CN / EU / US).
+    # Version numbers increment per (revision, doc_type, lang, batch, regulation).
+    regulation: Mapped[str] = mapped_column(String(16), default="CN", index=True)
     version_no: Mapped[int] = mapped_column(Integer, default=1)
     # draft | in_review | approved | released | superseded
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
@@ -337,6 +343,10 @@ class CompanyRow(Base):
     unified_credit_code: Mapped[str] = mapped_column(String(32), default="")
     logo_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
     is_default: Mapped[bool] = mapped_column(default=False, index=True)
+    # G2: applicable regulations (["CN", "EU", ...]) — the default selection
+    # for new documents. [] means "no default: generation must select
+    # explicitly". Existing rows are backfilled ["CN"] by alembic 0071.
+    applicable_regulations: Mapped[list] = mapped_column(_json, default=list)
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)

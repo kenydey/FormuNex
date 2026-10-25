@@ -112,6 +112,28 @@ def _latest_document(session: Session, revision_id: str, doc_type: str, lang: st
     return session.execute(q.order_by(RegulatoryDocumentRow.version_no.desc()).limit(1)).scalar_one_or_none()
 
 
+def _latest_documents(session: Session, revision_id: str, doc_type: str, lang: str,
+                      batch_id: str | None = None) -> list[RegulatoryDocumentRow]:
+    """G2: latest shippable version per regulation for SDS / label (so a
+    batch export ships every regulation version, not just one); a single
+    row for other doc types."""
+    if doc_type not in ("sds", "label"):
+        doc = _latest_document(session, revision_id, doc_type, lang, batch_id=batch_id)
+        return [doc] if doc is not None else []
+    rows = session.execute(
+        select(RegulatoryDocumentRow).where(RegulatoryDocumentRow.revision_id == revision_id,
+                                            RegulatoryDocumentRow.doc_type == doc_type,
+                                            RegulatoryDocumentRow.lang == lang,
+                                            RegulatoryDocumentRow.status.in_(_SHIPPABLE_STATUSES))
+        .order_by(RegulatoryDocumentRow.regulation, RegulatoryDocumentRow.version_no.desc())).scalars().all()
+    seen: dict[str, RegulatoryDocumentRow] = {}
+    for r in rows:
+        reg = getattr(r, "regulation", None) or "CN"
+        if reg not in seen:
+            seen[reg] = r
+    return [seen[reg] for reg in sorted(seen)]
+
+
 def _has_any_document(session: Session, revision_id: str, doc_type: str, lang: str) -> bool:
     return session.execute(
         select(RegulatoryDocumentRow.id).where(RegulatoryDocumentRow.revision_id == revision_id,
@@ -154,8 +176,8 @@ def build_batch_zip(session: Session, *, product_ids: list[str], doc_types: list
                                     "reason": "产品无修订版"})
                 continue
             for dt in doc_types:
-                doc = _latest_document(session, rev.id, dt, lang, batch_id=batch_id)
-                if doc is None:
+                docs = _latest_documents(session, rev.id, dt, lang, batch_id=batch_id)
+                if not docs:
                     entry = {"product_id": product.id, "product_code": product.code, "doc_type": dt}
                     if _has_any_document(session, rev.id, dt, lang):
                         # Deliberately excluded, not absent: only draft /
@@ -166,23 +188,29 @@ def build_batch_zip(session: Session, *, product_ids: list[str], doc_types: list
                         entry.update({"reason": f"修订版 {rev.rev} 无 {dt}（{lang}）文档"})
                     missing.append(entry)
                     continue
-                version = f"v{doc.version_no}"
-                for key, ext in ((doc.rendered_pdf_key, "pdf"), (doc.rendered_docx_key, "docx") if include_docx else (None, None)):
-                    if not key:
-                        continue
-                    if not storage.exists(key):
-                        missing.append({"product_id": product.id, "product_code": product.code, "doc_type": dt,
-                                        "reason": f"{dt} v{doc.version_no} 缺少 {ext} 渲染文件"})
-                        continue
-                    data = storage.get(key)
-                    name = render_filename(filename_template, company=company_name, product=product.code,
-                                           doc_type=dt, lang=lang, version=version, ext=ext)
-                    path = f"{sanitize_component(product.code)}/{name}"
-                    zf.writestr(path, data)
-                    files.append({"path": path, "product_code": product.code, "doc_type": dt, "lang": lang,
-                                  "version_no": doc.version_no, "document_id": doc.id, "status": doc.status,
-                                  "batch_id": doc.batch_id,
-                                  "sha256": hashlib.sha256(data).hexdigest()})
+                for doc in docs:
+                    doc_reg = getattr(doc, "regulation", None) or "CN"
+                    version = f"v{doc.version_no}"
+                    for key, ext in ((doc.rendered_pdf_key, "pdf"), (doc.rendered_docx_key, "docx") if include_docx else (None, None)):
+                        if not key:
+                            continue
+                        if not storage.exists(key):
+                            missing.append({"product_id": product.id, "product_code": product.code, "doc_type": dt,
+                                            "reason": f"{dt} v{doc.version_no} 缺少 {ext} 渲染文件"})
+                            continue
+                        data = storage.get(key)
+                        name = render_filename(filename_template, company=company_name, product=product.code,
+                                               doc_type=dt, lang=lang, version=version, ext=ext)
+                        if doc_reg != "CN":
+                            stem, _dot, suffix = name.rpartition(".")
+                            name = f"{stem}-{doc_reg}.{suffix}"
+                        path = f"{sanitize_component(product.code)}/{name}"
+                        zf.writestr(path, data)
+                        files.append({"path": path, "product_code": product.code, "doc_type": dt, "lang": lang,
+                                      "regulation": doc_reg,
+                                      "version_no": doc.version_no, "document_id": doc.id, "status": doc.status,
+                                      "batch_id": doc.batch_id,
+                                      "sha256": hashlib.sha256(data).hexdigest()})
         manifest = {"batch_export": True, "generated_at": utcnow().isoformat(), "lang": lang,
                     "filename_template": filename_template, "company": company_name,
                     "files": files, "missing": missing}

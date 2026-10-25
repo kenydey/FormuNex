@@ -32,6 +32,7 @@ from ....db.models_regulatory import SubstanceClassificationRow
 from ...compliance_rules import rohs_restricted
 from ..ghs import service as ghs_service
 from ..ghs.inputs import build_components
+from ..ghs.regulations import DEFAULT_REGULATION, ruleset_for
 from ..ghs.ruleset import load_ruleset, load_signoff
 from ..regulatory.source_priority import rank
 
@@ -126,28 +127,36 @@ def required_docs() -> list[tuple[str, str]]:
 # --------------------------------------------------------------------------- document selection
 
 
-def latest_documents(session: Session, rev: ProductRevisionRow) -> dict[tuple[str, str], RegulatoryDocumentRow]:
-    """Latest version of each (type, lang) for the revision; COA keyed per batch as ("coa", "<lang>@<batch>")."""
+def latest_documents(session: Session, rev: ProductRevisionRow) -> dict[tuple[str, str, str], RegulatoryDocumentRow]:
+    """Latest version of each (type, lang, regulation) for the revision;
+    COA keyed per batch as ("coa", "<lang>@<batch>", "CN"). Pre-G2 rows
+    carry regulation "CN" (alembic 0071 backfill), so old callers see the
+    same documents under the CN regulation."""
     rows = session.execute(
         select(RegulatoryDocumentRow).where(RegulatoryDocumentRow.revision_id == rev.id)
         .order_by(RegulatoryDocumentRow.version_no)
     ).scalars().all()
-    out: dict[tuple[str, str], RegulatoryDocumentRow] = {}
+    out: dict[tuple[str, str, str], RegulatoryDocumentRow] = {}
     for r in rows:
-        key = (r.doc_type, f"{r.lang}@{r.batch_id}" if r.doc_type == "coa" else r.lang)
+        key = (r.doc_type, f"{r.lang}@{r.batch_id}" if r.doc_type == "coa" else r.lang,
+               getattr(r, "regulation", None) or DEFAULT_REGULATION)
         out[key] = r
     return out
 
 
 def select_package_documents(session: Session, rev: ProductRevisionRow
                              ) -> tuple[list[RegulatoryDocumentRow], list[tuple[str, str, str]]]:
-    """The documents a release would contain, and what is missing: ``(doc_type, lang, reason)``."""
+    """The documents a release would contain, and what is missing: ``(doc_type, lang, reason)``.
+
+    SDS / label are selected per (lang, regulation): a release contains
+    every generated regulation version, each of which must be approved.
+    """
     latest = latest_documents(session, rev)
     chosen: list[RegulatoryDocumentRow] = []
     problems: list[tuple[str, str, str]] = []
     for doc_type, lang in required_docs():
         if doc_type == "coa":
-            coas = [d for (t, _k), d in latest.items() if t == "coa" and (lang == "*" or d.lang == lang)]
+            coas = [d for (t, _k, _r), d in latest.items() if t == "coa" and (lang == "*" or d.lang == lang)]
             approved = [d for d in coas if d.status == "approved" and (d.content.get("meta") or {}).get("overall") == "PASS"]
             if approved:
                 chosen.append(min(approved, key=lambda d: d.created_at))  # the first released batch
@@ -156,15 +165,18 @@ def select_package_documents(session: Session, rev: ProductRevisionRow
             else:
                 problems.append(("coa", lang, "缺少首批 COA"))
             continue
-        langs = [lang] if lang != "*" else sorted({k for (t, k) in latest if t == doc_type})
-        if not langs:
+        combos = sorted({(k_lang, k_reg) for (t, k_lang, k_reg) in latest
+                         if t == doc_type and (lang == "*" or k_lang == lang)})
+        if not combos:
             problems.append((doc_type, lang, "缺少文档"))
-        for lg in langs:
-            d = latest.get((doc_type, lg))
+        for lg, reg in combos:
+            d = latest.get((doc_type, lg, reg))
+            # CN keeps the historical message text; other regulations are named.
+            suffix = "" if reg == "CN" else f"[{reg}]"
             if d is None:
-                problems.append((doc_type, lg, "缺少文档"))
+                problems.append((doc_type, lg, f"缺少文档{suffix}"))
             elif d.status != "approved":
-                problems.append((doc_type, lg, f"最新版本 v{d.version_no} 未审核（状态 {d.status}）"))
+                problems.append((doc_type, lg, f"最新版本 v{d.version_no} 未审核（状态 {d.status}）{suffix}"))
                 chosen.append(d)
             else:
                 chosen.append(d)
@@ -382,59 +394,77 @@ def _check_red_lines(session: Session, c: Check, rev: ProductRevisionRow, fv: Fo
             c.fail("ghs_classification", f"无法分类，无法复核象形图/信号词/VOC：{exc}", waivable=False)
 
 
-def check_ruleset_signoff(c: Check, rs) -> None:
+def check_ruleset_signoff(c: Check, rs, key_suffix: str = "") -> None:
     """Plan 1-1: released documents may only cite classification results from an
     EHS-signed-off rule set. Both halves are required: the rule-set file's
     ``status`` must be ``released`` *and* a valid sign-off record for that
     version must be filed. A draft rule set — or a released one without a
-    record — fails the gate with an explicit "待 EHS 签核" message."""
-    c.evidence["rule_set_status"] = rs.status
+    record — fails the gate with an explicit "待 EHS 签核" message.
+    ``key_suffix`` qualifies the failure keys per regulation ("" for CN,
+    ":EU" / ":US" otherwise) so one regulation's failure never overwrites
+    another's; evidence keys are qualified the same way."""
+    c.evidence[f"rule_set_status{key_suffix}"] = rs.status
     if rs.status != "released":
-        c.fail("ruleset_status",
+        c.fail(f"ruleset_status{key_suffix}",
                f"分类规则集 {rs.version} 状态为 {rs.status}，待 EHS 签核后方可用于已发布文档")
         return
     signoff = load_signoff(rs.version)
     if signoff is None:
-        c.fail("ruleset_signoff",
+        c.fail(f"ruleset_signoff{key_suffix}",
                f"分类规则集 {rs.version} 已标记 released，但缺少 EHS 签核记录"
                f"（rulesets/signoffs/{rs.version}.yaml）")
         return
     for problem in signoff.problems(rs.version):
-        c.fail("ruleset_signoff", problem)
-    c.evidence["rule_set_signoff"] = {"signer": signoff.signer, "signed_at": signoff.signed_at}
+        c.fail(f"ruleset_signoff{key_suffix}", problem)
+    c.evidence[f"rule_set_signoff{key_suffix}"] = {"signer": signoff.signer, "signed_at": signoff.signed_at}
 
 
 def _check_classification(session: Session, c: Check, docs: list[RegulatoryDocumentRow], items: list[dict]) -> dict:
-    """Recompute the classification the SDS / label were built from; returns ``{inputs_hash: result}``."""
-    rs = load_ruleset()
+    """Recompute the classification each SDS / label was built from, per
+    regulation; returns ``{inputs_hash: result}``. A draft rule set blocks
+    only its own regulation's versions (fail-closed per regulation, never
+    for the whole package)."""
     # Only documents that cite classification results are gated on the rule set.
-    if any(d.doc_type in ("sds", "label") for d in docs):
-        check_ruleset_signoff(c, rs)
+    regs: dict[str, list[RegulatoryDocumentRow]] = {}
+    for d in docs:
+        if d.doc_type in ("sds", "label"):
+            regs.setdefault(getattr(d, "regulation", None) or DEFAULT_REGULATION, []).append(d)
+    for reg in sorted(regs):
+        check_ruleset_signoff(c, load_ruleset(ruleset_for(reg)),
+                              key_suffix="" if reg == "CN" else f":{reg}")
     latest_release = ghs_service.latest_data_release(session)
     results: dict[str, dict] = {}
-    hashes = set()
+    hashes_by_reg: dict[str, set[str]] = {}
     for d in docs:
         if d.doc_type not in ("sds", "label"):
             continue
+        reg = getattr(d, "regulation", None) or DEFAULT_REGULATION
+        rs = load_ruleset(ruleset_for(reg))
         meta = d.content.get("meta") or {}
         row = session.get(ClassificationResultRow, meta.get("classification_id") or "")
-        name = f"{d.doc_type.upper()} {d.lang} v{d.version_no}"
+        name = f"{d.doc_type.upper()} {d.lang}" + ("" if reg == "CN" else f" [{reg}]") + f" v{d.version_no}"
         if row is None:
             c.fail(item_key(d.id), f"{name}：找不到生成时的分类结果")
             continue
-        hashes.add(row.inputs_hash)
+        hashes_by_reg.setdefault(reg, set()).add(row.inputs_hash)
         results[row.inputs_hash] = row.result
         if row.rule_set_version != rs.version:
             c.fail(item_key(d.id, "ruleset"), f"{name}：分类规则集 {row.rule_set_version} 不是当前版本 {rs.version}")
         if latest_release and row.data_release_id != latest_release:
             c.fail(item_key(d.id, "release"), f"{name}：法规数据已更新（{row.data_release_id} → {latest_release}）")
         if items:
-            fresh = ghs_service.classify_items(session, items, meta.get("classification_properties"))
+            fresh = ghs_service.classify_items(session, items, meta.get("classification_properties"),
+                                               ruleset=rs.version)
             if fresh.inputs_hash != row.inputs_hash:
                 c.fail(item_key(d.id, "inputs"), f"{name}：配方或物质数据已变化，分类结果需重新计算")
-    if len(hashes) > 1:
-        c.fail("mixed", "SDS / 标签基于不同的分类输入生成")
-    c.evidence["rule_set_version"] = rs.version
+    for reg, hashes in hashes_by_reg.items():
+        if len(hashes) > 1:
+            c.fail("mixed", "SDS / 标签基于不同的分类输入生成" + ("" if reg == "CN" else f"（{reg}）"))
+    c.evidence["rule_set_versions"] = {reg: load_ruleset(ruleset_for(reg)).version for reg in sorted(regs)}
+    if regs:
+        # Backward-compatible single key: the CN version when present, else the first regulation's.
+        c.evidence["rule_set_version"] = c.evidence["rule_set_versions"].get("CN") \
+            or next(iter(c.evidence["rule_set_versions"].values()))
     c.evidence["data_release_id"] = latest_release
     if c.items:
         c.notes.append("重新生成 SDS 与标签即可基于当前数据重新计算")
@@ -454,7 +484,8 @@ def _check_consistency(c: Check, docs: list[RegulatoryDocumentRow]) -> None:
     values: dict[str, list[tuple[str, float]]] = {}
     for d in docs:
         f = _facts(d)
-        name = f"{d.doc_type.upper()} {d.lang}"
+        reg = getattr(d, "regulation", None) or DEFAULT_REGULATION
+        name = f"{d.doc_type.upper()} {d.lang}" + ("" if reg == "CN" else f" [{reg}]")
         if f is None:
             c.fail(item_key(d.id, "facts"), f"{name} v{d.version_no}：缺少可比对数据，请重新生成")
             continue
@@ -472,27 +503,40 @@ def _check_consistency(c: Check, docs: list[RegulatoryDocumentRow]) -> None:
 
 
 def _check_sds_label(c: Check, docs: list[RegulatoryDocumentRow]) -> None:
-    sds = {d.lang: _facts(d) for d in docs if d.doc_type == "sds" and _facts(d)}
-    labels = [(d.lang, _facts(d)) for d in docs if d.doc_type == "label" and _facts(d)]
+    """SDS / label consistency, compared within one regulation only: a CN
+    SDS and an EU SDS legitimately differ (different rule sets), so the
+    comparison key is (lang, regulation), never lang alone."""
+    sds = {(d.lang, getattr(d, "regulation", None) or DEFAULT_REGULATION): _facts(d)
+           for d in docs if d.doc_type == "sds" and _facts(d)}
+    labels = [((d.lang, getattr(d, "regulation", None) or DEFAULT_REGULATION), _facts(d))
+              for d in docs if d.doc_type == "label" and _facts(d)]
     if not sds:
         c.notes.append("没有可比对的 SDS")
         return
-    ref_lang = "zh-CN" if "zh-CN" in sds else next(iter(sds))
-    ref = sds[ref_lang]
-    for lang, f in sds.items():
-        if lang == ref_lang:
-            continue
-        for k in ("pictograms", "signal_word", "h_codes"):
-            if _norm(f.get(k)) != _norm(ref.get(k)):
-                c.fail(item_key("sds", lang, k), f"SDS {lang} 与 SDS {ref_lang} 的 {k} 不一致")
-    for lang, f in labels:
-        s = sds.get(lang) or ref
-        for k in ("pictograms", "signal_word", "h_codes"):
-            if _norm(f.get(k)) != _norm(s.get(k)):
-                c.fail(item_key("label", lang, k), f"标签 {lang} 的 {k}（{f.get(k)}）与 SDS 第 2 部分（{s.get(k)}）不一致")
-        extra = sorted(set(f.get("p_codes") or []) - set(s.get("p_codes") or []))
-        if extra:
-            c.fail(item_key("label", lang, "p_codes"), f"标签 {lang} 的防范说明 {', '.join(extra)} 不在 SDS 第 2 部分中")
+    regs = sorted({reg for (_lg, reg) in sds})
+    for reg in regs:
+        reg_sds = {lg: f for (lg, r), f in sds.items() if r == reg}
+        ref_lang = "zh-CN" if "zh-CN" in reg_sds else next(iter(reg_sds))
+        ref = reg_sds[ref_lang]
+        suffix = "" if reg == "CN" else f" [{reg}]"
+        for lang, f in reg_sds.items():
+            if lang == ref_lang:
+                continue
+            for k in ("pictograms", "signal_word", "h_codes"):
+                if _norm(f.get(k)) != _norm(ref.get(k)):
+                    c.fail(item_key("sds", lang, reg, k), f"SDS {lang}{suffix} 与 SDS {ref_lang}{suffix} 的 {k} 不一致")
+        for (lang, lreg), f in labels:
+            if lreg != reg:
+                continue
+            s = reg_sds.get(lang) or ref
+            for k in ("pictograms", "signal_word", "h_codes"):
+                if _norm(f.get(k)) != _norm(s.get(k)):
+                    c.fail(item_key("label", lang, reg, k),
+                           f"标签 {lang}{suffix} 的 {k}（{f.get(k)}）与 SDS 第 2 部分（{s.get(k)}）不一致")
+            extra = sorted(set(f.get("p_codes") or []) - set(s.get("p_codes") or []))
+            if extra:
+                c.fail(item_key("label", lang, reg, "p_codes"),
+                       f"标签 {lang}{suffix} 的防范说明 {', '.join(extra)} 不在 SDS 第 2 部分中")
 
 
 def _norm(v: Any) -> Any:
@@ -561,7 +605,8 @@ def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
         "revision_id": rev.id, "product_code": product.code if product else None, "rev": rev.rev,
         "passed": passed, "evaluated_at": utcnow().isoformat(), "checks": out,
         "documents": [{"id": d.id, "doc_type": d.doc_type, "lang": d.lang, "version_no": d.version_no,
-                       "status": d.status, "batch_id": d.batch_id} for d in docs],
+                       "status": d.status, "batch_id": d.batch_id,
+                       "regulation": getattr(d, "regulation", None) or DEFAULT_REGULATION} for d in docs],
         "batches": sorted(b for b in batches if session.get(BatchRow, b) is not None),
     }
 

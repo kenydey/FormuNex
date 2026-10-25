@@ -180,13 +180,16 @@ def test_append_only_guard_also_on_fresh_database(tmp_path, monkeypatch):
 
 def test_0068_regulatory_document_unique_key_includes_batch_id(legacy_url, monkeypatch):
     """P1-20: after upgrading past 0068 the regulatory_documents unique key
-    carries batch_id, and downgrading to 0067 + re-upgrading is clean."""
+    carries batch_id, and downgrading to 0067 + re-upgrading is clean.
+    G2 (0071) extends the same key with regulation; the batch_id part of
+    the assertion is unchanged."""
     run_upgrade(legacy_url, monkeypatch)
     engine = create_engine(legacy_url)
     try:
         insp = inspect(engine)
         uqs = {c["name"]: list(c["column_names"]) for c in insp.get_unique_constraints("regulatory_documents")}
-        assert uqs["uq_regulatory_document"] == ["revision_id", "doc_type", "lang", "batch_id", "version_no"]
+        assert uqs["uq_regulatory_document"] == ["revision_id", "doc_type", "lang", "batch_id",
+                                                "regulation", "version_no"]
     finally:
         engine.dispose()
     run_downgrade(legacy_url, monkeypatch, "0067")

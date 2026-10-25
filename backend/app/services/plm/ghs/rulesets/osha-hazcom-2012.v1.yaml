@@ -1,0 +1,169 @@
+# OSHA HazCom 2012 mixture classification parameters (aligned with UN GHS Rev.3).
+#
+# Every number the engine uses lives here, so the rule set can be reviewed,
+# signed off by an EHS specialist and frozen as ``version`` independently of the
+# code. A classification result records the version it was computed with.
+#
+# STATUS: draft — values aligned with HazCom 2012 / UN GHS Rev.3; requires
+# EHS review before results are used on released documents (plan §5.5.2).
+# Known phase-1 limits, all covered by the draft gate (fail-closed until
+# EHS sign-off): (1) trace entries in rule code still cite GB 30000 clause
+# numbers — the audit text, not the thresholds, is GB-flavoured; (2) label
+# max_p_statements follows GB practice (6) pending EHS confirmation.
+# HazCom differences vs GB 30000 encoded here: environmental hazard classes
+# (aquatic, ozone) are NOT adopted by HazCom 2012, so both are disabled
+# (``enabled: false``) and removed from the bridging principle lists;
+# flammable-liquid category 4 IS adopted (unlike CLP).
+
+version: osha-hazcom-2012.v1
+standard: OSHA HazCom 29 CFR 1910.1200 (2012)
+status: draft
+
+acute_toxicity:            # GB 30000.18
+  include_category_5: false        # China catalogue uses categories 1-4
+  relevant_cutoff_pct: 1.0         # ingredients below this are not counted
+  unknown_threshold_pct: 10.0      # above this, the unknown share is taken out of the formula
+  # Converted acute toxicity point estimates (GHS Table 3.1.2), by category.
+  point_estimates:
+    oral:      {"1": 0.5,   "2": 5,    "3": 100, "4": 500,  "5": 2500}   # mg/kg bw
+    dermal:    {"1": 5,     "2": 50,   "3": 300, "4": 1100, "5": 2500}   # mg/kg bw
+    gas:       {"1": 10,    "2": 100,  "3": 700, "4": 4500}              # ppmV
+    vapour:    {"1": 0.05,  "2": 0.5,  "3": 3,   "4": 11}                # mg/L
+    dust_mist: {"1": 0.005, "2": 0.05, "3": 0.5, "4": 1.5}               # mg/L
+  # Upper bound (inclusive) of each category for the mixture ATE.
+  category_limits:
+    oral:      [[5, "1"], [50, "2"], [300, "3"], [2000, "4"], [5000, "5"]]
+    dermal:    [[50, "1"], [200, "2"], [1000, "3"], [2000, "4"], [5000, "5"]]
+    gas:       [[100, "1"], [500, "2"], [2500, "3"], [20000, "4"]]
+    vapour:    [[0.5, "1"], [2.0, "2"], [10, "3"], [20, "4"]]
+    dust_mist: [[0.05, "1"], [0.5, "2"], [1.0, "3"], [5, "4"]]
+
+skin_corrosion:            # GB 30000.19, additivity (Table 3.2.3)
+  include_category_3: false
+  cat1_limit_pct: 5.0              # Σ skin 1 ≥ 5 % → category 1
+  cat2_from_cat1_pct: 1.0          # 1 % ≤ Σ skin 1 < 5 % → category 2
+  cat2_limit_pct: 10.0             # Σ skin 2 ≥ 10 %, or 10·Σ1 + Σ2 ≥ 10 % → category 2
+  cat1_weight: 10
+  # Ingredients for which additivity does not apply (Table 3.2.4).
+  non_additive_corrosive_pct: 1.0
+  non_additive_irritant_pct: 3.0
+  # Mixture pH ≤ 2 or ≥ 11.5 indicates category 1 when no acid/alkali reserve data.
+  ph_low: 2.0
+  ph_high: 11.5
+
+eye_damage:                # GB 30000.20, additivity (Table 3.3.3)
+  cat1_limit_pct: 3.0              # Σ (skin 1 + eye 1) ≥ 3 % → category 1
+  cat2_from_cat1_pct: 1.0
+  cat2_limit_pct: 10.0
+  cat1_weight: 10
+  non_additive_corrosive_pct: 1.0
+  non_additive_irritant_pct: 3.0
+
+sensitization:             # GB 30000.21 (Table 3.4.5)
+  skin_cat1_pct: 1.0
+  skin_cat1a_pct: 0.1
+  resp_cat1_pct: 1.0
+  resp_cat1_gas_pct: 0.2
+  resp_cat1a_pct: 0.1
+
+cmr:                       # GB 30000.22 / .23 / .24 (generic concentration limits)
+  mutagenicity:    {"1A": 0.1, "1B": 0.1, "2": 1.0}
+  carcinogenicity: {"1A": 0.1, "1B": 0.1, "2": 1.0}
+  reproductive:    {"1A": 0.3, "1B": 0.3, "2": 3.0, "lact": 0.3}
+
+stot:                      # GB 30000.25 / .26
+  cat1_pct: 10.0                   # ingredient cat 1 ≥ 10 % → mixture cat 1
+  cat1_to_cat2_pct: 1.0            # 1 % ≤ cat 1 ingredient < 10 % → mixture cat 2
+  cat2_pct: 10.0
+  se3_sum_pct: 20.0                # Σ STOT SE 3 (per effect) ≥ 20 % → category 3
+
+aspiration:                # GB 30000.27
+  include_category_2: false
+  cat1_sum_pct: 10.0
+  cat1_max_viscosity_40c: 20.5     # mm²/s
+  cat2_sum_pct: 10.0
+  cat2_max_viscosity_40c: 14.0
+
+aquatic:                   # HazCom 2012 does NOT adopt environmental hazard classes
+  enabled: false
+  limit_pct: 25.0
+  relevant_cutoff_pct: 1.0         # 0.1 % for acute 1 / chronic 1 ingredients
+  relevant_cutoff_highly_toxic_pct: 0.1
+  default_m_factor: 1
+
+ozone:                     # HazCom 2012 does NOT adopt environmental hazard classes
+  enabled: false
+  cat1_pct: 0.1
+
+flammable_liquid:          # GB 30000.7 (closed-cup flash point, initial boiling point, °C)
+  cat1: {flash_point_lt: 23, ibp_le: 35}
+  cat2: {flash_point_lt: 23, ibp_gt: 35}
+  cat3: {flash_point_ge: 23, flash_point_le: 60}
+  cat4: {flash_point_gt: 60, flash_point_le: 93}
+  # GB 30000.7 note: 35 °C < FP ≤ 60 °C liquids that do not sustain combustion (UN L.2) need not be cat 3.
+  sustained_combustion_exemption: {flash_point_gt: 35, flash_point_le: 60}
+
+metal_corrosive:           # GB 30000.17 — only from UN test C.1
+  corrosion_rate_mm_per_year: 6.25
+
+# Physical hazard classes the calculation method cannot decide: a component in
+# one of these classes at or above ``screening_pct`` raises a data gap that asks
+# for testing / expert judgement instead of an assigned category.
+physical_screening:
+  screening_pct: 1.0
+  classes: [explosive, self_reactive, organic_peroxide, oxidizing_liquid, oxidizing_solid,
+            pyrophoric_liquid, pyrophoric_solid, self_heating, water_reactive, flammable_solid]
+
+# Bridging principles (GB 30000.18-.28 / GHS 1.3.2.2): a mixture that was
+# not itself tested can take the classification of an established reference
+# mixture when the two are related in one of the five ways below. Bridging
+# applies to health and environmental hazard classes only — physical hazards
+# must be tested. Tolerances are absolute percentage points of composition.
+bridging:
+  batching_tolerance_pct: 1.0      # same product, another batch: per-ingredient content drift
+  content_tolerance_pct: 0.5       # dilution / interpolation / substantially-similar content comparisons
+  principles:
+    dilution: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+               skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+               stot_se, stot_re, aspiration]
+    batching: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+               skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+               stot_se, stot_re, aspiration]
+    concentration: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+                    skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+                    stot_se, stot_re, aspiration]
+    interpolation: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+                    skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+                    stot_se, stot_re, aspiration]
+    substantially_similar: [acute_tox_oral, acute_tox_dermal, acute_tox_inhal, skin_corrosion, eye_damage,
+                            skin_sensitizer, resp_sensitizer, mutagenicity, carcinogenicity, reproductive,
+                            stot_se, stot_re, aspiration]
+
+# Flammable aerosol (GB 30000.4 / GHS Rev.4 2.3): decided by test, not by
+# summation. Category 1 — any of: ≥85 % flammable components with heat of
+# combustion ≥ 30 kJ/g; spray ignition distance ≥ 75 cm; foam flame height
+# ≥ 20 cm with duration ≥ 2 s, or height ≥ 4 cm with duration ≥ 7 s.
+# Category 2 — any of: heat of combustion ≥ 20 kJ/g; ignition distance ≥ 15 cm;
+# foam height ≥ 4 cm with duration ≥ 2 s. Category 3 — ≤ 1 % flammable
+# components with heat of combustion < 20 kJ/g, not in category 1 / 2.
+aerosol:
+  heat_of_combustion_kj_g: {cat1: 30.0, cat2: 20.0}
+  flammable_pct: {cat1_min: 85.0, cat3_max: 1.0}
+  ignition_distance_cm: {cat1_min: 75.0, cat2_min: 15.0}
+  foam:
+    cat1: [{height_cm: 20.0, duration_s: 2.0}, {height_cm: 4.0, duration_s: 7.0}]
+    cat2: {height_cm: 4.0, duration_s: 2.0}
+
+# SDS section 3 disclosure (GB/T 17519): hazardous ingredients at or above
+# these concentrations are listed.
+disclosure:
+  default_pct: 1.0
+  low_pct: 0.1
+  low_classes: [mutagenicity, carcinogenicity, reproductive, skin_sensitizer, resp_sensitizer]
+
+# Substances assessed as not classified, so they never count as "unknown
+# toxicity" (an EHS-locked 'not_classified' record does the same per substance).
+assessed_not_classified_cas: ["7732-18-5"]   # water
+
+label:
+  max_p_statements: 6              # GB 15258 label; the SDS lists every selected P statement

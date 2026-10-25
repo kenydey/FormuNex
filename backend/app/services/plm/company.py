@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ...config import get_settings
 from ...db.models_plm import CompanyRow
 from . import storage
+from .ghs.regulations import validate_regulations
 
 MAX_LOGO_BYTES = 2 * 1024 * 1024
 _LOGO_SIGNATURES = {
@@ -59,6 +60,8 @@ def company_dict(row: CompanyRow) -> dict[str, Any]:
             "address_en": row.address_en, "phone": row.phone, "fax": row.fax, "email": row.email,
             "emergency_phone": row.emergency_phone, "unified_credit_code": row.unified_credit_code,
             "logo_key": row.logo_key, "has_logo": bool(row.logo_key), "is_default": row.is_default,
+            # G2: [] = no default (generation must select explicitly); never None.
+            "applicable_regulations": list(row.applicable_regulations or []),
             "created_at": row.created_at, "updated_at": row.updated_at}
 
 
@@ -91,11 +94,16 @@ def create_company(session: Session, data: dict[str, Any], *, created_by: str | 
         raise ValueError("公司名称不能为空")
     if not emergency:
         raise ValueError("24h 应急电话不能为空（SDS 强制非空）")
+    try:
+        regulations = validate_regulations(data.get("applicable_regulations") or [])
+    except ValueError as exc:
+        raise ValueError(str(exc)) from None
     row = CompanyRow(id=str(uuid.uuid4()), name=name, name_en=str(data.get("name_en") or ""),
                      address=str(data.get("address") or ""), address_en=str(data.get("address_en") or ""),
                      phone=str(data.get("phone") or ""), fax=str(data.get("fax") or ""),
                      email=str(data.get("email") or ""), emergency_phone=emergency,
-                     unified_credit_code=str(data.get("unified_credit_code") or ""), created_by=created_by)
+                     unified_credit_code=str(data.get("unified_credit_code") or ""), created_by=created_by,
+                     applicable_regulations=regulations)
     session.add(row)
     session.flush()
     if data.get("is_default") or default_company(session) is None:
@@ -111,6 +119,11 @@ def update_company(session: Session, company_id: str, data: dict[str, Any]) -> C
                   "emergency_phone", "unified_credit_code"):
         if field in data and data[field] is not None:
             setattr(row, field, str(data[field]))
+    if "applicable_regulations" in data and data["applicable_regulations"] is not None:
+        try:
+            row.applicable_regulations = validate_regulations(data["applicable_regulations"])
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
     if not row.name.strip():
         raise ValueError("公司名称不能为空")
     if not row.emergency_phone.strip():

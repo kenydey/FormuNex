@@ -91,6 +91,10 @@ class SdsContext:
     revision: dict[str, Any] = field(default_factory=dict)  # version, date, change_summary
     band_edges: tuple[float, ...] = DEFAULT_EDGES
     lang: str = "zh-CN"
+    # G2: regulation this SDS version was generated for; CN renders the full
+    # Chinese legislation list, other regulations their registry lines.
+    regulation: str = "CN"
+    regulation_standard: str = "GB 30000"
 
 
 def _cls_name(hazard_class: str, lang: str) -> str:
@@ -419,16 +423,24 @@ def build_sds(ctx: SdsContext) -> dict:
 
     # 15 -----------------------------------------------------------------------------------------------
     s = S["regulatory"]
-    base = [t(lang, z, e) for z, e in (
-        ("《中华人民共和国安全生产法》", "Work Safety Law of the PRC"),
-        ("《危险化学品安全管理条例》", "Regulations on the Safe Management of Hazardous Chemicals"),
-        ("《危险化学品目录（2015 版）》", "Catalogue of Hazardous Chemicals (2015)"),
-        ("GB 30000.2~29-2013《化学品分类和标签规范》", "GB 30000.2~29-2013 Rules for classification and labelling"),
-        ("GB/T 16483-2008、GB/T 17519-2013（SDS）", "GB/T 16483-2008, GB/T 17519-2013 (SDS)"),
-        ("GB 15258-2009《化学品安全标签编写规定》", "GB 15258-2009 Precautionary labelling"),
-        ("GBZ 2.1-2019《工作场所有害因素职业接触限值》", "GBZ 2.1-2019 Occupational exposure limits"),
-        ("GB 6944、GB 12268（危险货物分类与品名）", "GB 6944, GB 12268 (dangerous goods)"),
-    )]
+    if ctx.regulation == "CN":
+        base = [t(lang, z, e) for z, e in (
+            ("《中华人民共和国安全生产法》", "Work Safety Law of the PRC"),
+            ("《危险化学品安全管理条例》", "Regulations on the Safe Management of Hazardous Chemicals"),
+            ("《危险化学品目录（2015 版）》", "Catalogue of Hazardous Chemicals (2015)"),
+            ("GB 30000.2~29-2013《化学品分类和标签规范》", "GB 30000.2~29-2013 Rules for classification and labelling"),
+            ("GB/T 16483-2008、GB/T 17519-2013（SDS）", "GB/T 16483-2008, GB/T 17519-2013 (SDS)"),
+            ("GB 15258-2009《化学品安全标签编写规定》", "GB 15258-2009 Precautionary labelling"),
+            ("GBZ 2.1-2019《工作场所有害因素职业接触限值》", "GBZ 2.1-2019 Occupational exposure limits"),
+            ("GB 6944、GB 12268（危险货物分类与品名）", "GB 6944, GB 12268 (dangerous goods)"),
+        )]
+    else:
+        # G2: non-CN versions render only their own jurisdiction's core
+        # legislation (from the regulation registry). CN ingredient listings
+        # are never copied into another jurisdiction's section 15.
+        from ..ghs.regulations import section15_for
+
+        base = [t(lang, z, e) for z, e in section15_for(ctx.regulation)]
     s.add("regulations", t(lang, "适用法规", "Applicable regulations"), base, "template")
     if ctx.regulations:
         s.add("ingredient_listings", t(lang, "组分的法规管控信息", "Ingredient regulatory listings"), ctx.regulations,
@@ -440,7 +452,7 @@ def build_sds(ctx: SdsContext) -> dict:
     s.add("revision_date", t(lang, "修订日期", "Revision date"), ctx.revision.get("date"), "product")
     s.add("changes", t(lang, "修订说明", "Revision notes"), ctx.revision.get("change_summary") or "—", "manual")
     s.add("basis", t(lang, "分类依据", "Classification basis"),
-          f"GB 30000（{cls.get('rule_set_version')}）", "computed")
+          f"{ctx.regulation_standard}（{cls.get('rule_set_version')}）", "computed")
     s.paragraphs.append(t(lang, "本 SDS 的信息基于目前掌握的知识和数据，仅供安全处置本品参考，不构成任何质量保证。",
                           "The information in this SDS reflects current knowledge and is intended for safe handling only; "
                           "it does not constitute a warranty of properties."))

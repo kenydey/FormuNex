@@ -13,9 +13,10 @@ from dataclasses import asdict
 
 from ..transport import derive_transport
 from . import bridging as bridging_mod
+from .aqueous import suppressed_screening_classes as aqueous_suppressed_classes
 from .bridging import BridgingInput
 from .label_elements import build_label
-from .model import ClassificationResult, Component, DataGap, MixtureProperties, severity
+from .model import ClassificationResult, Component, DataGap, MixtureProperties, TraceEntry, severity
 from .rules import environment, health, physical
 from .rules.common import RuleOutput
 from .ruleset import DEFAULT_RULESET, RuleSet, load_ruleset
@@ -121,9 +122,15 @@ def classify(
     out.extend(health.cmr(comps, props, rs))
     out.extend(health.stot(comps, props, rs))
     out.extend(health.aspiration(comps, props, rs))
-    aquatic, unknown_aquatic = environment.aquatic(comps, props, rs)
-    out.extend(aquatic)
-    out.extend(environment.ozone(comps, props, rs))
+    # A rule set may disable a hazard group it does not adopt (OSHA HazCom
+    # 2012: aquatic / ozone). Absent ``enabled`` means enabled (GB behaviour).
+    if (rs.get("aquatic") or {}).get("enabled", True):
+        aquatic, unknown_aquatic = environment.aquatic(comps, props, rs)
+        out.extend(aquatic)
+    else:
+        unknown_aquatic = 0.0
+    if (rs.get("ozone") or {}).get("enabled", True):
+        out.extend(environment.ozone(comps, props, rs))
     out.extend(physical.flammable_liquid(comps, props, rs))
     out.extend(physical.aerosol(comps, props, rs))
     out.extend(physical.metal_corrosive(comps, props, rs))
@@ -134,6 +141,22 @@ def classify(
         out.outcomes = bridged.outcomes
         out.trace.extend(bridged.trace)
         out.gaps.extend(bridged.gaps)
+
+    # G3 aqueous suppression: in a water-dominant mixture (water strictly
+    # largest, no FP < 60 °C), solute physical hazards are not inherited —
+    # in this engine that surfaces only as screening gaps, so drop those
+    # gaps for the suppress-set classes and leave a trace entry. Measured
+    # outcomes (e.g. flammable_liquid from a measured flash point) are
+    # never suppressed by this rule.
+    suppressed = aqueous_suppressed_classes(comps, props)
+    if suppressed:
+        out.gaps = [g for g in out.gaps
+                    if not (g.code.startswith("physical_test_required:")
+                            and g.hazard_class in suppressed)]
+        out.trace.append(TraceEntry(
+            "aqueous_suppression", None, "suppressed", "水溶液规则",
+            f"水为唯一最大组分且无低于 60 ℃ 的实测闪点，溶质物理危害不继承："
+            f"已抑制筛查类 {sorted(suppressed)} 的试验缺口（实测物性判定不受影响）"))
 
     result.hazards = out.outcomes
     result.trace = out.trace

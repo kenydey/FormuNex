@@ -7,7 +7,8 @@ import { call } from "@/api/client";
 import { useSession } from "@/app/session";
 import { Forbidden, errorText } from "@/shared/feedback";
 
-interface Company { id: string; name: string; name_en: string; address: string; phone: string; email: string; emergency_phone: string; unified_credit_code: string; has_logo: boolean; is_default: boolean; updated_at: string }
+interface Company { id: string; name: string; name_en: string; address: string; phone: string; email: string; emergency_phone: string; unified_credit_code: string; has_logo: boolean; is_default: boolean; applicable_regulations: string[]; updated_at: string }
+interface Regulation { code: string; name: string; name_en: string; standard: string }
 
 /** 公司配置（整合方案 §5）：SDS 第 1 节 / TDS / 标签的供应商信息来源，需 admin.companies。 */
 export default function CompaniesPage() {
@@ -19,6 +20,8 @@ export default function CompaniesPage() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Company | null>(null);
   const companies = useQuery({ queryKey: ["companies"], queryFn: () => call<Company[]>("GET", "/api/plm/companies"), enabled: can("admin.companies") });
+  const regulations = useQuery({ queryKey: ["regulations"], queryFn: () => call<Regulation[]>("GET", "/api/plm/regulations"), enabled: can("admin.companies") });
+  const regName = (code: string) => regulations.data?.find((r) => r.code === code)?.name ?? code;
   const save = useMutation({
     mutationFn: (v: Record<string, unknown>) => editing
       ? call("PUT", `/api/plm/companies/${editing.id}`, v)
@@ -54,6 +57,8 @@ export default function CompaniesPage() {
     { title: "Logo", dataIndex: "has_logo", render: (_d, r) => r.has_logo
       ? <img src={`/api/plm/companies/${r.id}/logo`} alt="logo" style={{ height: 28, maxWidth: 120, objectFit: "contain" }} /> : "—" },
     { title: t("common.status", "状态"), dataIndex: "is_default", render: (_d, r) => r.is_default ? <Tag color="green">默认</Tag> : "—" },
+    { title: "适用法规", dataIndex: "applicable_regulations", render: (_d, r) => (r.applicable_regulations ?? []).length
+      ? <span>{(r.applicable_regulations ?? []).map((code) => <Tag key={code}>{regName(code)}</Tag>)}</span> : "—" },
     { title: t("common.actions", "操作"), valueType: "option", render: (_d, r) => [
       <a key="edit" onClick={() => { setEditing(r); form.setFieldsValue(r); }}>编辑</a>,
       !r.is_default && <a key="default" onClick={() => setDefault.mutate(r.id)}>设为默认</a>,
@@ -80,6 +85,9 @@ export default function CompaniesPage() {
           <Form.Item name="email" label="邮箱"><Input /></Form.Item>
           <Form.Item name="emergency_phone" label="24h 应急电话（SDS 强制非空）" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="unified_credit_code" label="统一社会信用代码"><Input /></Form.Item>
+          <Form.Item name="applicable_regulations" label="适用法规（新建文档的默认值）">
+            <Checkbox.Group options={(regulations.data ?? []).map((r) => ({ label: `${r.name} (${r.code})`, value: r.code }))} />
+          </Form.Item>
           <Form.Item name="is_default" valuePropName="checked"><Checkbox>设为默认公司</Checkbox></Form.Item>
         </Form>
       </Modal>

@@ -12,6 +12,7 @@ export interface Revision {
 export interface DocSummary {
   id: string; revision_id: string; batch_id: string | null; doc_type: string; lang: string; version_no: number; status: string;
   content_hash: string; supersedes_id: string | null; created_at: string; created_by: string | null; has_pdf: boolean; has_docx: boolean; missing: string[]; warnings: string[];
+  regulation: string;
 }
 export interface DocField { key: string; label: string; value: unknown; source: string }
 export interface DocSection { no: number; key: string; title: string; fields: DocField[]; tables: { key: string; columns: string[]; rows: unknown[][]; source: string }[]; paragraphs: string[] }

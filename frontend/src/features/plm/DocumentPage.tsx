@@ -90,8 +90,10 @@ export default function DocumentPage() {
     queryFn: () => call<DocSummary[]>("GET", `/api/plm/revisions/${doc.data!.revision_id}/documents`) });
   const d = doc.data;
   const sameType = (siblings.data ?? []).filter((x) => d && x.doc_type === d.doc_type && x.batch_id === d.batch_id);
-  const versions = sameType.filter((x) => x.lang === d?.lang && x.id !== d?.id);
-  const other = d && sameType.filter((x) => x.lang !== d.lang).sort((a, b) => b.version_no - a.version_no)[0];
+  const sameReg = (x: DocSummary) => (x.regulation ?? "CN") === (d?.regulation ?? "CN");
+  const versions = sameType.filter((x) => x.lang === d?.lang && sameReg(x) && x.id !== d?.id);
+  const other = d && (sameType.filter((x) => x.lang !== d.lang && sameReg(x)).sort((a, b) => b.version_no - a.version_no)[0]
+    ?? sameType.filter((x) => x.lang !== d.lang).sort((a, b) => b.version_no - a.version_no)[0]);
   const diff = useQuery({ queryKey: ["plm", "diff", documentId, diffWith], enabled: !!d && (!!diffWith || !!d.supersedes_id),
     queryFn: () => call<{ changes: Change[]; major: boolean; from: string }>("GET", `/api/plm/documents/${documentId}/diff${diffWith ? `?against=${diffWith}` : ""}`) });
   const pair = useQuery({ queryKey: ["plm", "document", other?.id], enabled: bilingual && !!other,
@@ -114,15 +116,16 @@ export default function DocumentPage() {
   if (doc.error) return <PageContainer><ErrorAlert error={doc.error} /></PageContainer>;
   const content: DocContent | undefined = d?.content;
   const perm = d?.doc_type === "coa" ? "coa.sign" : "plm.document.review";
+  const dlSuffix = d && ["sds", "label"].includes(d.doc_type) && d.regulation !== "CN" ? `-${d.regulation}` : "";
 
   return (
-    <PageContainer loading={!d} title={d && `${DOC_NAMES[d.doc_type]} · ${d.lang} · v${d.version_no}`} subTitle={d && <StatusTag status={d.status} />}
+    <PageContainer loading={!d} title={d && `${DOC_NAMES[d.doc_type]} · ${d.lang}${["sds", "label"].includes(d.doc_type) && d.regulation !== "CN" ? ` · ${d.regulation}` : ""} · v${d.version_no}`} subTitle={d && <StatusTag status={d.status} />}
       extra={d && <Space wrap>
         <Button onClick={() => setHistoryOpen(true)}>{t("doc.lock_history", "锁定记录（{{n}}）", { n: docLocks.length })}</Button>
         <Link to={`/plm/revisions/${d.revision_id}`}><Button>{t("plm.revision", "修订版")}</Button></Link>
         {other && <Link to={`/plm/documents/${d.id}/proofread`}><Button>{t("doc.proofread", "中英并排校对")}</Button></Link>}
-        {d.has_pdf && <Button onClick={() => void download(`/api/plm/documents/${d.id}/file/pdf`, `${d.doc_type}-${d.lang}-v${d.version_no}.pdf`)}>PDF</Button>}
-        {d.has_docx && <Button onClick={() => void download(`/api/plm/documents/${d.id}/file/docx`, `${d.doc_type}-${d.lang}-v${d.version_no}.docx`)}>Word</Button>}
+        {d.has_pdf && <Button onClick={() => void download(`/api/plm/documents/${d.id}/file/pdf`, `${d.doc_type}-${d.lang}${dlSuffix}-v${d.version_no}.pdf`)}>PDF</Button>}
+        {d.has_docx && <Button onClick={() => void download(`/api/plm/documents/${d.id}/file/docx`, `${d.doc_type}-${d.lang}${dlSuffix}-v${d.version_no}.docx`)}>Word</Button>}
         {d.status === "draft" && can(perm) && <Button type="primary" disabled={d.missing.length > 0 || d.created_by === me?.id} onClick={() => void approve()}>
           {d.doc_type === "coa" ? t("doc.issue_coa", "签发 COA") : t("doc.approve", "审核通过")}</Button>}
       </Space>}>

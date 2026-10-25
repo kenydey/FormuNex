@@ -1,6 +1,6 @@
-import { Alert, App, Button, Divider, Form, Input, InputNumber, Modal, Select, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Checkbox, Divider, Form, Input, InputNumber, Modal, Select, Space, Tag, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
@@ -53,8 +53,9 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
       const props = { flash_point_c: v.flash_point_c, initial_boiling_point_c: v.initial_boiling_point_c, ph: v.ph,
         kinematic_viscosity_40c: v.kinematic_viscosity_40c, phys_state: v.phys_state ?? "liquid" };
       const measured = (k: string, x: unknown) => (x == null ? {} : { [k]: { value: x, source: "measured" } });
-      return call<{ id: string; missing: string[]; warnings: string[] }>("POST", `/api/plm/revisions/${revision.id}/documents`, {
+      return call<{ id: string; documents?: { id: string }[]; missing: string[]; warnings: string[] }>("POST", `/api/plm/revisions/${revision.id}/documents`, {
         doc_type: v.doc_type, lang: v.lang,
+        regulations: ["sds", "label"].includes(v.doc_type) ? v.regulations : undefined,
         properties: ["sds", "label"].includes(v.doc_type) ? props : null,
         sds_properties: { ...measured("density_g_cm3", v.sds_density), ...measured("ph", v.sds_ph), ...measured("solids_content_pct", v.sds_solids), ...measured("voc_g_l", v.sds_voc) },
         trade_secrets: Object.fromEntries(secrets.filter((s) => s.cas && s.generic).map((s) => [s.cas, s.generic])),
@@ -74,11 +75,28 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
     onSuccess: (d) => {
       if (d.missing.length) message.warning(t("doc.missing", "缺项：{{m}}", { m: d.missing.join("、") }));
       onClose();
-      navigate(`/plm/documents/${d.id}`);
+      if (d.documents?.length) {
+        message.success(t("doc.generated_multi", "已生成 {{n}} 个法规版本", { n: d.documents.length }));
+        navigate(`/plm/documents/${d.documents[0].id}`);
+      } else navigate(`/plm/documents/${d.id}`);
     },
     onError: (e) => message.error(errorText(e)),
   });
   const sds = docType === "sds" || docType === "label";
+  // G2: default the regulation selection to the default company's
+  // applicable_regulations (once per open, when the data arrives); an
+  // empty default leaves the boxes unchecked and validation requires a pick.
+  const companies = useQuery({ queryKey: ["plm", "companies"], enabled: open && sds,
+    queryFn: () => call<{ id: string; is_default: boolean; applicable_regulations: string[] }[]>("GET", "/api/plm/companies") });
+  const regulations = useQuery({ queryKey: ["plm", "regulations"], enabled: open && sds,
+    queryFn: () => call<{ code: string; name: string; standard: string }[]>("GET", "/api/plm/regulations") });
+  const regInit = useRef(false);
+  useEffect(() => {
+    if (!open) { regInit.current = false; return; }
+    if (!sds || regInit.current || !companies.data) return;
+    form.setFieldsValue({ regulations: companies.data.find((c) => c.is_default)?.applicable_regulations ?? [] });
+    regInit.current = true;
+  }, [open, sds, companies.data, form]);
   // Locked fields of the latest same-type document of this revision: regeneration
   // should preserve them — surface them here (the lock lives in the browser).
   const docs = useQuery({ queryKey: ["plm", "docs", revision.id], enabled: open,
@@ -106,6 +124,12 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
           <Form.Item name="lang" label={t("doc.lang", "语言")}><Select style={{ width: 120 }} options={[{ value: "zh-CN", label: "中文" }, { value: "en-US", label: "English" }]} /></Form.Item>
           {(docType === "sds" || docType === "tds" || docType === "ts") && <Button style={{ marginTop: 8 }} loading={candidates.isPending} onClick={() => candidates.mutate()}>{t("doc.load_measured", "带入复核实测值")}</Button>}
         </Space>
+        {sds && <Form.Item name="regulations" label={t("doc.regulations", "适用法规")}
+          rules={[{ validator: (_, v) => (!v || v.length === 0)
+            ? Promise.reject(new Error(t("doc.regulations_required", "请至少选择一个适用法规")))
+            : Promise.resolve() }]}>
+          <Checkbox.Group options={(regulations.data ?? []).map((r) => ({ label: `${r.name} (${r.code})`, value: r.code }))} />
+        </Form.Item>}
         {sds && <>
           <Divider orientation="left" plain>{t("doc.classification_inputs", "分类输入（实测物性）")}</Divider>
           <Space wrap>
