@@ -261,7 +261,58 @@ def derive_process_levers(req: Requirement) -> list[LeverSpec]:
         if len(levels) >= 2:
             levers.append(LeverSpec(name="application_method", low=0.0, high=float(len(levels) - 1),
                                     unit="", kind="discrete", levels=levels))
+    # 自定义工艺窗口（与 process_window 平行，不动既有 4 键）：数值区间 → 连续
+    # 杠杆（杠杆名取英文 key，与窗口校验的键一致）；离散列表 ≥2 → 离散杠杆。
+    # 非法项（空键、与既有键冲突、区间倒置、离散不足 2 个水平）直接丢弃，
+    # 绝不产生零宽或倒置因子（与 _numeric_window 的丢弃约定一致）。
+    for param in _custom_window_params(req):
+        key = str(param.get("key") or "").strip()
+        if not key or key in ("cure_temp_c", "cure_time_min", "film_thickness_um", "application_method"):
+            continue
+        unit = str(param.get("unit") or "")
+        if _is_discrete_param(param):
+            levels = _discrete_levels(param)
+            if len(levels) >= 2:
+                levers.append(LeverSpec(name=key, low=0.0, high=float(len(levels) - 1),
+                                        unit=unit, kind="discrete", levels=levels))
+            continue
+        bounds = _custom_range(param)
+        if bounds is not None:
+            lo, hi = bounds
+            levers.append(LeverSpec(name=key, low=lo, high=hi, unit=unit))
     return levers
+
+
+def _custom_window_params(req: Requirement) -> list[dict]:
+    """Custom process-window params from the requirement (defensive parse)."""
+    raw = getattr(req, "process_window_custom", None) or []
+    return [p for p in raw if isinstance(p, dict)]
+
+
+def _is_discrete_param(param: dict) -> bool:
+    if param.get("kind") == "discrete":
+        return True
+    if param.get("kind") == "range":
+        return False
+    values = param.get("values")
+    return isinstance(values, (list, tuple)) and any(str(v).strip() for v in values)
+
+
+def _discrete_levels(param: dict) -> list[str]:
+    values = param.get("values") or []
+    levels = [str(v) for v in values if str(v).strip()]
+    seen: set[str] = set()
+    return [v for v in levels if not (v in seen or seen.add(v))]
+
+
+def _custom_range(param: dict) -> tuple[float, float] | None:
+    try:
+        lo, hi = float(param.get("low")), float(param.get("high"))
+    except (TypeError, ValueError):
+        return None
+    if lo >= hi:
+        return None
+    return round(lo, 4), round(hi, 4)
 
 
 # 补齐计划 2-10: 工艺参数名 → 工艺窗口键的别名。DOE/任务因子名可能是英文
@@ -285,22 +336,29 @@ _PROCESS_WINDOW_ALIASES: dict[str, str] = {
 def check_process_window(
     process_params: dict[str, Any] | None,
     process_window: dict[str, Any] | None,
+    custom_params: list[dict] | None = None,
 ) -> list[str]:
     """Warn (never block) when process params deviate from the contract window.
 
     窗口形状（与前端 SpecStudioPage 一致）：数值窗口为 [lo, hi] 区间或单个定点；
     application_method 为允许列表。参数落入区间 / 在列表中 → 无警告；否则警告。
     窗口为空 / 参数为空 → 无警告。数值容差 1e-6。
+
+    自定义窗口参数（custom_params，与 process_window 平行）：按英文 key 或中文
+    label 匹配参数名；数值区间与离散列表的校验与既有键同一规则。既有键与
+    自定义键重名时既有键优先（前端保存时已拦截重名，后端再防一层）。
     """
-    if not process_params or not process_window:
+    if not process_params or (not process_window and not custom_params):
         return []
     labels = {"cure_temp_c": "固化温度", "cure_time_min": "固化时间", "film_thickness_um": "干膜厚度"}
     units = {"cure_temp_c": "°C", "cure_time_min": "min", "film_thickness_um": "μm"}
     warnings: list[str] = []
+    handled: set[str] = set()
     for name, value in process_params.items():
         key = _PROCESS_WINDOW_ALIASES.get(str(name))
-        if key is None or key not in process_window:
+        if key is None or process_window is None or key not in process_window:
             continue
+        handled.add(str(name))
         window_value = process_window.get(key)
         if window_value is None:
             continue
@@ -331,6 +389,33 @@ def check_process_window(
                 warnings.append(
                     f"{labels.get(key, key)}超出工艺窗口：窗口要求 {expected:g}{units.get(key, '')}，实际 {actual:g}{units.get(key, '')}"
                 )
+    for param in (custom_params or []):
+        if not isinstance(param, dict):
+            continue
+        key = str(param.get("key") or "").strip()
+        if not key or key in ("cure_temp_c", "cure_time_min", "film_thickness_um", "application_method"):
+            continue
+        label = str(param.get("label") or key)
+        unit = str(param.get("unit") or "")
+        for name, value in process_params.items():
+            if str(name) in handled or (str(name) != key and str(name) != label):
+                continue
+            handled.add(str(name))
+            if _is_discrete_param(param):
+                allowed = _discrete_levels(param)
+                if str(value) not in allowed:
+                    warnings.append(f"{label}超出工艺窗口：窗口允许 {', '.join(allowed)}，实际 {value}")
+                continue
+            bounds = _custom_range(param)
+            if bounds is None:
+                continue
+            try:
+                actual = float(value)
+            except (TypeError, ValueError):
+                continue
+            lo, hi = bounds
+            if actual < lo - 1e-6 or actual > hi + 1e-6:
+                warnings.append(f"{label}超出工艺窗口：窗口允许 {lo:g}~{hi:g}{unit}，实际 {actual:g}{unit}")
     return warnings
 
 

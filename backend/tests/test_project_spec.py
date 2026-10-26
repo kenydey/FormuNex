@@ -252,3 +252,73 @@ def test_2_10_dispatch_warns_on_window_deviation(tmp_path, monkeypatch):
     warns = tasks_mod.task_process_window_warnings(session, pid, {"cure_temperature_c": 200})
     assert len(warns) == 1 and "120~180" in warns[0]
     assert tasks_mod.task_process_window_warnings(session, pid, {"cure_temperature_c": 150}) == []
+
+
+def test_custom_window_params_become_levers_and_invalid_dropped():
+    """自定义工艺窗口：数值区间→连续杠杆、离散列表→离散杠杆；非法项丢弃；固定键冲突不重复。"""
+    req = Requirement(
+        domain=ProductDomain.degreaser,
+        process_window_custom=[
+            {"key": "bake_humidity", "label": "烘烤湿度", "kind": "range", "unit": "%", "low": 30, "high": 60},
+            {"key": "pretreat", "label": "前处理", "kind": "discrete", "values": ["喷砂", "抛丸"]},
+            {"key": "bad_range", "label": "坏区间", "kind": "range", "low": 50, "high": 50},
+            {"key": "single_level", "label": "单水平", "kind": "discrete", "values": ["only"]},
+            {"key": "cure_temp_c", "label": "冲突键", "kind": "range", "low": 100, "high": 200},
+            {"key": "", "label": "空键", "kind": "range", "low": 0, "high": 1},
+        ],
+    )
+    levers = derive_process_levers(req)
+    by_name = {lv.name: lv for lv in levers}
+    assert set(by_name) == {"bake_humidity", "pretreat"}
+    assert (by_name["bake_humidity"].low, by_name["bake_humidity"].high, by_name["bake_humidity"].unit) == (30, 60, "%")
+    assert by_name["pretreat"].kind == "discrete" and by_name["pretreat"].levels == ["喷砂", "抛丸"]
+
+
+def test_custom_window_check_warns():
+    """自定义窗口校验：区间内/列表内无警告；超出区间/不在列表警告（中文 label + 单位）；label 匹配同样命中。"""
+    custom = [
+        {"key": "bake_humidity", "label": "烘烤湿度", "kind": "range", "unit": "%", "low": 30, "high": 60},
+        {"key": "pretreat", "label": "前处理", "kind": "discrete", "values": ["喷砂", "抛丸"]},
+    ]
+    assert check_process_window({"bake_humidity": 45, "pretreat": "喷砂"}, None, custom) == []
+    warns = check_process_window({"烘烤湿度": 70}, None, custom)
+    assert len(warns) == 1 and "烘烤湿度" in warns[0] and "30~60%" in warns[0]
+    warns = check_process_window({"pretreat": "刷涂"}, None, custom)
+    assert len(warns) == 1 and "前处理" in warns[0] and "喷砂" in warns[0]
+    # 固定键冲突的自定义项不产生第二条警告
+    assert check_process_window({"cure_temp_c": 150}, {"cure_temp_c": [120, 180]},
+                                [{"key": "cure_temp_c", "label": "冲突", "kind": "range", "low": 0, "high": 10}]) == []
+
+
+def test_custom_window_task_warnings_end_to_end(tmp_path):
+    """任务下发路径：自定义窗口从 spec_contract 读取并参与偏离警告。"""
+    import uuid
+
+    from app.db.database import Base, make_engine, make_session_factory
+    from app.db.models import ProjectRow
+    from app.services.lab import tasks as tasks_mod
+
+    engine = make_engine(f"sqlite:///{tmp_path}/pwcustom.db")
+    Base.metadata.create_all(engine)
+    session = make_session_factory(engine)()
+    pid = str(uuid.uuid4())
+    session.add(ProjectRow(id=pid, title="pwcustom", domain="anticorrosion_coating",
+                           payload={"spec_contract": {"process_window_custom": [
+                               {"key": "bake_humidity", "label": "烘烤湿度", "kind": "range", "unit": "%", "low": 30, "high": 60}]}}))
+    session.commit()
+    assert tasks_mod.project_process_window_custom(session, pid) == [
+        {"key": "bake_humidity", "label": "烘烤湿度", "kind": "range", "unit": "%", "low": 30, "high": 60}]
+    assert tasks_mod.task_process_window_warnings(session, pid, {"bake_humidity": 70}) != []
+    assert tasks_mod.task_process_window_warnings(session, pid, {"bake_humidity": 45}) == []
+
+
+def test_requirement_keeps_custom_fields_round_trip():
+    """Requirement 新字段在 model_validate 往返中不被 extra-ignore 丢弃。"""
+    req = Requirement(
+        domain=ProductDomain.anticorrosion_coating,
+        process_window_custom=[{"key": "bake_humidity", "label": "烘烤湿度", "kind": "range", "unit": "%", "low": 30, "high": 60}],
+        custom_constraints=[{"name": "附着力", "unit": "MPa", "kind": "lower", "value": 5}],
+    )
+    again = Requirement.model_validate(req.model_dump(mode="json"))
+    assert again.process_window_custom[0]["key"] == "bake_humidity"
+    assert again.custom_constraints[0]["name"] == "附着力"

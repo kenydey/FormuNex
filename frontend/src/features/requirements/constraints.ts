@@ -79,6 +79,63 @@ export function customConstraints(req: ConstraintRequirement): [string, number][
   return Object.entries(req.constraint_values ?? {}).filter(([name]) => !labels.has(name));
 }
 
+export type CustomConstraintKind = "upper" | "lower" | "range" | "target";
+
+export interface CustomConstraintRow {
+  name: string;
+  unit?: string;
+  kind: CustomConstraintKind;
+  low?: number | null;
+  high?: number | null;
+  value?: number | null;
+}
+
+export type CustomConstraintRequirement = ConstraintRequirement & { custom_constraints?: CustomConstraintRow[] | null };
+
+/** Rows for the editor: stored structured rows, or legacy single-value entries migrated in place (kind=target). */
+export function customConstraintRows(req: CustomConstraintRequirement): CustomConstraintRow[] {
+  const stored = (req.custom_constraints ?? []).filter((r) => r && r.name.trim());
+  if (stored.length > 0) return stored;
+  return customConstraints(req).map(([name, value]) => ({ name, unit: "", kind: "target" as const, value }));
+}
+
+/** Validate structured rows; returns an error message or null. */
+export function validateCustomConstraintRows(rows: CustomConstraintRow[]): string | null {
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const name = (r.name ?? "").trim();
+    if (!name) return "自定义约束名称不能为空";
+    if (seen.has(name)) return `自定义约束名称重复：${name}`;
+    seen.add(name);
+    if (r.kind === "range") {
+      if (r.low == null || r.high == null) return `自定义约束 ${name}：区间需要上下限`;
+      if (r.low >= r.high) return `自定义约束 ${name}：下限必须小于上限`;
+    } else if (r.value == null) {
+      return `自定义约束 ${name}：需要一个值`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Write rows back: store the structured rows and keep the constraint_values
+ * single-value mirror in sync (upper/lower/target rows mirror their value;
+ * range rows write no mirror). Mirrors of rows that disappeared are removed;
+ * unrelated constraint_values entries are left untouched.
+ */
+export function syncCustomConstraints<R extends CustomConstraintRequirement>(
+  req: R, rowsBefore: CustomConstraintRow[], rowsAfter: CustomConstraintRow[],
+): R {
+  const single = new Map(rowsAfter.filter((r) => r.kind !== "range").map((r) => [r.name.trim(), r.value ?? 0]));
+  const cv = { ...(req.constraint_values ?? {}) };
+  for (const r of rowsBefore) {
+    const name = r.name.trim();
+    if (name && !single.has(name)) delete cv[name];
+  }
+  for (const [name, value] of single) cv[name] = value;
+  return { ...req, custom_constraints: rowsAfter, constraint_values: cv };
+}
+
 export function setCustomConstraint<R extends ConstraintRequirement>(req: R, name: string, value: number): R {
   const n = name.trim();
   if (!n) return req;

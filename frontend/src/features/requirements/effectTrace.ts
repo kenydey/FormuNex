@@ -61,6 +61,15 @@ export function previewEffectTrace(req: TraceRequirement | null | undefined): Tr
     if (v == null) continue;
     items.push({ field: `constraint_values.${k}`, kind: "constraint", label: `${k}=${v}`, status: "wired", consumers: ["recommend", "doe"] });
   }
+  // 自定义约束结构化行（区间行无单值镜像，只在这里可见）。
+  const customRows = (req as { custom_constraints?: { name?: string; unit?: string; kind?: string; low?: number | null; high?: number | null; value?: number | null }[] | null }).custom_constraints ?? [];
+  for (const r of customRows) {
+    if (!r?.name?.trim()) continue;
+    const unit = r.unit ?? "";
+    const desc = r.kind === "range" ? `${r.low}~${r.high}${unit}`
+      : r.kind === "upper" ? `≤${r.value}${unit}` : r.kind === "lower" ? `≥${r.value}${unit}` : `=${r.value}${unit}`;
+    items.push({ field: `custom_constraints.${r.name}`, kind: "constraint", label: `${r.name}${desc}`, status: "wired", consumers: ["recommend", "doe"] });
+  }
   return items;
 }
 

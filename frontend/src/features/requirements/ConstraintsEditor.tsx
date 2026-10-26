@@ -1,11 +1,12 @@
-import { DeleteOutlined, PlusOutlined, UndoOutlined } from "@ant-design/icons";
+import { DeleteOutlined, UndoOutlined } from "@ant-design/icons";
 import { ProCard } from "@ant-design/pro-components";
-import { Button, Col, Empty, Form, Input, InputNumber, Popconfirm, Row, Select, Slider, Space, Typography } from "antd";
-import { useState } from "react";
+import { Button, Col, Empty, Form, InputNumber, Popconfirm, Row, Select, Slider, Typography } from "antd";
 import { useTranslation } from "react-i18next";
+import { EditableRows } from "@/shared/EditableRows";
 import {
-  CONSTRAINT_CATALOG, addConstraint, appliesToDomain, constraintDef, customConstraints, getConstraintValue, removeConstraint,
-  removeCustomConstraint, resetConstraints, setConstraintValue, setCustomConstraint, type ConstraintKey, type ConstraintRequirement,
+  CONSTRAINT_CATALOG, addConstraint, appliesToDomain, constraintDef, customConstraintRows, getConstraintValue, removeConstraint,
+  resetConstraints, setConstraintValue, syncCustomConstraints, type ConstraintKey, type ConstraintRequirement,
+  type CustomConstraintRow,
 } from "./constraints";
 import { constraintLabel } from "./labels";
 
@@ -20,18 +21,10 @@ export function ConstraintsEditor<R extends ConstraintRequirement>({ requirement
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const [name, setName] = useState("");
-  const [value, setValue] = useState<number | null>(0);
   const domain = requirement.domain;
   const active = activeKeys.map(constraintDef).filter((d): d is NonNullable<typeof d> => !!d && appliesToDomain(d, domain));
   const addable = CONSTRAINT_CATALOG.filter((c) => appliesToDomain(c, domain) && !activeKeys.includes(c.key));
-  const custom = customConstraints(requirement);
-  const addCustom = () => {
-    if (!name.trim()) return;
-    onChange(setCustomConstraint(requirement, name, value ?? 0), activeKeys);
-    setName("");
-    setValue(0);
-  };
+  const customRows = customConstraintRows(requirement);
 
   return (
     <ProCard size="small" bordered title={t("requirements.constraints.title", "工艺约束")}
@@ -41,7 +34,7 @@ export function ConstraintsEditor<R extends ConstraintRequirement>({ requirement
           <Button size="small" icon={<UndoOutlined />} disabled={disabled}>{t("requirements.constraints.reset", "重置默认")}</Button>
         </Popconfirm>
       }>
-      {active.length === 0 && custom.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("requirements.constraints.empty", "暂无约束，可从下方添加")} />}
+      {active.length === 0 && customRows.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("requirements.constraints.empty", "暂无约束，可从下方添加")} />}
       {active.map((def) => {
         const v = getConstraintValue(requirement, def.key);
         return (
@@ -62,24 +55,23 @@ export function ConstraintsEditor<R extends ConstraintRequirement>({ requirement
           </Row>
         );
       })}
-      {custom.length > 0 && (
-        <>
-          <Typography.Text type="secondary">{t("requirements.constraints.custom", "自定义约束")}</Typography.Text>
-          {custom.map(([n, v]) => (
-            <Row key={n} gutter={12} align="middle" style={{ marginTop: 8 }}>
-              <Col flex="160px"><Typography.Text>{n}</Typography.Text></Col>
-              <Col flex="auto">
-                <InputNumber size="small" value={v} disabled={disabled} style={{ width: 200 }}
-                  onChange={(x) => x != null && onChange(setCustomConstraint(requirement, n, x), activeKeys)} />
-              </Col>
-              <Col flex="32px">
-                <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={disabled} aria-label={t("common.delete", "删除")}
-                  onClick={() => onChange(removeCustomConstraint(requirement, n), activeKeys)} />
-              </Col>
-            </Row>
-          ))}
-        </>
-      )}
+      <Typography.Title level={5} style={{ marginTop: 16 }}>{t("requirements.constraints.custom", "自定义约束")}</Typography.Title>
+      <Typography.Paragraph type="secondary">{t("requirements.constraints.custom_help", "与目标契约同形态：名称、单位、类型（上限 / 下限 / 区间 / 目标值）与数值；单值行同步写入约束值，区间行只作区间记录。旧单值自定义项自动转为目标值行。")}</Typography.Paragraph>
+      <EditableRows<CustomConstraintRow>
+        value={customRows}
+        onChange={(rows) => onChange(syncCustomConstraints(requirement, customRows, rows), activeKeys)}
+        newRow={() => ({ name: "", unit: "", kind: "target", value: 0 })}
+        columns={[
+          { title: t("requirements.constraints.custom_name", "约束名称"), dataIndex: "name", formItemProps: { rules: [{ required: true }] } },
+          { title: t("spec.unit", "单位"), dataIndex: "unit", width: 90 },
+          { title: t("requirements.constraints.custom_kind", "类型"), dataIndex: "kind", valueType: "select", width: 130, valueEnum: {
+            upper: t("requirements.constraints.kind_upper", "≤ 上限"), lower: t("requirements.constraints.kind_lower", "≥ 下限"),
+            range: t("requirements.constraints.kind_range", "区间"), target: t("requirements.constraints.kind_target", "目标值") } },
+          { title: t("spec.min", "下限"), dataIndex: "low", valueType: "digit", width: 110 },
+          { title: t("spec.max", "上限"), dataIndex: "high", valueType: "digit", width: 110 },
+          { title: t("requirements.constraints.custom_value", "值"), dataIndex: "value", valueType: "digit", width: 110 },
+        ]}
+      />
       <Form layout="vertical" style={{ marginTop: 16 }}>
         {addable.length > 0 && (
           <Form.Item label={t("requirements.constraints.add_preset", "添加预设约束")}>
@@ -88,14 +80,6 @@ export function ConstraintsEditor<R extends ConstraintRequirement>({ requirement
               onChange={(k: ConstraintKey | null) => { if (k) { const r = addConstraint(requirement, activeKeys, k); onChange(r.req, r.keys); } }} />
           </Form.Item>
         )}
-        <Form.Item label={t("requirements.constraints.add_custom", "添加自定义约束")}>
-          <Space.Compact>
-            <Input placeholder={t("requirements.constraints.custom_name", "约束名称")} value={name} disabled={disabled}
-              onChange={(e) => setName(e.target.value)} onPressEnter={addCustom} style={{ width: 200 }} />
-            <InputNumber placeholder={t("requirements.constraints.custom_value", "值")} value={value} disabled={disabled} onChange={setValue} style={{ width: 120 }} />
-            <Button icon={<PlusOutlined />} disabled={disabled || !name.trim()} onClick={addCustom}>{t("requirements.constraints.add", "添加")}</Button>
-          </Space.Compact>
-        </Form.Item>
       </Form>
     </ProCard>
   );

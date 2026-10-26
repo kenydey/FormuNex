@@ -239,6 +239,11 @@ class Requirement(BaseModel):
     # application_method / notes）。derive_process_levers / check_process_window 读取；
     # 前端 useRequirement 从 spec_contract.process_window 合并进来。
     process_window: dict[str, Any] | None = Field(default=None, description="工艺窗口（规格契约）")
+    # 项目自定义工艺窗口（与 process_window 平行，不动既有 4 键）：数值型
+    # {key, label, unit, low, high} 或离散型 {key, label, values[]}；前端
+    # useRequirement 从 spec_contract.process_window_custom 合并进来，后端
+    # derive_process_levers / check_process_window 以通用分支读取。
+    process_window_custom: list[dict[str, Any]] | None = Field(default=None, description="自定义工艺窗口参数")
     ph_target: float | None = Field(None, ge=0, le=14)
     notes: str = ""
     objectives: list[ObjectiveSpec] = Field(default_factory=list)
@@ -249,6 +254,10 @@ class Requirement(BaseModel):
         default_factory=dict,
         description="工艺约束 SSOT {名称: 值}，含 catalog 标签与自定义项",
     )
+    # 自定义工艺约束结构化行（与 constraint_values 单值镜像并存）：{name, unit,
+    # kind: upper|lower|range|target, low?, high?, value?}；区间行不写单值镜像。
+    # 旧单值自定义条目前端加载时原地转行（kind=target），后端不做强制迁移。
+    custom_constraints: list[dict[str, Any]] | None = Field(default=None, description="自定义工艺约束结构化行")
     active_formulation: Formulation | None = None
 
     @model_validator(mode="before")

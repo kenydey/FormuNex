@@ -1,6 +1,6 @@
 import { ProLayout } from "@ant-design/pro-components";
-import { BulbOutlined, GlobalOutlined, LockOutlined, LogoutOutlined, UserOutlined } from "@ant-design/icons";
-import { Badge, Button, Dropdown, Select, Tooltip } from "antd";
+import { BulbOutlined, GlobalOutlined, LockOutlined, LogoutOutlined, PlusOutlined, UserOutlined } from "@ant-design/icons";
+import { Badge, Button, Dropdown, Select, Space, Tooltip } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { Suspense, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -11,6 +11,7 @@ import { useUi } from "./store";
 import { NAV, type NavItem } from "./nav";
 import { ChangePasswordModal } from "@/features/auth/ChangePasswordModal";
 import { GlobalSearch } from "@/features/knowledge/GlobalSearch";
+import { ProjectCreateModal } from "@/features/spec/ProjectCreateModal";
 import { PageSpin } from "@/shared/PageSpin";
 import { ErrorBoundary } from "@/features/chat/ErrorBoundary";
 import { DegradedBanner, InfraHealthBanner } from "@/features/chat/HealthBanners";
@@ -34,6 +35,7 @@ export function Shell() {
   const { me, logout, can } = useSession();
   const ui = useUi();
   const [pwOpen, setPwOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => call<ProjectSummary[]>("GET", "/api/projects") });
   const reviewQueue = useQuery({
     queryKey: ["lab", "review-queue", "count"], enabled: can("lab.review"), refetchInterval: 60_000,
@@ -52,17 +54,21 @@ export function Shell() {
       onMenuHeaderClick={() => navigate("/dashboard")}
       actionsRender={() => [
         <GlobalSearch key="search" />,
-        <Select<string>
-          key="project"
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          style={{ width: 220 }}
-          placeholder={t("shell.project", "选择项目")}
-          value={ui.projectId ?? undefined}
-          onChange={(v) => ui.setProject(v ?? null)}
-          options={(projects.data ?? []).map((p) => ({ value: p.id, label: p.title }))}
-        />,
+        <Space.Compact key="project">
+          <Select<string>
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            style={{ width: 220 }}
+            placeholder={t("shell.project", "选择项目")}
+            value={ui.projectId ?? undefined}
+            onChange={(v) => ui.setProject(v ?? null)}
+            options={(projects.data ?? []).map((p) => ({ value: p.id, label: p.title }))}
+          />
+          <Tooltip title={t("shell.new_project", "新建项目")}>
+            <Button icon={<PlusOutlined />} disabled={!can("project.write")} onClick={() => setCreateOpen(true)} />
+          </Tooltip>
+        </Space.Compact>,
         <TaskCenter key="tasks" />,
         <Tooltip key="todo" title={t("shell.review_queue", "待复核测量值")}>
           <Badge count={reviewQueue.data?.length ?? 0} size="small">
@@ -102,6 +108,7 @@ export function Shell() {
       </ErrorBoundary>
       <ApprovalCenters />
       <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
+      <ProjectCreateModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </ProLayout>
   );
 }

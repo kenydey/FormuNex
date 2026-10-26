@@ -77,12 +77,19 @@ export default function DoeDesignerPage() {
     push("固化温度", pw.cure_temp_c, "°C");
     push("固化时间", pw.cure_time_min, "min");
     push("干膜厚度", pw.film_thickness_um, "μm");
+    // 自定义工艺窗口数值项：以中文 label 作因子名（与固定项的中文名约定一致），
+    // 离散项不自动填充（DOE 离散因子另由分类因子编辑）。
+    for (const p of (spec?.process_window_custom ?? [])) {
+      if (p?.kind !== "range" || p.low == null || p.high == null || p.low >= p.high) continue;
+      pushRange(p.label || p.key, p.low, p.high, p.unit ?? "");
+    }
     setProc(next);
     message.success(t("doe.filled_pw", "已从工艺窗口填充工艺因子（可手动调整）"));
   };
   const fmtWindow = (v: number | [number, number] | undefined, unit: string) =>
     v === undefined ? null : Array.isArray(v) ? `${v[0]}~${v[1]} ${unit}` : `${v} ${unit}`;
-  const hasProcessWindow = pw.cure_temp_c !== undefined || pw.cure_time_min !== undefined || pw.film_thickness_um !== undefined;
+  const hasProcessWindow = pw.cure_temp_c !== undefined || pw.cure_time_min !== undefined || pw.film_thickness_um !== undefined
+    || (spec?.process_window_custom ?? []).some((p) => p?.kind === "range" && p.low != null && p.high != null && p.low < p.high);
   const arrays = useQuery({ queryKey: ["doe", "arrays"], queryFn: () => call<{ name: string; runs: number; columns: number }[]>("GET", "/api/doe/designs/orthogonal-arrays") });
 
   const [oaFactors, setOaFactors] = useState<LevelFactor[]>([{ name: "固化温度", levels: "120, 150, 180" }, { name: "固化时间", levels: "20, 30, 40" }]);

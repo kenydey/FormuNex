@@ -47,9 +47,28 @@ def project_process_window(session: Session, project_id: str | None) -> dict[str
     return dict(window) if isinstance(window, dict) and window else None
 
 
+def project_process_window_custom(session: Session, project_id: str | None) -> list[dict] | None:
+    """读项目的自定义工艺窗口（spec_contract.process_window_custom，与既有窗口平行）。"""
+    if not project_id:
+        return None
+    row = session.get(ProjectRow, project_id)
+    if row is None:
+        return None
+    spec = (row.payload or {}).get("spec_contract") or {}
+    custom = spec.get("process_window_custom")
+    if not isinstance(custom, list):
+        return None
+    params = [p for p in custom if isinstance(p, dict)]
+    return params or None
+
+
 def task_process_window_warnings(session: Session, project_id: str | None, factors: dict[str, Any]) -> list[str]:
     """补齐计划 2-10: 任务因子 vs 契约工艺窗口的偏离警告（只警告，不拦截）。"""
-    return check_process_window(factors, project_process_window(session, project_id))
+    return check_process_window(
+        factors,
+        project_process_window(session, project_id),
+        project_process_window_custom(session, project_id),
+    )
 
 
 def _next_task_no(session: Session) -> str:

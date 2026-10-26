@@ -39,8 +39,31 @@ export interface ProcessWindow {
   notes?: string;
 }
 
+/** 自定义工艺窗口参数（与 ProcessWindow 既有 4 键平行，不动旧数据）。 */
+export interface CustomWindowParam {
+  key: string;
+  label: string;
+  kind: "range" | "discrete";
+  unit?: string;
+  low?: number | null;
+  high?: number | null;
+  values?: string[];
+}
+
+/** 自定义工艺约束结构化行：单值行（upper/lower/target）同步写 constraint_values 镜像，区间行不写。 */
+export interface CustomConstraintRow {
+  name: string;
+  unit?: string;
+  kind: "upper" | "lower" | "range" | "target";
+  low?: number | null;
+  high?: number | null;
+  value?: number | null;
+}
+
 export interface SpecContract {
   process_window?: ProcessWindow;
+  /** 自定义工艺窗口参数（见 CustomWindowParam）。 */
+  process_window_custom?: CustomWindowParam[];
   red_lines?: RedLineSubstance[];
   voc_limit_g_l?: number | null;
   forbidden_pictograms?: string[];
@@ -66,8 +89,12 @@ export interface Requirement {
   levers?: { name: string; low: number; high: number; unit?: string }[];
   /** 补齐计划 2-10: 规格契约工艺窗口（后端 derive_process_levers / check_process_window 读取）。 */
   process_window?: ProcessWindow | null;
+  /** 自定义工艺窗口参数（与 process_window 平行；useRequirement 从 spec_contract 合并进来）。 */
+  process_window_custom?: CustomWindowParam[] | null;
   /** 工艺约束 SSOT {名称: 值}: catalogue labels and free-form entries. */
   constraint_values?: Record<string, number>;
+  /** 自定义工艺约束结构化行（见 CustomConstraintRow；单值行同步写 constraint_values 镜像）。 */
+  custom_constraints?: CustomConstraintRow[] | null;
   [k: string]: unknown;
 }
 

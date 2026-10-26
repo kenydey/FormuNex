@@ -140,6 +140,32 @@ def build_requirement_effect_trace(req: Requirement | None) -> list[dict[str, An
             }
         )
 
+    # 自定义约束结构化行（与单值镜像并存，区间行无单值镜像，只在这里可见）。
+    for row in (getattr(req, "custom_constraints", None) or []):
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        unit = str(row.get("unit") or "")
+        kind = str(row.get("kind") or "target")
+        if kind == "range":
+            desc = f"{row.get('low')}~{row.get('high')}{unit}"
+        elif kind in ("upper", "lower"):
+            desc = f"{'≤' if kind == 'upper' else '≥'}{row.get('value')}{unit}"
+        else:
+            desc = f"={row.get('value')}{unit}"
+        items.append(
+            {
+                "field": f"custom_constraints.{name}",
+                "kind": "constraint",
+                "label": f"{name}{desc}",
+                "status": "wired",
+                "consumers": ["recommend", "doe"],
+                "detail": "自定义约束结构化行",
+            }
+        )
+
     # Notes / materials list — display unless empty
     if (getattr(req, "notes", None) or "").strip():
         items.append(

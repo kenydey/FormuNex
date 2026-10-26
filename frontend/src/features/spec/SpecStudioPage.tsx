@@ -2,10 +2,11 @@ import { PageContainer, ProCard } from "@ant-design/pro-components";
 import { App, Button, Checkbox, Form, Input, InputNumber, Select, Slider, Space, Tabs, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { useUi } from "@/app/store";
+import { useSession } from "@/app/session";
 import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { GhsPictogram } from "@/shared/ghs";
@@ -13,10 +14,13 @@ import { AgentContextCard } from "@/features/requirements/AgentContextCard";
 import { ConstraintsEditor } from "@/features/requirements/ConstraintsEditor";
 import { EffectTrace } from "@/features/requirements/EffectTrace";
 import { ProjectHistory } from "@/features/requirements/ProjectHistory";
-import { parseActiveConstraints, type ConstraintKey } from "@/features/requirements/constraints";
+import { customConstraintRows, parseActiveConstraints, validateCustomConstraintRows, type ConstraintKey } from "@/features/requirements/constraints";
 import { previewEffectTrace } from "@/features/requirements/effectTrace";
 import { DOMAINS, SUBSTRATES, type Acceptance, type Objective, type ProjectDetail, type RedLineSubstance, type ReleaseSpec,
   type Requirement, type SpecContract } from "./types";
+import { fromEditorRows, toEditorRows, validateCustomWindow, type CustomWindowRow } from "./customWindow";
+import { ProjectDeleteModal } from "./ProjectDeleteModal";
+import { ProjectRenameModal } from "./ProjectRenameModal";
 
 const PICTOS = ["GHS01", "GHS02", "GHS03", "GHS04", "GHS05", "GHS06", "GHS07", "GHS08", "GHS09"];
 const METHODS = ["airless", "air_spray", "electrostatic", "dip", "roller", "brush", "electrophoretic", "autodeposition"];
@@ -26,7 +30,9 @@ export default function SpecStudioPage() {
   const { t, i18n } = useTranslation();
   const { message } = App.useApp();
   const { projectId = "" } = useParams();
+  const navigate = useNavigate();
   const setProject = useUi((s) => s.setProject);
+  const { can } = useSession();
   const qc = useQueryClient();
   const en = i18n.language === "en-US";
   const q = useQuery({ queryKey: ["project", projectId], queryFn: () => call<ProjectDetail>("GET", `/api/projects/${projectId}`) });
@@ -41,6 +47,9 @@ export default function SpecStudioPage() {
   const [req, setReq] = useState<Requirement | null>(null);
   const [spec, setSpec] = useState<SpecContract>({});
   const [activeKeys, setActiveKeys] = useState<ConstraintKey[]>([]);
+  const [tab, setTab] = useState("scenario");
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   useEffect(() => { setProject(projectId); }, [projectId, setProject]);
   useEffect(() => {
     if (q.data) {
@@ -57,21 +66,38 @@ export default function SpecStudioPage() {
     },
     onError: (e) => message.error(errorText(e)),
   });
+  const saveChecked = () => {
+    const windowError = validateCustomWindow(spec.process_window_custom ?? []);
+    if (windowError) { message.error(windowError); setTab("process_custom"); return; }
+    const constraintError = req ? validateCustomConstraintRows(customConstraintRows(req)) : null;
+    if (constraintError) { message.error(constraintError); setTab("constraints"); return; }
+    save.mutate();
+  };
   if (q.error) return <PageContainer><ErrorAlert error={q.error} /></PageContainer>;
   if (!req) return <PageContainer loading />;
   const setR = (patch: Partial<Requirement>) => setReq({ ...req, ...patch });
   const setS = (patch: Partial<SpecContract>) => setSpec({ ...spec, ...patch });
   const pw = spec.process_window ?? {};
+  const canWrite = can("project.write");
 
   return (
     <PageContainer title={q.data?.title} subTitle={t("spec.sub", "规格契约是 DOE、寻优、合规拦截与发布门禁的共同依据")}
       extra={<Space>
         <Link to={`/spec/projects/${projectId}/sources`}>{t("requirements.sources.link", "项目资料")}</Link>
-        <Button type="primary" loading={save.isPending} onClick={() => save.mutate()}>{t("common.save", "保存")}</Button>
+        <Button disabled={!canWrite || !q.data} title={t("common.need_project_write", "需要权限：创建 / 编辑项目")}
+          onClick={() => setRenameOpen(true)}>{t("common.edit", "编辑")}</Button>
+        <Button danger disabled={!canWrite || !q.data} title={t("common.need_project_write", "需要权限：创建 / 编辑项目")}
+          onClick={() => setDeleteOpen(true)}>{t("common.delete", "删除")}</Button>
+        <Button type="primary" loading={save.isPending} onClick={saveChecked}>{t("common.save", "保存")}</Button>
       </Space>}>
+      <ProjectRenameModal open={renameOpen} onClose={() => setRenameOpen(false)}
+        project={q.data ? { id: projectId, title: q.data.title } : null} />
+      <ProjectDeleteModal open={deleteOpen} onClose={() => setDeleteOpen(false)}
+        project={q.data ? { id: projectId, title: q.data.title } : null}
+        onDeleted={() => { setProject(null); navigate("/spec/projects"); }} />
       <ProCard split="vertical" bordered>
         <ProCard>
-          <Tabs items={[
+          <Tabs activeKey={tab} onChange={setTab} items={[
             { key: "scenario", label: t("spec.tab.scenario", "应用场景"), children: (
               <Form layout="vertical" style={{ maxWidth: 640 }}>
                 <Form.Item label={t("spec.domain", "产品领域")}>
@@ -121,7 +147,30 @@ export default function SpecStudioPage() {
                   <Checkbox.Group value={pw.application_method} onChange={(v) => setS({ process_window: { ...pw, application_method: v as string[] } })}
                     options={METHODS.map((m) => ({ value: m, label: t(`spec.method.${m}`, { airless: "高压无气喷涂", air_spray: "空气喷涂", electrostatic: "静电喷涂", dip: "浸涂", roller: "辊涂", brush: "刷涂", electrophoretic: "电泳", autodeposition: "自沉积" }[m]!) }))} />
                 </Form.Item>
+                <Form.Item label={t("spec.process_notes", "工艺备注")}>
+                  <Input.TextArea rows={2} value={pw.notes} onChange={(e) => setS({ process_window: { ...pw, notes: e.target.value } })} />
+                </Form.Item>
               </Form>
+            ) },
+            { key: "process_custom", label: t("spec.tab.process_custom", "自定义工艺参数"), children: (
+              <>
+                <Typography.Paragraph type="secondary">{t("spec.process_custom.help", "与目标契约同形态：英文键、中文名、单位、数值区间或离散列表；保存时校验键唯一、不与固定项冲突、区间下限小于上限。自定义参数进入 DOE 杠杆与任务窗口警告。")}</Typography.Paragraph>
+                <EditableRows<CustomWindowRow>
+                  value={toEditorRows(spec.process_window_custom ?? [])}
+                  onChange={(rows) => setS({ process_window_custom: fromEditorRows(rows) })}
+                  newRow={() => ({ key: "", label: "", kind: "range", unit: "", low: 0, high: 1 })}
+                  columns={[
+                    { title: t("spec.custom_key", "英文键"), dataIndex: "key", formItemProps: { rules: [{ required: true, pattern: /^[a-z0-9_]+$/ }] } },
+                    { title: t("spec.custom_label", "中文名"), dataIndex: "label", formItemProps: { rules: [{ required: true }] } },
+                    { title: t("spec.custom_kind", "类型"), dataIndex: "kind", valueType: "select", width: 120, valueEnum: {
+                      range: t("spec.custom_range", "数值区间"), discrete: t("spec.custom_discrete", "离散列表") } },
+                    { title: t("spec.unit", "单位"), dataIndex: "unit", width: 90 },
+                    { title: t("spec.min", "下限"), dataIndex: "low", valueType: "digit", width: 110 },
+                    { title: t("spec.max", "上限"), dataIndex: "high", valueType: "digit", width: 110 },
+                    { title: t("spec.custom_values", "离散值（逗号分隔）"), dataIndex: "values_text" },
+                  ]}
+                />
+              </>
             ) },
             { key: "constraints", label: t("requirements.constraints.tab", "工艺约束"), children: (
               <Space direction="vertical" style={{ width: "100%" }} size={16}>

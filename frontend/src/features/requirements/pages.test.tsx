@@ -72,8 +72,19 @@ describe("ConstraintsEditor", () => {
     wrap(<ConstraintsEditor requirement={{ domain: "anticorrosion_coating", voc_limit_gpl: 300, constraint_values: { 硬度: 2 } }}
       activeKeys={["voc_limit_gpl"]} onChange={onChange} />);
     expect(screen.getByText("VOC 上限")).toBeInTheDocument();
-    expect(screen.getByText("硬度")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("硬度")).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole("button", { name: /删除|delete/i })[0]);
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ voc_limit_gpl: null }), []);
-  });
+  }, 60_000);
+
+  it("migrates a legacy single custom constraint and deletes it via the structured rows", async () => {
+    const onChange = vi.fn();
+    wrap(<ConstraintsEditor requirement={{ domain: "anticorrosion_coating", constraint_values: { 硬度: 2 } }}
+      activeKeys={[]} onChange={onChange} />);
+    expect(screen.getByDisplayValue("硬度")).toBeInTheDocument();
+    await userEvent.click(screen.getByText(/^(删除|Delete)$/));
+    await userEvent.click(await screen.findByRole("button", { name: /确\s?定|OK/ }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ custom_constraints: [], constraint_values: {} }), []);
+  }, 60_000);
 });

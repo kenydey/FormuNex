@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  addConstraint, clearConstraintValue, customConstraints, getConstraintValue, parseActiveConstraints, removeConstraint, removeCustomConstraint,
-  resetConstraints, setCustomConstraint,
+  addConstraint, clearConstraintValue, customConstraintRows, customConstraints, getConstraintValue, parseActiveConstraints, removeConstraint, removeCustomConstraint,
+  resetConstraints, setCustomConstraint, syncCustomConstraints, validateCustomConstraintRows,
 } from "./constraints";
-import type { ConstraintRequirement } from "./constraints";
+import type { ConstraintRequirement, CustomConstraintRequirement } from "./constraints";
 import { previewEffectTrace, traceCounts } from "./effectTrace";
 import { applyLookup, draftFromView, lookupQuery, lookupSource, nextAvailability, payloadFromDraft, structureMode, EMPTY_DRAFT } from "./materials/materialForm";
 import { causeParts } from "./ProjectHistory";
@@ -48,6 +48,32 @@ describe("constraints", () => {
     expect(s.constraint_values).toMatchObject({ 硬度: 2 });
     expect(setCustomConstraint(base, "  ", 2)).toBe(base);
     expect(removeCustomConstraint(s, "附着力").constraint_values).not.toHaveProperty("附着力");
+  });
+
+  it("structured custom rows prefer stored rows and migrate legacy singles", () => {
+    const stored = customConstraintRows({ domain: "anticorrosion_coating", custom_constraints: [{ name: "附着力", unit: "MPa", kind: "lower", value: 5 }], constraint_values: { 附着力: 1 } });
+    expect(stored).toEqual([{ name: "附着力", unit: "MPa", kind: "lower", value: 5 }]);
+    expect(customConstraintRows(base)).toEqual([{ name: "附着力", unit: "", kind: "target", value: 1 }]);
+  });
+
+  it("sync keeps the single-value mirror and drops removed rows, leaving others alone", () => {
+    const before = [{ name: "附着力", unit: "", kind: "target" as const, value: 1 }];
+    const after = [
+      { name: "附着力", unit: "MPa", kind: "lower" as const, value: 5 },
+      { name: "粗糙度", unit: "μm", kind: "range" as const, low: 10, high: 30 },
+    ];
+    const next = syncCustomConstraints({ domain: "anticorrosion_coating", constraint_values: { 附着力: 1, 外来: 9 } } as CustomConstraintRequirement, before, after);
+    expect(next.custom_constraints).toEqual(after);
+    expect(next.constraint_values).toEqual({ 附着力: 5, 外来: 9 });
+    const removed = syncCustomConstraints(next, after, []);
+    expect(removed.constraint_values).toEqual({ 外来: 9 });
+  });
+
+  it("validates structured custom rows", () => {
+    expect(validateCustomConstraintRows([{ name: "a", kind: "range", low: 5, high: 5 }])).toMatch(/下限必须小于上限/);
+    expect(validateCustomConstraintRows([{ name: "a", kind: "range", low: 1, high: 2 }, { name: "a", kind: "target", value: 1 }])).toMatch(/重复/);
+    expect(validateCustomConstraintRows([{ name: "a", kind: "upper", value: null }])).toMatch(/需要一个值/);
+    expect(validateCustomConstraintRows([{ name: "a", kind: "range", low: 1, high: 2 }])).toBeNull();
   });
 
   it("sanitises the persisted active list", () => {

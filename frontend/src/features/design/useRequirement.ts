@@ -23,6 +23,8 @@ export function useRequirement() {
         // 补齐计划 2-10: 规格契约工艺窗口是 DOE 的共同依据，随 requirement 一起发给后端
         // （后端 derive_process_levers / check_process_window 读取）。
         process_window: project.data.workspace.spec_contract?.process_window ?? (stored as DesignRequirement | undefined)?.process_window,
+        process_window_custom: project.data.workspace.spec_contract?.process_window_custom
+          ?? (stored as DesignRequirement | undefined)?.process_window_custom,
         domain: stored?.domain || project.data.domain || "anticorrosion_coating", project_id: projectId ?? "" }
     : null;
   const saveLevers = useMutation({
