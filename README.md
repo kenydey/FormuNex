@@ -133,6 +133,10 @@ bash scripts/apply_patches.sh      # 第三方库补丁(幂等,pymupdf4llm Rapid
 pytest -q                          # 430+ tests, all offline
 uvicorn app.main:app --reload --reload-exclude .venv  # http://localhost:8000/docs
 
+# If the dev database predates a migration (API errors like "no such column"),
+# bring it to head before debugging further:
+alembic upgrade head
+
 # Frontend (separate shell)
 cd frontend
 npm install
