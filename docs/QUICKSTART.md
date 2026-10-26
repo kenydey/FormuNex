@@ -1,415 +1,141 @@
-# FormuNex Quick Start (5 minutes)
+# FormuNex Quick Start (10 minutes)
 
-Run a complete formulation R&D loop in 5 minutes, with real UI screenshots.
-For the full reference see [USER_GUIDE.md](./USER_GUIDE.md) (中文: [快速入门.md](./快速入门.md)).
-
----
+FormuNex is an R&D + PLM platform in one: literature and patent insight → requirement contract → formulation design → DOE / Bayesian optimization → GB 30000 compliance → SDS / TDS / COA / labels → freeze and release. This guide walks you through one minimal loop. See the User Guide for full details.
 
 ## Prerequisite: start the platform
 
 ```bash
-# One-click install (checks Python/Node, installs deps, writes .env, runs migrations)
-./install.sh            # macOS / Linux   (add --start to launch everything afterwards)
-install.bat             # Windows         (double-click, or: powershell -ExecutionPolicy Bypass -File install.ps1)
+# Terminal 1: backend (from the repo backend/ directory)
+uvicorn app.main:app --reload --reload-exclude .venv  # http://localhost:8000
 
-# …or step by step:
-./scripts/install.sh    # deps only
-cp .env.example .env    # intranet: FORMUNEX_API_AUTH_ENABLED=false
-# Product defaults already pin Datalab ELN (do not switch to sqlite for "offline lab")
-
-# Core infra (required): Redis + Datalab ELN + Celery worker
-docker compose up -d redis
-docker compose -f docker-compose.yml -f docker-compose.eln.yml up -d
-# Or: bash scripts/start_all.sh
-
-# Backend + worker (terminal 1–2) — keep CELERY_EAGER=false for real async
-cd backend
-source .venv/bin/activate
-FORMUNEX_CELERY_EAGER=false uvicorn app.main:app --reload --reload-exclude .venv
-# other terminal:
-FORMUNEX_CELERY_EAGER=false celery -A app.worker.celery_app worker --loglevel=info
-
-# Frontend (terminal 3)
-cd frontend && npm run dev                        # http://localhost:5174
+# Terminal 2: frontend (from the repo frontend/ directory)
+npm run dev                                            # http://localhost:5174
 ```
 
-Open **http://localhost:5174**. LLM API keys are optional for offline rule-based paths.
-**Datalab ELN (:5001) is required** for recommend / experiments / workbench / optimize.
-If platform bearer auth is enabled, enter the **API access token** in Settings first
-(matching `FORMUNEX_API_TOKEN`), or set `FORMUNEX_API_AUTH_ENABLED=false`.
+Open http://localhost:5174 and log in. No LLM key is fine: the platform shows an "offline degraded mode" banner, and features that work offline (recommendation, DOE, optimization) keep working, while deep research, online search and cross-source verification need a key. Document generation is async: run a Celery worker, or start the backend with `FORMUNEX_CELERY_EAGER=true` for local development.
 
-### Or with Docker
-
-```bash
-cp .env.example .env
-docker compose -f docker-compose.yml -f docker-compose.eln.yml up -d --build
-docker compose exec backend alembic upgrade head
-curl -s localhost:8000/health
-```
-
-**Check `/health` before anything else** — it is the one place that tells you
-whether the platform can actually do work:
-
-```json
-{"status":"ok",
- "database":  {"ok":true,"scheme":"sqlite"},
- "task_broker":{"required":true,"reachable":true},
- "datalab":   {"required":true,"reachable":true}}
-```
-
-- `datalab.reachable:false` with `required:true` → start ELN (`deploy/eln/README.md`);
-  lab APIs return 503 with a start hint (no silent sqlite success).
-- `task_broker.reachable:false` → Redis/worker down; async submit is refused.
-  Prefer Redis + worker over treating `CELERY_EAGER=true` as a production substitute.
-
-> Pick one compose invocation and keep it. `docker compose up` uses the bridge
-> network; `-f docker-compose.yml -f docker-compose.host.yml` uses the host
-> network. Switching mid-life recreates only some services and strands the rest
-> on the old network — the symptom is `task_broker.reachable:false` with redis
-> apparently "Up". `docker compose down && docker compose up -d` realigns
-> everything.
-
----
+> First-time deployments also offer a desktop setup wizard (`/setup`: local Docker stack or a remote server, regulation library, admin account). Team deployments just need a login.
 
 ## Step 0 · Overview
 
-FormuNex uses a NotebookLM-style three-pane layout that separates
-**inputs → research → outputs**: **Sources** on the left, **Research** Q&A in
-the center, and the **Actions** toolbar on the right. The header holds
-**⚙ Settings** (LLM provider) and **🕐 History**.
+The UI is a light workbench: the **left nav** groups features by R&D workflow, the **top project selector** sets the current project, and most pages filter by project. Pick a project first; without one, most pages only show an empty state.
 
-![Overview](./images/01-overview.png)
+Left nav (web: 41 second-level entries + dashboard):
 
-- **Left (Sources)**: research-topic prompt box, source-type checkboxes
-  (patents / literature / internet / local files / **📓 NotebookLM**) each with
-  a **status dot** (green = available online, yellow = offline fallback, red =
-  library not installed), file upload, a **Search** button, a **🔬 Deep
-  Research** button (below Search) that triggers multi-agent DeepResearchEngine
-  research, a **🧪 ChemCrow** chemistry-enhancement badge that appears when
-  Literature or Internet are selected, an error banner shown when search fails,
-  and the loaded-sources list.
-- **Center (Research)**: chat that answers questions grounded in the loaded
-  sources, with citations.
-- **Right (Actions)**: ten buttons, each opening a focused modal:
+| Group | Entries |
+|---|---|
+| My Workspace | Dashboard |
+| Knowledge Search | Search, Sources & Tree, Knowledge Q&A, Retrieval Evidence Audit |
+| Literature & Research | Literature Library, External Search & Deep Research, Research Artifacts, Example Drafts, Patent / IP Analysis, Wiki Knowledge Base |
+| R&D Requirements | PathWizard, Projects & Spec Contracts |
+| Formulation & Lab | AI Formulation Recommendation, Formulation Editor, DOE Design, Lab Task Records, Measurement & Review, Material Substitution, Inverse Design, Methods & Instruments, External ELN |
+| Optimization & Analysis | Surrogate Models, Response Surfaces, Uncertainty Diagnosis, Optimization Loop, Formulation Properties, Rheology Fitting |
+| Documents & Release | Products & Revisions, Formulation DB Mappings, Label Designer, Regulatory Assistant |
+| Materials & Regulations | Substances & Regulatory Data, Raw Materials, Substance Tox/Eco Records, Material Knowledge Graph |
+| System Admin | MCP Tool Approvals, Users & Roles, Company Settings, Settings Center, Audit Log, Org Dashboard |
 
-  | | Button | What it does |
-  |---|---|---|
-  | 🧪 | Requirements | domain, substrate, objectives (**constraint tracing**) |
-  | ⭐ | Recommend | AI Top-N (expand **Why recommended** on cards) |
-  | 🎯 | **Inverse Design** | target properties → Pareto front of formulations |
-  | 🔁 | **Material Substitution** | replacements + predicted Δ (supply badges) |
-  | 🔬 | DOE Design | generate a run table, export a worksheet |
-  | 📋 | Workbench | measured ledger; optional project auto-loop / soft-correct (off by default) |
-  | 📄 | **QC Report** | upload a test report → extracted measurements |
-  | 📈 | Optimization | Bayesian multi-objective loop |
-  | ⚙️ | Process Optimization | cure / dispersion / film-thickness parameters |
-  | 🔄 | Self-Driving Loop | data → retrain → optimize → next DOE, one click |
-  | 📚 | **Knowledge** | Hub: archive · quality-ops · Wiki · graph · dossier |
+![Overview · Dashboard](./images/01-overview.png)
 
-  A **PathWizard** above the buttons short-cuts formula / substitute / knowledge.
-  The three in bold are covered in steps 5b, 5c and 6b below.
+The top bar also has global search, a "+" next to the project selector to create a project (needs `project.write`), a task center, a to-do badge (measurements awaiting review, linking to Measurement & Review), and a ZH / EN switch.
 
----
+## Step 1 · Create a project and set the requirement contract
 
-## Step 1 · Load sources
+Click "+" in the top bar to create a project (or go to **R&D Requirements → Projects & Spec Contracts**), fill in the contract tabs, and click **Save**:
 
-Type a research topic (e.g. "low-VOC waterborne anti-corrosion coating"), tick
-the source types to search (patents / literature / internet / **📓 NotebookLM**),
-and click **Search**. You can also upload local files (PDF/DOCX/XLSX/PPTX/HTML/
-images), parsed via markitdown.
+- **Application**: product domain, substrate, and more;
+- **Target Contract**: optimization targets, weights, directions;
+- **Process Window**: manufacturing parameter ranges (cure temperature, cure time, dispersion speed, film thickness, and more);
+- **Custom Process Parameters**: product-specific numeric ranges or discrete lists;
+- **Process Constraints**: structured constraint rows;
+- **Compliance Red Lines**: banned / restricted substances.
 
-![Search & sources](./images/02-search.png)
+![Projects & Spec Contracts](./images/08-nl-intent.png)
 
-Results from every selected source are merged, de-duplicated, ranked by
-relevance, and listed in the left column (each removable). Offline, patent
-search returns the curated seed corpus; literature/internet search need the
-optional `intel` libraries; NotebookLM needs the `notebooklm` extra and a
-one-time browser login (see §12 of the full guide).
+> ✨ NL Intent is currently **API-only** (`POST /api/intent/parse`): send a one-sentence brief such as "Develop a waterborne epoxy anti-corrosion coating for automotive underbody, salt spray ≥ 1000 h, cures at 120 °C" and the API extracts domain, substrate, salt-spray hours, VOC limit, cure temperature and more (LLM when configured, otherwise a deterministic regex fallback). Fill the returned fields into the contract form. The contract page has no parse input box yet.
 
-**v0.9 source panel additions:**
+## Step 2 · Search sources and ask them questions
 
-- **Status dots** beside each source-type checkbox give real-time availability
-  at a glance: green = available online, yellow = offline fallback active
-  (patents always have a seed corpus even offline), red = required library not
-  installed.
-- When **Literature** or **Internet** is selected, a **🧪 ChemCrow** badge
-  appears in the panel indicating whether ChemCrow chemistry-enhanced retrieval
-  is active (`[intel]` extra required).
-- The **🔬 Deep Research** button (below Search) calls the async
-  `POST /api/research/deep` endpoint. It launches **DeepResearchEngine** — a
-  multi-agent pipeline comprising a `web_agent` and a `kb_agent` (with HyDE
-  query expansion and LLM re-ranking), followed by a `report_agent` that
-  cross-validates evidence and enforces cited conclusions. Use it when you need
-  a thorough synthesised report rather than a quick keyword search.
-- An **error banner** is displayed in the Sources column if a search request
-  fails, with the reason returned by the backend.
+**Knowledge Search → Search** is hybrid retrieval (BM25 / cosine / hybrid) over the project knowledge base; you can upload local files (PDF / DOCX / XLSX / PPTX / HTML / images).
 
----
+![Knowledge Search](./images/02-search.png)
 
-## Step 2 · Ask the sources (grounded Q&A)
+**Literature & Research → External Search & Deep Research** is a hub page with tabs instead of the old three columns: **External Search** (patent / literature / web multi-source search), **Source Q&A** (grounded Q&A over selected sources, every answer carrying citation tags), **Deep Research** (multi-source comprehensive research flow), and **STORM Long-form** (long-form writing with citations). Offline, patent search returns a curated seed corpus; literature and web search need the matching optional dependencies.
 
-In the center column, ask a question about the loaded sources — e.g. "What is
-the main corrosion-protection mechanism in these patents?". The answer is
-**grounded in the evidence** (semantic embedding or TF-IDF re-rank → LLM) and
-shows citation chips linking back to the sources used.
+![Research · Source Q&A](./images/03-research.png)
 
-![Research Q&A](./images/03-research.png)
+**Knowledge Search → Knowledge Q&A** is streaming Q&A over the project knowledge base, with sessions persisted per project. The "+" beside the input picks chat skills, Connectors, literature-synthesis mode and MCP servers (up to 4); typing `/` quickly picks an enabled skill. MCP write tools need per-session approval, not a permanent grant.
 
----
+## Step 3 · Choose your LLM (Settings Center)
 
-## Step 3 · Choose your LLM (Settings)
+**System Admin → Settings Center** (needs `admin.llm`) has tabs for Models, API Keys & Search Routing, API Access Tokens, Skills, Environment Variables, Dependency Management, KB / KG Maintenance, and Connectors. Pick a model provider and fill in its key on the Models tab; enable skills on the Skills tab; import MCP servers on the Connectors tab (disabled by default).
 
-Click **⚙ Settings** in the header. The dialog has three tabs:
+![Settings · Models](./images/04-settings.png)
 
-| Tab | Purpose |
-|-----|---------|
-| **LLM** | Nine providers — model and **LLM API key** |
-| **API keys** | Tavily, SerpAPI, EPO, … search/data-source secrets |
-| **Dependencies** | Install optional pip packages (`llm`, `intel`, `science`, …) from the UI |
+Do not confuse the two kinds of keys: the platform API access token (`FORMUNEX_API_TOKEN`) protects `/api/*` with Bearer auth; LLM / search API keys (DeepSeek, Tavily, and others) power LLM Q&A and online search.
 
-If an **API access token** banner appears at the top, that is the **platform bearer**
-(`FORMUNEX_API_TOKEN`), not your LLM key. For intranet dev, set
-`FORMUNEX_API_AUTH_ENABLED=false` in `.env` and restart the backend.
+## Step 4 · Generate recommended formulations
 
-Pick provider and model, paste an API key, optionally set base URL, then **Save &
-test connection**. With no key, everything still runs via the offline rule engine.
+**Formulation & Lab → AI Formulation Recommendation**: the **Generate** tab creates recommendations from the contract (high-active / baseline / lean variants, scored and ranked by target metrics), then automatically switches to the **Leaderboard** tab. Expand a card for the ingredient table, predicted metrics with uncertainty (PVC / CPVC, Tg, relative viscosity, optional lab_L/a/b + ΔE₀₀), why it was recommended, and the **🔍 IP Compliance Analysis** button.
 
-![Settings · multi-LLM](./images/04-settings.png)
+![Recommended formulations · Leaderboard](./images/05-recommend.png)
 
----
+## Step 5 · Inverse design: start from the target
 
-## Step 4 · Describe the project in one sentence (✨ NL Intent)
-
-NL Intent is currently API-only (`POST /api/intent/parse`): send a
-plain-language brief like *"Develop a waterborne epoxy anti-corrosion coating
-for automotive underbody, salt spray ≥ 1000 h, cures at 120 °C"* and the API
-extracts domain, substrate, salt-spray hours, VOC limit and cure temperature
-(LLM when configured, otherwise the deterministic regex fallback). Fill the
-returned fields into the contract form below (the contract page has no parse
-input box yet).
-
-![NL Intent · contract form (API-only)](./images/08-nl-intent.png)
-
----
-
-## Step 5 · Recommend formulations + IP analysis
-
-Open **⭐ Recommend** (right column) and click **research patents & recommend
-formulations**. The Top-N leaderboard appears — each card shows the ingredient
-table and predicted metrics, including the auto-computed `cost_cny_per_kg`,
-`voc_gpl`, `sustainability_idx`, **PVC / CPVC** (pigment volume concentration
-vs. critical), **Tg (°C)** and **viscosity_relative** (Fox & Mooney models),
-plus **lab_L/a/b + ΔE₀₀** when the `color` extra is present.
-
-Click **🔍 IP 合规分析** on any formula card to retrieve relevant patents,
-score the formula's novelty (0–1) and surface infringement-risk highlights
-and white-space hints. Expand a card and a **3D molecular-viewer panel** lists
-the SMILES-bearing components to be rendered via 3Dmol.js.
-
-![Recommend · leaderboard with molecular viewer](./images/05-recommend.png)
-
----
-
-## Step 5b · Inverse design — start from the target, not from a template
-
-**⭐ Recommend** answers "what should I try?". **🎯 Inverse Design** answers the
-harder question: *"salt spray ≥ 1000 h, VOC ≤ 250, cost ≤ ¥40/kg — what
-formulations satisfy all of that at once, and what do I give up between them?"*
-
-Open **🎯 Inverse Design**, state the targets as **hard constraints** (must be
-satisfied) and **soft objectives** (optimized, traded off), and run the search.
-
-The important part is what makes this different from rescaling a template:
-**the ingredients themselves are variables.** The search picks materials per
-role from the catalogue, not just percentages of a fixed recipe, so the results
-on the Pareto front are **structurally different formulations** — different
-hardeners, different anticorrosive pigments, different carriers — rather than
-one recipe with the dials nudged.
-
-- **Hard constraints** are enforced by constraint-domination: a feasible
-  candidate always beats an infeasible one, so what comes back satisfies the
-  constraints or the run reports that nothing could.
-- **Soft objectives** produce the front. Each returned candidate is
-  non-dominated: nothing else is better on every objective at once.
-- `rejected_infeasible` tells you how many candidates were discarded, which is
-  the honest signal that your constraints may be too tight.
+**Formulation & Lab → Inverse Design**: given target performance, search backwards for a formulation. Fill **hard constraints** on the left (must-haves, e.g. salt spray ≥ 1000 h, VOC ≤ 250 g/L, cost ≤ 40 CNY/kg) and **soft objectives** on the right (weights, e.g. maximize salt spray 0.5, minimize cost 0.5), set population and generations, and click **Start inverse design**. When the run finishes, it returns mutually distinct candidates on the Pareto front, which can be saved as formulation versions.
 
 ![Inverse design · hard constraints & soft objectives](./images/10-inverse-design.png)
 
-The run banner is the honest summary of what happened: engine, generations,
-evaluations, how many candidates were rejected as infeasible, and — the number
-worth checking — **how many distinct ingredient sets** came back.
+> "Seed initial population with LLM" is checked by default; without an LLM key, uncheck it and run pure numerical optimization.
 
-Runs asynchronously (`POST /api/design/inverse`), with progress over SSE.
+## Step 6 · Material substitution & supply risk
 
----
-
-## Step 5c · Material substitution & supply risk
-
-Open **🔁 Material Substitution**, pick a formulation and the ingredient at
-risk. You get a ranked list of replacements, each with **the predicted change
-to every metric** — not just "these are chemically similar".
-
-Ranking fuses three signals:
-
-1. **Structural similarity** — interchangeable-group match first, then chemical
-   family, then Hansen solubility distance `Ra = √(4Δd² + Δp² + Δh²)`, plus
-   Tanimoto fingerprint similarity when RDKit is installed.
-2. **Predicted deviation** — the genome is rebuilt with the replacement and
-   re-predicted, giving a per-metric Δ.
-3. **Literature evidence** — `substitutes` edges from the knowledge graph, each
-   carrying the source and sentence it came from.
-
-> **Read `delta_confidence` before trusting the Δ.** Without RDKit the predictor
-> distinguishes same-role materials only through role loading, amine/epoxy
-> equivalent ratio and table lookups for price and VOC. Swapping three epoxy
-> hardeners moves cost (¥13.2 / 17.8 / 20.2 per kg) and leaves `salt_spray_hours`
-> **identical at 867 h** — that is the model having no resolution, not evidence
-> that the swap is performance-neutral. The report says so with
-> `delta_confidence: cost_only`; install the `science` extra to raise it.
+**Formulation & Lab → Material Substitution**: pick a formulation source (project baseline or a saved formulation version), name the ingredient to replace, and click **Find Substitutes**. Candidates pass a four-layer funnel: in-library predicted deviation → literature / knowledge-base evidence → web structural similarity (PubChem) → SureChEMBL patent chemical similarity → AI / rule expansion; only in-library items carry per-metric deltas (Δ), and candidates are ranked by composite score.
 
 ![Material substitution page](./images/11-substitution.png)
 
-Note the amber line under the table. That is `delta_confidence` surfacing in
-the UI: without RDKit it says so, rather than letting three identical
-salt-spray figures read as evidence.
+## Step 7 · Generate a DOE, run experiments, feed results back
 
-**Supply risk**: mark a material `discontinued` (`POST /api/materials/availability`),
-then `GET /api/materials/supply-risk` lists every affected formulation with
-substitution suggestions attached.
+**Formulation & Lab → DOE Design**: on the **Designer** tab pick a design type (orthogonal, central composite CCD, Plackett-Burman, mixture, D-optimal, or 🧠 AI active selection), click **Fill from process window** to center factors on the contract setpoints, and click **Generate design**. AI-selected rows are highlighted purple.
 
----
+![DOE Design](./images/06-doe.png)
 
-## Step 6 · Generate a DOE and feed results back
+**Formulation & Lab → Lab Task Records**: dispatch tasks on the **Lab Tasks** tab; fill actual parameters and measured metrics on the **Lab Ledger** tab (Excel paste supported) and click **Save ledger & sync**. On the **Measurement & Review** tab you can upload a QC report for automatic parsing instead of typing by hand; results only enter optimization after another person reviews and approves them.
 
-Open **🔬 DOE Design**, choose a design (e.g. **central composite CCD** or
-**🧠 AI active selection**) and click **Generate DOE**. You get a run table —
-one row per experiment, natural factor values plus a blank "measured" column.
-The 🧠 active-learning rows are highlighted in violet: they are the points
-expected-improvement says will teach the surrogate the most.
+![Measurement & Review · report parsing](./images/12-qc-report.png)
 
-![DOE design](./images/06-doe.png)
+Once a (domain, metric) pair accumulates ≥ `min_train_samples` samples (default 4), the platform trains a data-driven model automatically; the more measured data, the higher its weight (blend weight `w = n/(n+8)`).
 
-Two feedback paths:
+## Step 8 · Optimization loop and self-driving iteration
 
-1. **Manual**: type lab-measured values into the "measured" column, then click
-   **③ feed back results and train model**.
-2. **Batch**: click **Export CSV**, hand it to the lab, then **Import CSV** once
-   it's filled in.
-
-Once a metric reaches ≥ 4 samples, a data-driven model is trained automatically;
-the model-quality dashboard shows an R² half-gauge + RMSE, and subsequent
-recommendations/optimization switch to the "empirical + measured" blend.
-
----
-
-## Step 6b · Feed back from a QC report instead of by hand
-
-Typing numbers out of a PDF is where measured data usually stops arriving. Open
-**📄 QC Report**, pick the experiment the report belongs to, and upload the file.
-
-The extractor pulls each measurement as a **row of its own** — metric, value,
-**unit, method and specification limit** — instead of the bare `{metric: value}`
-dictionary that experiment records used to carry. A salt-spray figure now
-records that it came from ASTM B117 with a ≥1000 h spec, so a later reading is
-comparable rather than merely numeric.
-
-The whole ingest is one transaction, deduplicated by content hash, and the
-original file is attached **before** the values are written — so a failure
-part-way through cannot leave you with numbers whose source is gone.
-
-![QC report upload](./images/12-qc-report.png)
-
-Read them back with `GET /api/qc/experiments/{id}/measurements`.
-
-> Backward compatible: `ExperimentRecord.measured` still exists and still reads
-> as the same flat dictionary. It is now derived from the measurement rows, so
-> nothing that consumed it needs to change.
-
----
-
-## Step 7 · Run the optimization loop
-
-Open **📈 Optimization** and click **run optimization loop** to start Bayesian
-multi-objective optimization (24 iterations by default). The **convergence
-chart** plots the best-so-far objective score per iteration; hover for exact
-values. The leaderboard updates to the optimized Top-5 formulations, balancing
-salt-spray, cost and sustainability simultaneously.
+**Optimization & Analysis → Optimization Loop** has tabs for **Pareto & Freeze** (default), **Point Review**, and **Loop Iteration**. The optimizer auto-picks the strongest installed engine (BoTorch → Optuna → built-in numpy UCB), samples the design space, validates each candidate stoichiometrically, and scores it with the empirical / data hybrid predictor. After the Pareto front and top formulations appear, review candidates one by one on the Point Review tab; a frozen formulation goes to Step 10 for documents and release.
 
 ![Optimization · Pareto & freeze](./images/07-optimize.png)
 
----
-
-## Step 8 · Process optimization & self-driving loop
-
-- **⚙️ Process Optimization** — co-optimizes manufacturing parameters
-  (cure temperature/time, dispersion RPM, film thickness, bath temperature, pH,
-  …) with Arrhenius/empirical outcome models. Same Bayesian engine as
-  formulation optimization, but over the *process* design space.
-- **🔄 Self-Driving Loop** — one click runs **measured records → retrain →
-  Bayesian optimize → next active-learning DOE batch** end-to-end. The modal
-  shows model R²/RMSE cards (with a ↓ trend arrow), the convergence chart, and
-  the next DOE batch (AI rows highlighted in violet). Export the next batch as
-  CSV and the loop continues.
+On the **Loop Iteration** tab, click **Run one loop iteration**: in a single async task the platform pulls all measured records for the current product domain, retrains the data-driven models, runs the optimizer, and uses the freshly trained surrogate to compute EI over the DOE grid, proposing the next batch of active-learning experiments. The page shows engine, sample counts, R² / RMSE cards and a convergence chart; the next DOE batch exports in one click, and the loop continues across rounds.
 
 ![Self-Driving Loop · loop iteration](./images/09-loop.png)
 
-> Every successful research / recommend / optimize / feedback / loop run is
-> saved as a session snapshot — open **🕐 History** in the header to review and
-> restore the last 20 sessions (stored in browser localStorage).
-
----
-
 ## Step 9 · Formulation revision history
 
-Every formula card can be saved as a **version**, and versions form a lineage —
-a parent/child chain you can walk. Given any two, the diff is structured
-(ingredients added, removed, adjusted, plus renames) rather than a text blob,
-and a one-line summary is generated when nobody wrote a note:
-
-> 移除 1 项（聚酰胺固化剂）；新增 1 项（异佛尔酮二胺）；调整 2 项（环氧树脂、二甲苯）
+Every save is an immutable revision record. On the formulation editor or the lineage page (`lab/lineage/<lineage-id>`) versions list their change notes, operator and creation time; pick two versions to compare ingredient and metric changes.
 
 ![Formulation revision history](./images/13-version-history.png)
 
-Endpoints: `POST /api/formulations/versions` to save,
-`GET /api/formulations/versions?name=` to find a lineage,
-`GET /api/formulations/versions/{from}/diff/{to}` to compare.
+## Step 10 · Documents & release (after freezing)
 
----
+**Documents & Release → Products & Revisions**: create a product (auto-coded by the company coding rules; the code belongs to the product and is shared by its formulation revisions); create a revision and link a formulation version (an empty-lineage empty state guides you, the version field is optional, the dropdown filters by project while unscoped global versions are still listed). Generate SDS / TDS / COA / GHS label documents: China regulations are checked by default, and after the company ticks applicable regulations (China / EU / US) each regulation is computed and exported separately. SDS §11/12 come from **Materials & Regulations → Substance Tox/Eco Records**.
+
+On a revision's **Release Gate** tab you see the G1–Gn checks; then review, sign off (sign or publish permission), and release. The gate is fail-closed: the CLP / OSHA rule sets are draft and only release published documents after EHS sign-off. The **Label Designer** validates GB 15258 completeness before producing a label; the **Regulatory Assistant** looks up regulation texts.
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| A feature returns **503** naming Redis | Broker unreachable; the submission was recorded, not lost | `docker compose ps`; start redis + worker. Recorded jobs are re-enqueued automatically |
-| `/health` shows `task_broker.reachable:false` while redis looks "Up" | Services on different networks — usually from mixing compose files | `docker compose down && docker compose up -d` |
-| `/health` shows `task_broker.required:false` but you run a worker | A UI-saved "run tasks synchronously" toggle used to override the deployment | Fixed: the deployment now wins and logs the ignored value. Turn the toggle off in Settings to clear it |
-| Image build fails at `apt-get` | The apt layer is optional and off by default | `git pull`. Only add `--build-arg INSTALL_BUILD_TOOLCHAIN=true` if you need a compiler in the image |
-| Image build fails at `npm ci` | Incomplete lockfile | `cd frontend && npm install --package-lock-only`, commit the result |
-| `alembic: No config file 'alembic.ini' found` | Older image | `git pull` and rebuild; `alembic.ini` now ships in the image |
-
-An unexpected error message that is **not** plain `path -> status` is working as
-intended — the API returns a JSON `detail` the UI shows verbatim. A bare
-`path -> 502` means the response never came from the API at all; check the
-reverse proxy and whether the backend is reachable.
-
----
+- **Empty pages**: check the top bar — a project must be selected first; most pages filter by project and show only an empty state without one.
+- **"Offline degraded mode" banner**: no LLM API key is configured. Deep research and online search are unavailable; recommendation, DOE and optimization still work.
+- **Document generation stuck**: documents are async tasks. Make sure a Celery worker is running, or start the backend with `FORMUNEX_CELERY_EAGER=true` for local development.
+- **Release gate G5 failing**: the classification rule set is draft and awaits EHS sign-off before it can back published documents. That is not an operator error.
+- **Changing company info, coding rules or applicable regulations**: **System Admin → Company Settings** (needs `admin.companies`). The first company automatically becomes the default; document issuing units and SDS §1 supplier info come from it.
 
 ## Next steps
 
-- Custom objectives, `constraint_values`, manual / AI formula edits, multi-LLM and
-  search API setup? See the **[full User Guide](./USER_GUIDE.md)**.
-- `pytest -q` runs **1040+** offline backend tests; `cd frontend && npm test`
-  runs the frontend tests; `npm run lint` checks the React hooks rules (the only lint rules —
-  everything else is `tsc` and the tests). `pip install -e ".[dev]"` for dev tooling.
-- Stronger engines auto-detect on install — `".[optimize]"`, `".[bo]"`, `".[intel]"`,
-  `".[science]"`, `".[embedding]"`, `".[colbert,crag]"`, `".[color]"`, `".[notebooklm]"`.
-  Installing `".[science]"` (RDKit) is what raises substitution's
-  `delta_confidence` above `cost_only`.
-- Interactive API docs: start the backend and visit
-  **http://localhost:8000/docs**.
-- Check referential integrity any time: `GET /api/kb/integrity`.
-
-> The offline performance numbers are engineering-reasonable screening
-> estimates, not lab-validated specs. Feed real DOE data back and predictions
-> get progressively more accurate.
+- Full feature details: User Guide §5 (optimization, cost and PVC / CPVC, rheology and color, prediction intervals, IP compliance, process optimization, self-driving loop, lineage, citation audits, and more).
+- Permissions and roles: System Admin → Users & Roles. Write actions are permission-gated; buttons you lack permission for are disabled or hidden.
