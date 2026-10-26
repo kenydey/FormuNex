@@ -744,6 +744,7 @@ def save_formulation_version(body: SaveVersionRequest) -> VersionView:
 def find_formulation_lineages(
     name: str = "",
     domain: str = "",
+    project_id: str | None = None,
     limit: int = 10,
 ) -> list[LineageResponse]:
     """Stored histories whose first revision matches — used to reconnect a
@@ -752,7 +753,8 @@ def find_formulation_lineages(
 
     store = get_history_store()
     out: list[LineageResponse] = []
-    for lineage_id in store.find_lineages(name=name, domain=domain, limit=limit):
+    for lineage_id in store.find_lineages(name=name, domain=domain, project_id=project_id,
+                                          include_unscoped=True, limit=limit):
         rows = store.lineage(lineage_id)
         if rows:
             out.append(

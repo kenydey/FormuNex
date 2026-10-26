@@ -1,5 +1,5 @@
 import { PageContainer, ProCard, ProTable } from "@ant-design/pro-components";
-import { App, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Tag } from "antd";
+import { Alert, App, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Tag, Tooltip } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -24,7 +24,7 @@ export default function ProductDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const p = useQuery({ queryKey: ["plm", "product", productId], queryFn: () => call<ProductDetail>("GET", `/api/plm/products/${productId}`) });
-  const lineages = useQuery({ queryKey: ["formulations", "lineages", ""], queryFn: () => call<Lineage[]>("GET", "/api/formulations/versions?limit=50") });
+  const lineages = useQuery({ queryKey: ["formulations", "lineages", p.data?.project_id ?? ""], queryFn: () => call<Lineage[]>("GET", `/api/formulations/versions?limit=200${p.data?.project_id ? `&project_id=${encodeURIComponent(p.data.project_id)}` : ""}`) });
   const project = useQuery({ queryKey: ["project", p.data?.project_id], enabled: !!p.data?.project_id,
     queryFn: () => call<ProjectDetail>("GET", `/api/projects/${p.data!.project_id}`) });
   const [revOpen, setRevOpen] = useState(false);
@@ -35,7 +35,7 @@ export default function ProductDetailPage() {
   const [bForm] = Form.useForm();
   const refresh = () => void qc.invalidateQueries({ queryKey: ["plm"] });
   const createRev = useMutation({
-    mutationFn: (v: { formulation_version_id: string; copy_spec: boolean }) => {
+    mutationFn: (v: { formulation_version_id?: string; copy_spec: boolean }) => {
       const sc = project.data?.workspace.spec_contract ?? {};
       const spec = v.copy_spec ? { release_specs: sc.release_specs ?? [], acceptance: sc.acceptance ?? [], red_lines: sc.red_lines ?? [] } : {};
       return call<{ id: string }>("POST", `/api/plm/products/${productId}/revisions`, { formulation_version_id: v.formulation_version_id, spec_snapshot: spec });
@@ -87,11 +87,16 @@ export default function ProductDetailPage() {
       <Modal open={revOpen} title={t("plm.new_revision", "新建修订版")} onCancel={() => setRevOpen(false)} confirmLoading={createRev.isPending}
         onOk={async () => createRev.mutate(await rForm.validateFields())} destroyOnHidden>
         <Form form={rForm} layout="vertical" preserve={false} initialValues={{ copy_spec: true }}>
-          <Form.Item name="formulation_version_id" label={t("winning.version", "配方版本")} rules={[{ required: true }]}>
-            <Select showSearch optionFilterProp="label" options={(lineages.data ?? []).flatMap((l) => l.versions.map((v) => ({ value: v.id, label: `${v.name} v${v.version}` })))} />
+          <Form.Item name="formulation_version_id" label={t("winning.version", "配方版本")}>
+            <Select showSearch optionFilterProp="label" placeholder={t("plm.rev_version_optional", "选择配方版本（可为空）")} options={(lineages.data ?? []).flatMap((l) => l.versions.map((v) => ({ value: v.id, label: `${v.name} v${v.version}` })))} />
           </Form.Item>
+          {lineages.isSuccess && (lineages.data ?? []).every((l) => l.versions.length === 0) && (
+            <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t("plm.rev_empty_hint", "暂无配方版本：请先在配方编辑页保存一个版本，或直接创建不关联配方版本的修订版。")} action={<Link to="/lab/formulations">{t("plm.goto_formulation_editor", "去配方编辑")}</Link>} />
+          )}
           <Form.Item name="copy_spec" label={t("plm.copy_spec", "从项目规格契约复制出厂指标 / 验收指标 / 红线")}>
-            <Select options={[{ value: true, label: t("common.yes", "是") }, { value: false, label: t("common.no", "否") }]} disabled={!d?.project_id} />
+            <Tooltip title={!d?.project_id ? t("plm.copy_spec_need_project", "需先关联项目才能从规格契约复制") : undefined}>
+              <Select options={[{ value: true, label: t("common.yes", "是") }, { value: false, label: t("common.no", "否") }]} disabled={!d?.project_id} />
+            </Tooltip>
           </Form.Item>
         </Form>
       </Modal>

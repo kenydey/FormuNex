@@ -66,7 +66,7 @@ export default function RevisionPage() {
             <Descriptions column={2} size="small">
               <Descriptions.Item label={t("plm.product", "产品")}>{r.product.code} {r.product.name_zh}</Descriptions.Item>
               <Descriptions.Item label={t("plm.state", "状态")}><StatusTag status={r.state} /></Descriptions.Item>
-              <Descriptions.Item label={t("winning.version", "配方版本")}>{r.formulation_version_id ?? "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("winning.version", "配方版本")}>{r.formulation_version_id ?? <Tag>{t("plm.no_formulation_version", "未关联配方版本")}</Tag>}</Descriptions.Item>
               <Descriptions.Item label={t("winning.experiment", "定型实验")}>{r.winning_experiment_id ?? "—"}</Descriptions.Item>
               <Descriptions.Item label={t("plm.frozen", "冻结时间")}>{r.frozen_at ?? "—"}</Descriptions.Item>
               <Descriptions.Item label={t("gate.title", "发布门禁")}>{gate.data ? (gate.data.passed ? <Tag color="green">{t("gate.passed", "通过")}</Tag> : <Tag color="red">{t("gate.not_passed", "未通过")}</Tag>) : "—"}</Descriptions.Item>

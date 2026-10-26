@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..domain.schemas import Formulation
@@ -252,6 +252,7 @@ class FormulationHistoryStore:
         name: str = "",
         domain: str = "",
         project_id: str | None = None,
+        include_unscoped: bool = False,
         limit: int = 20,
     ) -> list[str]:
         """Lineage ids whose *root* revision matches, most recent first.
@@ -274,7 +275,14 @@ class FormulationHistoryStore:
             if domain:
                 query = query.filter(FormulationVersion.domain == domain)
             if project_id:
-                query = query.filter(FormulationVersion.project_id == project_id)
+                if include_unscoped:
+                    # Versions saved before any project was selected carry a
+                    # NULL project_id; they are global, not another project's,
+                    # so a project-scoped list must still include them.
+                    query = query.filter(or_(FormulationVersion.project_id == project_id,
+                                             FormulationVersion.project_id.is_(None)))
+                else:
+                    query = query.filter(FormulationVersion.project_id == project_id)
             rows = (
                 query.order_by(FormulationVersion.created_at.desc()).limit(limit).all()
             )

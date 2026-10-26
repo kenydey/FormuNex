@@ -315,3 +315,27 @@ def test_lineage_lookup_returns_empty_list_not_404(store):
     response = client.get("/api/formulations/versions?name=does-not-exist")
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_find_lineages_scopes_by_project_and_keeps_unscoped(store):
+    scoped = store.save_version(_form("Scoped"), project_id="p1")
+    other = store.save_version(_form("Other"), project_id="p2")
+    unscoped = store.save_version(_form("Global"))
+    assert set(store.find_lineages(project_id="p1")) == {scoped.lineage_id}
+    assert set(store.find_lineages(project_id="p1", include_unscoped=True)) == {
+        scoped.lineage_id, unscoped.lineage_id}
+    assert set(store.find_lineages()) == {
+        scoped.lineage_id, other.lineage_id, unscoped.lineage_id}
+    # Endpoint level goes through the app's default store (get_history_store
+    # rebuilds past the fixture's patched store), so seed through the API.
+    client.post("/api/formulations/versions",
+                json={"formulation": _form("ProbeScopedP1").model_dump(mode="json"), "project_id": "p1"})
+    client.post("/api/formulations/versions",
+                json={"formulation": _form("ProbeOtherP2").model_dump(mode="json"), "project_id": "p2"})
+    client.post("/api/formulations/versions",
+                json={"formulation": _form("ProbeGlobalUnscoped").model_dump(mode="json")})
+    res = client.get("/api/formulations/versions?project_id=p1")
+    assert res.status_code == 200, res.text
+    names = {v["name"] for lin in res.json() for v in lin["versions"]}
+    assert {"ProbeScopedP1", "ProbeGlobalUnscoped"} <= names
+    assert "ProbeOtherP2" not in names
