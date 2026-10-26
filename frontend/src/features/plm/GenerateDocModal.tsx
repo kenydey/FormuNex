@@ -86,8 +86,9 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
   });
   const sds = docType === "sds" || docType === "label";
   // G2: default the regulation selection to the default company's
-  // applicable_regulations (once per open, when the data arrives); an
-  // empty default leaves the boxes unchecked and validation requires a pick.
+  // applicable_regulations (once per open, when the data arrives); with no
+  // default company (or an empty default) fall back to CN — validation
+  // requires at least one pick, so an all-unchecked default only blocks.
   const companies = useQuery({ queryKey: ["plm", "companies"], enabled: open && sds,
     queryFn: () => call<{ id: string; is_default: boolean; applicable_regulations: string[] }[]>("GET", "/api/plm/companies") });
   const regulations = useQuery({ queryKey: ["plm", "regulations"], enabled: open && sds,
@@ -96,7 +97,8 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
   useEffect(() => {
     if (!open) { regInit.current = false; return; }
     if (!sds || regInit.current || !companies.data) return;
-    form.setFieldsValue({ regulations: companies.data.find((c) => c.is_default)?.applicable_regulations ?? [] });
+    const defaults = companies.data.find((c) => c.is_default)?.applicable_regulations ?? [];
+    form.setFieldsValue({ regulations: defaults.length ? defaults : ["CN"] });
     regInit.current = true;
   }, [open, sds, companies.data, form]);
   // Locked fields of the latest same-type document of this revision: regeneration
