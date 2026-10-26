@@ -13,9 +13,7 @@
   "copyright": "© United Nations. Statement texts quoted verbatim from the GHS for labelling and safety data sheets, their intended use.",
   "extracted": "2026-10-24",
   "scope": "Only codes the CLP dataset (hpstatements_en.json) does not cover; CLP texts take precedence where both exist.",
-  "not_covered": {
-   "H361E": "not a GHS code (the Chinese text 怀疑对胎儿造成伤害 corresponds to CLP H361d); left without English text"
-  }
+  "not_covered": {}
  },
  "statements": {
   "H227": {

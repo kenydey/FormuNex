@@ -273,15 +273,15 @@ def test_reseed_backfills_english_and_never_overwrites_human_text_en(engine, res
 # deleted after GHS Rev.4. hpstatements_en_ghs.json supplies them from UN GHS Rev.4 annex 3.
 CLP_GAP = {
     "H227", "H303", "H303+H313", "H303+H313+H333", "H303+H333", "H305", "H313",
-    "H313+H333", "H315+H320", "H316", "H320", "H333", "H361E", "H401", "H402",
+    "H313+H333", "H315+H320", "H316", "H320", "H333", "H401", "H402",
     "P221", "P235+P410", "P281", "P304+P312", "P335+P334",
     "P370+P380", "P374", "P411+P235", "P422",
 }
-# Still without trustworthy English text: H361E is not a GHS code (its Chinese text duplicates
-# H361d). P281 left this set 2026-10-26: its historical GHS text ("Use personal protective
-# equipment as required.") was filled into hpstatements_en_ghs.json; MSDS-Generator's P281 text
-# was NOT used — it duplicates P280 and the vendored file's note already rejects it.
-KNOWN_MISSING_EN = {"H361E"}
+# Still without trustworthy English text: none at present. History: H361E was not a GHS code
+# (its Chinese text duplicated H361d) and was deleted from hazard_statements.json 2026-10-26;
+# P281 left this set 2026-10-26 when its historical GHS text was filled into
+# hpstatements_en_ghs.json. This set must be updated deliberately, never by inventing text.
+KNOWN_MISSING_EN = set()
 # MSDS-Generator hand-added entries, excluded from the vendored English file:
 # their provenance is a maintainer edit, not the EUR-Lex extraction.
 EXCLUDED_EN = {"H303", "H313", "H350I", "H360E", "H401", "P281"}

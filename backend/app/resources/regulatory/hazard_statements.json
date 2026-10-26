@@ -654,13 +654,6 @@
       "hazard_category": "2"
     },
     {
-      "index": 94,
-      "code": "H361E",
-      "statement": "怀疑对胎儿造成伤害",
-      "hazard_type": "生殖毒性",
-      "hazard_category": "2"
-    },
-    {
       "index": 95,
       "code": "H361F",
       "statement": "怀疑损害生育能力",

@@ -22,8 +22,8 @@ Sources (``app/resources/regulatory``, imported from MSDS-Generator):
   Acute 3 / Flam. Liq. 4, nor deleted P codes.
 * ``hpstatements_en_ghs.json`` — English texts for those codes, verbatim from UN GHS Rev.4 annex 3
   (the edition GB 30000-2013 follows; source URL, sha256 and Rev.10 status recorded in the file).
-  Used only where the CLP file has no text. H361E (not a GHS code) and P281 (deleted before
-  Rev.4) stay without English.
+  Used only where the CLP file has no text. History: P281 (deleted before Rev.4) now carries its
+  historical GHS text; H361E was deleted 2026-10-26 as a non-GHS duplicate of H361D.
 * ``gb12268_2025.json`` — GB 12268-2025 表 1 in full: 2,861 rows / 2,347 UN numbers, one row per
   packing group, with special provisions and quantities; parsed from the official PDF by
   ``scripts/gb12268/`` (see its README). Linked to a substance by exact Chinese name, else by
