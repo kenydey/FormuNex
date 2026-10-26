@@ -202,7 +202,7 @@ class ProjectUpdateRequest(BaseModel):
     ``sources`` 非空→空的覆盖会被拒绝(记 warning)。
     """
 
-    workspace: dict[str, Any]
+    workspace: dict[str, Any] = Field(default_factory=dict)
     title: str | None = None
     # Explicit clear: allow ``workspace.sources == []`` to replace a non-empty list (the user deleted the
     # last item). Without it the guard above keeps the stored sources.

@@ -194,3 +194,14 @@ def test_project_store_unit(tmp_path):
     assert latest == "changed"
     rolled = store.rollback_payload(detail.id, 1)
     assert rolled is not None and rolled.workspace.search_query != "changed"
+
+
+def test_rename_title_only_without_workspace(client):
+    """纯改标题的 PUT 不再 422：workspace 可选，workspace 内容保持不变。"""
+    pid = client.post("/api/projects", json={"title": "旧名"}).json()["id"]
+    before = client.get(f"/api/projects/{pid}").json()
+    r = client.put(f"/api/projects/{pid}", json={"title": "新名"})
+    assert r.status_code == 200, r.text
+    assert r.json()["title"] == "新名"
+    after = client.get(f"/api/projects/{pid}").json()
+    assert after["workspace"]["requirement"] == before["workspace"]["requirement"]
