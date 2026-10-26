@@ -180,14 +180,15 @@ test connection**. With no key, everything still runs via the offline rule engin
 
 ## Step 4 · Describe the project in one sentence (✨ NL Intent)
 
-Open **🧪 Requirements** and use the **✨ NL Intent** box at the top: type a
+NL Intent is currently API-only (`POST /api/intent/parse`): send a
 plain-language brief like *"Develop a waterborne epoxy anti-corrosion coating
-for automotive underbody, salt spray ≥ 1000 h, cures at 120 °C"*. Click
-**Parse & Fill** — domain, substrate, salt-spray hours, VOC limit and cure
-temperature are extracted and auto-filled (LLM when configured, otherwise the
-deterministic regex fallback).
+for automotive underbody, salt spray ≥ 1000 h, cures at 120 °C"* and the API
+extracts domain, substrate, salt-spray hours, VOC limit and cure temperature
+(LLM when configured, otherwise the deterministic regex fallback). Fill the
+returned fields into the contract form below (the contract page has no parse
+input box yet).
 
-![NL Intent · auto-fill requirements](./images/08-nl-intent.png)
+![NL Intent · contract form (API-only)](./images/08-nl-intent.png)
 
 ---
 
@@ -233,7 +234,7 @@ one recipe with the dials nudged.
 - `rejected_infeasible` tells you how many candidates were discarded, which is
   the honest signal that your constraints may be too tight.
 
-![Inverse design · Pareto front](./images/10-inverse-design.png)
+![Inverse design · hard constraints & soft objectives](./images/10-inverse-design.png)
 
 The run banner is the honest summary of what happened: engine, generations,
 evaluations, how many candidates were rejected as infeasible, and — the number
@@ -267,7 +268,7 @@ Ranking fuses three signals:
 > that the swap is performance-neutral. The report says so with
 > `delta_confidence: cost_only`; install the `science` extra to raise it.
 
-![Material substitution · per-metric deltas](./images/11-substitution.png)
+![Material substitution page](./images/11-substitution.png)
 
 Note the amber line under the table. That is `delta_confidence` surfacing in
 the UI: without RDKit it says so, rather than letting three identical
@@ -335,7 +336,7 @@ chart** plots the best-so-far objective score per iteration; hover for exact
 values. The leaderboard updates to the optimized Top-5 formulations, balancing
 salt-spray, cost and sustainability simultaneously.
 
-![Optimization · convergence](./images/07-optimize.png)
+![Optimization · Pareto & freeze](./images/07-optimize.png)
 
 ---
 
@@ -351,7 +352,7 @@ salt-spray, cost and sustainability simultaneously.
   the next DOE batch (AI rows highlighted in violet). Export the next batch as
   CSV and the loop continues.
 
-![Self-Driving Loop · convergence + next DOE](./images/09-loop.png)
+![Self-Driving Loop · loop iteration](./images/09-loop.png)
 
 > Every successful research / recommend / optimize / feedback / loop run is
 > saved as a session snapshot — open **🕐 History** in the header to review and

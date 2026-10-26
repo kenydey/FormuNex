@@ -28,6 +28,8 @@ every feature and the end-to-end workflow.
 
 > **2026-09 addenda (§5.21–§5.25):** Knowledge Hub (quality-ops / Wiki / dossier), recommendation explain + constraint effect tracing, manual supplier quotes & `stale_price`, project-level auto-loop & soft-correct, persistent hybrid search vs session FAISS.
 
+> **2026-10 addenda (§5.26):** third-round left-nav slimming (41 web entries), project shortcuts, custom process parameters & structured constraints, substance tox/eco records, multi-regulation & generic product coding.
+
 ---
 
 ## 1. Overview
@@ -107,84 +109,64 @@ it is installed.
 
 ## 3. UI tour
 
-A dark, industrial NotebookLM-style three-column layout that separates **inputs
-→ research → outputs**:
+A light workbench layout: a **left navigation** grouped by workflow stage, a
+**top project selector** that scopes almost every page to the current project,
+and a content area of pages or hub tabs. Pick a project first; without one,
+most pages show only an empty state.
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  FormuNex · metal surface treatment R&D platform  [⚙ Settings] [🕐 History] │
-├──────────────────┬───────────────────────────┬───────────────────────┤
-│  Sources (left)  │  Research (center)         │  Actions (right)      │
-│                  │                            │                       │
-│ · research topic │  RAG-grounded Q&A:         │ 🧪 Requirements       │
-│   (prompt box)   │  · chat with the loaded    │ ⭐ Recommend          │
-│ · source types:  │    sources                 │ 🎯 Inverse Design     │
-│   ☑ patents      │  · citation chips per      │ 🔁 Material Substitute│
-│   ☑ literature   │    answer                  │ 🔬 DOE Design         │
-│   ☑ internet     │                            │ 📋 Workbench          │
-│   ☑ local files  │  [ask the sources… ][send] │ 📄 QC Report          │
-│   ☐ 📓 NotebookLM│                            │ 📈 Optimization       │
-│ [⬆ upload][search]│                           │ ⚙️ Process Optimization│
-│                  │                            │ 🔄 Self-Driving Loop  │
-│                  │                            │  (each opens a modal) │
-│ ── loaded (N) ── │                            │                       │
-│ 📄 patent · ✕    │                            │                       │
-│ 📚 arxiv  · ✕    │                            │                       │
-│ 📓 NotebookLM ✕ │                            │                       │
-│ 📎 local  · ✕    │                            │                       │
-└──────────────────┴───────────────────────────┴───────────────────────┘
-```
+**Left navigation (41 second-level entries on the web, plus the dashboard)**:
 
-- **Left (Sources)**: a **research-topic prompt box** at the top (sets the
-  context for searches and Q&A), checkboxes to choose which source types to
-  search (patents / literature / internet / local files / **📓 NotebookLM**), a
-  file-upload button, a **Search** button, and the list of loaded sources (each
-  removable). Each source-type checkbox carries a **status dot**: green = library
-  installed and available, yellow = offline fallback active (patents always have
-  a curated seed corpus), red = library missing. Below the Search button, a
-  **🔬 Deep Research** button triggers `POST /api/research/deep` — the
-  DeepResearchEngine multi-agent pipeline (`web_agent` + `kb_agent` with HyDE query
-  expansion + LLM re-rank + `report_agent` with cross-validation and forced
-  per-claim citations); the result is an async task whose output appears in the
-  center column automatically. When the **Literature** or **Internet** source is
-  selected, a **🧪 ChemCrow badge** indicates whether chemistry-enhanced
-  retrieval (SerpAPI + paper-qa) is enabled. If a search fails (e.g. the backend
-  is not running), a red **error banner** with a backend startup hint is shown at
-  the top of the panel.
-- **Center (Research)**: a chat interface that answers questions **grounded in
-  the loaded sources** (semantic embedding or TF-IDF re-rank → LLM answer), with
-  citation chips linking back to the evidence used. The composer **「+」** picker
-  selects chat skills, connectors, Evidence mode, and starts **formulation
-  playbooks** (recommend / DOE / optimize, …).
-- **Right (Actions)**: a **PathWizard** at the top (formula / substitute / knowledge).
-  When a playbook is active, a compact **checklist strip** appears (no skills
-  marketplace dock). Buttons open focused modals —
-  🧪 Requirements (**constraint effect tracing**: which brief fields feed scoring / DOE),
-  ⭐ Recommend (default playbook is **Formula recommend**, with domain-adaptive
-  search hints — not locked to silane coupling; expand **Why recommended** on each card),
-  🎯 Inverse Design (§5.15),
-  🔁 Material Substitution (§5.16),
-  🔬 DOE Design,
-  📋 Workbench (project-level **auto-loop on sync** and **prediction soft-correct**, both default off),
-  📄 QC Report (§5.17),
-  📈 Optimization,
-  ⚙️ Process Optimization,
-  🔄 Self-Driving Loop,
-  📚 **Knowledge Hub** (archive · retrieval probe · quality-ops · Wiki · graph · dossier).
-  Status badges show running / result counts.
-- **Header**: ⚙ **Settings** (includes **Skills**, **MCP/Connectors**, LLM, API keys,
-  Dependencies, …) and 🕐 **History** (project snapshot drawer, with a live count badge). Enable/disable playbooks and chat skills under
-  **Settings → Skills**; start them from the center **「+」**. Under **Settings → Skills →
-  + Add**, install chat skills from GitHub, a local zip/SKILL.md upload, or paste —
-  dry-run preview + security review, then one-click confirm. Origin badges:
-  bundled / github / local; user-installed skills can be uninstalled. Under
-  **Settings → MCP → + Add**, import Claude/Cursor `mcpServers` JSON (paste,
-  upload, or GitHub `mcp.json`) with the same preview → confirm flow. Imported
-  servers default to disabled; Probe still requires `mcp_client_enabled`.
-  Optional domain packs (e.g. `coatings-silane`) install from **Settings → Skills →
-  Domain Packs** without changing the default formula-recommend playbook. Type `/`
-  in the chat composer to pick enabled skills; GitHub-installed skills support
-  update checks via pinned SHA.
+| Group | Entries (in order) |
+|---|---|
+| Dashboard | My dashboard |
+| Knowledge retrieval | Search, Knowledge sources & tree, Knowledge Q&A, Retrieval evidence audit |
+| Literature & research | Library, External search & deep research, Research artifacts, Embodiment drafts, Patent / IP analysis, Wiki knowledge base |
+| R&D requirements | Path wizard, Projects & specification contracts |
+| Formulation & experiments | AI formula recommend, Formulation editor, DOE design, Experiment work records, Measurements & review, Material substitution, Inverse design, Methods & instruments, External ELN |
+| Optimization & analysis | Surrogate models, Response surface, Uncertainty diagnostics, Optimization loop, Formulation properties, Rheology fitting |
+| Documentation & release | Products & revisions, Formula-database mapping, Label designer, Regulatory assistant |
+| Materials & regulations | Substances & regulatory data, Raw materials, Substance tox/eco records, Material knowledge graph |
+| System admin | MCP tool approvals, Users & roles, Company configuration, Settings center, Audit log, Organization dashboard (plus a desktop-only entry: Desktop & local services) |
+
+Entries no longer in the left nav, still reachable (routes kept): **quality-ops**
+lives on the search hub's ops tab; **NotebookLM** on the library hub tab;
+**connectors** on the settings-center tab; **agent memory** in the knowledge-Q&A
+page header; **project sources** only via the contract page header.
+
+**Research page (Literature & research → External search & deep research)**
+uses tabs instead of the old three columns: **External search** (multi-source
+patent / literature / internet search), **Source Q&A** (grounded Q&A over the
+selected sources, with citation chips per answer), **Deep research**
+(multi-source synthesis pipeline), and **STORM long-form**. The page header
+also links to **internal KB search** and **research artifacts**.
+
+- **Top bar**: global search, a project selector + **「+」** new-project button
+  (needs `project.write`; shares the same modal as the project list page),
+  a task center, a **to-do** badge (pending review measurements, linking to the
+  measurements & review page), a light/dark theme toggle, a 中 / EN toggle, and
+  an avatar menu (change password, log out). The project list's row actions
+  (rename, delete) share the `project.write` permission.
+- **Settings center** (System admin → Settings center, needs `admin.llm`):
+  tabs are Model, API keys & retrieval routing, API access token, Skills,
+  Environment variables, Dependency management, KB / KG maintenance, and
+  Connectors. Enable/disable chat skills under the **Skills** tab; install from
+  GitHub, a local zip/SKILL.md upload, or paste — dry-run preview + security
+  review, then one-click confirm. Origin badges: bundled / github / local;
+  user-installed skills can be uninstalled. Import MCP servers under the
+  **Connectors** tab: paste/upload Claude/Cursor `mcpServers` JSON, or pull a
+  `mcp.json` from GitHub; imported servers default to disabled; Probe still
+  requires `mcp_client_enabled`. Optional domain packs (e.g. `coatings-silane`)
+  install from the Skills tab's domain-pack area without changing the default
+  formula-recommend playbook. Type `/` in the chat composer to pick enabled
+  skills; GitHub-installed skills support update checks via pinned SHA.
+- **Knowledge Q&A** (Knowledge retrieval → Knowledge Q&A): streamed Q&A over
+  the project's knowledge base, with sessions persisted per project and a
+  session list to return to earlier conversations. The composer **「+」**
+  picker selects chat skills, connectors, Evidence mode, and MCP servers
+  (max 4); explicit `/mcp <server> <tool> {json}` calls run readonly tools,
+  while write-like tools require **session approval**
+  (`POST /api/connectors/mcp/{id}/approve-session`) — not a permanent
+  global grant.
 - **Wave A (OpenScience) — report steel-stamp, Evidence fix-loop, MCP in chat**:
   - **Publication preflight**: before exporting a STORM report, FormuNex runs
     citation / placeholder / bare-numeric checks. Open **blocking** findings
@@ -273,63 +255,72 @@ A dark, industrial NotebookLM-style three-column layout that separates **inputs
 
 ## 4. The full closed-loop workflow
 
-### Step ⓪ — load sources and research the topic (left + center)
+### Step ⓪ — research: pick a project, then search and ask
 
-1. In the **left column**, type your research topic in the prompt box (e.g.
-   "waterborne anti-corrosion coating with low VOC").
-2. Tick the source types to search — **patents**, **literature** (arXiv +
-   Semantic Scholar), **internet** (DuckDuckGo), **📓 NotebookLM** — and/or
-   **upload local files** (PDF/DOCX/XLSX/PPTX/HTML/images, parsed via
-   markitdown). Click **Search**.
-3. Loaded sources appear in the list below. In the **center column**, ask
-   questions about them — answers are grounded in the loaded evidence and cite
-   the sources used.
+1. Pick a project in the top bar (or create one with 「+」). Under
+   **Literature & research → External search & deep research**: the
+   **External search** tab runs multi-source search (patents / literature /
+   internet, plus local-file uploads — PDF/DOCX/XLSX/PPTX/HTML/images, parsed
+   via markitdown); the **Source Q&A** tab answers questions about the
+   selected sources, with citation chips per answer; the **Deep research** tab
+   runs the DeepResearchEngine multi-source synthesis pipeline and generates a
+   report; the **STORM long-form** tab generates a cited long-form report.
+2. Under **Knowledge retrieval → Search**, run hybrid search over the
+   project's knowledge base (BM25 / cosine / hybrid); **Knowledge sources &
+   tree** manages sources and catalogs; **Retrieval evidence audit** shows
+   claim → evidence grades (supported / partial / unsupported / contradicted).
 
 > Offline, the patent search returns the curated seed corpus; literature,
 > internet and NotebookLM search need their optional extras (see §12).
+> After loading, source status indicators reflect which sources are actually
+> available in the current environment.
 
-> After loading, the **status dots** on each source-type checkbox reflect which
-> sources are actually available in the current environment. For a fully automated
-> multi-source run, use the **🔬 Deep Research** button below the Search button:
-> it launches the DeepResearchEngine pipeline (web + KB + HyDE + re-rank +
-> cross-validation report) without requiring manual Q&A in the center column.
+### Step ① — set the requirement contract and generate recommendations
 
-### Step ① — set requirement and retrieve recommendations (right-column modals)
-
-The research functions live in the **right column** as buttons; each opens a
-modal popup so you can focus on one task at a time.
-
-1. Open **🧪 Requirements**. At the top, the **✨ NL Intent** box accepts a
-   one-sentence brief — *"Waterborne epoxy anti-corrosion coating, 1000 h salt
-   spray, cures at 120 °C"* — and parses it into structured fields (LLM when
-   configured, else regex fallback) that auto-populate the form below.
-2. Adjust the **domain** (e.g. "anti-corrosion coating"), **substrate** (e.g.
-   `carbon_steel`), objectives, weights, directions and constraints (e.g.
-   VOC limit).
-3. Open **⭐ Recommend** and click **research patents & recommend formulations**.
+1. Under **R&D requirements → Projects & specification contracts**: the
+   **Scenario** tab sets domain and substrate; the **Objectives** tab sets
+   optimization targets, weights and directions; the **Process window** tab
+   sets manufacturing parameter ranges; the **Custom process parameters** tab
+   adds numeric-range or discrete-list parameters (unique keys, no clash with
+   the 4 fixed keys, range low < high); the **Constraints** tab writes
+   structured constraint rows (values mirror into the single-value field,
+   range rows excluded); the **Redlines** tab lists banned/restricted
+   substances. The header **✨ NL Intent** box is currently API-only (`POST /api/intent/parse`,
+   LLM when configured, else regex fallback; see §5.10) — the contract page has
+   no parse input box yet. A one-sentence brief — *"Waterborne epoxy
+   anti-corrosion coating, 1000 h salt spray, cures at 120 °C"* — parsed via
+   the API yields structured fields to fill into the contract. Click **Save** to apply the
+   contract.
+2. Project management: create a project from the top-bar 「+」 or the project
+   list's **New project** button; row actions **rename** and **delete** the
+   project (knowledge-base disposition delete | global, default delete;
+   business data is always deleted).
+3. Under **Formulation & experiments → AI formula recommend**: the
+   **Generate** tab generates recommendations from the contract (high-active /
+   baseline / lean variants, scored and sorted by the target metric), then
+   switches to the **Leaderboard** tab automatically. Expand a card to see its
+   ingredient table, predicted metrics with uncertainty (incl. **PVC / CPVC**,
+   **Tg (°C)**, **viscosity_relative**, and optional **lab_L/a/b + ΔE₀₀**), the
+   **3D molecular-viewer panel** (see §5.10), **Why recommended** (see §5.22),
+   and a **🔍 IP compliance analysis** button (see §5.11). The leaderboard also
+   supports manual formulation entry (`POST /api/formulations/manual`) and
+   AI-assisted formulation editing (`POST /api/research/modify`, async SSE).
 
 The platform will:
 - retrieve patent/literature evidence for the domain (offline seed corpus);
 - build a semantic-embedding (or TF-IDF) RAG index and recall the most relevant
   items;
-- generate 3 recommended formulation variants from the knowledge base templates
-  (high-active / baseline / lean), scored and sorted by the target metric;
+- generate recommended formulation variants from the knowledge-base templates,
+  scored and sorted by the target metric;
 - synthesize a mechanism explanation and research conversation.
 
-**Result**: the center shows mechanism + evidence + chat; the leaderboard shows
-the 3 recommended formulations. Expand a card to see its ingredient table,
-predicted metrics with uncertainty (incl. **PVC / CPVC**, **Tg (°C)**,
-**viscosity_relative**, and optional **lab_L/a/b + ΔE₀₀**), the **3D
-molecular-viewer panel** (see §5.10), and a **🔍 IP compliance analysis**
-button (see §5.11).
-
-![Recommend · leaderboard with molecular viewer](./images/05-recommend.png)
+![Recommend · leaderboard](./images/05-recommend.png)
 
 ### Step ② — run the optimization loop
 
-Open the **📈 Optimization** modal and click **run optimization loop**. The
-platform runs an asynchronous Bayesian multi-objective optimization (24
-iterations by default):
+Under **Optimization & analysis → Optimization loop**, the tabs are
+**Pareto & freeze** (default), **Point review**, and **Loop iteration**. The
+platform runs asynchronous Bayesian multi-objective optimization:
 
 - the optimizer auto-selects the strongest installed engine (**BoTorch** →
   **Optuna** → built-in numpy UCB);
@@ -339,45 +330,58 @@ iterations by default):
   empirical/data blended predictor (weighted multi-objective aggregation);
 - results feed back into the optimizer and converge.
 
-**Result**: the convergence chart appears in the modal; the leaderboard updates
-to the Top-5 optimized formulations.
+**Result**: the Pareto front and Top formulations; the point-review tab lets
+you confirm / reject candidates one by one; a frozen formulation moves on to
+Step ⑥ documentation & release.
 
 ### Step ③ — generate a DOE and feed measured results back
 
-1. In the **🔬 DOE Design** modal, choose a design type (central composite CCD,
-   Plackett-Burman, …, or **🧠 AI active selection**) and click **Generate DOE**.
-   AI-active rows are highlighted in violet — these are the points expected
-   improvement (EI) flagged as most informative.
+1. Under **Formulation & experiments → DOE design**, the **Designer** tab
+   offers design types (orthogonal, central composite CCD, Plackett-Burman,
+   mixture, D-optimal, or **🧠 AI active selection**); click **Fill from
+   process window** to center factors on the contract set-points, then
+   **Generate design**. AI-active rows are highlighted in violet — these are
+   the points expected improvement (EI) flagged as most informative.
 2. The system produces a run table (one row per experiment, natural factor
    values + a blank measured column).
-3. Two feedback paths:
+3. Under **Formulation & experiments → Experiment work records**: the
+   **Tasks** tab dispatches tasks; the **Ledger** tab (AG Grid) takes the
+   actual executed parameters and measured metrics (Excel paste supported);
+   click **save ledger & sync**. **Training records** and **cross-batch
+   search** tabs review history; **similar historical formulations** finds
+   similar past formulas.
+4. Two feedback paths:
    - **Manual**: type the lab-measured metric values directly into the
-     "measured" column, then click **③ feed back results and train model**.
+     "measured" column, then sync and train.
    - **Batch**: click **Export CSV** to hand off to the lab → they fill it in →
      click **Import CSV** to upload.
-4. Once a metric accumulates ≥ `min_train_samples` (default 4) samples, the
+5. Once a metric accumulates ≥ `min_train_samples` (default 4) samples, the
    platform automatically trains a data-driven model for that (domain, metric).
 
-**Result**: the model-quality dashboard shows an R² half-gauge + RMSE;
-recommendations and optimization switch to the "empirical + data" blend.
+**Result**: the model-quality dashboard (Optimization & analysis → Surrogate
+models) shows R² + RMSE; recommendations and optimization switch to the
+"empirical + data" blend.
 
 > **The closed loop**: the more measured data, the higher the data-driven model
 > weight (blend weight `w = n/(n+8)`), and the closer predictions track reality.
 
 ### Step ④ — process-parameter optimization
 
-Open the **⚙️ Process Optimization** modal. The platform optimizes **manufacturing
-parameters** (cure temperature, cure time, dispersion RPM, film thickness, bath
-temperature, immersion time, pH set-point, accelerator factor) using the same
-Bayesian engine but on the *process* design space. Domain-specific outcome
-models (Arrhenius cure conversion, Q10 cleaning, phosphating power-law) score
-each candidate. The result shows the optimal process recipe and a mini
-convergence chart.
+Process optimization is no longer a standalone modal; it lives in the contract
+and the DOE: set manufacturing parameter ranges on the **contract → Process
+window** tab (cure temperature, cure time, dispersion RPM, film thickness, bath
+temperature, immersion time, pH set-point, accelerator factor, …) and add
+product-specific parameters on the **Custom process parameters** tab; in the
+**DOE designer**, **Fill from process window** centers factors on those
+set-points. The optimization loop samples the process space under the same
+window constraints. Domain-specific outcome models (Arrhenius cure conversion,
+Q10 cleaning, phosphating power-law) score each candidate. The result shows
+the optimal process recipe and a mini convergence chart.
 
 ### Step ⑤ — one-click self-driving loop
 
-Open **🔄 Self-Driving Loop** and click **iterate one round**. In a single async
-task the platform:
+Under **Optimization & analysis → Optimization loop → Loop iteration**, click
+run. In a single async task the platform:
 
 1. pulls every measured record for the active domain from the registry;
 2. retrains the data-driven model (RMSE / R² are reported per metric);
@@ -385,10 +389,29 @@ task the platform:
 4. uses the freshly-retrained surrogate to compute EI on the DOE grid and
    suggests the next active-learning batch.
 
-The modal shows engine, sample count, R²/RMSE cards (with a ↓ trend arrow as
+The page shows engine, sample count, R²/RMSE cards (with a ↓ trend arrow as
 RMSE drops over rounds), the convergence chart, and the next DOE batch (AI rows
 highlighted in violet). Export the next batch as CSV and the loop continues
 across rounds.
+
+### Step ⑥ — documentation & release (after freezing)
+
+1. Under **Documentation & release → Products & revisions**: create a product
+   (auto-coded per the company coding rule; the code belongs to the product
+   and is shared by its revisions); create a revision and link a formulation
+   version (an empty lineage shows inline guidance; the version field is
+   optional; the dropdown filters by project and still lists unscoped global
+   versions).
+2. Generate SDS / TDS / COA / GHS label documents: by default the China
+   regulation is checked; tick applicable regulations in the company
+   configuration (China / EU / US) to compute and export one edition per
+   regulation. SDS §11/12 come from **Materials & regulations → Substance
+   tox/eco records**; SDS §8 still uses GBZ only (see §5.26).
+3. The revision detail's **release gate** tab shows G1–Gn checks; approve,
+   sign (sign or publish permission), and release. The gate stays fail-closed:
+   the CLP / OSHA rule sets are draft and require EHS sign-off before release.
+4. The **Label designer** validates GB 15258 completeness before emitting a
+   label; the **Regulatory assistant** looks up regulation texts.
 
 ---
 
@@ -578,8 +601,9 @@ deterministic offline path, so behaviour never breaks.
 
 ### 5.10 NL intent parser (✨)
 
-The top of **🧪 Requirements** has a *✨ NL Intent · 智能解析* box. Paste a
-one-sentence project brief and the platform extracts a structured `Requirement`:
+One-sentence brief parsing (NL Intent) is currently API-only
+(`POST /api/intent/parse`). Send a one-sentence project brief and the platform
+extracts a structured `Requirement`:
 
 - with an LLM configured, the parser uses `complete_json()` (the same shared
   JSON-extraction helper that powers IP analysis);
@@ -693,7 +717,7 @@ was actually run end-to-end, and no unit test would have caught either:
   Structural niching caps how many individuals may share an ingredient set,
   which took one distinct composition to twelve.
 
-![Inverse design · Pareto front](./images/10-inverse-design.png)
+![Inverse design · hard constraints & soft objectives](./images/10-inverse-design.png)
 
 Async: `POST /api/design/inverse` → 202 + SSE progress.
 
@@ -731,7 +755,7 @@ interchangeable despite both being fillers.
 `genome.swappable()` — that is a *search* constraint which excludes pigments and
 fillers, whereas substitution is user-directed and any slot should be queryable.
 
-![Material substitution · per-metric deltas](./images/11-substitution.png)
+![Material substitution page](./images/11-substitution.png)
 
 **Supply risk**: `POST /api/materials/availability` marks a material
 `discontinued` or `restricted`; `GET /api/materials/supply-risk` then lists
@@ -823,17 +847,14 @@ count.
 
 ### 5.21 Knowledge Hub (📚)
 
-The right-rail **📚 Knowledge** button opens the Knowledge Hub (complements the
-left-pane session sources):
+The legacy Knowledge Hub modal has been split into three left-nav hub pages
+(old deep links redirect to the matching tab):
 
-| Tab | Purpose |
-|-----|---------|
-| **Materials** | Persistent sources/chunks; soft-archive / restore; archived excluded from retrieval by default |
-| **Retrieval probe** | `/api/kb/query-test` — BM25 / cosine / hybrid breakdown |
-| **Quality ops** | `/api/kb/quality-ops` — quality score, scan pressure, topicality stats, **hybrid p50/p95**, near-cap CTA |
-| **Wiki** | Compiled-memory pages; summaries can embed into dual-track retrieval (`wiki_embed_enabled`; Claims still filter wiki) |
-| **Graph** | Wiki wikilink graph (**not** materials KG / Neo4j) |
-| **Reports / dossier** | Project dossier tables + optional narrative; STORM longform (flag-gated) |
+| Page | Tabs | Purpose |
+|---|---|---|
+| Knowledge retrieval → Search (search hub) | Quick search, Deep search, Ops | Ops holds the quality dashboard, retrieval probe, and parsing & structure recognition |
+| Literature & research → Library (library hub) | Catalog & import, Frozen & screening, Smart collections (scheduled rules), NotebookLM | Shares Capture / Freeze / OA-enrich with the report freeze strip |
+| Literature & research → Wiki knowledge base | Page browse, Link graph | Compiled-memory pages; summaries can embed into dual-track retrieval (`wiki_embed_enabled`; Claims still filter wiki); link graph is **not** the materials KG |
 
 **Gates (defaults):** topicality enforce on (`kb_relevance_shadow=False`);
 retention purge never auto-deletes (dry-run + confirm).
@@ -878,6 +899,56 @@ Still **off** unless explicitly enabled:
 - `auto_loop_on_sync` / `auto_adopt_next_doe_on_loop` / `prediction_bias_soft_correct`
 - `kg_relations_on_ingest`, archive TTL physical purge, stopping `suppliers_json` dual-write
 - Neo4j / external vector DBs (e.g. Qdrant) — not default until metrics demand them
+
+### 5.26 2026-10 addenda: nav slimming, project shortcuts, custom process window & constraints, tox/eco records
+
+- **Left nav (third slimming round, 41 web entries)**: recommend first in the
+  formulation group, models and surface first in the optimization group,
+  research artifacts moved up in the literature group, raw materials first in
+  the materials group; the 5 entries removed from the menu each have a home
+  and their routes are kept — quality-ops → search hub ops tab, NotebookLM →
+  library hub tab, connectors → settings-center tab, agent memory → knowledge-Q&A
+  page header, project sources → contract page header only. MCP tool approvals
+  keep their top-level entry (5-minute approval window; expired requests are
+  auto-rejected).
+- **Project shortcuts**: the top-bar project dropdown's 「+」 creates a project;
+  the project list's row actions and the contract page header rename and delete
+  it. Permission reuses `project.write`; delete takes a knowledge-base
+  disposition (delete | global, default delete) while business data is always
+  deleted.
+- **Custom process parameters** (contract → Custom process parameters tab):
+  numeric-range or discrete-list rows; unique keys, no clash with the 4 fixed
+  keys, range low < high; the DOE designer's "Fill from process window"
+  includes custom numeric items.
+- **Structured process constraints** (contract → Constraints tab): constraint
+  rows + a `constraint_values` single-value mirror (range rows excluded); old
+  single values convert to target rows in place; `derive_process_levers` /
+  `check_process_window` accept custom items.
+- **Substance tox/eco records** (Materials & regulations → Substance tox/eco
+  records, renamed from "test records" to disambiguate from work records):
+  toxicology and ecotoxicology records render SDS §11/12; 445 EH40 occupational
+  exposure limits are seeded (SDS §8 still uses GBZ only; the OEL query API
+  covers the rest).
+- **Revision empty-state guidance**: the product-revision dialog guides when
+  the formulation-version dropdown's lineage is empty; the version field is
+  optional; with no default company, document generation checks China by
+  default; the revision detail page labels unlinked versions.
+- **Multi-regulation** (company configuration ticks applicable regulations —
+  China / EU / US first): two-level agent (company default + per-generation /
+  per-export override); generation computes per regulation, export emits one
+  edition per regulation; CLP / OSHA rule sets are draft and require EHS
+  sign-off before production release; the gate stays fail-closed. Existing
+  data backfills to GB.
+- **Generic product coding** (company configuration defines the coding rule):
+  category Chinese/English names, identifier digits or letters, and product
+  numeric-code length; new products auto-code; the code belongs to the product
+  and is shared by its revisions; old MYH codes are not auto-mapped (a manual
+  legacy-code field remains); a length-rule change applies to new products only
+  — existing codes are frozen, never rewritten.
+- **GHS statement scope**: H statements 96 → 95 (H361E removed: verbatim
+  duplicate of H361D, no rule/label/frontend reference); the English gap is
+  closed except P281, now filled with the historical GHS text matching the
+  Chinese wording.
 
 ---
 
