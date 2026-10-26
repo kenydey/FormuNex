@@ -73,3 +73,6 @@ backend/evals-history.jsonl
 
 # 法规数据源下载产物（征求意见稿 PDF 等，不进代码库）
 data_sources/
+
+# 开发模式运行时目录（pid + 日志）
+.run/
