@@ -2,7 +2,7 @@
 import type { DependencyInfo, EnvFlag, LlmModelOption, LlmProviderInfo, Neo4jRawStats, UnifiedSkill } from "./types";
 
 /** Tabs of /admin/settings/:tab. */
-export const SETTINGS_TABS = ["model", "keys", "api-token", "capabilities", "env", "deps", "kb"] as const;
+export const SETTINGS_TABS = ["model", "keys", "api-token", "capabilities", "env", "deps", "kb", "connectors"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /** Legacy tab ids (FormuMind settings modal, possibly bookmarked) → new tab. */

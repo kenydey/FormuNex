@@ -3,11 +3,15 @@ import { NAV, type NavItem } from "./nav";
 import { router } from "./router";
 
 /**
- * 左侧菜单清单测试（菜单合并与精简方案 A + 第二轮精简）：新菜单结构即唯一事实源。
- * 逐项编码 46 个组内叶项 + 我的工作台的 path / 中文文案 / permission / when / order，
+ * 左侧菜单清单测试（菜单合并与精简方案 A + 第二轮精简 + 第三轮精简）：新菜单结构即唯一事实源。
+ * 逐项编码 42 个组内叶项 + 我的工作台的 path / 中文文案 / permission / when / order，
  * 防止后续改动悄悄增删入口、改权限或打乱顺序。路由本身在 router.tsx 中，菜单只呈现。
  * 第二轮：知识检索 6、文献与研究 6、研发需求 3、配方与实验 9、寻优与分析 6、
  * 文档与发布 4、物料与法规 3、系统管理 9（含桌面端限定 1 项，Web 可见 8 项）。
+ * 第三轮：知识检索 4、文献与研究 6、研发需求 2、配方与实验 9、寻优与分析 6、
+ * 文档与发布 4、物料与法规 4、系统管理 7（含桌面端限定 1 项，Web 可见 6 项）；
+ * 移出菜单的 5 项（检索质量运维、Agent 记忆、项目资料、NotebookLM、连接器）改走
+ * hub tab / 页眉入口 / 契约页内入口 / 路由重定向，路由本身不删。
  */
 type Leaf = { path: string; zh: string; permission?: string; hasWhen?: boolean };
 type Group = { path: string; zh: string; leaves: Leaf[] };
@@ -19,11 +23,9 @@ const EXPECTED: Group[] = [
     zh: "知识检索",
     leaves: [
       { path: "/knowledge/search", zh: "检索" },
-      { path: "/knowledge/quality", zh: "检索质量运维" },
       { path: "/knowledge/sources", zh: "知识源与目录树" },
       { path: "/knowledge/chat", zh: "知识问答" },
       { path: "/knowledge/reviews", zh: "检索证据审计" },
-      { path: "/knowledge/memory", zh: "Agent 记忆" },
     ],
   },
   {
@@ -32,9 +34,9 @@ const EXPECTED: Group[] = [
     leaves: [
       { path: "/knowledge/library", zh: "文献库" },
       { path: "/knowledge/research", zh: "外部检索与深度研究" },
+      { path: "/knowledge/research/artifacts", zh: "研究产物" },
       { path: "/knowledge/research/embodiment", zh: "实施例草稿" },
       { path: "/knowledge/research/ip", zh: "专利 / IP 分析" },
-      { path: "/knowledge/research/artifacts", zh: "研究产物" },
       { path: "/knowledge/wiki", zh: "Wiki 知识库" },
     ],
   },
@@ -42,36 +44,35 @@ const EXPECTED: Group[] = [
     path: "/spec",
     zh: "研发需求",
     leaves: [
-      { path: "/spec/projects", zh: "项目与规格契约" },
       { path: "/spec/paths", zh: "主路径向导" },
-      { path: "/spec/sources", zh: "项目资料" },
+      { path: "/spec/projects", zh: "项目与规格契约" },
     ],
   },
   {
     path: "/lab",
     zh: "配方与实验",
     leaves: [
+      { path: "/lab/recommend", zh: "AI 配方推荐" },
       { path: "/lab/formulations", zh: "配方编辑" },
       { path: "/lab/doe", zh: "DOE 设计" },
       { path: "/lab/work-records", zh: "实验工作记录" },
       { path: "/lab/measurements", zh: "测量与复核" },
+      { path: "/lab/substitution", zh: "原料替代" },
+      { path: "/lab/inverse-design", zh: "逆向设计" },
       { path: "/lab/methods", zh: "方法与仪器" },
       { path: "/lab/eln", zh: "外部 ELN" },
-      { path: "/lab/recommend", zh: "AI 配方推荐" },
-      { path: "/lab/inverse-design", zh: "逆向设计" },
-      { path: "/lab/substitution", zh: "原料替代" },
     ],
   },
   {
     path: "/cockpit",
     zh: "寻优与分析",
     leaves: [
-      { path: "/cockpit/optimization", zh: "寻优闭环" },
-      { path: "/cockpit/uncertainty", zh: "不确定性诊断" },
-      { path: "/cockpit/rheology", zh: "流变拟合" },
-      { path: "/cockpit/properties", zh: "配方物性" },
       { path: "/cockpit/models", zh: "代理模型" },
       { path: "/cockpit/surface", zh: "响应曲面" },
+      { path: "/cockpit/uncertainty", zh: "不确定性诊断" },
+      { path: "/cockpit/optimization", zh: "寻优闭环" },
+      { path: "/cockpit/properties", zh: "配方物性" },
+      { path: "/cockpit/rheology", zh: "流变拟合" },
     ],
   },
   {
@@ -89,8 +90,8 @@ const EXPECTED: Group[] = [
     zh: "物料与法规",
     leaves: [
       { path: "/materials/substances", zh: "物质与法规数据" },
-      { path: "/materials/test-records", zh: "试验记录" },
       { path: "/materials/raw", zh: "原料" },
+      { path: "/materials/test-records", zh: "物质毒理/生态记录" },
       { path: "/knowledge/graph", zh: "材料知识图谱" },
     ],
   },
@@ -98,14 +99,12 @@ const EXPECTED: Group[] = [
     path: "/admin",
     zh: "系统管理",
     leaves: [
+      { path: "/admin/mcp-approvals", zh: "MCP 工具审批" },
       { path: "/admin/users", zh: "用户与角色", permission: "admin.users" },
       { path: "/admin/companies", zh: "公司配置", permission: "admin.companies" },
-      { path: "/admin/audit", zh: "审计日志", permission: "audit.read" },
-      { path: "/admin/connectors", zh: "连接器" },
       { path: "/admin/settings", zh: "设置中心", permission: "admin.llm" },
-      { path: "/admin/mcp-approvals", zh: "MCP 工具审批" },
+      { path: "/admin/audit", zh: "审计日志", permission: "audit.read" },
       { path: "/admin/org-dashboard", zh: "组织看板" },
-      { path: "/knowledge/notebooklm", zh: "NotebookLM" },
       { path: "/admin/desktop", zh: "桌面端与本机服务", hasWhen: true },
     ],
   },
@@ -147,10 +146,10 @@ describe("nav (menu checklist, scheme A)", () => {
     }
   });
 
-  it("47 group leaves + dashboard = 48 entries, no duplicate paths or keys", () => {
+  it("42 group leaves + dashboard = 43 entries, no duplicate paths or keys", () => {
     const leaves = flatLeaves(NAV);
-    expect(leaves).toHaveLength(48);
-    expect(new Set(leaves.map((l) => l.path)).size).toBe(48);
+    expect(leaves).toHaveLength(43);
+    expect(new Set(leaves.map((l) => l.path)).size).toBe(43);
     const keys = NAV.flatMap((g) => [g.key, ...(g.children ?? []).map((l) => l.key)]);
     expect(keys.every((k) => k.length > 0)).toBe(true);
     expect(new Set(keys).size).toBe(keys.length);

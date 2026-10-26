@@ -17,8 +17,8 @@ const module: FeatureModule = {
   ],
   nav: {
     "/lab": [
-      { path: "/lab/inverse-design", key: "nav.lab.inverse", zh: "逆向设计", order: 7 },
-      { path: "/lab/substitution", key: "nav.lab.substitution", zh: "原料替代", order: 8 },
+      { path: "/lab/inverse-design", key: "nav.lab.inverse", zh: "逆向设计", order: 6 },
+      { path: "/lab/substitution", key: "nav.lab.substitution", zh: "原料替代", order: 5 },
     ],
   },
 };

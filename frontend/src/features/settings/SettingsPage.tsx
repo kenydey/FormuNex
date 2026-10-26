@@ -11,6 +11,7 @@ import { SkillsTab } from "./SkillsTab";
 import { EnvFlagsTab } from "./EnvFlagsTab";
 import { DependenciesTab } from "./DependenciesTab";
 import { KbMaintenanceTab } from "./KbMaintenanceTab";
+import ConnectorsPage from "@/features/admin/ConnectorsPage";
 
 /** Server configuration is a system-administrator task (rbac: admin.llm). */
 export const SETTINGS_PERMISSION = "admin.llm";
@@ -34,6 +35,7 @@ export default function SettingsPage() {
     { key: "env", tab: t("settings.tab.env", "环境变量") },
     { key: "deps", tab: t("settings.tab.deps", "依赖管理") },
     { key: "kb", tab: t("settings.tab.kb", "KB / KG 维护") },
+    { key: "connectors", tab: t("settings.tab.connectors", "连接器") },
   ];
   return (
     <PageContainer title={t("settings.title", "设置中心")} tabList={tabs} tabActiveKey={tab}
@@ -45,6 +47,7 @@ export default function SettingsPage() {
       {tab === "env" && <EnvFlagsTab />}
       {tab === "deps" && <DependenciesTab />}
       {tab === "kb" && <KbMaintenanceTab />}
+      {tab === "connectors" && (can("admin.connectors") ? <ConnectorsPage /> : <Forbidden permission="admin.connectors" />)}
     </PageContainer>
   );
 }

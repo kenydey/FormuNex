@@ -12,6 +12,7 @@ const en: Record<string, string> = {
   "settings.tab.env": "Environment flags",
   "settings.tab.deps": "Dependencies",
   "settings.tab.kb": "KB / KG maintenance",
+  "settings.tab.connectors": "Connectors",
   "settings.cancel": "Cancel",
   "settings.preview": "Preview",
   "settings.refresh": "Refresh",

@@ -10,8 +10,7 @@ const module: FeatureModule = {
   ],
   nav: {
     "/spec": [
-      { path: "/spec/paths", key: "nav.spec.paths", zh: "主路径向导", order: 1 },
-      { path: "/spec/sources", key: "nav.spec.sources", zh: "项目资料", order: 2 },
+      { path: "/spec/paths", key: "nav.spec.paths", zh: "主路径向导", order: 0 },
     ],
   },
 };

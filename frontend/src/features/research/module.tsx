@@ -13,9 +13,9 @@ const module: FeatureModule = {
   nav: {
     "/knowledge-library": [
       { path: "/knowledge/research", key: "nav.knowledge.research", zh: "外部检索与深度研究", order: 1 },
-      { path: "/knowledge/research/embodiment", key: "nav.knowledge.embodiment", zh: "实施例草稿", order: 2 },
-      { path: "/knowledge/research/ip", key: "nav.knowledge.ip", zh: "专利 / IP 分析", order: 3 },
-      { path: "/knowledge/research/artifacts", key: "nav.knowledge.artifacts", zh: "研究产物", order: 4 },
+      { path: "/knowledge/research/embodiment", key: "nav.knowledge.embodiment", zh: "实施例草稿", order: 3 },
+      { path: "/knowledge/research/ip", key: "nav.knowledge.ip", zh: "专利 / IP 分析", order: 4 },
+      { path: "/knowledge/research/artifacts", key: "nav.knowledge.artifacts", zh: "研究产物", order: 2 },
     ],
   },
 };

@@ -21,9 +21,10 @@ export function useHubTab(param: string, keys: string[], fallback: string): [str
 }
 
 /** Legacy route → hub tab, keeping the rest of the query string (e.g. ``?campaign=&row=``). */
-export function TabRedirect({ to, tab, param = "tab" }: { to: string; tab: string; param?: string }) {
+export function TabRedirect({ to, tab, param = "tab", extra }: { to: string; tab: string; param?: string; extra?: Record<string, string> }) {
   const [params] = useSearchParams();
   const next = new URLSearchParams(params);
   next.set(param, tab);
+  for (const [k, v] of Object.entries(extra ?? {})) next.set(k, v);
   return <Navigate to={`${to}?${next.toString()}`} replace />;
 }

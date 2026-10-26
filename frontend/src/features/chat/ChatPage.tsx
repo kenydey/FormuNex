@@ -353,7 +353,7 @@ export default function ChatPage() {
 
   return (
     <PageContainer subTitle={t("chat.sub", "向项目知识库提问：流式回答、逐句引用脚注、断言核验与证据审计")}
-      extra={<Space wrap><RagPrewarmBar /><WikiChatModeSelector /></Space>}>
+      extra={<Space wrap><RagPrewarmBar /><WikiChatModeSelector /><Link to="/knowledge/memory">{t("nav.knowledge.memory", "Agent 记忆")}</Link></Space>}>
       <ProCard split="vertical" bordered style={{ minHeight: "calc(100vh - 220px)" }}>
         <ProCard colSpan={{ xs: 24, md: 6 }} title={t("chat.sessions", "会话")}
           extra={<Button size="small" icon={<PlusOutlined />} onClick={newChat} data-testid="chat-new">{t("chat.new", "新对话")}</Button>}>

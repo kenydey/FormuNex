@@ -11,8 +11,8 @@ const module: FeatureModule = {
   ],
   nav: {
     "/knowledge": [
-      { path: "/knowledge/chat", key: "nav.knowledge.chat", zh: "知识问答", order: 3 },
-      { path: "/knowledge/reviews", key: "nav.knowledge.reviews", zh: "检索证据审计", order: 4 },
+      { path: "/knowledge/chat", key: "nav.knowledge.chat", zh: "知识问答", order: 2 },
+      { path: "/knowledge/reviews", key: "nav.knowledge.reviews", zh: "检索证据审计", order: 3 },
     ],
   },
 };

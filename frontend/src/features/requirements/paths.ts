@@ -28,7 +28,7 @@ export const PATHS: PathDef[] = [
   { id: "knowledge", maturity: "beta", needsProject: true, steps: [
     { id: "sources", routes: ["/spec/projects/:projectId/sources"], needsProject: true },
     { id: "wiki", routes: ["/knowledge/wiki", "/wiki"] },
-    { id: "quality", routes: ["/knowledge/quality", "/wiki/quality"] },
+    { id: "quality", routes: ["/knowledge/search?tab=ops", "/knowledge/quality"] },
     { id: "reports", routes: ["/knowledge/research/artifacts"] },
   ] },
 ];

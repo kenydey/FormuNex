@@ -70,7 +70,7 @@ export const router = createBrowserRouter([
       { path: "admin/users", element: L(() => import("@/features/admin/UsersPage")) },
       { path: "admin/companies", element: L(() => import("@/features/admin/CompaniesPage")) },
       { path: "admin/audit", element: L(() => import("@/features/admin/AuditPage")) },
-      { path: "admin/connectors", element: L(() => import("@/features/admin/ConnectorsPage")) },
+      { path: "admin/connectors", element: <Navigate to="/admin/settings/connectors" replace /> },
       ...MODULES.flatMap((m) => m.routes),
       { path: "*", element: L(() => import("@/features/dashboard/NotFoundPage")) },
     ],
