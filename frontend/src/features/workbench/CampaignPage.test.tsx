@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import CampaignPage from "./CampaignPage";
 
 vi.mock("@/app/store", () => ({ useUi: (sel: (s: { projectId: string; theme: string }) => unknown) => sel({ projectId: "p1", theme: "light" }) }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 vi.mock("echarts-for-react", () => ({ default: () => null }));
 vi.mock("@/api/client", () => ({
   call: vi.fn(async (_m: string, path: string) => {

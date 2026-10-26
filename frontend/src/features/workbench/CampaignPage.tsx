@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type HTM
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert } from "@/shared/feedback";
 import { StructuredDiff } from "@/shared/StructuredDiff";
 import { ContourChart } from "./charts";
@@ -41,6 +42,7 @@ function statusLabel(t: (k: string, d: string) => string, s: string): string {
 /** 实验台账 (legacy ``LabWorkbench``): edit actual params / measurements, batch operations, sync → training + optional loop. */
 export default function CampaignPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -297,7 +299,7 @@ export default function CampaignPage() {
         <Button key="rounds" icon={<HistoryOutlined />} onClick={() => setRoundsOpen(true)}>{t("workbench.rounds_btn", "轮次历史")}</Button>,
         <Button key="csv" icon={<DownloadOutlined />} disabled={!rows.length}
           onClick={() => saveText(toCsv(rows, factors, objectives), `DOE-C${campaignId}-${new Date().toISOString().slice(0, 10)}.csv`)}>{t("workbench.export_csv", "导出 CSV")}</Button>,
-        <Button key="save" type="primary" icon={<SaveOutlined />} loading={save.isPending} disabled={!rows.length} onClick={() => save.mutate()}>
+        <Button key="save" type="primary" icon={<SaveOutlined />} loading={save.isPending} disabled={!rows.length || !can("lab.execute")} onClick={() => save.mutate()}>
           {dirty.size ? t("workbench.save_n", "保存台账并同步（{{n}}）", { n: dirty.size }) : t("workbench.save", "保存台账并同步")}
         </Button>,
       ]}
@@ -317,7 +319,7 @@ export default function CampaignPage() {
       {loopRun.retry && !loopRun.running && (
         <Alert type="error" showIcon style={{ marginBottom: 12 }} data-testid="workbench-loop-retry"
           message={t("workbench.loop_failed", "闭环失败：{{e}}", { e: loopRun.error ?? "" })}
-          action={projectId && <Button size="small" danger onClick={() => void runLoop(qc, projectId, campaignId)}>{t("workbench.loop_retry", "重试闭环")}</Button>} />
+          action={projectId && <Button size="small" danger disabled={!can("optimize.run")} onClick={() => void runLoop(qc, projectId, campaignId)}>{t("workbench.loop_retry", "重试闭环")}</Button>} />
       )}
       {bias && (
         <Alert type="warning" closable onClose={() => setBias(null)} style={{ marginBottom: 12 }}
@@ -332,7 +334,7 @@ export default function CampaignPage() {
             {quality.data.errors_count > 0 && <Tag color="warning">{t("workbench.quality.errors", "探测失败 {{n}}", { n: quality.data.errors_count })}</Tag>}
             {quality.data.dropped_total > 0 && <Tag color="warning">{t("workbench.quality.dropped", "累计丢弃非法值 {{n}}", { n: quality.data.dropped_total })}</Tag>}
           </Space>}
-          action={quality.data.stale_count > 0 && <Button size="small" loading={reconcile.isPending} onClick={() => reconcile.mutate()}>{t("workbench.reconcile", "清理失效引用")}</Button>} />
+          action={quality.data.stale_count > 0 && <Button size="small" disabled={!can("lab.execute")} loading={reconcile.isPending} onClick={() => reconcile.mutate()}>{t("workbench.reconcile", "清理失效引用")}</Button>} />
       )}
 
       <ProCard bordered>
@@ -410,7 +412,7 @@ export default function CampaignPage() {
           </Space>
         )}
         <div style={{ marginTop: 16 }}>
-          <Button loading={train.isPending} onClick={() => train.mutate()}>{t("workbench.train", "回灌实验结果并训练模型")}</Button>
+          <Button loading={train.isPending} disabled={!can("optimize.run")} onClick={() => train.mutate()}>{t("workbench.train", "回灌实验结果并训练模型")}</Button>
           <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
             {t("workbench.train_hint", "BayBE 主动 DOE 从台账 Completed 行读取实际参数与测量值；")}<Link to="/cockpit/models">{t("workbench.see_models", "查看模型")}</Link>
           </Typography.Text>

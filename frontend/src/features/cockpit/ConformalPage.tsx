@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
@@ -21,6 +22,7 @@ interface Out {
 /** 预测区间与偏差 (方案 §5.4): split conformal intervals and coverage monitoring. */
 export default function ConformalPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const projectId = useUi((s) => s.projectId);
   const [metric, setMetric] = useState("");
   const [planId, setPlanId] = useState<string | undefined>();
@@ -53,13 +55,13 @@ export default function ConformalPage() {
             <Space wrap>
               <Select allowClear style={{ width: 320 }} placeholder={t("conformal.plan", "DOE 计划（不选则用当前项目）")} value={planId} onChange={setPlanId}
                 options={(plans.data?.items ?? []).map((p) => ({ value: p.plan_id, label: `${p.design} · ${p.created_at?.slice(0, 10)}` }))} />
-              <Button type="primary" disabled={!metric} loading={lab.isPending} onClick={() => { manual.reset(); lab.mutate(); }}>{t("conformal.run", "校准")}</Button>
+              <Button type="primary" disabled={!metric || !can("formulation.read")} loading={lab.isPending} onClick={() => { manual.reset(); lab.mutate(); }}>{t("conformal.run", "校准")}</Button>
             </Space>
           ) },
           { key: "manual", label: t("conformal.manual", "粘贴配对数据"), children: (
             <Space direction="vertical" style={{ width: "100%" }}>
               <Input.TextArea rows={6} value={csv} onChange={(e) => setCsv(e.target.value)} placeholder={t("conformal.csv", "每行：预测值, 实测值[, σ]（按时间顺序）")} />
-              <Button type="primary" disabled={!csv.trim()} loading={manual.isPending} onClick={() => { lab.reset(); manual.mutate(); }}>{t("conformal.run", "校准")}</Button>
+              <Button type="primary" disabled={!csv.trim() || !can("formulation.read")} loading={manual.isPending} onClick={() => { lab.reset(); manual.mutate(); }}>{t("conformal.run", "校准")}</Button>
             </Space>
           ) },
         ]} />

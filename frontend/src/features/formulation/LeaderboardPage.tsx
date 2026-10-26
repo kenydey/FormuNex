@@ -10,6 +10,7 @@ import type { EChartsOption } from "echarts";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { fx, saveText } from "./api";
+import { useSession } from "@/app/session";
 import { useOpenInEditor } from "./adopt";
 import { FormulaCard } from "./FormulaCard";
 import { RelationInsightsBanner } from "./RelationInsights";
@@ -23,6 +24,7 @@ type View = "cards" | "table" | "pareto" | "parallel";
 /** Top recommended formulations of the current project (legacy FormulaLeaderboard). */
 export default function LeaderboardPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -143,7 +145,7 @@ export default function LeaderboardPage() {
           <ul style={{ margin: 0, paddingInlineStart: 18, maxHeight: 140, overflow: "auto" }}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
           {actions.hasCompliance && <Typography.Paragraph type="secondary" style={{ margin: "6px 0 0" }}>{t("formulation.board.compliance", "合规项（REACH / SVHC / RoHS）需人工确认，不会自动改配方。")}</Typography.Paragraph>}
           <Space style={{ marginTop: 8 }} wrap>
-            {actions.proposeMissing && <Button size="small" loading={proposeMissing.isPending} onClick={() => proposeMissing.mutate()}>{t("formulation.board.propose", "入库缺失组分")}</Button>}
+            {actions.proposeMissing && <Button size="small" disabled={!can("knowledge.write")} loading={proposeMissing.isPending} onClick={() => proposeMissing.mutate()}>{t("formulation.board.propose", "入库缺失组分")}</Button>}
             {actions.openMaterials && <Link to="/materials">{t("formulation.board.materials", "打开材料库")}</Link>}
             {syncMsg && <Typography.Text type="secondary">{syncMsg}</Typography.Text>}
           </Space>
@@ -164,9 +166,9 @@ export default function LeaderboardPage() {
                 onOpenEditor={() => openInEditor(f, { recommendId, index: i, projectId, levers: requirement?.levers })} />
             ))}
       <Space style={{ marginTop: 12 }} wrap>
-        <Button icon={<PlusOutlined />} loading={addManual.isPending} onClick={() => addManual.mutate()}>{t("formulation.board.add_manual", "手动添加配方")}</Button>
+        <Button icon={<PlusOutlined />} disabled={!can("formulation.write")} loading={addManual.isPending} onClick={() => addManual.mutate()}>{t("formulation.board.add_manual", "手动添加配方")}</Button>
         <Button icon={<RobotOutlined />} disabled={!draft.length || task.busy} onClick={() => setAiTarget(0)}>{t("formulation.board.ai", "AI 修改配方")}</Button>
-        <Button icon={<SyncOutlined />} disabled={!draft.length} loading={proposeMissing.isPending} onClick={() => proposeMissing.mutate()}
+        <Button icon={<SyncOutlined />} disabled={!draft.length || !can("knowledge.write")} loading={proposeMissing.isPending} onClick={() => proposeMissing.mutate()}
           title={t("formulation.board.propose_tip", "将推荐配方中的组分提交到全局材料库（有 CAS / SMILES 自动入库，否则进待确认）")}>{t("formulation.board.propose", "入库缺失组分")}</Button>
         {syncMsg && !warnings.length && <Typography.Text type="secondary">{syncMsg}</Typography.Text>}
       </Space>

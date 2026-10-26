@@ -210,6 +210,16 @@ def test_the_semantic_scholar_probe_reports_each_outcome(env_file, monkeypatch):
         assert out["ok"] is ok and fragment in out["message"], (status, out)
 
 
+def test_the_epa_ctx_probe_reports_each_outcome(env_file, monkeypatch):
+    assert ss.probe_secret("epa_ctx_api_key")["ok"] is False  # nothing configured yet
+    ss.update_secrets({"epa_ctx_api_key": "ctx-key-0123456789"})
+    for status, ok, fragment in ((200, True, "有效"), (401, False, "拒绝"), (404, False, "待确认"), (500, False, "500")):
+        transport = httpx.MockTransport(lambda request, st=status: httpx.Response(st, json={}))
+        monkeypatch.setattr(ss, "make_client", lambda **kw: httpx.Client(transport=transport))
+        out = ss.probe_secret("epa_ctx_api_key")
+        assert out["ok"] is ok and fragment in out["message"], (status, out)
+
+
 def test_langfuse_probe_needs_both_keys(env_file):
     ss.update_secrets({"langfuse_public_key": "pk-lf-1"})
     assert ss.probe_secret("langfuse_public_key")["ok"] is False

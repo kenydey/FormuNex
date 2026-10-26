@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert } from "@/shared/feedback";
 import { specRange } from "./logic";
@@ -18,6 +19,7 @@ const num = (s: string | null) => (s && Number(s) > 0 ? Number(s) : undefined);
  *  data only after review (P1-13); the sync switch only folds already-reviewed values. */
 export default function QcReportPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const qc = useQueryClient();
   const projectId = useUi((s) => s.projectId);
   const [params, setParams] = useSearchParams();
@@ -89,7 +91,7 @@ export default function QcReportPage() {
           <Form.Item label={t("design.qc.sync", "复核通过后同步进可训练数据")}><Switch checked={sync} onChange={setSync} /></Form.Item>
         </Form>
         <ErrorAlert error={campaigns.error ?? campaign.error} />
-        <Upload.Dragger style={{ marginTop: 16 }} disabled={!target || upload.isPending} showUploadList={false}
+        <Upload.Dragger style={{ marginTop: 16 }} disabled={!target || upload.isPending || !can("qc.write")} showUploadList={false}
           accept=".pdf,.docx,.doc,.md,.txt,.csv,.png,.jpg,.jpeg" beforeUpload={(f) => { upload.mutate(f); return false; }}>
           <p className="ant-upload-drag-icon"><InboxOutlined /></p>
           <p className="ant-upload-text">{upload.isPending ? t("design.qc.parsing", "解析中…") : t("design.qc.drop", "点击或拖拽检测报告到此处上传并解析")}</p>

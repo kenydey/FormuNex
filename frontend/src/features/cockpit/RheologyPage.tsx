@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
 
@@ -23,6 +24,7 @@ interface FitOut {
 /** 补齐 2-20: 流变拟合 — 粘贴剪切速率/黏度或应力表，选模型拟合。 */
 export default function RheologyPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const [csv, setCsv] = useState("1\t10\n2\t6.3\n5\t3.6\n10\t2.4\n20\t1.6\n50\t1.0\n100\t0.7");
   const [mode, setMode] = useState<"viscosity" | "stress">("viscosity");
   const [model, setModel] = useState<Model>("auto");
@@ -71,7 +73,7 @@ export default function RheologyPage() {
               options={[{ value: "viscosity", label: t("rheo.mode_visc", "剪切速率, 黏度") }, { value: "stress", label: t("rheo.mode_stress", "剪切速率, 剪切应力") }]} />
             <Select style={{ width: 200 }} value={model} onChange={setModel}
               options={[{ value: "auto", label: t("rheo.auto", "auto（取 R² 最高）") }, { value: "power_law", label: "Power-law" }, { value: "herschel_bulkley", label: "Herschel–Bulkley" }, { value: "cross", label: "Cross" }]} />
-            <Button type="primary" disabled={pts.length < 4} loading={fit.isPending} onClick={() => fit.mutate()}>{t("rheo.fit", "拟合")}</Button>
+            <Button type="primary" disabled={pts.length < 4 || !can("formulation.read")} loading={fit.isPending} onClick={() => fit.mutate()}>{t("rheo.fit", "拟合")}</Button>
             <span>{t("rheo.points", "已解析 {{n}} 点（至少 4 点）", { n: pts.length })}</span>
           </Space>
           <Input.TextArea rows={7} value={csv} onChange={(e) => setCsv(e.target.value)}

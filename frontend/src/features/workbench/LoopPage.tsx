@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { call, download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
 import { HandoffBanner } from "@/shared/handoff";
@@ -26,6 +27,7 @@ const stamp = (iso?: string | null) => {
 /** 自驱动闭环 (legacy ``LoopModal``): data → retrain → optimise → next active-learning DOE batch. */
 export default function LoopPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -120,7 +122,7 @@ export default function LoopPage() {
           )}
         </Space>
         <Space wrap style={{ marginTop: 12 }}>
-          <Button type="primary" icon={<SyncOutlined spin={run.running} />} disabled={run.running || converged} loading={run.running}
+          <Button type="primary" icon={<SyncOutlined spin={run.running} />} disabled={run.running || converged || !can("optimize.run")} loading={run.running}
             onClick={() => void runLoop(qc, projectId, cid)} title={converged ? t("workbench.converged_tip", "模型 RMSE 已收敛，建议停止迭代") : undefined}>
             {run.running ? coldStartMessage(ev?.stage, ev?.message, t("workbench.iterating", "迭代中…"), t("workbench.cold", "模型冷启动中… 正在检索"))
               : converged ? t("workbench.loop.converged", "已收敛") : t("workbench.run_loop", "迭代一轮闭环")}
@@ -151,7 +153,7 @@ export default function LoopPage() {
       {run.retry && !run.running && (
         <Alert type="error" showIcon style={{ marginTop: 16 }} data-testid="loop-retry-banner"
           message={t("workbench.loop_failed", "闭环失败：{{e}}", { e: run.error ?? "" })}
-          action={<Button size="small" danger onClick={() => void runLoop(qc, projectId, cid)}>{t("workbench.loop_retry", "重试闭环")}</Button>} />
+          action={<Button size="small" danger disabled={!can("optimize.run")} onClick={() => void runLoop(qc, projectId, cid)}>{t("workbench.loop_retry", "重试闭环")}</Button>} />
       )}
       {!run.retry && run.error && !run.running && <Alert type="warning" showIcon style={{ marginTop: 16 }} message={run.error} />}
 
@@ -231,7 +233,7 @@ export default function LoopPage() {
         <ProCard bordered style={{ marginTop: 16 }} title={t("workbench.next_doe", "下一批推荐实验 · Next DOE")}
           subTitle={<Tag color="purple">{t("workbench.ai_point", "AI = 主动学习选点")}</Tag>}
           extra={<Space>
-            {pendingAdopt && <Button type="primary" loading={adopt.isPending} onClick={() => adopt.mutate()}>{t("workbench.adopt", "创建实验台账 →")}</Button>}
+            {pendingAdopt && <Button type="primary" disabled={!can("lab.execute") || !can("project.write")} loading={adopt.isPending} onClick={() => adopt.mutate()}>{t("workbench.adopt", "创建实验台账 →")}</Button>}
             {!pendingAdopt && ws.workbench_campaign_id != null && <Link to={`/cockpit/workbench/${ws.workbench_campaign_id}`}>{t("workbench.open_ledger", "打开台账")}</Link>}
             {plan.plan_id && <Button icon={<DownloadOutlined />} onClick={() => void download(`/api/doe/${plan.plan_id}/export?format=csv`, `doe_${plan.plan_id}.csv`)}>
               {t("workbench.export_next", "导出下一批 DOE")}</Button>}

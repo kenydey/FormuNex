@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { envFlag, isFlagGateError, wikiApi } from "./api";
@@ -21,6 +22,7 @@ const FLAG = "wiki_page_graph_enabled";
 export default function WikiGraphPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const projectId = useUi((s) => s.projectId);
   const [kind, setKind] = useState<string | undefined>();
@@ -100,7 +102,7 @@ export default function WikiGraphPage() {
             </Card>
           </Col>
           <Col xs={24} lg={7}>
-            <WikiGraphInsights insights={graph.data?.insights} busy={op.isPending ? op.variables ?? null : null} canRefreshDossier={!!projectId}
+            <WikiGraphInsights insights={graph.data?.insights} busy={op.isPending ? op.variables ?? null : null} canRefreshDossier={!!projectId && can("knowledge.write")}
               onOpenPath={setOpenPath} onRunLint={() => op.mutate("lint")} onRefreshDossier={() => op.mutate("dossier")} />
           </Col>
         </Row>

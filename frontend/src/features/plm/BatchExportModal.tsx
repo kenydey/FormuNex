@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { errorText } from "@/shared/feedback";
 import type { Product } from "./types";
 
@@ -13,6 +14,7 @@ interface BatchResult { id: string; status: string; file_count: number; missing:
 export function BatchExportModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const [form] = Form.useForm();
   const [result, setResult] = useState<BatchResult | null>(null);
   const products = useQuery({ queryKey: ["plm", "products"], enabled: open,
@@ -29,7 +31,7 @@ export function BatchExportModal({ open, onClose }: { open: boolean; onClose: ()
       footer={result ? [<Button key="dl" type="primary" href={`/api/plm/documents/batch-export/${result.id}/download`}>{t("common.download", "下载 ZIP")}</Button>,
         <Button key="close" onClick={() => { onClose(); setResult(null); }}>{t("common.close", "关闭")}</Button>]
         : [<Button key="cancel" onClick={onClose}>{t("common.cancel", "取消")}</Button>,
-          <Button key="ok" type="primary" loading={run.isPending} onClick={async () => run.mutate(await form.validateFields())}>{t("plm.export", "导出")}</Button>]}
+          <Button key="ok" type="primary" disabled={!can("plm.document.write")} loading={run.isPending} onClick={async () => run.mutate(await form.validateFields())}>{t("plm.export", "导出")}</Button>]}
       destroyOnHidden>
       <Form form={form} layout="vertical" initialValues={{ doc_types: ["sds", "tds", "ts"], lang: "zh-CN", filename_template: "{company}_{product}_{doc_type}_{lang}_{version}.{ext}", include_docx: false }}>
         <Form.Item name="product_ids" label={t("plm.products", "产品（最多 20 个）")} rules={[{ required: true }]}>

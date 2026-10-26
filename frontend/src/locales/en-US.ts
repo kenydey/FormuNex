@@ -106,6 +106,8 @@ const en: Record<string, string> = {
   "common.download": "Download",
   "common.edit": "Edit",
   "common.forbidden": "Missing permission: {{p}}",
+  "common.need_document_write": "Requires permission: author SDS / TDS / labels",
+  "common.need_project_write": "Requires permission: create / edit projects",
   "common.no": "No",
   "common.not_found": "Page not found",
   "common.save": "Save",

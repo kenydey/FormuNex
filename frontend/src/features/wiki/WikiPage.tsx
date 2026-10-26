@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { envFlag, wikiApi } from "./api";
@@ -24,6 +25,7 @@ type Op = { label: string; fn: () => Promise<string | void> };
 export default function WikiPage() {
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
+  const { can } = useSession();
   const { token } = theme.useToken();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -179,9 +181,9 @@ export default function WikiPage() {
         <Link key="graph" to="/knowledge/wiki?view=graph"><Button icon={<NodeIndexOutlined />}>{t("wiki.graph", "链接图")}</Button></Link>,
         <Button key="dossier" type="primary" disabled={!projectId || !!busy} loading={busy === "dossier-open"} onClick={openDossier}>{t("wiki.dossier", "项目卷宗")}</Button>,
         <Tooltip key="refresh" title={t("wiki.dossier_refresh_tip", "从 live pack 刷新卷宗各节表（确定性；LLM 叙述默认关）")}>
-          <Button disabled={!projectId || !!busy} loading={busy === "dossier-refresh"} onClick={refreshDossier}>{t("wiki.dossier_refresh", "刷新卷宗")}</Button>
+          <Button disabled={!projectId || !!busy || !can("knowledge.write")} loading={busy === "dossier-refresh"} onClick={refreshDossier}>{t("wiki.dossier_refresh", "刷新卷宗")}</Button>
         </Tooltip>,
-        <Dropdown key="ops" disabled={!!busy} menu={{ items: maintenance }}>
+        <Dropdown key="ops" disabled={!!busy || !can("knowledge.write")} menu={{ items: maintenance }}>
           <Button loading={!!busy && !["dossier-open", "dossier-refresh"].includes(busy)}>{t("wiki.maintenance", "维护")} <DownOutlined /></Button>
         </Dropdown>,
       ].filter(Boolean)}
@@ -225,7 +227,7 @@ export default function WikiPage() {
                           <Space wrap size={4}>
                             {p.actions.map((a) => (
                               <Tooltip key={a.id} title={a.hint}>
-                                <Button size="small" disabled={!!busy} onClick={() => flagAction(p, a)}>{a.label}</Button>
+                                <Button size="small" disabled={!!busy || !can("knowledge.write")} onClick={() => flagAction(p, a)}>{a.label}</Button>
                               </Tooltip>
                             ))}
                           </Space>
@@ -243,10 +245,10 @@ export default function WikiPage() {
             <Space>
               {d.kind === "system" && (
                 <Tooltip title={t("wiki.compile_tip", "编译当前体系的 L2 综述（需 wiki_llm_themes_enabled）")}>
-                  <Button size="small" disabled={!!busy} loading={busy === "theme"} onClick={() => { const k = themeKey(d); if (k) compileTheme(k); }}>{t("wiki.compile", "编译主题")}</Button>
+                  <Button size="small" disabled={!!busy || !can("knowledge.write")} loading={busy === "theme"} onClick={() => { const k = themeKey(d); if (k) compileTheme(k); }}>{t("wiki.compile", "编译主题")}</Button>
                 </Tooltip>
               )}
-              <Button size="small" disabled={!!busy} loading={busy === "review"} onClick={() => markReviewed(d.path)}>{t("wiki.mark_reviewed", "标记已审")}</Button>
+              <Button size="small" disabled={!!busy || !can("knowledge.write")} loading={busy === "review"} onClick={() => markReviewed(d.path)}>{t("wiki.mark_reviewed", "标记已审")}</Button>
             </Space>
           )}>
             {!selectedPath ? (

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ApiError, call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { errorText } from "@/shared/feedback";
 import { HandoffBanner, ingredientInQuestion, useHandoffQuestion } from "@/shared/handoff";
 import { FormulationPicker } from "./FormulationPicker";
@@ -35,6 +36,7 @@ function Delta({ pct }: { pct: number | null | undefined }) {
 export default function SubstitutionPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const [params] = useSearchParams();
   const { projectId, requirement } = useRequirement();
   const [source, setSource] = useState<"baseline" | "version">("baseline");
@@ -100,7 +102,7 @@ export default function SubstitutionPage() {
     title: t("common.actions", "操作"), key: "act", width: 120, render: (_v: unknown, r: R) => {
       if (r.in_catalog) return <Typography.Text type="secondary">{t("design.sub.see_above", "见库内候选")}</Typography.Text>;
       const p = toPromote(r);
-      return <Button size="small" loading={promoting === p.key} onClick={() => void promote(p)}>{t("design.sub.promote", "入库并选用")}</Button>;
+      return <Button size="small" disabled={!can("knowledge.write")} loading={promoting === p.key} onClick={() => void promote(p)}>{t("design.sub.promote", "入库并选用")}</Button>;
     },
   });
   const section = (title: string, meta: LayerMeta | undefined, rows: unknown[], table: React.ReactNode, note: string) => (

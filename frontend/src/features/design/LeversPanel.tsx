@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { factorHintsToLevers, leverProblems, leverToRow, rowToLever, type LeverRow } from "./logic";
@@ -38,6 +39,7 @@ export function LeversEditor({ value, onChange }: { value: LeverRow[]; onChange:
 export function LeversPanel({ onSaved }: { onSaved?: (levers: LeverSpec[]) => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const { project, requirement, levers, saveLevers, projectId } = useRequirement();
   const [rows, setRows] = useState<LeverRow[]>([]);
   const [dirty, setDirty] = useState(false);
@@ -83,8 +85,8 @@ export function LeversPanel({ onSaved }: { onSaved?: (levers: LeverSpec[]) => vo
           <Popconfirm title={t("design.levers.defaults_confirm", "用产品域默认因子替换当前列表？")} onConfirm={() => defaults.mutate()}>
             <Button loading={defaults.isPending}>{t("design.levers.defaults", "载入默认因子")}</Button>
           </Popconfirm>
-          <Button loading={suggest.isPending} onClick={() => suggest.mutate()}>{t("design.levers.suggest", "AI 建议因子")}</Button>
-          <Button type="primary" disabled={!dirty || problems.length > 0} loading={saveLevers.isPending} onClick={save}>
+          <Button loading={suggest.isPending} disabled={!can("doe.write")} onClick={() => suggest.mutate()}>{t("design.levers.suggest", "AI 建议因子")}</Button>
+          <Button type="primary" disabled={!dirty || problems.length > 0 || !can("project.write")} loading={saveLevers.isPending} onClick={save}>
             {t("common.save", "保存")}
           </Button>
         </Space>}>

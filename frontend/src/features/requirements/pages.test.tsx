@@ -8,6 +8,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const call = vi.fn();
 vi.mock("@/api/client", () => ({ call: (...a: unknown[]) => call(...a), download: vi.fn(() => Promise.resolve()) }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 
 import MaterialsPage from "@/features/materials/MaterialsPage";
 import ProjectSourcesPage from "./ProjectSourcesPage";

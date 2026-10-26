@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { awaitTask, cancelTask, type AsyncTaskAccepted } from "@/api/stream";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { EmbodimentDraftDrawer } from "./EmbodimentDraftDrawer";
@@ -26,6 +27,7 @@ type RowState = { busy?: "ingest" | "draft"; sourceId?: string | null; status?: 
 export default function ExternalSearchTab() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const { projectId, requirement, domain, notebookId: boundNotebookId } = useProjectRequirement();
   const s = useResearch();
@@ -400,7 +402,7 @@ export default function ExternalSearchTab() {
             <Checkbox checked={dedup} onChange={(e) => setDedup(e.target.checked)}>
               {t("research.cluster.dedup", "去重簇（同文档合并）")}
             </Checkbox>
-            <Button disabled={!s.selected.length || batch?.active} loading={batch?.active} onClick={() => void batchIngest()}>
+            <Button disabled={!s.selected.length || batch?.active || !can("knowledge.write")} loading={batch?.active} onClick={() => void batchIngest()}>
               {t("research.ingest.batch", "批量入库已选（{{n}}）", { n: s.selected.length })}
             </Button>
           </Space>,
@@ -452,7 +454,7 @@ export default function ExternalSearchTab() {
             return [
               <Tooltip key="i" title={r?.error ?? undefined}>
                 <Button size="small" type="link" icon={<CloudDownloadOutlined />} loading={r?.busy === "ingest"}
-                  disabled={!e.identifier || inKb} onClick={() => void ingest(e)}>
+                  disabled={(!e.identifier || inKb) || !can("knowledge.write")} onClick={() => void ingest(e)}>
                   {inKb ? t("research.ingest.in_kb", "已入库") : t("research.ingest.run", "入库全文")}
                 </Button>
               </Tooltip>,
@@ -462,7 +464,7 @@ export default function ExternalSearchTab() {
                 </Link>
               ),
               draftable && (
-                <Button key="d" size="small" type="link" icon={<ExperimentOutlined />} loading={r?.busy === "draft"} onClick={() => void extract(e)}>
+                <Button key="d" size="small" type="link" icon={<ExperimentOutlined />} disabled={!can("formulation.write")} loading={r?.busy === "draft"} onClick={() => void extract(e)}>
                   {t("research.emb.extract", "实施例草稿")}
                 </Button>
               ),

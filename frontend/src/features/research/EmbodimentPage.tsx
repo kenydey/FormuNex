@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { EmbodimentDraftDrawer } from "./EmbodimentDraftDrawer";
 import type { EligibilityItem, EmbodimentDraft, KbSource } from "./types";
@@ -20,6 +21,7 @@ type Extracted = { ok: boolean; draft?: EmbodimentDraft; reason?: string };
 export default function EmbodimentPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const { projectId, domain } = useProjectRequirement();
   const [onlyEligible, setOnlyEligible] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -90,7 +92,7 @@ export default function EmbodimentPage() {
             </Tooltip>;
           } },
           { title: t("common.actions", "操作"), valueType: "option", width: 160, render: (_d, s) => [
-            <Button key="x" type="link" size="small" disabled={!elig.get(s.id)?.eligible} loading={busy === s.id}
+            <Button key="x" type="link" size="small" disabled={!elig.get(s.id)?.eligible || !can("formulation.write")} loading={busy === s.id}
               onClick={() => void open(s.id, () => call<Extracted>("POST", "/api/formulations/extract-embodiment-draft", { source_id: s.id, domain }))}>
               {t("research.emb.extract_draft", "提取实施例草稿")}
             </Button>,

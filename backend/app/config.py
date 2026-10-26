@@ -337,6 +337,9 @@ class Settings(BaseSettings):
     # Semantic Scholar Graph API key (https://www.semanticscholar.org/product/api#api-key). Optional: without it the API is
     # shared with every other anonymous caller and answers 429 under load; with it you get a dedicated rate limit.
     semantic_scholar_api_key: str | None = None
+    # EPA CompTox Chemicals Dashboard API key (G5)：CAS→DTXSID→ToxVal 毒理/生态数据，
+    # 回填 G6 毒理/生态记录。经设置中心 API 密钥 → 学术 / 研究组配置。
+    epa_ctx_api_key: str | None = None
     epo_consumer_key: str | None = None      # EPO OPS API consumer key
     epo_consumer_secret: str | None = None     # EPO OPS API consumer secret
 

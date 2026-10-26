@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ApiError, call, download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert } from "@/shared/feedback";
 import { specText, valueMeetsSpec } from "./ledger";
 import type { Attachment, ObjectiveSpec, QcMeasurement, VersionEntry, WorkbenchRow } from "./types";
@@ -112,6 +113,7 @@ function AttachmentsTab({ campaignId, rowId, onCount }: { campaignId: number; ro
 function QcTab({ campaignId, rowId, onSynced }: { campaignId: number; rowId: number; onSynced: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const key = ["workbench", campaignId, "row", rowId, "qc"];
   const q = useQuery({ queryKey: key, retry: false,
@@ -126,8 +128,8 @@ function QcTab({ campaignId, rowId, onSynced }: { campaignId: number; rowId: num
   return (
     <>
       <Typography.Paragraph type="secondary">{t("workbench.qc.hint", "上传检测报告（PDF / Excel / 图片），自动抽取测量值并回填到该行。")}</Typography.Paragraph>
-      <Upload showUploadList={false} beforeUpload={(f) => { upload.mutate(f); return false; }}>
-        <Button icon={<UploadOutlined />} loading={upload.isPending}>{t("workbench.qc.upload", "上传检测报告")}</Button>
+      <Upload showUploadList={false} beforeUpload={(f) => { if (!can("qc.write")) return false; upload.mutate(f); return false; }}>
+        <Button icon={<UploadOutlined />} disabled={!can("qc.write")} loading={upload.isPending}>{t("workbench.qc.upload", "上传检测报告")}</Button>
       </Upload>
       <ErrorAlert error={upload.error} />
       <Table size="small" style={{ marginTop: 12 }} rowKey={(m) => `${m.metric}-${m.test_method}`} loading={q.isLoading} pagination={false}

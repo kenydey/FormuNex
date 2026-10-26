@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ApiError, call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { errorText } from "@/shared/feedback";
 import { postForFile, saveBlob } from "./artifactApi";
@@ -19,6 +20,7 @@ const FORMATS: TechReportFormat[] = ["docx", "pdf", "html", "md"];
  */
 export function TechReportExport({ kind, projectId: pid }: { kind: TechReportKind; projectId?: string | null }) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const current = useUi((s) => s.projectId);
@@ -59,7 +61,7 @@ export function TechReportExport({ kind, projectId: pid }: { kind: TechReportKin
       <Select<TechReportFormat> value={format} onChange={setFormat} disabled={busy} style={{ width: 90 }}
         options={FORMATS.map((f) => ({ value: f, label: f.toUpperCase(), disabled: caps.data ? caps.data[f] === false : false }))} />
       <Tooltip title={t("research.tr.tip", "导出{{k}}（经发布预检门禁）", { k: labels[kind] })}>
-        <Button icon={<FileTextOutlined />} loading={busy} onClick={() => void run()}>{labels[kind]}</Button>
+        <Button icon={<FileTextOutlined />} disabled={!can("formulation.read")} loading={busy} onClick={() => void run()}>{labels[kind]}</Button>
       </Tooltip>
     </Space.Compact>
   );

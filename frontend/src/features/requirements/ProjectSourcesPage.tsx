@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
@@ -20,6 +21,7 @@ interface IngestResult { ok: boolean; status: string; source_id?: string | null;
 export default function ProjectSourcesPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const params = useParams();
   const uiProject = useUi((s) => s.projectId);
@@ -109,7 +111,7 @@ export default function ProjectSourcesPage() {
         columns={[
           { title: t("requirements.sources.pick", "选"), width: 50, tooltip: t("requirements.sources.pick_tip", "勾选用于问答"),
             render: (_d, r) => r.evidence
-              ? <Checkbox checked={r.selected} disabled={select.isPending} onChange={() => select.mutate(toggleSelected(selected, r.identifier))} />
+              ? <Checkbox checked={r.selected} disabled={select.isPending || !can("project.write")} onChange={() => select.mutate(toggleSelected(selected, r.identifier))} />
               : <Typography.Text type="secondary">—</Typography.Text> },
           { title: t("requirements.sources.col_title", "标题"), dataIndex: "title", ellipsis: true,
             render: (_d, r) => <Space direction="vertical" size={0}>
@@ -125,25 +127,25 @@ export default function ProjectSourcesPage() {
             const busy = busyRow(r);
             return [
               <Button key="open" type="link" size="small" disabled={!url} href={url ?? undefined} target="_blank" rel="noopener noreferrer">{t("requirements.sources.open", "打开")}</Button>,
-              <Button key="ingest" type="link" size="small" disabled={busy || r.kb_status === "fetching" || r.kb_status === "indexing"}
+              <Button key="ingest" type="link" size="small" disabled={busy || r.kb_status === "fetching" || r.kb_status === "indexing" || !can("knowledge.write")}
                 loading={ingest.isPending && ingest.variables?.row_key === r.row_key} onClick={() => ingest.mutate(r)}>
                 {r.source_id ? t("requirements.sources.reingest", "再入库") : t("requirements.sources.ingest", "入库全文")}
               </Button>,
               r.source_id && (r.archived
-                ? <Button key="restore" type="link" size="small" disabled={busy} onClick={() => archive.mutate({ id: r.source_id!, archived: false })}>{t("requirements.sources.restore", "恢复")}</Button>
+                ? <Button key="restore" type="link" size="small" disabled={busy || !can("knowledge.write")} onClick={() => archive.mutate({ id: r.source_id!, archived: false })}>{t("requirements.sources.restore", "恢复")}</Button>
                 : <Popconfirm key="archive" title={t("requirements.sources.archive_confirm", "归档「{{t}}」？", { t: r.title })}
                     description={t("requirements.sources.archive_desc", "将从默认列表与检索中隐藏，切块保留，可随时恢复。")}
                     onConfirm={() => archive.mutateAsync({ id: r.source_id!, archived: true }).catch(() => undefined)}>
-                    <Button type="link" size="small" disabled={busy}>{t("requirements.sources.archive", "归档")}</Button>
+                    <Button type="link" size="small" disabled={busy || !can("knowledge.write")}>{t("requirements.sources.archive", "归档")}</Button>
                   </Popconfirm>),
               !r.source_id && r.evidence && <Popconfirm key="unlink" title={t("requirements.sources.unlink_confirm", "将「{{t}}」移出会话证据？", { t: r.title })}
                 onConfirm={() => remove.mutateAsync(r).catch(() => undefined)}>
-                <Button type="link" size="small" danger disabled={busy}>{t("requirements.sources.unlink", "移出")}</Button>
+                <Button type="link" size="small" danger disabled={busy || !can("knowledge.write")}>{t("requirements.sources.unlink", "移出")}</Button>
               </Popconfirm>,
               r.source_id && <Popconfirm key="del" title={t("requirements.sources.delete_confirm", "永久删除「{{t}}」？", { t: r.title })}
                 description={t("requirements.sources.delete_desc", "将移除切块与图谱提及，不可撤销（一般请用「归档」）。")} okButtonProps={{ danger: true }}
                 onConfirm={() => remove.mutateAsync(r).catch(() => undefined)}>
-                <Button type="link" size="small" danger disabled={busy}>{t("requirements.sources.delete", "永久删除")}</Button>
+                <Button type="link" size="small" danger disabled={busy || !can("knowledge.write")}>{t("requirements.sources.delete", "永久删除")}</Button>
               </Popconfirm>,
             ].filter(Boolean);
           } },

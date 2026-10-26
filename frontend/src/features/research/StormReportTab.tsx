@@ -4,6 +4,7 @@ import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, DownloadOutlined, F
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { awaitTask, cancelTask, thinkingSteps, type AsyncTaskAccepted, type ThinkingStep } from "@/api/stream";
 import { Markdown } from "@/shared/Markdown";
 import { ErrorAlert, errorText } from "@/shared/feedback";
@@ -42,6 +43,7 @@ type Step = "outline" | "generating" | "report";
 export default function StormReportTab() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const { projectId } = useProjectRequirement();
   const [topic, setTopic] = useState("");
   const [outline, setOutline] = useState<StormOutline | null>(null);
@@ -218,7 +220,7 @@ export default function StormReportTab() {
         <Space.Compact style={{ width: "100%" }}>
           <Input value={topic} onChange={(e) => setTopic(e.target.value)}
             placeholder={t("research.storm.topic", "报告主题，例如：无铬钝化技术综述")} />
-          <Button loading={busy === "outline"} onClick={() => void generateOutline()}>
+          <Button loading={busy === "outline"} disabled={!can("knowledge.write")} onClick={() => void generateOutline()}>
             {t("research.storm.gen_outline", "生成大纲")}</Button>
         </Space.Compact>
       </Card>
@@ -229,7 +231,7 @@ export default function StormReportTab() {
           extra={(
             <Space>
               <Button icon={<FileAddOutlined />} onClick={addSection}>{t("research.storm.add_section", "添加章节")}</Button>
-              <Button loading={busy === "save"} onClick={() => void saveOutline()}>{t("research.storm.save_outline", "保存大纲")}</Button>
+              <Button loading={busy === "save"} disabled={!can("knowledge.write")} onClick={() => void saveOutline()}>{t("research.storm.save_outline", "保存大纲")}</Button>
               <Button type="primary" icon={<ThunderboltOutlined />} loading={step === "generating"} onClick={() => void generateReport()}>
                 {t("research.storm.gen_report", "按大纲生成报告")}</Button>
             </Space>

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { SmilesDrawing } from "@/shared/Markdown";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { PARSE_PROFILES, missingForProfile } from "./logic";
@@ -16,6 +17,7 @@ const PROFILE_KEY = ["settings", "parse-profile"];
 export function ParseProfileSelector() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: PROFILE_KEY, queryFn: () => call<{ profile: string; availability: ParseAvailability }>("GET", "/api/settings/parse-profile") });
   const meta: Record<string, { title: string; desc: string }> = {
@@ -40,7 +42,7 @@ export function ParseProfileSelector() {
       subTitle={q.data && <Typography.Text type="secondary">{t("library.parse.current", "当前：{{p}}", { p: meta[q.data.profile]?.title ?? q.data.profile })}
         {avail?.active_rag_backend ? ` · ${t("library.parse.backend", "检索后端 {{b}}", { b: avail.active_rag_backend })}` : ""}</Typography.Text>}>
       <ErrorAlert error={q.error} />
-      <CheckCard.Group value={q.data?.profile} disabled={apply.isPending} onChange={(v) => { if (typeof v === "string" && v !== q.data?.profile) apply.mutate(v); }}
+      <CheckCard.Group value={q.data?.profile} disabled={apply.isPending || !can("admin.llm")} onChange={(v) => { if (typeof v === "string" && v !== q.data?.profile) apply.mutate(v); }}
         style={{ width: "100%" }}>
         {PARSE_PROFILES.map((p) => {
           const missing = missingForProfile(p, avail);
@@ -65,6 +67,7 @@ export function ParseProfileSelector() {
 export function OcsrPanel() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const q = useQuery({ queryKey: ["settings", "ocsr"], queryFn: () => call<{ status: OcsrStatus }>("GET", "/api/settings/ocsr") });
   const [smiles, setSmiles] = useState("c1ccccc1O");
   const [corrections, setCorrections] = useState<OcsrCorrection[]>(() => loadCorrections());
@@ -138,7 +141,7 @@ export function OcsrPanel() {
             placeholder={t("library.ocsr.fixed_ph", "校正后的 SMILES")} />
           <Input style={{ width: 220 }} value={note} onChange={(e) => setNote(e.target.value)}
             placeholder={t("library.ocsr.note_ph", "备注（可选）")} />
-          <Button type="primary" disabled={!fixed.trim()} onClick={save}>{t("library.ocsr.correct_save", "保存校正")}</Button>
+          <Button type="primary" disabled={!fixed.trim() || !can("admin.llm")} onClick={save}>{t("library.ocsr.correct_save", "保存校正")}</Button>
           <Button disabled={!corrections.length} onClick={download}>{t("library.ocsr.export", "导出校正记录")}</Button>
         </Space>
         {corrections.length > 0 && (

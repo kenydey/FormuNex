@@ -9,7 +9,7 @@ import "@/app/i18n";
 const call = vi.fn();
 vi.mock("@/api/client", () => ({ call: (...a: unknown[]) => call(...a), download: vi.fn(), ApiError: class extends Error {} }));
 vi.mock("@/app/store", () => ({ useUi: (sel: (s: { projectId: string | null; theme: string }) => unknown) => sel({ projectId: "p1", theme: "light" }) }));
-vi.mock("@/app/session", () => ({ useSession: () => ({ can: (p: string) => p === "formulation.freeze" }) }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: (p: string) => p === "formulation.freeze" || p === "formulation.read" }) }));
 vi.mock("@/features/workbench/charts", () => ({ ParallelChart: () => <div data-testid="parallel" /> }));
 // 散点 stub：每个点渲染一个按钮，点击即触发页面的 click 回调（与真实 echarts 事件同构）。
 vi.mock("@/shared/Chart", () => ({ Chart: ({ onEvents, option }: { onEvents?: { click?: (p: unknown) => void }; option?: { series?: { data?: { name: string }[] }[] } }) => (

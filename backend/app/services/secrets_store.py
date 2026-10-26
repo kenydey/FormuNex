@@ -40,6 +40,7 @@ SECRET_REGISTRY: list[tuple[str, str, str, str]] = [
     ("openalex_mailto", "FORMUNEX_OPENALEX_MAILTO", "OpenAlex mailto", "research"),
     ("openalex_api_key", "FORMUNEX_OPENALEX_API_KEY", "OpenAlex 内容库（全文 PDF/TEI XML）", "research"),
     ("semantic_scholar_api_key", "FORMUNEX_SEMANTIC_SCHOLAR_API_KEY", "Semantic Scholar API Key", "research"),
+    ("epa_ctx_api_key", "FORMUNEX_EPA_CTX_API_KEY", "EPA CTX (Comptox) API Key", "research"),
     ("unpaywall_mailto", "FORMUNEX_UNPAYWALL_MAILTO", "Unpaywall 邮箱（开放获取全文查询，缺省沿用 OpenAlex mailto）", "research"),
     ("mineru_api_key", "FORMUNEX_MINERU_API_KEY", "MinerU 文档解析", "parse"),
     ("mineru_base_url", "FORMUNEX_MINERU_BASE_URL", "MinerU API 地址（默认官方云端，私有部署时修改）", "parse"),
@@ -459,6 +460,26 @@ def probe_secret(secret_id: str) -> dict:
         if r.status_code == 429:
             return {"ok": False, "message": "Semantic Scholar 限流（429）：密钥可能无效，或稍后再试"}
         return {"ok": False, "message": f"Semantic Scholar 返回 HTTP {r.status_code}"}
+
+    if secret_id == "epa_ctx_api_key":
+        key = effective_setting(s, "epa_ctx_api_key")
+        if not key:
+            return {"ok": False, "message": "EPA CTX key 未配置"}
+        try:
+            with make_client(timeout=15.0) as client:
+                r = client.get(
+                    "https://api-ccte.epa.gov/chemical/search/by-casrn/7732-18-5",
+                    headers={"x-api-key": key},
+                )
+        except Exception as exc:
+            return {"ok": False, "message": f"EPA CTX 连接失败：{type(exc).__name__}"}
+        if r.status_code == 200:
+            return {"ok": True, "message": "EPA CTX 连接成功，密钥有效"}
+        if r.status_code in (401, 403):
+            return {"ok": False, "message": "EPA CTX 拒绝了该密钥（无效或已停用）"}
+        if r.status_code == 404:
+            return {"ok": False, "message": "EPA CTX 端点路径待确认（HTTP 404），密钥有效性未验证"}
+        return {"ok": False, "message": f"EPA CTX 返回 HTTP {r.status_code}"}
 
     if secret_id in ("langfuse_public_key", "langfuse_secret_key", "langfuse_host"):
         have = [effective_setting(s, a) for a in ("langfuse_public_key", "langfuse_secret_key")]

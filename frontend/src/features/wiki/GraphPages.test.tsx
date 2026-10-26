@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/app/store", () => ({ useUi: (sel: (s: { projectId: string; theme: string }) => unknown) => sel({ projectId: "p1", theme: "light" }) }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 vi.mock("@/shared/Chart", () => ({
   Chart: ({ option, onEvents }: { option: { series: { data: { id: string; name: string }[] }[] }; onEvents?: Record<string, (p: unknown) => void> }) => (
     <div>{option.series[0].data.map((d) => (

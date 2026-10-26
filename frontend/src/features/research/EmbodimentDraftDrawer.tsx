@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { confirmPath, draftForEmbodiment } from "./lib";
 import type { DraftConfirmResult, EmbodimentDraft, FormulationIngredient } from "./types";
@@ -16,6 +17,7 @@ export function EmbodimentDraftDrawer({ draft, onClose, onConfirmed }: {
 }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const [idx, setIdx] = useState(0);
   const [note, setNote] = useState<string | null>(null);
   const [key, setKey] = useState<EmbodimentDraft | null>(draft);
@@ -55,7 +57,7 @@ export function EmbodimentDraftDrawer({ draft, onClose, onConfirmed }: {
   return (
     <Drawer open width={720} onClose={onClose} destroyOnHidden
       title={t("research.emb.title", "实施例草稿 · {{id}}", { id: draft.doc_id || draft.source_id || "" })}
-      extra={<Button type="primary" disabled={!has || !!note} loading={confirm.isPending} onClick={() => confirm.mutate(active)}>
+      extra={<Button type="primary" disabled={!has || !!note || !can("formulation.write")} loading={confirm.isPending} onClick={() => confirm.mutate(active)}>
         {t("research.emb.confirm", "人工确认入库")}</Button>}>
       <Alert type="warning" showIcon style={{ marginBottom: 16 }}
         message={t("research.emb.gate", "人审闸：确认后仅写入 KG + 原料 pending，不会写入生产配方池或静默 upsert 原料。")}

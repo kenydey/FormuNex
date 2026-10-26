@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert } from "@/shared/feedback";
 import { TrainingDataBanner } from "./panels";
@@ -20,6 +21,7 @@ const rmse = (v?: number | null) => (v == null ? "—" : Number(v).toFixed(Numbe
 export function ModelVersionsDrawer({ model, onClose }: { model: ModelInfo | null; onClose: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const pid = model?.project_id ?? "";
   const key = ["models", "versions", pid, model?.metric];
@@ -36,7 +38,7 @@ export function ModelVersionsDrawer({ model, onClose }: { model: ModelInfo | nul
       {model?.pinned && (
         <Alert type="warning" showIcon icon={<LockOutlined />} style={{ marginBottom: 12 }} data-testid="model-pinned-note"
           message={t("workbench.models.pinned", "已锁定在回滚版本") + (model.newer_version_id ? t("workbench.models.newer", "；重训产生的新版本已存档，未生效") : "")}
-          action={<Button size="small" loading={unpin.isPending} onClick={() => unpin.mutate()} data-testid="model-unpin">{t("workbench.models.unpin", "解除锁定并使用最新")}</Button>} />
+          action={<Button size="small" disabled={!can("optimize.run")} loading={unpin.isPending} onClick={() => unpin.mutate()} data-testid="model-unpin">{t("workbench.models.unpin", "解除锁定并使用最新")}</Button>} />
       )}
       <ErrorAlert error={versions.error ?? rollback.error ?? unpin.error} />
       {pid && (
@@ -56,7 +58,7 @@ export function ModelVersionsDrawer({ model, onClose }: { model: ModelInfo | nul
             { title: "RMSE", dataIndex: "rmse", render: rmse },
             { title: "", render: (_v, v) => !v.is_current && (
               <Popconfirm title={t("workbench.models.rollback_q", "回滚后将锁定该版本，之后的重训只存档、不覆盖。确认？")} onConfirm={() => rollback.mutate(v.version_id)}>
-                <Button size="small" loading={rollback.isPending && rollback.variables === v.version_id}>{t("workbench.models.rollback", "回滚到此版本")}</Button>
+                <Button size="small" disabled={!can("optimize.run")} loading={rollback.isPending && rollback.variables === v.version_id}>{t("workbench.models.rollback", "回滚到此版本")}</Button>
               </Popconfirm>
             ) },
           ]} />

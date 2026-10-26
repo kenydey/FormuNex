@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { NotebookLMLogin, NotebookLMStatus } from "./types";
@@ -34,6 +35,7 @@ function LoginResult({ r }: { r: NotebookLMLogin }) {
 function ProjectBinding({ projectId, status }: { projectId: string; status: NotebookLMStatus | undefined }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const project = useQuery({ queryKey: ["project", projectId],
     queryFn: () => call<{ title?: string; workspace?: { notebooklm_notebook_id?: string | null } }>("GET", `/api/projects/${encodeURIComponent(projectId)}`) });
@@ -67,7 +69,7 @@ function ProjectBinding({ projectId, status }: { projectId: string; status: Note
           <Input value={draft} onChange={(e) => setDraft(e.target.value)} style={{ fontFamily: "monospace" }} />
         </Form.Item>
         <Space wrap>
-          <Button type="primary" loading={save.isPending} onClick={() => save.mutate()}>{t("library.nlm.save_project", "保存到本项目")}</Button>
+          <Button type="primary" disabled={!can("admin.llm")} loading={save.isPending} onClick={() => save.mutate()}>{t("library.nlm.save_project", "保存到本项目")}</Button>
           {legacy && legacy !== draft.trim() && (
             <Button type="link" onClick={() => setDraft(legacy)}>{t("library.nlm.use_legacy", "使用全局遗留 Notebook ID（{{id}}）", { id: legacy })}</Button>
           )}
@@ -81,6 +83,7 @@ function ProjectBinding({ projectId, status }: { projectId: string; status: Note
 export default function NotebookLMPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const projectId = useUi((s) => s.projectId);
   const status = useQuery({ queryKey: STATUS_KEY, queryFn: () => call<NotebookLMStatus>("GET", "/api/notebooklm/auth-status") });
@@ -123,7 +126,7 @@ export default function NotebookLMPage() {
                 </Form.Item>
               </Form>
               <Space wrap>
-                <Button type="primary" loading={save.isPending} onClick={() => save.mutate()}>{t("library.nlm.save", "保存配置")}</Button>
+                <Button type="primary" disabled={!can("admin.llm")} loading={save.isPending} onClick={() => save.mutate()}>{t("library.nlm.save", "保存配置")}</Button>
                 <Button loading={login.isPending} disabled={!s.lib_installed} onClick={() => login.mutate()}>{t("library.nlm.login", "授权登录")}</Button>
               </Space>
               {login.data && <LoginResult r={login.data} />}

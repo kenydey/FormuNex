@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ApiError, call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { groupChunksByPage, pages, type Chunk, type TocNode } from "./types";
 import { useReparse } from "./reparse";
@@ -41,6 +42,7 @@ function find(n: TocNode, id: string): TocNode | null {
 export default function SourceDetailPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const { sourceId = "" } = useParams();
   const [selected, setSelected] = useState<string | null>(null);
   const tree = useQuery({
@@ -109,15 +111,15 @@ export default function SourceDetailPage() {
 
   return (
     <PageContainer title={detail.data?.title || sourceId} extra={<Space>
-      <Button loading={extract.isPending} onClick={() => extract.mutate()}>{t("library.search.draft", "提取实施例草稿")}</Button>
+      <Button loading={extract.isPending} disabled={!can("formulation.write")} onClick={() => extract.mutate()}>{t("library.search.draft", "提取实施例草稿")}</Button>
       <Popconfirm title={t("knowledge.kg.rebuild_confirm", "重建全库知识图谱？将重新抽取全部来源的实体与关系，可能需要一段时间。")}
         onConfirm={() => rebuildKg.mutate()}>
-        <Button loading={rebuildKg.isPending}>{t("knowledge.kg.rebuild", "一键生成 KG")}</Button>
+        <Button loading={rebuildKg.isPending} disabled={!can("knowledge.write")}>{t("knowledge.kg.rebuild", "一键生成 KG")}</Button>
       </Popconfirm>
-      <Button loading={rebuild.isPending} onClick={() => rebuild.mutate()}>{t("knowledge.tree.rebuild", "重建目录树")}</Button>
+      <Button loading={rebuild.isPending} disabled={!can("knowledge.write")} onClick={() => rebuild.mutate()}>{t("knowledge.tree.rebuild", "重建目录树")}</Button>
       <Popconfirm title={t("library.sources.reparse_confirm", "按当前解析配置重新解析原文件？将重建切块、索引与目录树。")}
         onConfirm={() => reparse(sourceId)}>
-        <Button loading={isRunning(sourceId)}>{t("library.sources.reparse", "重新解析")}</Button>
+        <Button loading={isRunning(sourceId)} disabled={!can("knowledge.write")}>{t("library.sources.reparse", "重新解析")}</Button>
       </Popconfirm></Space>}>
       {kgReport && (
         <Alert type="success" showIcon closable onClose={() => setKgReport(null)} style={{ marginBottom: 12 }}

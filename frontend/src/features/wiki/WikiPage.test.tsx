@@ -10,6 +10,7 @@ const pages = [
 ];
 
 vi.mock("@/app/store", () => ({ useUi: (sel: (s: { projectId: string; theme: string }) => unknown) => sel({ projectId: "p1", theme: "light" }) }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 vi.mock("@/shared/Markdown", () => ({ Markdown: ({ content }: { content: string }) => <pre data-testid="md">{content}</pre> }));
 vi.mock("@/api/client", () => ({
   ApiError: class extends Error {},

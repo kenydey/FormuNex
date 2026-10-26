@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { awaitTask, thinkingSteps, type AsyncTaskAccepted, type TaskProgressEvent } from "@/api/stream";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { HandoffBanner } from "@/shared/handoff";
@@ -47,6 +48,7 @@ function ModelCard({ m }: { m: ModelInfo }) {
 export default function ClassicDoePage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { projectId, requirement, levers } = useRequirement();
@@ -214,13 +216,13 @@ export default function ClassicDoePage() {
           </Form.Item>
         </Form>
         <Space wrap style={{ marginTop: 16 }}>
-          <Button type="primary" loading={generate.isPending} disabled={!requirement} onClick={() => generate.mutate()}>
+          <Button type="primary" loading={generate.isPending} disabled={!requirement || !can("doe.write")} onClick={() => generate.mutate()}>
             {t("design.doe.generate", "生成 DOE")}</Button>
           <Tooltip title={t("design.doe.cycle_tip", "提交异步 DOE 闭环任务（Baybe/LHS → 待测实验），写入所选实验台账")}>
-            <Button loading={cycle.isPending} disabled={!requirement} onClick={() => cycle.mutate()}>{t("design.doe.cycle", "运行 DOE 闭环")}</Button>
+            <Button loading={cycle.isPending} disabled={!requirement || !can("doe.write")} onClick={() => cycle.mutate()}>{t("design.doe.cycle", "运行 DOE 闭环")}</Button>
           </Tooltip>
           <Upload accept=".csv,text/csv" showUploadList={false} beforeUpload={(f) => { importCsv.mutate(f); return false; }}>
-            <Button loading={importCsv.isPending}>{t("design.doe.import", "导入实测 CSV 并训练")}</Button>
+            <Button loading={importCsv.isPending} disabled={!can("optimize.run")}>{t("design.doe.import", "导入实测 CSV 并训练")}</Button>
           </Upload>
         </Space>
         <div style={{ marginTop: 12 }}>
@@ -244,7 +246,7 @@ export default function ClassicDoePage() {
           extra={<Space wrap>
             <Button onClick={() => exportPlan("csv")}>{t("design.doe.export_csv", "导出 CSV")}</Button>
             <Button onClick={() => exportPlan("xlsx")}>XLSX</Button>
-            <Button loading={adopt.isPending} onClick={() => adopt.mutate(plan)}>{t("design.doe.adopt", "写入实验台账")}</Button>
+            <Button loading={adopt.isPending} disabled={!can("lab.execute") || !can("project.write")} onClick={() => adopt.mutate(plan)}>{t("design.doe.adopt", "写入实验台账")}</Button>
             {dispatchId ? <DispatchButton planId={dispatchId} />
               : <Tooltip title={t("design.doe.not_persisted", "该计划未能保存到 DOE 历史，无法下发为实验任务")}>
                 <Button type="primary" disabled>{t("doe.dispatch", "下发为实验任务")}</Button></Tooltip>}

@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { awaitTask, cancelTask, type AsyncTaskAccepted, type TaskProgressEvent } from "@/api/stream";
 import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert, errorText } from "@/shared/feedback";
@@ -18,6 +19,7 @@ const METRICS = ["salt_spray_hours", "cost_cny_per_kg", "voc_gpl", "cleaning_eff
 export default function InverseDesignPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const { projectId, requirement } = useRequirement();
   const domain = requirement?.domain ?? "anticorrosion_coating";
   const [hard, setHard] = useState<HardConstraint[]>(() => defaultConstraints(domain));
@@ -124,7 +126,7 @@ export default function InverseDesignPage() {
           <Form.Item label={t("design.inv.population", "种群")}><InputNumber min={8} max={400} value={population} onChange={(v) => setPopulation(v ?? 48)} /></Form.Item>
           <Form.Item label={t("design.inv.generations", "迭代代数")}><InputNumber min={1} max={300} value={generations} onChange={(v) => setGenerations(v ?? 30)} /></Form.Item>
           <Form.Item><Checkbox checked={seedWithLlm} onChange={(e) => setSeedWithLlm(e.target.checked)}>{t("design.inv.llm_seed", "用 LLM 播种初始种群")}</Checkbox></Form.Item>
-          <Button type="primary" loading={run.isPending} disabled={!requirement || hard.length === 0} onClick={() => run.mutate()}>
+          <Button type="primary" loading={run.isPending} disabled={!requirement || hard.length === 0 || !can("optimize.run")} onClick={() => run.mutate()}>
             {t("design.inv.run", "开始逆向设计")}</Button>
           {run.isPending && <Button danger onClick={() => void stop()} style={{ marginLeft: 8 }}>{t("design.stop", "停止")}</Button>}
         </Form>
@@ -139,7 +141,7 @@ export default function InverseDesignPage() {
 
       {result && (
         <ProCard bordered style={{ marginTop: 16 }} title={t("design.inv.result", "候选配方")}
-          extra={<Button disabled={!cands.length} loading={save.isPending} onClick={() => save.mutate(frontier(cands))}>
+          extra={<Button disabled={!cands.length || !can("lab.execute")} loading={save.isPending} onClick={() => save.mutate(frontier(cands))}>
             {t("design.inv.save_front", "保存前沿候选为配方版本")}</Button>}>
           <Descriptions size="small" column={{ xs: 1, md: 5 }} style={{ marginBottom: 12 }}>
             <Descriptions.Item label={t("design.inv.engine", "引擎")}>{result.engine}</Descriptions.Item>

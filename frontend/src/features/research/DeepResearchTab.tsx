@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { awaitTask, cancelTask, thinkingSteps, type AsyncTaskAccepted, type ThinkingStep } from "@/api/stream";
 import { Markdown } from "@/shared/Markdown";
 import { ErrorAlert, errorText } from "@/shared/feedback";
@@ -24,6 +25,7 @@ interface RunState { stage: string; message: string; progress?: number; steps: T
 export default function DeepResearchTab() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const navigate = useNavigate();
   const { projectId, requirement, domain: projectDomain } = useProjectRequirement();
   const domains = useDomainOptions();
@@ -126,11 +128,11 @@ export default function DeepResearchTab() {
             <Space wrap>
               <Button icon={<DownloadOutlined />} onClick={() => saveText(report.report_markdown, shelfFilename("deep_report", "md"))}>
                 {t("research.deep.download", "下载 MD")}</Button>
-              <Button icon={<InboxOutlined />} disabled={!projectId} loading={saving === "shelf"} onClick={() => void guard("shelf", async () => {
+              <Button icon={<InboxOutlined />} disabled={!projectId || !can("project.write")} loading={saving === "shelf"} onClick={() => void guard("shelf", async () => {
                 await saveToShelf(projectId!, shelfFilename("deep_report", "md"), report.report_markdown);
                 message.success(t("research.deep.shelved", "已保存到项目导出货架"));
               })}>{t("research.deep.shelf", "保存到货架")}</Button>
-              <Button icon={<BranchesOutlined />} disabled={!projectId} loading={saving === "version"} onClick={() => void guard("version", async () => {
+              <Button icon={<BranchesOutlined />} disabled={!projectId || !can("project.write")} loading={saving === "version"} onClick={() => void guard("version", async () => {
                 const lin = await saveAsVersion(projectId!, t("research.deep.lineage", "深度研究 · {{t}}", { t: report.topic }).slice(0, 250), report.report_markdown);
                 navigate(`/knowledge/research/artifacts/${lin.lineage_id}`);
               })}>{t("research.deep.version", "存为版本")}</Button>

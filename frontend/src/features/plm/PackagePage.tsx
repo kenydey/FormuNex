@@ -61,7 +61,7 @@ export default function PackagePage() {
         <ProCard bordered>
           <Steps current={p.flow.steps.findIndex((s) => s.current)} status={p.flow.status === "rejected" ? "error" : p.status === "released" ? "finish" : "process"}
             items={p.flow.steps.map((s) => ({ title: t(`role.${s.role}`, s.role), description: <span><StatusTag status={s.status} />{s.comment && <div>{s.comment}</div>}</span> }))} />
-          {myTurn && p.status === "under_review" && (
+          {myTurn && p.status === "under_review" && (can("release.sign") || can("release.publish")) && (
             <Space style={{ marginTop: 16 }}>
               <Button type="primary" onClick={() => void decide("approve")}>{last ? t("sign.release", "最终发布") : t("sign.approve", "签批通过")}</Button>
               <Button danger onClick={() => void decide("reject")}>{t("sign.reject", "驳回")}</Button>

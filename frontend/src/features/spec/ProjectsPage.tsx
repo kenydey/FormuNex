@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { DOMAINS, type ProjectDetail } from "./types";
@@ -14,6 +15,7 @@ interface ProjectSummary { id: string; title: string; headline: string; domain: 
 export default function ProjectsPage() {
   const { t, i18n } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const navigate = useNavigate();
   const setProject = useUi((s) => s.setProject);
   const qc = useQueryClient();
@@ -36,7 +38,7 @@ export default function ProjectsPage() {
       <ErrorAlert error={q.error} />
       <ProTable<ProjectSummary>
         rowKey="id" search={false} loading={q.isLoading} dataSource={q.data} options={{ reload: () => void q.refetch() }}
-        toolBarRender={() => [<Button key="new" type="primary" onClick={() => setOpen(true)}>{t("spec.new_project", "新建项目")}</Button>]}
+        toolBarRender={() => [<Button key="new" type="primary" disabled={!can("project.write")} title={t("common.need_project_write", "需要权限：创建 / 编辑项目")} onClick={() => setOpen(true)}>{t("spec.new_project", "新建项目")}</Button>]}
         columns={[
           { title: t("spec.project", "项目"), dataIndex: "title", render: (_d, r) => <Link to={`/spec/projects/${r.id}`} onClick={() => setProject(r.id)}>{r.title}</Link> },
           { title: t("spec.domain", "产品领域"), dataIndex: "domain", render: (_d, r) => domainLabel(r.domain), width: 160 },

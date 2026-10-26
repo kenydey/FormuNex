@@ -8,6 +8,7 @@ import "@/app/i18n";
 
 const call = vi.fn();
 vi.mock("@/api/client", () => ({ call: (...a: unknown[]) => call(...a), download: vi.fn(), ApiError: class extends Error {} }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 vi.mock("@/shared/Chart", () => ({ Chart: () => <div data-testid="chart" /> }));
 vi.mock("@/app/store", () => ({ useUi: (sel: (s: { projectId: string | null; theme: string }) => unknown) => sel({ projectId: "p1", theme: "light" }) }));
 

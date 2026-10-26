@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
@@ -17,6 +18,7 @@ interface CodingCompany { id: string; is_default: boolean; coding_rules: { categ
 export default function ProductsPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const navigate = useNavigate();
   const projectId = useUi((s) => s.projectId);
   const qc = useQueryClient();
@@ -51,9 +53,9 @@ export default function ProductsPage() {
       <ProTable<Product> rowKey="id" search={false} loading={products.isLoading} dataSource={products.data} options={{ reload: () => void products.refetch() }}
         toolBarRender={() => [
           <Input.Search key="q" allowClear placeholder={t("plm.search", "产品代码 / 名称")} onSearch={setQ} />,
-          <Button key="batch" onClick={() => setBatchOpen(true)}>{t("plm.batch_export", "批量导出")}</Button>,
-          <Button key="import" onClick={() => setImportOpen(true)}>Excel 导入</Button>,
-          <Button key="new" type="primary" onClick={() => setOpen(true)}>{t("plm.new_product", "新建产品")}</Button>]}
+          <Button key="batch" disabled={!can("plm.document.write")} onClick={() => setBatchOpen(true)}>{t("plm.batch_export", "批量导出")}</Button>,
+          <Button key="import" disabled={!can("plm.document.write")} onClick={() => setImportOpen(true)}>Excel 导入</Button>,
+          <Button key="new" type="primary" disabled={!can("plm.document.write")} title={t("common.need_document_write", "需要权限：编制 SDS / TDS / 标签")} onClick={() => setOpen(true)}>{t("plm.new_product", "新建产品")}</Button>]}
         columns={[
           { title: t("plm.code", "产品代码"), dataIndex: "code", render: (_d, r) => <Link to={`/plm/products/${r.id}`}>{r.code}</Link> },
           { title: t("plm.name", "名称"), dataIndex: "name_zh" },

@@ -26,7 +26,7 @@ function preflightError(e: unknown): string {
 export function PreflightPanel({ projectId, kind, onKindChange }: { projectId: string | null; kind: PreflightKind; onKindChange: (k: PreflightKind) => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
-  const { me } = useSession();
+  const { me, can } = useSession();
   const qc = useQueryClient();
   const [edit, setEdit] = useState<{ f: PreflightFinding; mode: "resolve" | "override" } | null>(null);
   const key = ["research", "preflight", projectId, kind];
@@ -64,7 +64,7 @@ export function PreflightPanel({ projectId, kind, onKindChange }: { projectId: s
         <Button onClick={() => void state.refetch()} loading={state.isFetching}>{t("research.pf.reload", "刷新")}</Button>
         {kind === "storm" && <Tooltip title={t("research.pf.review_tip", "按当前已生成的 STORM 长文重新跑引用 / 占位符 / 数值检查")}>
           <Button loading={review.isPending} onClick={() => review.mutate()}>{t("research.pf.review", "重新预检")}</Button></Tooltip>}
-        <Button type="primary" disabled={openBlocking > 0 || !s?.content_hash} loading={finalize.isPending} onClick={() => finalize.mutate()}>
+        <Button type="primary" disabled={openBlocking > 0 || !s?.content_hash || !can("knowledge.write")} loading={finalize.isPending} onClick={() => finalize.mutate()}>
           {t("research.pf.finalize", "定稿")}</Button>
       </Space>
       <ErrorAlert error={state.error} />
@@ -98,6 +98,7 @@ export function PreflightPanel({ projectId, kind, onKindChange }: { projectId: s
       <ModalForm<{ actor: string; text: string }>
         open={!!edit} title={edit?.mode === "override" ? t("research.pf.override_title", "放行（接受风险并留痕）") : t("research.pf.resolve_title", "标记已处理")}
         modalProps={{ destroyOnHidden: true, onCancel: () => setEdit(null) }}
+        submitter={{ submitButtonProps: { disabled: !can("knowledge.write") } }}
         initialValues={{ actor: me?.display_name || me?.username || "user", text: "" }}
         onFinish={async (v) => {
           if (!edit) return false;

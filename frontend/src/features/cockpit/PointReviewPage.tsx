@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert } from "@/shared/feedback";
 
@@ -35,6 +36,7 @@ interface Edit {
 /** 补齐 2-17: 逐点审核（采纳/修改/驳回）+ 寻优规则微调。 */
 export default function PointReviewPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const projectId = useUi((s) => s.projectId);
   const [planId, setPlanId] = useState<string | undefined>();
   const plans = useQuery({ queryKey: ["doe", "history", projectId], queryFn: () => call<{ items: { plan_id: string; design: string; created_at: string }[] }>("GET", `/api/doe/history?page_size=50${projectId ? `&project_id=${projectId}` : ""}`) });
@@ -117,7 +119,7 @@ export default function PointReviewPage() {
                 onChange={(e) => setEdits((prev) => { const cur = prev[r.run_id]; if (!cur) return { ...prev, [r.run_id]: { decision: undefined, note: e.target.value, factors: { ...(r.natural ?? {}) } } }; return { ...prev, [r.run_id]: { ...cur, note: e.target.value } }; })} />
             ) },
           ]} />
-          <Button type="primary" style={{ marginTop: 12 }} loading={submit.isPending} onClick={() => submit.mutate()}>{t("review.submit", "提交审核")}</Button>
+          <Button type="primary" style={{ marginTop: 12 }} disabled={!can("formulation.read")} loading={submit.isPending} onClick={() => submit.mutate()}>{t("review.submit", "提交审核")}</Button>
         </ProCard>
       )}
       <ProCard bordered style={{ marginTop: 16 }} title={t("review.rules_title", "寻优规则微调（仅 numpy-UCB 引擎与早停读取，立即生效）")}>
@@ -128,7 +130,7 @@ export default function PointReviewPage() {
           <InputNumber min={1} max={100} step={1} value={rules.early_stop_patience} onChange={(v) => setRules((r) => ({ ...r, early_stop_patience: v ?? 5 }))} />
           <span>{t("review.min_delta", "早停 min_delta")}</span>
           <InputNumber min={0.000001} max={1} step={0.0001} value={rules.early_stop_min_delta} onChange={(v) => setRules((r) => ({ ...r, early_stop_min_delta: v ?? 1e-4 }))} />
-          <Button type="primary" loading={saveRules.isPending} onClick={() => saveRules.mutate()}>{t("review.rules_save", "保存规则")}</Button>
+          <Button type="primary" disabled={!can("admin.llm")} loading={saveRules.isPending} onClick={() => saveRules.mutate()}>{t("review.rules_save", "保存规则")}</Button>
         </Space>
         <ErrorAlert error={saveRules.error} />
       </ProCard>

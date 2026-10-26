@@ -96,7 +96,7 @@ export default function RevisionPage() {
         { key: "docs", label: t("plm.documents", "文档"), children: (
           <ProTable<DocSummary> rowKey="id" search={false} options={{ reload: () => void docs.refetch() }} dataSource={latest} loading={docs.isLoading}
             headerTitle={t("plm.latest_docs", "各类文档的最新版本")}
-            toolBarRender={() => editable || r.frozen_at ? [<Button key="gen" type="primary" disabled={r.state === "under_review"}
+            toolBarRender={() => editable || r.frozen_at ? [<Button key="gen" type="primary" disabled={r.state === "under_review" || !can("plm.document.write")}
               onClick={() => setGenOpen(true)}>{t("doc.generate", "生成文档")}</Button>] : []}
             columns={[
               { title: t("doc.type", "类型"), dataIndex: "doc_type", render: (_d, d) => <Link to={`/plm/documents/${d.id}`}>{DOC_NAMES[d.doc_type]}</Link> },

@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert } from "@/shared/feedback";
 import { useCampaigns, useEngines, useProjectWorkspace } from "./hooks";
 import { adoptPlan } from "./loop";
@@ -18,6 +19,7 @@ interface NewCampaign { name?: string; source: "project" | "generate" | "stored"
 export default function WorkbenchPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { projectId, ws, project } = useProjectWorkspace();
@@ -63,7 +65,7 @@ export default function WorkbenchPage() {
         headerTitle={t("workbench.total", "共 {{n}} 个台账", { n: campaigns.items.length })}
         toolBarRender={() => [
           <ModalForm<NewCampaign> key="new" title={t("workbench.new", "新建实验台账")} modalProps={{ destroyOnHidden: true }}
-            trigger={<Button type="primary" icon={<PlusOutlined />} disabled={!projectId}>{t("workbench.new", "新建实验台账")}</Button>}
+            trigger={<Button type="primary" icon={<PlusOutlined />} disabled={!projectId || !can("doe.write")}>{t("workbench.new", "新建实验台账")}</Button>}
             initialValues={{ source: plan ? "project" : "generate", design: "full_factorial" }}
             onFinish={async (v) => {
               try {

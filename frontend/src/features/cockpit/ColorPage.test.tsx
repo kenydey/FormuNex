@@ -8,6 +8,7 @@ import "@/app/i18n";
 
 const call = vi.fn();
 vi.mock("@/api/client", () => ({ call: (...a: unknown[]) => call(...a), download: vi.fn(), ApiError: class extends Error {} }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 let chartShouldThrow = false;
 vi.mock("@/shared/Chart", () => ({ Chart: () => { if (chartShouldThrow) throw new Error("chart boom"); return <div data-testid="chart" />; } }));
 

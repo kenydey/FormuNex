@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { toggleDiffPick } from "./lib";
 import type { ArtifactDiff, ArtifactLineage, ArtifactVersion, ArtifactVersionList, VersionStatus } from "./types";
@@ -38,6 +39,7 @@ export function VersionsPanel({ projectId, lineageId }: { projectId: string | nu
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const { message } = App.useApp();
+  const { can } = useSession();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [name, setName] = useState("");
@@ -119,7 +121,7 @@ export function VersionsPanel({ projectId, lineageId }: { projectId: string | nu
           }} />
         <Space.Compact>
           <Input style={{ width: 220 }} value={name} onChange={(e) => setName(e.target.value)} placeholder={t("research.ver.new_name", "新建逻辑文件名称")} />
-          <Button disabled={!name.trim()} loading={create.isPending} onClick={() => create.mutate()}>{t("research.ver.create", "新建")}</Button>
+          <Button disabled={!name.trim() || !can("project.write")} loading={create.isPending} onClick={() => create.mutate()}>{t("research.ver.create", "新建")}</Button>
         </Space.Compact>
       </Space>
       <Typography.Paragraph type="secondary">
@@ -151,13 +153,13 @@ export function VersionsPanel({ projectId, lineageId }: { projectId: string | nu
               { title: t("research.ver.evidence", "证据冻结"), dataIndex: "evidence_frozen", render: (f?: boolean) => (f ? <Tag color="success">✓</Tag> : "—") },
               { title: t("common.actions", "操作"), width: 300, render: (_v, v) => (
                 <Space size={0} wrap>
-                  {v.status === "staging" && <Button type="link" size="small" onClick={() => action.mutate({ id: v.version_id, op: "submit" })}>{t("research.ver.submit", "提交待审")}</Button>}
+                  {v.status === "staging" && <Button type="link" size="small" disabled={!can("project.write")} onClick={() => action.mutate({ id: v.version_id, op: "submit" })}>{t("research.ver.submit", "提交待审")}</Button>}
                   {v.status === "pending" && (
                     <Popconfirm title={t("research.ver.finalize_confirm", "定版后不可修改，确认？")} onConfirm={() => action.mutate({ id: v.version_id, op: "finalize" })}>
-                      <Button type="link" size="small">{t("research.ver.finalize", "定版")}</Button>
+                      <Button type="link" size="small" disabled={!can("project.write")}>{t("research.ver.finalize", "定版")}</Button>
                     </Popconfirm>
                   )}
-                  <Button type="link" size="small" onClick={() => action.mutate({ id: v.version_id, op: "restore" })}>{t("research.ver.restore", "恢复为新版")}</Button>
+                  <Button type="link" size="small" disabled={!can("project.write")} onClick={() => action.mutate({ id: v.version_id, op: "restore" })}>{t("research.ver.restore", "恢复为新版")}</Button>
                   <Tooltip title={v.sha256}><Button type="link" size="small" loading={verify.isPending && verify.variables === v.version_id}
                     onClick={() => verify.mutate(v.version_id)}>{t("research.ver.verify", "校验")}</Button></Tooltip>
                 </Space>

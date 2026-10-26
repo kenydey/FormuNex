@@ -7,11 +7,13 @@ import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { fx } from "./api";
+import { useSession } from "@/app/session";
 import { datalabSyncOutcome } from "./logic";
 import type { Attachment, QCMeasurement } from "./types";
 
 /** One training experiment: measured snapshot, typed QC measurements, attachments, Datalab sync (legacy ExperimentsBrowser detail). */
 export default function ExperimentDetailPage() {
+  const { can } = useSession();
   const { id = "" } = useParams();
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -44,7 +46,7 @@ export default function ExperimentDetailPage() {
     <PageContainer
       title={t("formulation.exp.detail_title", "实验 #{{id}}", { id })}
       subTitle={s?.label || undefined}
-      extra={<Button icon={<SyncOutlined />} loading={sync.isPending} onClick={() => sync.mutate()}>
+      extra={<Button icon={<SyncOutlined />} disabled={!can("optimize.run")} loading={sync.isPending} onClick={() => sync.mutate()}>
         {t("formulation.exp.sync", "从 Datalab 同步")}</Button>}
     >
       <ErrorAlert error={summary.error ?? meas.error ?? atts.error} />
@@ -65,7 +67,7 @@ export default function ExperimentDetailPage() {
         </ProCard>
         <ProCard title={t("formulation.att.title", "附件 · {{n}}", { n: atts.data?.length ?? 0 })} bordered
           extra={<Upload showUploadList={false} beforeUpload={(f) => { upload.mutate(f); return false; }}>
-            <Button icon={<UploadOutlined />} loading={upload.isPending}>{t("formulation.att.upload", "上传")}</Button>
+            <Button icon={<UploadOutlined />} disabled={!can("optimize.run")} loading={upload.isPending}>{t("formulation.att.upload", "上传")}</Button>
           </Upload>}>
           <Table<Attachment> size="small" rowKey="id" pagination={false} loading={atts.isLoading} dataSource={atts.data}
             locale={{ emptyText: <Empty description={t("formulation.att.empty", "暂无附件")} /> }}

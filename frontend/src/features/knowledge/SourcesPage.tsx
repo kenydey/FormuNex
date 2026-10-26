@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { AddSourceDrawer } from "@/features/library/AddSourceDrawer";
@@ -21,6 +22,7 @@ interface DeleteResult { chunks_removed: number; links_removed: number; wiki_pag
 export default function SourcesPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const projectId = useUi((s) => s.projectId);
   const [archived, setArchived] = useState(false);
@@ -110,20 +112,21 @@ export default function SourcesPage() {
             <Space size={0} wrap>
               <Popconfirm title={t("library.sources.reparse_confirm", "按当前解析配置重新解析原文件？将重建切块、索引与目录树。")}
                 onConfirm={() => reparse(r.id)}>
-                <Button type="link" size="small" icon={<RedoOutlined />} loading={isRunning(r.id)}>{t("library.sources.reparse", "重新解析")}</Button>
+                <Button type="link" size="small" icon={<RedoOutlined />} disabled={!can("knowledge.write")} loading={isRunning(r.id)}>{t("library.sources.reparse", "重新解析")}</Button>
               </Popconfirm>
               {isEligible(r.id) && (
-                <Button type="link" size="small" loading={extract.isPending && extract.variables === r.id} onClick={() => extract.mutate(r.id)}>
+                <Button type="link" size="small" disabled={!can("formulation.write")} loading={extract.isPending && extract.variables === r.id} onClick={() => extract.mutate(r.id)}>
                   {t("library.search.draft", "提取实施例草稿")}
                 </Button>
               )}
               <Button type="link" size="small" icon={r.archived ? <RollbackOutlined /> : <InboxOutlined />}
+                disabled={!can("knowledge.write")}
                 onClick={() => archive.mutate({ id: r.id, archived: !r.archived })}>
                 {r.archived ? t("library.sources.restore", "恢复") : t("library.sources.archive", "归档")}
               </Button>
               <Popconfirm title={t("library.sources.delete_confirm", "永久删除该文档？其切块、图谱链接与 Wiki 引用将一并移除，无法恢复。")}
                 okButtonProps={{ danger: true }} onConfirm={() => remove.mutate(r.id)}>
-                <Button type="link" size="small" danger icon={<DeleteOutlined />} loading={remove.isPending && remove.variables === r.id}>{t("common.delete", "删除")}</Button>
+                <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!can("knowledge.write")} loading={remove.isPending && remove.variables === r.id}>{t("common.delete", "删除")}</Button>
               </Popconfirm>
             </Space>) },
         ]}

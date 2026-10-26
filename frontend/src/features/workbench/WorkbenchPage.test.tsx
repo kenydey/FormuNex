@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import WorkbenchPage from "./WorkbenchPage";
 
 vi.mock("@/app/store", () => ({ useUi: (sel: (s: { projectId: string }) => unknown) => sel({ projectId: "p1" }) }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 vi.mock("@/api/client", () => ({
   call: vi.fn(async (_m: string, path: string) => {
     if (path === "/api/experiments/workbench/campaigns") {

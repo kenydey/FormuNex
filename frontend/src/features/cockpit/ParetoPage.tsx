@@ -104,7 +104,7 @@ export default function ParetoPage() {
             options={metrics.flatMap((m) => [{ value: `${m}:maximize`, label: `${m} ↑` }, { value: `${m}:minimize`, label: `${m} ↓` }, { value: `${m}:match_target`, label: `${m} 目标值` }])} />
           <span>{t("pareto.objectives_hint", "最多 3 个目标；3 个目标时可用 3D 散点")}</span>
           <Switch checked={hazard} onChange={setHazard} /> {t("pareto.hazard", "危害评分作为最小化目标（由组成计算）")}
-          <Button type="primary" disabled={!objectives.length} loading={run.isPending} onClick={() => run.mutate()}>{t("pareto.run", "计算前沿")}</Button>
+          <Button type="primary" disabled={!objectives.length || !can("formulation.read")} loading={run.isPending} onClick={() => run.mutate()}>{t("pareto.run", "计算前沿")}</Button>
         </Space>
         {hazard && (
           <div style={{ marginTop: 12 }}>
@@ -181,7 +181,7 @@ export default function ParetoPage() {
               <Space direction="vertical" style={{ width: "100%" }}>
                 <span>{t("pareto.detail_factors", "因子：{{f}}", { f: JSON.stringify(selectedTask.factors) })}</span>
                 <span>{t("pareto.detail_measured", "实测：{{m}}", { m: JSON.stringify(selectedTask.measured) })}</span>
-                <Button type="primary" disabled={!objectives[0]} loading={sensitivity.isPending}
+                <Button type="primary" disabled={!objectives[0] || !can("formulation.read")} loading={sensitivity.isPending}
                   onClick={() => sensitivity.mutate(selectedTask.task_no)}>{t("pareto.sensitivity", "灵敏度分析（局部梯度 + Sobol）")}</Button>
                 <ErrorAlert error={sensitivity.error} />
                 {sensitivity.data && (

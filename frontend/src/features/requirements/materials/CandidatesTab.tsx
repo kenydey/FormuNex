@@ -3,6 +3,7 @@ import { Alert, App, Button, Popconfirm, Space, Tag, Tooltip, Typography } from 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { materialsKey } from "./MaterialLibraryTab";
 
@@ -21,6 +22,7 @@ export function useCandidates() {
 export function CandidatesTab() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const q = useCandidates();
   const refresh = () => void qc.invalidateQueries({ queryKey: materialsKey });
@@ -52,9 +54,9 @@ export function CandidatesTab() {
         rowKey="id" search={false} loading={q.isLoading} dataSource={q.data?.candidates} options={{ reload: () => void q.refetch() }} pagination={{ pageSize: 50 }}
         headerTitle={t("requirements.cand.total", "待入库 {{n}} 条", { n: q.data?.total ?? q.data?.candidates.length ?? 0 })}
         toolBarRender={() => [
-          <Button key="h" loading={harvest.isPending} onClick={() => harvest.mutate()}>{t("requirements.cand.harvest", "从 KB 商品库收获")}</Button>,
+          <Button key="h" disabled={!can("knowledge.write")} loading={harvest.isPending} onClick={() => harvest.mutate()}>{t("requirements.cand.harvest", "从 KB 商品库收获")}</Button>,
           <Popconfirm key="n" title={t("requirements.cand.noise_confirm", "自动忽略 KB 抽取出的低质量待入库项？")} onConfirm={() => noise.mutateAsync().catch(() => undefined)}>
-            <Button danger loading={noise.isPending}>{t("requirements.cand.noise", "清理 KB 噪声")}</Button>
+            <Button danger disabled={!can("knowledge.write")} loading={noise.isPending}>{t("requirements.cand.noise", "清理 KB 噪声")}</Button>
           </Popconfirm>,
         ]}
         locale={{ emptyText: t("requirements.cand.empty", "暂无待入库候选") }}
@@ -68,8 +70,8 @@ export function CandidatesTab() {
           { title: t("requirements.cand.confidence", "置信"), dataIndex: "confidence", width: 90, render: (_d, c) => <Tag>{c.confidence || "—"}</Tag> },
           { title: t("common.updated", "更新时间"), dataIndex: "updated_at", valueType: "dateTime", width: 170 },
           { title: t("common.actions", "操作"), valueType: "option", width: 130, render: (_d, c) => [
-            <a key="p" onClick={() => !promote.isPending && promote.mutate(c.id)}>{t("requirements.cand.promote", "晋升")}</a>,
-            <a key="d" onClick={() => !dismiss.isPending && dismiss.mutate(c.id)}>{t("requirements.cand.dismiss", "忽略")}</a>,
+            <Button key="p" type="link" disabled={!can("knowledge.write")} onClick={() => !promote.isPending && promote.mutate(c.id)}>{t("requirements.cand.promote", "晋升")}</Button>,
+            <Button key="d" type="link" disabled={!can("knowledge.write")} onClick={() => !dismiss.isPending && dismiss.mutate(c.id)}>{t("requirements.cand.dismiss", "忽略")}</Button>,
           ] },
         ]} />
     </>

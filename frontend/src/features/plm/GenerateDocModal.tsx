@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { EditableRows } from "@/shared/EditableRows";
 import { errorText } from "@/shared/feedback";
 import type { DocSummary, ProductDetail, Revision } from "./types";
@@ -24,6 +25,7 @@ const splitList = (v: unknown): string[] | undefined =>
 export function GenerateDocModal({ revision, open, onClose }: { revision: Revision; open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const navigate = useNavigate();
   const [form] = Form.useForm();
   const docType = Form.useWatch("doc_type", form) as string | undefined;
@@ -105,6 +107,7 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
   const lockedFields = latestOfType ? (loadLocks()[latestOfType.id] ?? []) : [];
   return (
     <Modal open={open} width={760} title={t("doc.generate", "生成文档")} onCancel={onClose} confirmLoading={gen.isPending} destroyOnHidden
+      okButtonProps={{ disabled: !can("plm.document.write") }}
       onOk={async () => gen.mutate(await form.validateFields())}>
       <Form form={form} layout="vertical" initialValues={{ doc_type: "sds", lang: "zh-CN", phys_state: "liquid" }}>
         {lockedFields.length > 0 && (

@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const call = vi.fn();
 const postSse = vi.fn();
 vi.mock("@/api/client", () => ({ call: (...a: unknown[]) => call(...a), ApiError: class extends Error {} }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 vi.mock("@/api/stream", () => ({ postSse: (...a: unknown[]) => postSse(...a) }));
 vi.mock("@/shared/Markdown", () => ({ Markdown: ({ content }: { content: string }) => <div>{content}</div> }));
 

@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { errorText } from "@/shared/feedback";
 import { isFlagGateError } from "./api";
@@ -28,6 +29,7 @@ export interface SaveWikiDraftButtonProps {
 export function SaveWikiDraftButton({ answer, question = "", citations, origin = "chat", projectId }: SaveWikiDraftButtonProps) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const current = useUi((s) => s.projectId);
   const pid = projectId === undefined ? current : projectId;
   const save = useMutation({
@@ -44,7 +46,7 @@ export function SaveWikiDraftButton({ answer, question = "", citations, origin =
   return (
     <Space size={4} data-testid="save-wiki-draft">
       <Tooltip title={!pid ? t("wiki.draft_need_project", "请先选择项目") : t("wiki.draft_tip", "写入 queries/ L2 草稿（unreviewed；不进 Claims / DOE）")}>
-        <Button size="small" icon={<SaveOutlined />} disabled={disabled} loading={save.isPending} onClick={() => save.mutate()}>
+        <Button size="small" icon={<SaveOutlined />} disabled={disabled || !can("knowledge.write")} loading={save.isPending} onClick={() => save.mutate()}>
           {t("wiki.draft_save", "存为 Wiki 草稿")}
         </Button>
       </Tooltip>

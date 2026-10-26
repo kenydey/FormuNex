@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { errorText } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
@@ -14,6 +15,7 @@ interface Method { code: string; metric: string; name_zh: string }
 export function DispatchButton({ planId }: { planId: string }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const navigate = useNavigate();
   const projectId = useUi((s) => s.projectId);
   const [open, setOpen] = useState(false);
@@ -40,8 +42,9 @@ export function DispatchButton({ planId }: { planId: string }) {
   });
   return (
     <>
-      <Button type="primary" onClick={() => setOpen(true)}>{t("doe.dispatch", "下发为实验任务")}</Button>
+      <Button type="primary" disabled={!can("doe.write")} onClick={() => setOpen(true)}>{t("doe.dispatch", "下发为实验任务")}</Button>
       <Modal open={open} title={t("doe.dispatch", "下发为实验任务")} onCancel={() => setOpen(false)} confirmLoading={dispatch.isPending}
+        okButtonProps={{ disabled: !can("doe.write") }}
         onOk={async () => dispatch.mutate(await form.validateFields())}>
         <Form form={form} layout="vertical">
           <Form.Item name="metrics" label={t("doe.metrics", "待测指标")} rules={[{ required: true }]}>

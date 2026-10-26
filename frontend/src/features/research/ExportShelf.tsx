@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
 import { call, download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { saveToShelf, shelfPath } from "./artifactApi";
 import { formatBytes, shelfFilename } from "./lib";
@@ -15,6 +16,7 @@ import type { ExportFile } from "./types";
 export function ExportShelf({ projectId }: { projectId: string | null }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const report = useResearch((s) => s.report);
   const key = ["research", "exports", projectId];
@@ -44,10 +46,10 @@ export function ExportShelf({ projectId }: { projectId: string | null }) {
         headerTitle={t("research.shelf.title", "导出货架（项目级落盘）")}
         locale={{ emptyText: t("research.shelf.empty", "货架为空。可保存深度研究报告或上传文件。") }}
         toolBarRender={() => [
-          <Button key="r" disabled={!report} loading={saveReport.isPending} onClick={() => saveReport.mutate()}>{t("research.shelf.save_report", "保存深度报告")}</Button>,
+          <Button key="r" disabled={!report || !can("project.write")} loading={saveReport.isPending} onClick={() => saveReport.mutate()}>{t("research.shelf.save_report", "保存深度报告")}</Button>,
           <Upload key="u" showUploadList={false} accept=".pdf,.xlsx,.xls,.docx,.pptx,.png,.jpg,.jpeg,.zip,.md,.json,.csv"
-            beforeUpload={(f) => { upload.mutate(f); return false; }}>
-            <Button icon={<UploadOutlined />} loading={upload.isPending}>{t("research.shelf.upload", "上传文件")}</Button>
+            beforeUpload={(f) => { if (!can("project.write")) return false; upload.mutate(f); return false; }}>
+            <Button icon={<UploadOutlined />} disabled={!can("project.write")} loading={upload.isPending}>{t("research.shelf.upload", "上传文件")}</Button>
           </Upload>,
         ]}
         columns={[
@@ -57,7 +59,7 @@ export function ExportShelf({ projectId }: { projectId: string | null }) {
           { title: t("common.actions", "操作"), valueType: "option", width: 140, render: (_d, f) => [
             <a key="d" onClick={() => void download(shelfPath(projectId, f.name), f.name).catch(onError)}>{t("research.shelf.download", "下载")}</a>,
             <Popconfirm key="x" title={t("common.confirm_delete", "确定删除？")} onConfirm={() => remove.mutate(f.name)}>
-              <a>{t("common.delete", "删除")}</a>
+              {can("project.write") ? <a>{t("common.delete", "删除")}</a> : <a style={{ color: "rgba(0,0,0,0.25)", cursor: "not-allowed" }}>{t("common.delete", "删除")}</a>}
             </Popconfirm>,
           ] },
         ]}

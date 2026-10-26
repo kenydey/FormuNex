@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
 import { FormulationEditor, type DraftFormulation } from "./FormulationEditor";
@@ -25,6 +26,7 @@ const STATUS_NUM: Record<string, number> = { pass: 0, warn: 1, infeasible: 2 };
  * ``forms``/``onFormsChange`` 仅供配方物性 hub 使用：hub 把编辑器状态提升到页级，两 tab 共用。 */
 export default function AcidStabilityPage({ forms: controlledForms, onFormsChange }: { forms?: DraftFormulation[]; onFormsChange?: (v: DraftFormulation[]) => void } = {}) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const [localForms, setLocalForms] = useState<DraftFormulation[]>([
     { name: "配方 1", ingredients: [{ name: "Zinc dust", weight_pct: 10, role: "pigment" }] },
   ]);
@@ -53,7 +55,7 @@ export default function AcidStabilityPage({ forms: controlledForms, onFormsChang
             <InputNumber min={0} max={14} step={0.5} value={phMax} onChange={(v) => setPhMax(v ?? 6)} />
             <span>pH step</span>
             <InputNumber min={0.1} max={2} step={0.1} value={phStep} onChange={(v) => setPhStep(v ?? 0.5)} />
-            <Button type="primary" loading={run.isPending} onClick={() => run.mutate()}>{t("acid.run", "扫掠")}</Button>
+            <Button type="primary" disabled={!can("formulation.read")} loading={run.isPending} onClick={() => run.mutate()}>{t("acid.run", "扫掠")}</Button>
           </Space>
         </Space>
       </ProCard>

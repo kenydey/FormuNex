@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { fmtEpoch, splitList } from "./logic";
 import { WithProject } from "./shared";
@@ -17,6 +18,7 @@ const withProject = (path: string, projectId: string) => `${path}?${new URLSearc
 function CollectionsBody({ projectId }: { projectId: string }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const [openId, setOpenId] = useState<string | null>(null);
   // P1-6: preset names are validated against the known preset list
@@ -71,7 +73,7 @@ function CollectionsBody({ projectId }: { projectId: string }) {
         toolBarRender={() => [
           <ModalForm<CreateForm> key="new" title={t("library.coll.new", "新建集合")} modalProps={{ destroyOnHidden: true }}
             initialValues={{ sched: true, interval: 24 }}
-            trigger={<Button type="primary" icon={<PlusOutlined />}>{t("library.coll.new", "新建集合")}</Button>}
+            trigger={<Button type="primary" icon={<PlusOutlined />} disabled={!can("knowledge.write")}>{t("library.coll.new", "新建集合")}</Button>}
             onFinish={async (v) => { try { await create.mutateAsync(v); return true; } catch (e) { message.error(errorText(e)); return false; } }}>
             <ProFormText name="name" label={t("library.coll.name", "名称")} placeholder={t("library.coll.name_ph", "如 水性防腐文献")} rules={[{ required: true, whitespace: true }]} />
             <ProFormText name="query" label={t("library.coll.query", "查询")} placeholder="waterborne conversion coating corrosion" rules={[{ required: true, whitespace: true }]} />
@@ -104,16 +106,16 @@ function CollectionsBody({ projectId }: { projectId: string }) {
               {t("library.coll.last", "上次：共 {{n}} · +{{a}} · −{{r}}", { n: c.last_snapshot.total, a: c.last_snapshot.added, r: c.last_snapshot.removed })}</Typography.Text>}</Space>) },
           { title: t("common.actions", "操作"), width: 160, render: (_d, c) => (
             <Space size={0}>
-              <Button type="link" size="small" loading={refresh.isPending && refresh.variables === c.collection_id} onClick={() => refresh.mutate(c.collection_id)}>
+              <Button type="link" size="small" disabled={!can("knowledge.write")} loading={refresh.isPending && refresh.variables === c.collection_id} onClick={() => refresh.mutate(c.collection_id)}>
                 {t("library.coll.refresh", "刷新")}</Button>
               <Popconfirm title={t("common.confirm_delete", "确认删除？")} onConfirm={() => remove.mutate(c.collection_id)} okButtonProps={{ danger: true }}>
-                <Button type="link" size="small" danger loading={remove.isPending && remove.variables === c.collection_id}>{t("common.delete", "删除")}</Button>
+                <Button type="link" size="small" danger disabled={!can("knowledge.write")} loading={remove.isPending && remove.variables === c.collection_id}>{t("common.delete", "删除")}</Button>
               </Popconfirm>
             </Space>) },
         ]} />
       <Drawer open={!!openId} onClose={() => setOpenId(null)} width={640} destroyOnHidden loading={detail.isLoading}
         title={detail.data ? t("library.coll.detail", "集合详情：{{n}}", { n: detail.data.name }) : ""}
-        extra={openId && <Button loading={refresh.isPending} onClick={() => refresh.mutate(openId)}>{t("library.coll.refresh", "刷新")}</Button>}>
+        extra={openId && <Button disabled={!can("knowledge.write")} loading={refresh.isPending} onClick={() => refresh.mutate(openId)}>{t("library.coll.refresh", "刷新")}</Button>}>
         <ErrorAlert error={detail.error} />
         {detail.data && detail.data.screening_preset && (
           <Typography.Paragraph type="secondary">

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
@@ -18,6 +19,7 @@ interface QcRow { metric: string; value: number | null; unit?: string; test_meth
 export default function ProductDetailPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const { productId = "" } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -60,7 +62,7 @@ export default function ProductDetailPage() {
     </Space>}>
       <ProCard gutter={16} ghost wrap>
         <ProCard colSpan={{ xs: 24, md: 14 }} bordered title={t("plm.revisions", "修订版")}
-          extra={<Button type="primary" onClick={() => setRevOpen(true)}>{t("plm.new_revision", "新建修订版")}</Button>}>
+          extra={<Button type="primary" disabled={!can("plm.document.write")} onClick={() => setRevOpen(true)}>{t("plm.new_revision", "新建修订版")}</Button>}>
           <ProTable rowKey="id" search={false} options={false} pagination={false} dataSource={d?.revisions} columns={[
             { title: t("plm.rev", "修订"), dataIndex: "rev", render: (_d, r) => <Link to={`/plm/revisions/${r.id}`}>{r.rev}</Link> },
             { title: t("plm.state", "状态"), dataIndex: "state", render: (_d, r) => <StatusTag status={r.state} /> },
@@ -68,11 +70,11 @@ export default function ProductDetailPage() {
           ]} />
         </ProCard>
         <ProCard colSpan={{ xs: 24, md: 10 }} bordered title={t("plm.batches", "批次")}
-          extra={<Button onClick={() => setBatchOpen(true)}>{t("plm.new_batch", "新建批次")}</Button>}>
+          extra={<Button disabled={!can("plm.document.write")} onClick={() => setBatchOpen(true)}>{t("plm.new_batch", "新建批次")}</Button>}>
           <ProTable rowKey="id" search={false} options={false} pagination={false} dataSource={d?.batches} columns={[
             { title: t("plm.batch_no", "批号"), dataIndex: "batch_no" },
             { title: t("plm.state", "状态"), dataIndex: "status" },
-            { title: "", valueType: "option", render: (_d, r) => [<a key="qc" onClick={() => { setQcBatch(r.id); setQcRows([{ metric: "", value: null }]); }}>{t("plm.qc", "录入质检结果")}</a>] },
+            { title: "", valueType: "option", render: (_d, r) => [<Button key="qc" type="link" disabled={!can("qc.write")} onClick={() => { setQcBatch(r.id); setQcRows([{ metric: "", value: null }]); }}>{t("plm.qc", "录入质检结果")}</Button>] },
           ]} />
         </ProCard>
       </ProCard>

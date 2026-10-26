@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { call } from "@/api/client";
 import { getAccessToken } from "@/api/auth";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
@@ -29,6 +30,7 @@ interface Lineage { lineage_id: string; versions: { id: string; version: number;
 /** 配方编辑器 (方案 §3.6): RevoGrid (paste from Excel, range edit) + live GB 30000 compliance side panel. */
 export default function FormulationEditorPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const projectId = useUi((s) => s.projectId);
   const grid = useRef<HTMLRevoGridElement>(null);
@@ -127,6 +129,11 @@ export default function FormulationEditorPage() {
       setCls(null);
       return;
     }
+    // 无 GHS 分类权限时不发起自动分类（WS 与 REST 都会 403），面板保持空态。
+    if (!can("plm.document.write")) {
+      setCls(null);
+      return;
+    }
     const h = setTimeout(async () => {
       const payload = {
         components: filled.map((r) => ({ name: r.zh_name || r.name, pct: Number(r.weight_pct), cas: r.cas_no || null })),
@@ -151,7 +158,7 @@ export default function FormulationEditorPage() {
       }
     }, 400);
     return () => clearTimeout(h);
-  }, [filled, flash]);
+  }, [filled, flash, can]);
 
   const violations = useMemo(() => redLineViolations(rows, spec, cls ?? undefined), [rows, spec, cls]);
   const badUids = new Set(violations.map((v) => v.uid).filter(Boolean));
@@ -248,7 +255,7 @@ export default function FormulationEditorPage() {
         </Tooltip>
         <Button onClick={() => setLoadOpen(true)}>{t("formula.open", "打开版本")}</Button>
         <Tooltip title={violations.some((v) => v.uid) ? t("formula.blocked", "命中合规红线，不能保存") : undefined}>
-          <Button type="primary" disabled={!filled.length || violations.some((v) => v.uid)}
+          <Button type="primary" disabled={!filled.length || violations.some((v) => v.uid) || !can("formulation.write")}
             onClick={() => { form.setFieldsValue({ name, change_summary: "" }); setSaveOpen(true); }}>{t("formula.save", "保存为新版本")}</Button>
         </Tooltip>
       </Space>}

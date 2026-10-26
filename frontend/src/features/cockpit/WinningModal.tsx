@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { errorText } from "@/shared/feedback";
 
 interface Product { id: string; code: string; name_zh: string }
@@ -12,6 +13,7 @@ interface Lineage { lineage_id: string; versions: { id: string; version: number;
 export function WinningModal({ experimentId, open, onClose }: { experimentId: number | null; open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const navigate = useNavigate();
   const [form] = Form.useForm();
   const products = useQuery({ queryKey: ["plm", "products"], enabled: open, queryFn: () => call<Product[]>("GET", "/api/plm/products") });
@@ -29,6 +31,7 @@ export function WinningModal({ experimentId, open, onClose }: { experimentId: nu
   });
   return (
     <Modal open={open} title={t("winning.title", "设为定型配方")} onCancel={onClose} confirmLoading={win.isPending} destroyOnHidden
+      okButtonProps={{ disabled: !can("formulation.freeze") }}
       onOk={async () => win.mutate(await form.validateFields())}>
       <Form form={form} layout="vertical">
         <Form.Item label={t("winning.experiment", "定型实验")}>#{experimentId}</Form.Item>

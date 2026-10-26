@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { awaitTask } from "@/api/stream";
 import { Markdown } from "@/shared/Markdown";
 import { ErrorAlert, errorText } from "@/shared/feedback";
@@ -21,6 +22,7 @@ const manifestKey = (projectId: string) => ["literature", "manifest", projectId]
 function FreezeStrip({ projectId, manifest }: { projectId: string; manifest: Manifest | undefined }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const [form] = Form.useForm<{ preset?: string; include: string; exclude: string; rule_name?: string }>();
   const [evalRes, setEvalRes] = useState<ScreeningEval | null>(null);
@@ -53,15 +55,15 @@ function FreezeStrip({ projectId, manifest }: { projectId: string; manifest: Man
       subTitle={<Typography.Text type="secondary">{t("library.manifest.stats", "候选 {{c}} · 已冻结 {{f}} · digest {{d}}",
         { c: cand, f: manifest?.coverage?.frozen_count ?? 0, d: frozen?.digest?.slice(0, 10) ?? "—" })}</Typography.Text>}
       extra={<Space wrap>
-        <Button loading={run.isPending} onClick={() => act(t("library.manifest.captured", "已捕获"), () => call("POST", "/api/wiki/literature/capture", { project_id: projectId }))}>
+        <Button loading={run.isPending} disabled={!can("knowledge.write")} onClick={() => act(t("library.manifest.captured", "已捕获"), () => call("POST", "/api/wiki/literature/capture", { project_id: projectId }))}>
           {t("library.manifest.capture", "捕获 Capture")}</Button>
         <Popconfirm title={t("library.manifest.freeze_q", "冻结当前候选集为评审语料？")} onConfirm={() => act(t("library.manifest.frozen_ok", "已冻结"),
           () => call("POST", "/api/wiki/literature/freeze", { project_id: projectId, actor: "hub" }))}>
-          <Button type="primary" loading={run.isPending}>{t("library.manifest.freeze", "冻结 Freeze")}</Button>
+          <Button type="primary" disabled={!can("knowledge.write")} loading={run.isPending}>{t("library.manifest.freeze", "冻结 Freeze")}</Button>
         </Popconfirm>
-        <Button disabled={!frozen} loading={run.isPending} onClick={() => act(t("library.manifest.unfrozen", "已解冻"),
+        <Button disabled={!frozen || !can("knowledge.write")} loading={run.isPending} onClick={() => act(t("library.manifest.unfrozen", "已解冻"),
           () => call("POST", "/api/wiki/literature/unfreeze", { project_id: projectId, actor: "hub" }))}>{t("library.manifest.unfreeze", "解冻")}</Button>
-        <Button disabled={cand < 1} loading={run.isPending} onClick={() => act("", async () => {
+        <Button disabled={cand < 1 || !can("knowledge.write")} loading={run.isPending} onClick={() => act("", async () => {
           const r = await call<{ attempted?: number; fetched?: number; skipped?: number }>("POST", "/api/wiki/literature/enrich-oa",
             { project_id: projectId, scope: "missing_fulltext", limit: 20, actor: "hub" });
           return t("library.manifest.enrich_result", "补全文 {{f}}/{{a}} · 跳过 {{s}}", { f: r.fetched ?? 0, a: r.attempted ?? 0, s: r.skipped ?? 0 });
@@ -78,20 +80,20 @@ function FreezeStrip({ projectId, manifest }: { projectId: string; manifest: Man
         <Form.Item name="rule_name" label={t("library.screen.rule_name", "规则版本名")}><Input style={{ width: 140 }} /></Form.Item>
       </Form>
       <Space wrap style={{ marginTop: 12 }}>
-        <Button type="primary" loading={run.isPending} onClick={() => act(t("library.screen.done", "筛选完成"), async () => {
+        <Button type="primary" disabled={!can("knowledge.write")} loading={run.isPending} onClick={() => act(t("library.screen.done", "筛选完成"), async () => {
           const v = form.getFieldsValue();
           const res = await call<{ async?: boolean; task_id?: string }>("POST", "/api/wiki/literature/screen", {
             project_id: projectId, apply: true, preset: v.preset || undefined, rule_name: v.rule_name?.trim() || undefined, criteria: criteria(),
           });
           if (res.async && res.task_id) await awaitTask(res.task_id);
         })}>{t("library.screen.run", "运行筛选")}</Button>
-        <Button loading={run.isPending} onClick={() => {
+        <Button loading={run.isPending} disabled={!can("knowledge.write")} onClick={() => {
           const name = form.getFieldValue("rule_name")?.trim();
           if (!name) { message.warning(t("library.screen.need_name", "请先填写规则版本名")); return; }
           act(t("library.screen.saved", "规则版本已保存"), () => call("POST", "/api/wiki/literature/screening/rule-versions",
             { project_id: projectId, name, criteria: criteria(), created_by: "hub" }));
         }}>{t("library.screen.save", "保存版本")}</Button>
-        <Button loading={run.isPending} onClick={() => act(t("library.screen.evaluated", "评估完成"), async () => {
+        <Button loading={run.isPending} disabled={!can("knowledge.write")} onClick={() => act(t("library.screen.evaluated", "评估完成"), async () => {
           setEvalRes(await call<ScreeningEval>("POST", "/api/wiki/literature/screening/evaluate", { project_id: projectId, criteria: criteria() }));
         })}>{t("library.screen.evaluate", "效果评估")}</Button>
         {(rules.data?.versions?.length ?? 0) > 0 && (

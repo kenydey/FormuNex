@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { SCREENING_COLOR, splitList } from "./logic";
 import { WithProject, getTextDownload } from "./shared";
@@ -25,6 +26,7 @@ function toDraft(it: LibraryItem): Draft {
 function LibraryBody({ projectId }: { projectId: string }) {
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const [filters, setFilters] = useState({ q: "", tag: "", collection_id: "", screening: "" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -110,13 +112,13 @@ function LibraryBody({ projectId }: { projectId: string }) {
         </ProCard>
         <ProCard>
           <Space wrap>
-            <Button type="primary" disabled={!importText.trim()} loading={run.isPending} onClick={() => act("", async () => {
+            <Button type="primary" disabled={!importText.trim() || !can("knowledge.write")} loading={run.isPending} onClick={() => act("", async () => {
               const r = await call<ImportResult>("POST", "/api/wiki/literature/import-ids", { project_id: projectId, text: importText });
               setImportText("");
               return importMsg(r);
             })}>{t("library.lib.import_ids", "导入 DOI / ChemRxiv")}</Button>
             {(["bibtex", "ris"] as const).map((fmt) => (
-              <Button key={fmt} disabled={!importText.trim()} loading={run.isPending} onClick={() => act("", async () => {
+              <Button key={fmt} disabled={!importText.trim() || !can("knowledge.write")} loading={run.isPending} onClick={() => act("", async () => {
                 const r = await call<ImportResult>("POST", "/api/wiki/literature/import", { project_id: projectId, format: fmt, text: importText });
                 setImportText("");
                 return importMsg(r);

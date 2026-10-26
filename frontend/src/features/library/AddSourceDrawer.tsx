@@ -6,6 +6,7 @@ import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { awaitTask, cancelTask, type AsyncTaskAccepted, type TaskProgressEvent } from "@/api/stream";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
@@ -27,6 +28,7 @@ function Warnings({ warnings }: { warnings: string[] }) {
 function UploadTab({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [ev, setEv] = useState<TaskProgressEvent | null>(null);
   const [batch, setBatch] = useState<[number, number] | null>(null);
@@ -79,7 +81,7 @@ function UploadTab({ onDone }: { onDone: () => void }) {
         <p className="ant-upload-text">{t("library.add.drop", "点击或拖拽文件到此处")}</p>
         <p className="ant-upload-hint">{t("library.add.drop_hint", "PDF / Word / Excel / PPT / HTML / TXT / MD / CSV / 图片；每批最多 20 个")}</p>
       </Upload.Dragger>
-      <Button type="primary" disabled={!files.length} loading={run.isPending} onClick={() => run.mutate()}>
+      <Button type="primary" disabled={!files.length || !can("knowledge.write")} loading={run.isPending} onClick={() => run.mutate()}>
         {t("library.add.upload", "上传并解析（{{n}} 个文件）", { n: files.length })}
       </Button>
       {run.isPending && (
@@ -99,6 +101,7 @@ function UploadTab({ onDone }: { onDone: () => void }) {
 function SimpleImport({ kind, onDone }: { kind: "url" | "text" | "id"; onDone: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const [form] = Form.useForm();
   const [warnings, setWarnings] = useState<string[]>([]);
   const docType = Form.useWatch("doc_type", form) as string | undefined;
@@ -150,7 +153,7 @@ function SimpleImport({ kind, onDone }: { kind: "url" | "text" | "id"; onDone: (
           </Form.Item>
         </>
       )}
-      <Button type="primary" htmlType="submit" loading={run.isPending}>{t("library.add.submit", "确定导入")}</Button>
+      <Button type="primary" htmlType="submit" disabled={!can("knowledge.write")} loading={run.isPending}>{t("library.add.submit", "确定导入")}</Button>
       <div style={{ marginTop: 12 }}><ErrorAlert error={run.error} /><Warnings warnings={warnings} /></div>
     </Form>
   );

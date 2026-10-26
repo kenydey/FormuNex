@@ -5,6 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { EditableRows } from "@/shared/EditableRows";
 import { SmilesDrawing } from "@/shared/Markdown";
 import { StructureEditorModal } from "@/shared/StructureEditor";
@@ -24,6 +25,7 @@ export function MaterialEditDrawer({ open, material, onClose, onSaved }: {
 }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const [d, setD] = useState<MaterialDraft>(EMPTY_DRAFT);
   const [lookupMsg, setLookupMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -71,7 +73,7 @@ export function MaterialEditDrawer({ open, material, onClose, onSaved }: {
           <Button icon={<SearchOutlined />} loading={lookup.isPending} onClick={runLookup}>{t("requirements.mat.lookup", "化学查询填充")}</Button>
         </Tooltip>
         <Button onClick={onClose}>{t("requirements.cancel", "取消")}</Button>
-        <Button type="primary" disabled={!valid} loading={save.isPending} onClick={() => save.mutate()}>{t("common.save", "保存")}</Button>
+        <Button type="primary" disabled={!valid || !can("knowledge.write")} loading={save.isPending} onClick={() => save.mutate()}>{t("common.save", "保存")}</Button>
       </Space>}>
       {lookupMsg && <Typography.Paragraph type={lookupMsg.ok ? "success" : "warning"}>{lookupMsg.text}</Typography.Paragraph>}
       <Form layout="vertical">

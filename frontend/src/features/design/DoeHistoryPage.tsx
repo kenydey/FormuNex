@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { DispatchButton } from "@/features/lab/DispatchButton";
@@ -32,6 +33,7 @@ export function DoeStatusTag({ status }: { status?: string }) {
 function CyclePause({ campaignId }: { campaignId: number }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const [ttl, setTtl] = useState<number | null>(24);
   const key = ["design", "doe-pause", campaignId];
@@ -52,11 +54,11 @@ function CyclePause({ campaignId }: { campaignId: number }) {
         {t("design.hist.lapsed", "上次暂停已于 {{t}} 自动恢复", { t: status.data.lapsedAt.slice(0, 19).replace("T", " ") })}</Typography.Text>}
       {status.data?.degraded && <Tag color="warning">{t("design.hist.degraded", "状态存储不可用")}</Tag>}
       {paused ? (
-        <Button size="small" loading={toggle.isPending} onClick={() => toggle.mutate(false)}>{t("design.hist.resume", "恢复闭环")}</Button>
+        <Button size="small" disabled={!can("optimize.run")} loading={toggle.isPending} onClick={() => toggle.mutate(false)}>{t("design.hist.resume", "恢复闭环")}</Button>
       ) : (
         <>
           <InputNumber size="small" min={0} max={720} value={ttl} onChange={setTtl} suffix={t("design.hist.hours", "小时")} style={{ width: 130 }} />
-          <Button size="small" loading={toggle.isPending} onClick={() => toggle.mutate(true)}>{t("design.hist.pause", "暂停闭环")}</Button>
+          <Button size="small" disabled={!can("optimize.run")} loading={toggle.isPending} onClick={() => toggle.mutate(true)}>{t("design.hist.pause", "暂停闭环")}</Button>
         </>
       )}
     </Space>
@@ -67,6 +69,7 @@ function CyclePause({ campaignId }: { campaignId: number }) {
 export default function DoeHistoryPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const projectId = useUi((s) => s.projectId);
   const [campaignId, setCampaignId] = useState<number | undefined>();
@@ -152,7 +155,7 @@ export default function DoeHistoryPage() {
         extra={detail?.plan_id && <Space>
           <Button onClick={() => download(`/api/doe/${encodeURIComponent(detail.plan_id!)}/export?format=csv`, `doe_${detail.plan_id}.csv`)
             .catch((e) => message.error(errorText(e)))}>{t("design.doe.export_csv", "导出 CSV")}</Button>
-          <Button loading={adopt.isPending} disabled={!planQ.data} onClick={() => planQ.data && adopt.mutate(planQ.data)}>
+          <Button loading={adopt.isPending} disabled={!planQ.data || !can("lab.execute") || !can("project.write")} onClick={() => planQ.data && adopt.mutate(planQ.data)}>
             {t("design.doe.adopt", "写入实验台账")}</Button>
           <DispatchButton planId={detail.plan_id} />
         </Space>}>

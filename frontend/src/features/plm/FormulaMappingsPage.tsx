@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { errorText } from "@/shared/feedback";
 
 interface Mapping { id: string; source: string; source_ref: string; product_id: string | null; product_code: string | null; company_name: string | null; formulation_version_id: string | null; created_at: string }
@@ -14,6 +15,7 @@ interface ImportReport { created: { product_code: string }[]; skipped: { product
 export default function FormulaMappingsPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const [importOpen, setImportOpen] = useState(false);
   const [form] = Form.useForm();
@@ -42,13 +44,13 @@ export default function FormulaMappingsPage() {
     { title: "配方版本", dataIndex: "formulation_version_id", render: (v) => v ? String(v).slice(0, 8) : "—" },
     { title: t("common.created", "创建时间"), dataIndex: "created_at", valueType: "dateTime" },
     { title: t("common.actions", "操作"), valueType: "option", render: (_d, r) => [
-      <a key="rev" onClick={() => createRevision.mutate(r.id)}>创建修订版</a>,
+      <Button key="rev" type="link" disabled={!can("formulation.freeze")} onClick={() => createRevision.mutate(r.id)}>创建修订版</Button>,
     ] },
   ];
   return (
     <PageContainer>
       <ProTable<Mapping> rowKey="id" search={false} columns={columns} dataSource={mappings.data} loading={mappings.isLoading}
-        toolBarRender={() => [<Button key="import" type="primary" onClick={() => { setReport(null); setImportOpen(true); }}>导入配方记录</Button>]}
+        toolBarRender={() => [<Button key="import" type="primary" disabled={!can("plm.document.write")} onClick={() => { setReport(null); setImportOpen(true); }}>导入配方记录</Button>]}
         options={{ reload: () => void mappings.refetch() }} />
       <Modal open={importOpen} width={720} title="导入 MSDS-Generator 配方记录" destroyOnHidden
         onCancel={() => setImportOpen(false)} confirmLoading={doImport.isPending}

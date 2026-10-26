@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert } from "@/shared/feedback";
 import { ErrorBoundary } from "@/features/chat/ErrorBoundary";
@@ -35,6 +36,7 @@ export function deltaEab(lab1: [number, number, number], lab2: [number, number, 
  * ``forms``/``onFormsChange`` 仅供配方物性 hub 使用：hub 把编辑器状态提升到页级，两 tab 共用。 */
 export default function ColorPage({ forms: controlledForms, onFormsChange }: { forms?: DraftFormulation[]; onFormsChange?: (v: DraftFormulation[]) => void } = {}) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const [localForms, setLocalForms] = useState<DraftFormulation[]>([
     { name: "配方 1", ingredients: [{ name: "Titanium dioxide", weight_pct: 20, role: "pigment" }] },
   ]);
@@ -76,7 +78,7 @@ export default function ColorPage({ forms: controlledForms, onFormsChange }: { f
             <InputNumber placeholder="b*" onChange={(v) => setRefLab((r) => [r?.[0] ?? 0, r?.[1] ?? 0, Number(v ?? 0)])} />
             <Button onClick={() => setRefLab(null)}>{t("color.reference_clear", "清除参考色")}</Button>
           </Space>
-          <Button type="primary" loading={run.isPending} onClick={() => run.mutate()}>{t("color.run", "计算色度")}</Button>
+          <Button type="primary" disabled={!can("formulation.read")} loading={run.isPending} onClick={() => run.mutate()}>{t("color.run", "计算色度")}</Button>
         </Space>
       </ProCard>
       <ErrorAlert error={run.error} />

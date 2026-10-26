@@ -23,6 +23,7 @@ const call = vi.fn(async (method: string, path: string, _body?: unknown): Promis
   throw new Error(`unexpected ${method} ${path}`);
 });
 vi.mock("@/api/client", () => ({ call: (m: string, p: string, b?: unknown) => call(m, p, b), download: vi.fn() }));
+vi.mock("@/app/session", () => ({ useSession: () => ({ can: () => true }) }));
 vi.mock("@/app/store", () => ({ useUi: (sel: (s: { projectId: string }) => unknown) => sel({ projectId: "proj1" }) }));
 vi.mock("@/features/lab/DispatchButton", () => ({ DispatchButton: () => null }));
 

@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { useUi } from "@/app/store";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
@@ -36,6 +37,7 @@ function listUrl(q: string, role: string, avail: string, archived: boolean) {
 export function MaterialLibraryTab({ onChanged }: { onChanged?: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const projectId = useUi((s) => s.projectId);
   const [q, setQ] = useState("");
@@ -127,10 +129,10 @@ export function MaterialLibraryTab({ onChanged }: { onChanged?: () => void }) {
           <Space size={4}><Switch size="small" checked={archived} onChange={setArchived} />{t("requirements.mat.show_archived", "含已归档")}</Space>
         </Space>}
         toolBarRender={() => [
-          <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setEditing(null)}>{t("requirements.mat.new", "新材料")}</Button>,
+          <Button key="new" type="primary" icon={<PlusOutlined />} disabled={!can("knowledge.write")} onClick={() => setEditing(null)}>{t("requirements.mat.new", "新材料")}</Button>,
           <Upload key="imp" accept=".json,.csv,.xlsx,.xls" showUploadList={false}
-            beforeUpload={(f) => { setImportFile(f); runImport.mutate({ file: f, dry: true }); return false; }}>
-            <Button icon={<UploadOutlined />} loading={runImport.isPending && !!runImport.variables?.dry}>{t("requirements.mat.import", "导入")}</Button>
+            beforeUpload={(f) => { if (!can("knowledge.write")) return false; setImportFile(f); runImport.mutate({ file: f, dry: true }); return false; }}>
+            <Button icon={<UploadOutlined />} disabled={!can("knowledge.write")} loading={runImport.isPending && !!runImport.variables?.dry}>{t("requirements.mat.import", "导入")}</Button>
           </Upload>,
           <Dropdown key="exp" menu={{
             items: [
@@ -147,10 +149,10 @@ export function MaterialLibraryTab({ onChanged }: { onChanged?: () => void }) {
             <Button icon={<DownloadOutlined />}>{t("requirements.mat.export", "导出")}</Button>
           </Dropdown>,
           <Tooltip key="prom" title={projectId ? t("requirements.mat.promote_tip", "把当前项目需求中的材料提升到材料库 / 待入库") : t("requirements.mat.promote_need", "请先在顶部选择项目")}>
-            <Button disabled={!projectId} loading={promote.isPending} onClick={() => promote.mutate()}>{t("requirements.mat.promote", "从需求提升")}</Button>
+            <Button disabled={!projectId || !can("knowledge.write")} loading={promote.isPending} onClick={() => promote.mutate()}>{t("requirements.mat.promote", "从需求提升")}</Button>
           </Tooltip>,
           <Tooltip key="enr" title={t("requirements.mat.enrich_tip", "为缺失 SMILES / 摩尔质量的材料批量补全属性（PubChem，每次 20 条）")}>
-            <Button icon={<ThunderboltOutlined />} loading={enrich.isPending} onClick={() => enrich.mutate()}>{t("requirements.mat.enrich", "批量补全属性")}</Button>
+            <Button icon={<ThunderboltOutlined />} disabled={!can("knowledge.write")} loading={enrich.isPending} onClick={() => enrich.mutate()}>{t("requirements.mat.enrich", "批量补全属性")}</Button>
           </Tooltip>,
         ]}
         columns={[
