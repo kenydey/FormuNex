@@ -27,9 +27,11 @@ session). Instead the serialisation lock is held until the transaction ends:
 - Other dialects: a transaction-scoped lock held from the first ``append``
   in a transaction until that transaction ends (commit, rollback, or close).
   Within one process that is :data:`_process_lock`; for a file-backed SQLite
-  database it is additionally a blocking ``flock`` on a ``<db>.audit-chain.lock``
-  sibling file, so separate processes (uvicorn workers, celery, a second
-  request thread's session) serialise too. The lock is released from the
+  database it is additionally a blocking file lock on a
+  ``<db>.audit-chain.lock`` sibling file (``flock`` on POSIX,
+  ``msvcrt.locking`` on Windows, via :mod:`app.services._filelock`), so
+  separate processes (uvicorn workers, celery, a second request thread's
+  session) serialise too. The lock is released from the
   ``after_transaction_end`` event, guarded by ``session.in_transaction()``:
   that event also fires for flushes and for nested (SAVEPOINT) transaction
   ends, where the outer transaction is still active and the lock must stay
@@ -58,16 +60,16 @@ from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session
 
 from ...db.models_plm import AuditLogRow
-
-try:  # fcntl is POSIX-only; without it the process lock below is all we have.
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None  # type: ignore[assignment]
+from .._filelock import lock_exclusive, unlock
 
 logger = logging.getLogger(__name__)
 
 GENESIS = "0" * 64
 _ADVISORY_KEY = 0x464E5841  # "FNXA"
+# A waiter fails loudly after this long rather than forking the chain: it
+# covers the 60 s SQLite busy window with room to spare, and a live holder
+# longer than this is pathological (a dead holder releases via fd close).
+_FILE_LOCK_TIMEOUT_S = 120.0
 _process_lock = threading.Lock()
 _INFO_KEY = "_audit_chain_lock"
 
@@ -112,10 +114,15 @@ def _acquire_chain_lock(session: Session) -> None:
     token = _ChainLock()
     try:
         path = _lock_file_path(session)
-        if path is not None and fcntl is not None:
+        if path is not None:
             try:
                 token.lock_file = path.open("a+")
-                fcntl.flock(token.lock_file.fileno(), fcntl.LOCK_EX)
+                # Portable: flock on POSIX, msvcrt on Windows. A bare
+                # ``import fcntl`` used to skip the cross-process lock
+                # entirely on Windows, so a second process read the chain
+                # tip before the first committed and forked the chain
+                # (prev_hash GENESIS instead of the parent's hash).
+                lock_exclusive(token.lock_file, timeout=_FILE_LOCK_TIMEOUT_S)
             except Exception as exc:
                 # Degrade to the process lock only (same policy as the Redis
                 # SQLite write lock): a missing/unlockable file must not take
@@ -152,7 +159,11 @@ def _release_chain_lock(session: Session, _transaction: Any) -> None:
     try:
         if token.lock_file is not None:
             try:
-                token.lock_file.close()  # closing releases the flock
+                unlock(token.lock_file)
+            except Exception:
+                pass
+            try:
+                token.lock_file.close()
             except Exception:
                 pass
     finally:
