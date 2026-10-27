@@ -256,7 +256,10 @@ def test_metal_corrosion_is_not_inferred_from_ph_or_ingredients():
 
 
 def test_oxidizer_ingredient_requires_a_test():
-    r = mix((20, [H("oxidizing_liquid", "2")]))
+    # Non-aqueous on purpose: the default water filler would make this
+    # mixture water-dominant, and G3 aqueous suppression then drops exactly
+    # this screening gap (pinned in test_ghs_regulations_g2.py).
+    r = mix((20, [H("oxidizing_liquid", "2")]), (80, []))
     assert cats(r, "oxidizing_liquid") == []
     assert any(g.code == "physical_test_required:oxidizing_liquid" and g.severity == "blocking" for g in r.data_gaps)
 
