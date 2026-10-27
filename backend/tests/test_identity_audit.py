@@ -58,8 +58,10 @@ def test_project_roles_only_apply_in_their_project():
     assert not p.can("formulation.write")
     with pytest.raises(rbac.PermissionDenied, match="formulation.write in project proj-b"):
         rbac.require(p, "formulation.write", "proj-b")
-    with pytest.raises(KeyError):
-        p.can("formulation.typo")
+    # W0: unknown permissions fail closed (False -> 403), never KeyError -> 500.
+    assert p.can("formulation.typo") is False
+    with pytest.raises(rbac.PermissionDenied, match="formulation.typo"):
+        rbac.require(p, "formulation.typo")
 
 
 def test_global_role_applies_everywhere():

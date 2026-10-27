@@ -95,7 +95,7 @@ def test_approve_then_call(tmp_data, monkeypatch):
         ],
     )
 
-    def fake_call(server_id, tool_name, arguments=None):
+    def fake_call(server_id, tool_name, arguments=None, **kwargs):
         called["ok"] = True
         return {"ok": True, "result": {"content": "done"}}
 

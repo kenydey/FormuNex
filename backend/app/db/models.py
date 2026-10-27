@@ -1064,8 +1064,11 @@ class McpToolPolicyRow(Base):
 class McpApprovalRequestRow(Base):
     """MCP 逐工具审批挂起请求（Phase 2D 2-24：从独立 SQLite 文件迁入主库）。
 
-    ``requested_at`` / ``decided_at`` are monotonic-clock seconds (the ask
-    timeout is measured on the monotonic clock, not wall time).
+    ``requested_at`` / ``decided_at`` are wall-clock seconds (``time.time()``)
+    since W0 (2026-10-27): the monotonic clock resets on reboot, which made
+    pre-restart pending rows unexpirable. Rows written before W0 carry
+    monotonic timestamps and therefore compute a huge age — they are treated
+    as expired wherever an age is checked, never resurrected.
     """
 
     __tablename__ = "mcp_approval_requests"

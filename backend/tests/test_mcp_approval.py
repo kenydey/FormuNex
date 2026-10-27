@@ -83,10 +83,11 @@ def test_ask_timeout_auto_deny(sf):
 
 
 def test_decide_allow_then_call_permitted(sf):
-    v = mcp_approval.evaluate_call(SID, TOOL, session_factory=sf, now=1000.0)
+    # W0: a session-scoped allow only applies to calls carrying that session.
+    v = mcp_approval.evaluate_call(SID, TOOL, session_id="s1", session_factory=sf, now=1000.0)
     r = mcp_approval.decide_approval(v["request_id"], "allow", scope="session", session_factory=sf, now=1100.0)
     assert r["ok"] is True
-    assert mcp_approval.evaluate_call(SID, TOOL, session_factory=sf, now=1200.0)["verdict"] == "allow"
+    assert mcp_approval.evaluate_call(SID, TOOL, session_id="s1", session_factory=sf, now=1200.0)["verdict"] == "allow"
 
 
 def test_decide_deny_keeps_denying(sf):

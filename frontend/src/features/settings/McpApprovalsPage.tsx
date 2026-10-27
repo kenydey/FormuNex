@@ -3,7 +3,8 @@ import { Alert, App, Button, Space, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
-import { ErrorAlert, errorText } from "@/shared/feedback";
+import { useSession } from "@/app/session";
+import { ErrorAlert, Forbidden, errorText } from "@/shared/feedback";
 import type { McpApprovalItem } from "./types";
 
 export const MCP_PENDING_KEY = ["settings", "mcp-approvals"] as const;
@@ -21,12 +22,14 @@ export function argsPreview(args: Record<string, unknown> | null | undefined, ma
 /** MCP 工具审批中心: tool calls held by the ask policy; undecided requests are auto-denied after 5 minutes. */
 export default function McpApprovalsPage() {
   const { t } = useTranslation();
+  const { me } = useSession();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: MCP_PENDING_KEY,
     queryFn: () => call<{ items: McpApprovalItem[]; total: number }>("GET", "/api/mcp/approvals/pending"),
     refetchInterval: POLL_MS,
+    enabled: !!me,
   });
   const decide = useMutation({
     mutationFn: ({ id, decision, scope }: Decision) => call("POST", `/api/mcp/approvals/${id}/decide`, { decision, scope }),
@@ -36,6 +39,11 @@ export default function McpApprovalsPage() {
     onSettled: () => void qc.invalidateQueries({ queryKey: MCP_PENDING_KEY }),
   });
   const busy = (id: number) => decide.isPending && decide.variables?.id === id;
+  // W0: deciding is a personal action (current_user + attribution on the backend;
+  // the backend list is already filtered to the caller's decidable requests).
+  // There is no MCP permission code, so the page gate is login, not a permission.
+  // The gate sits after all hooks (rules of hooks: no early return above).
+  if (!me) return <Forbidden permission="登录" />;
   return (
     <PageContainer title={t("settings.mcp.title", "MCP 工具审批")}>
       <Alert type="info" showIcon style={{ marginBottom: 12 }}

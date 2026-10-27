@@ -21,21 +21,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_WRITEISH = frozenset(
-    {
-        "write",
-        "delete",
-        "remove",
-        "unlink",
-        "update",
-        "create",
-        "put",
-        "post",
-        "exec",
-        "shell",
-        "run",
-    }
-)
+# W0 (2026-10-27): write classification is NO LONGER a name wordlist. The old
+# ``_WRITEISH`` substring match both missed destructive tools (purge, truncate,
+# drop, rename, publish, ...) and misfired on read-only names containing "run".
+# Classification now follows the tool's own metadata (MCP ``annotations``):
+# ``readOnlyHint=true`` is read; ``destructiveHint=true`` (or an explicit
+# ``readOnlyHint=false``) is write; anything undeclared — no descriptor, no
+# annotations, no hints — is write-class by default (default-deny: it needs an
+# explicit session grant and never executes freely).
+_TOOL_ANNOTATIONS_KEY = "annotations"
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +139,28 @@ def save_mcp_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return cleaned
 
 
-def _is_writeish(name: str) -> bool:
-    n = (name or "").lower()
-    return any(tok in n for tok in _WRITEISH)
+def classify_tool(tool_name: str, annotations: dict | None = None) -> str:
+    """Classify a tool from its metadata: "read", "write", or "unknown".
+
+    ``readOnlyHint=true`` → read. ``destructiveHint=true`` or an explicit
+    ``readOnlyHint=false`` → write. Anything else (no annotations, no hints)
+    → unknown, which callers treat as write-class (default-deny).
+    """
+    ann = annotations if isinstance(annotations, dict) else {}
+    if ann.get("readOnlyHint") is True:
+        return "read"
+    if ann.get("destructiveHint") is True or ann.get("readOnlyHint") is False:
+        return "write"
+    return "unknown"
+
+
+def is_writeish_tool(tool_name: str, annotations: dict | None = None) -> bool:
+    """True when the tool needs a session grant: write, or undeclared.
+
+    Kept under its old name for the chat path; the semantics changed in W0 from
+    "name looks write-like" to "not provably read-only from metadata".
+    """
+    return classify_tool(tool_name, annotations) != "read"
 
 
 def _sleep(seconds: float) -> None:
@@ -673,11 +686,15 @@ def probe_server(
             name = str(t["name"])
             names.append(name)
             schema = t.get("inputSchema")
+            ann = t.get("annotations")
             descriptors.append(
                 {
                     "name": name,
                     "description": str(t.get("description") or ""),
                     "inputSchema": schema if isinstance(schema, dict) else {},
+                    # W0: annotations carry the read/write declaration used by
+                    # classify_tool; dropping them would force default-deny.
+                    "annotations": ann if isinstance(ann, dict) else {},
                 }
             )
         return {"ok": True, "tools": descriptors, "names": names, "error": None}
@@ -696,8 +713,30 @@ def probe_server(
         }
 
 
-def is_writeish_tool(tool_name: str) -> bool:
-    return _is_writeish(tool_name)
+def get_tool_annotations(
+    server_id: str, tool_name: str, *, descriptors: list[dict] | None = None
+) -> dict | None:
+    """The ``annotations`` of one tool, or None when undeclared / unlistable.
+
+    ``descriptors`` (a tools/list result) avoids a second round trip; otherwise
+    the server is probed. None is NOT "read" — callers treat it as write-class.
+    """
+    tools = descriptors
+    if tools is None:
+        server = next((s for s in _prefs_servers() if s.get("id") == server_id and s.get("enabled")), None)
+        if server is None:
+            return None
+        probed = probe_server(server)
+        if not isinstance(probed, dict) or not probed.get("ok"):
+            return None
+        tools = probed.get("tools")
+    if not tools:
+        return None
+    for t in tools:
+        if isinstance(t, dict) and str(t.get("name")) == tool_name:
+            ann = t.get("annotations")
+            return ann if isinstance(ann, dict) else {}
+    return None
 
 
 def _approval_gate(
@@ -706,6 +745,8 @@ def _approval_gate(
     *,
     settings: Any = None,
     arguments: dict[str, Any] | None = None,
+    session_id: str | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any] | None:
     """W2-7 MCP 逐工具审批门禁。返回 None 表示放行，否则返回 error dict。
 
@@ -727,7 +768,8 @@ def _approval_gate(
     try:
         from .mcp_approval import evaluate_call
 
-        verdict = evaluate_call(server_id, tool_name, arguments=arguments)
+        verdict = evaluate_call(server_id, tool_name, arguments=arguments,
+                                session_id=session_id, project_id=project_id)
     except Exception:  # noqa: BLE001
         logger.exception("MCP 审批模块异常，按 ask(deny) 处理：%s/%s", server_id, tool_name)
         return {
@@ -759,10 +801,18 @@ def call_tool_readonly(
     arguments: dict[str, Any] | None = None,
     *,
     settings: Any = None,
+    session_id: str | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
+    """Readonly entry point (``POST /api/connectors/mcp/call``).
+
+    Only provably read-only tools (``readOnlyHint=true``) execute here. Write
+    tools — and undeclared tools, which default to write-class — are denied
+    and must go through the session-granted path.
+    """
     if settings is not None and not settings.mcp_client_enabled:
         return {"ok": False, "error": "mcp_client_enabled is off"}
-    if _is_writeish(tool_name):
+    if is_writeish_tool(tool_name, get_tool_annotations(server_id, tool_name)):
         return {
             "ok": False,
             "error": f"write-like tool denied: {tool_name}",
@@ -771,7 +821,8 @@ def call_tool_readonly(
                 "tool_name": tool_name,
             },
         }
-    return _call_tool(server_id, tool_name, arguments)
+    return _call_tool(server_id, tool_name, arguments, settings=settings,
+                     is_write=False, session_id=session_id, project_id=project_id)
 
 
 def call_tool_with_session(
@@ -781,11 +832,25 @@ def call_tool_with_session(
     *,
     session_id: str | None = None,
     settings: Any = None,
+    descriptors: list[dict] | None = None,
 ) -> dict[str, Any]:
-    """Call tool; writeish requires prior session grant via approve-session."""
+    """Call tool; write-class requires a prior session grant via approve-session.
+
+    Write-class = declared write OR undeclared (default-deny). Read tools skip
+    the grant check but still pass the approval gate inside ``_call_tool``.
+    """
     if settings is not None and not settings.mcp_client_enabled:
         return {"ok": False, "error": "mcp_client_enabled is off"}
-    if _is_writeish(tool_name):
+    annotations = None
+    if descriptors is not None:
+        for t in descriptors:
+            if isinstance(t, dict) and str(t.get("name")) == tool_name:
+                annotations = t.get("annotations") if isinstance(t.get("annotations"), dict) else {}
+                break
+    else:
+        annotations = get_tool_annotations(server_id, tool_name)
+    is_write = is_writeish_tool(tool_name, annotations)
+    if is_write:
         from .mcp_session_grants import is_granted
 
         if not session_id or not is_granted(session_id, server_id, tool_name):
@@ -798,7 +863,8 @@ def call_tool_with_session(
                     "session_id": session_id,
                 },
             }
-    return _call_tool(server_id, tool_name, arguments)
+    return _call_tool(server_id, tool_name, arguments, settings=settings,
+                     is_write=is_write, session_id=session_id)
 
 
 def _call_tool(
@@ -807,14 +873,23 @@ def _call_tool(
     arguments: dict[str, Any] | None = None,
     *,
     settings: Any = None,
+    is_write: bool = False,
+    session_id: str | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
-    gate = _approval_gate(server_id, tool_name, settings=settings, arguments=arguments)
+    gate = _approval_gate(server_id, tool_name, settings=settings, arguments=arguments,
+                          session_id=session_id, project_id=project_id)
     if gate is not None:
         return gate
     server = next((s for s in _prefs_servers() if s.get("id") == server_id and s.get("enabled")), None)
     if not server:
         return {"ok": False, "error": "server not found or disabled"}
-    retries, backoff_s = _retry_params(settings)
+    # W0: write tools are NEVER retried. A generic MCP server offers no
+    # idempotency key and no read-back, so a timeout after server-side
+    # execution cannot be distinguished from a never-executed call — a retry
+    # would silently re-execute a non-idempotent write. The timeout surfaces
+    # as an error and the caller decides; reads keep the configured retries.
+    retries, backoff_s = (0, 0.0) if is_write else _retry_params(settings)
 
     def _call_once() -> Any:
         sess = _acquire_session(server)

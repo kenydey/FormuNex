@@ -21,12 +21,22 @@ from app.services import mcp_approval
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
+    from app.api._principal import CurrentUser, current_user
+    from app.services.identity.rbac import Principal
+
     engine = make_engine(f"sqlite:///{tmp_path}/mcp_args.db")
     Base.metadata.create_all(engine)
     sf = make_session_factory(engine)
     monkeypatch.setattr(mcp_approval, "_session_factory", lambda _sf=None: sf)
     app = FastAPI()
     app.include_router(router)
+    # W0: list/decide require current_user; the bare app has no auth stack,
+    # so override the dependency with an admin principal (sees everything).
+    admin = CurrentUser(
+        id="admin", username="admin", display_name="admin", session_id="s",
+        principal=Principal("admin", frozenset({"admin.connectors"}), {}),
+    )
+    app.dependency_overrides[current_user] = lambda: admin
     yield TestClient(app, raise_server_exceptions=False), sf
     engine.dispose()
 
@@ -42,7 +52,7 @@ def test_redact_arguments_recursive():
 
 def test_pending_includes_redacted_arguments(client):
     c, sf = client
-    mcp_approval.evaluate_call("srv", "write_file", now=time.monotonic(),
+    mcp_approval.evaluate_call("srv", "write_file", now=time.time(),
                                arguments={"path": "/tmp/a.txt", "secret": "s3cr3t", "headers": {"Authorization": "x"}})
     items = c.get("/api/mcp/approvals/pending").json()["items"]
     assert len(items) == 1
@@ -53,12 +63,14 @@ def test_pending_includes_redacted_arguments(client):
         assert "s3cr3t" not in (row.arguments_json or "")
 
 
-def test_retry_updates_arguments_and_none_when_absent(client):
+def test_retry_keeps_original_arguments_and_none_when_absent(client):
+    # W0: a later call never overwrites a still-pending request's arguments —
+    # the approver decides the original call, not a replaced one.
     c, _sf = client
-    now = time.monotonic()
+    now = time.time()
     mcp_approval.evaluate_call("srv", "t1", now=now, arguments={"q": "first"})
     mcp_approval.evaluate_call("srv", "t1", now=now, arguments={"q": "second"})
     mcp_approval.evaluate_call("srv", "t2", now=now)
     items = {i["tool_name"]: i for i in c.get("/api/mcp/approvals/pending").json()["items"]}
-    assert items["t1"]["arguments"] == {"q": "second"}
+    assert items["t1"]["arguments"] == {"q": "first"}
     assert items["t2"]["arguments"] is None

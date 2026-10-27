@@ -7,7 +7,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const call = vi.fn();
 vi.mock("@/api/client", () => ({ call: (...a: unknown[]) => call(...a), ApiError: class extends Error {} }));
 let perms: string[] = ["admin.llm"];
-vi.mock("@/app/session", () => ({ useSession: () => ({ can: (p: string) => perms.includes(p) }) }));
+let me: unknown = { id: "u1", username: "u1", permissions: [], project_permissions: {} };
+vi.mock("@/app/session", () => ({ useSession: () => ({ me, can: (p: string) => perms.includes(p) }) }));
 
 import SettingsPage from "./SettingsPage";
 import McpApprovalsPage from "./McpApprovalsPage";
@@ -36,6 +37,7 @@ function renderAt(path: string) {
 
 beforeEach(() => {
   perms = ["admin.llm"];
+  me = { id: "u1", username: "u1", permissions: [], project_permissions: {} };
   call.mockReset();
   call.mockImplementation(async (_m: string, path: string) => {
     if (path === "/api/settings") return LLM;
@@ -91,5 +93,12 @@ describe("McpApprovalsPage", () => {
     expect(screen.getByText("path=/etc/x, api_key=***")).toBeInTheDocument();
     screen.getByRole("button", { name: /允许一次/ }).click();
     await waitFor(() => expect(call).toHaveBeenCalledWith("POST", "/api/mcp/approvals/7/decide", { decision: "allow", scope: "once" }));
+  });
+
+  it("shows Forbidden when logged out (W0: deciding is a personal action)", async () => {
+    me = null;
+    renderAt("/admin/mcp-approvals");
+    expect(await screen.findByText("403")).toBeInTheDocument();
+    expect(call.mock.calls.filter((c) => c[1] === "/api/mcp/approvals/pending")).toHaveLength(0);
   });
 });

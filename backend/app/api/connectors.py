@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..services import connectors_builtin, mcp_client, mcp_import
+from ._principal import CurrentUser, current_user
 from ._uploads import read_upload_capped
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
@@ -36,6 +37,11 @@ class McpCallRequest(BaseModel):
     server_id: str
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    # Attribution for the approval gate: the chat session / project this call
+    # runs in. Carried into the pending request so only its owner/project may
+    # decide it. Absent attribution stays admin-only at decide time.
+    session_id: str | None = None
+    project_id: str | None = None
 
 
 class McpImportJsonBody(BaseModel):
@@ -215,6 +221,8 @@ def call_mcp(body: McpCallRequest) -> dict:
         body.tool_name,
         body.arguments,
         settings=settings,
+        session_id=body.session_id,
+        project_id=body.project_id,
     )
 
 
@@ -224,20 +232,77 @@ class McpApproveSessionBody(BaseModel):
     until_session_end: bool = True
 
 
+def _audit_session_grant(user: CurrentUser, action: str, server_id: str, body: McpApproveSessionBody) -> None:
+    """Hash-chain audit for a session-grant decision, in its own transaction."""
+    from ..db.database import default_session_factory
+    from ..services.audit import hash_chain
+
+    with default_session_factory()() as session:
+        hash_chain.append(
+            session, actor=user.id, action=action, entity_type="mcp_session_grant",
+            entity_id=f"{server_id}:{body.session_id}",
+            detail={"server_id": server_id, "session_id": body.session_id, "tool_name": body.tool_name},
+        )
+        session.commit()
+
+
 @router.post("/mcp/{server_id}/approve-session")
-def approve_mcp_session(server_id: str, body: McpApproveSessionBody) -> dict:
-    """Grant writeish MCP tools for one chat session (not global permanent)."""
+def approve_mcp_session(server_id: str, body: McpApproveSessionBody,
+                        user: CurrentUser = Depends(current_user)) -> dict:
+    """Grant writeish MCP tools for one chat session (not global permanent).
+
+    Personal action: the grant is bound to the granting login (owner), expires
+    (24 h for session grants, 1 h otherwise), and is hash-chain audited.
+    """
     settings = get_settings()
     if not settings.mcp_client_enabled:
         raise HTTPException(status_code=503, detail="mcp_client_enabled is off")
-    from ..services.mcp_session_grants import approve_session
+    from ..services.mcp_session_grants import approve_session, revoke_session
 
     try:
-        return approve_session(
+        result = approve_session(
             body.session_id,
             server_id,
             tool_name=body.tool_name,
             until_session_end=body.until_session_end,
+            owner_user_id=user.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        _audit_session_grant(user, "mcp.session.granted", server_id, body)
+    except Exception:
+        # Fail-closed: a grant without its audit row must not stand.
+        revoke_session(body.session_id, server_id, tool_name=body.tool_name,
+                       owner_user_id=user.id, is_admin=True)
+        raise HTTPException(status_code=500, detail="mcp session audit failed; grant revoked") from None
+    return result
+
+
+class McpRevokeSessionBody(BaseModel):
+    session_id: str = Field(min_length=1, max_length=80)
+    tool_name: str | None = Field(default=None, max_length=120)
+
+
+@router.post("/mcp/{server_id}/revoke-session")
+def revoke_mcp_session(server_id: str, body: McpRevokeSessionBody,
+                       user: CurrentUser = Depends(current_user)) -> dict:
+    """Revoke a chat session's MCP write grant(s). Owner-or-admin only."""
+    from ..services.mcp_session_grants import revoke_session
+
+    try:
+        result = revoke_session(
+            body.session_id,
+            server_id,
+            tool_name=body.tool_name,
+            owner_user_id=user.id,
+            is_admin=user.principal.can("admin.connectors"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not result.get("ok"):
+        raise HTTPException(status_code=403, detail=result.get("error", "not_authorized"))
+    if result.get("revoked"):
+        _audit_session_grant(user, "mcp.session.revoked", server_id,
+                             McpApproveSessionBody(session_id=body.session_id, tool_name=body.tool_name))
+    return result

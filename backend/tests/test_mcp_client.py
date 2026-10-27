@@ -197,6 +197,8 @@ def test_probe_server_returns_descriptors_and_retries(fake_session):
                 "required": ["q"],
                 "properties": {"q": {"type": "string"}},
             },
+            # W0: probe keeps annotations for the read/write classification.
+            "annotations": {},
         }
     ]
     assert state["calls"] == 2  # 首次超时后重试成功
@@ -432,3 +434,72 @@ def test_a_failed_handshake_reaps_the_server_process(monkeypatch):
         assert spawned and spawned[0]._proc is None  # closed
     finally:
         mcp_client._reset_client_cache()
+
+
+# ---------------------------------------------------------------------------
+# W0 (2026-10-27): write classification from tool metadata + default-deny,
+# and no retries for write tools.
+# ---------------------------------------------------------------------------
+
+
+def test_classify_tool_from_annotations():
+    assert mcp_client.classify_tool("anything", {"readOnlyHint": True}) == "read"
+    assert mcp_client.classify_tool("anything", {"destructiveHint": True}) == "write"
+    assert mcp_client.classify_tool("anything", {"readOnlyHint": False}) == "write"
+    assert mcp_client.classify_tool("anything", {}) == "unknown"
+    assert mcp_client.classify_tool("anything", None) == "unknown"
+    # Undeclared tools are write-class: they need a session grant.
+    assert mcp_client.is_writeish_tool("purge_cache", {}) is True
+    assert mcp_client.is_writeish_tool("search", {"readOnlyHint": True}) is False
+
+
+def test_get_tool_annotations_from_stubbed_probe(monkeypatch):
+    monkeypatch.setattr(
+        mcp_client, "_prefs_servers",
+        lambda: [{"id": "s1", "command": "true", "args": [], "enabled": True, "env": {}, "transport": "stdio"}],
+    )
+    monkeypatch.setattr(
+        mcp_client, "probe_server",
+        lambda s: {"ok": True, "tools": [
+            {"name": "search", "annotations": {"readOnlyHint": True}},
+            {"name": "purge_cache", "annotations": {}},
+        ], "names": ["search", "purge_cache"]},
+    )
+    assert mcp_client.get_tool_annotations("s1", "search") == {"readOnlyHint": True}
+    assert mcp_client.get_tool_annotations("s1", "purge_cache") == {}
+    assert mcp_client.get_tool_annotations("s1", "nope") is None
+
+
+def _enabled_settings():
+    s = _settings()
+    s.mcp_client_enabled = True
+    s.mcp_approval_enabled = False
+    return s
+
+
+def test_readonly_denies_wordlist_outside_destructive_tools(monkeypatch):
+    """purge/truncate/drop/rename/... used to sail through the readonly path:
+    the old name wordlist did not contain them. Now undeclared == write-class."""
+    monkeypatch.setattr(mcp_client, "get_tool_annotations", lambda *a, **k: {})
+    for name in ("purge_cache", "truncate_table", "drop_index", "rename_file",
+                 "publish_release", "send_message", "format_disk"):
+        out = mcp_client.call_tool_readonly("s1", name, {}, settings=_enabled_settings())
+        assert out["ok"] is False and out.get("mcp_permission_required"), name
+
+
+def test_readonly_allows_declared_read(fake_session, monkeypatch):
+    monkeypatch.setattr(mcp_client, "get_tool_annotations",
+                        lambda *a, **k: {"readOnlyHint": True})
+    planner, state, sleeps = fake_session
+    planner.plan([{"content": [{"text": "42"}]}])
+    out = mcp_client.call_tool_readonly("s1", "search", {}, settings=_enabled_settings())
+    assert out["ok"] is True and state["calls"] == 1
+
+
+def test_call_tool_write_never_retried(fake_session):
+    planner, state, sleeps = fake_session
+    planner.plan([TimeoutError("slow"), {"content": [{"text": "42"}]}])
+    out = mcp_client._call_tool("s1", "write_file", {}, settings=_settings(), is_write=True)
+    assert out["ok"] is False
+    assert state["calls"] == 1  # no replay of a possibly-executed write
+    assert sleeps == []

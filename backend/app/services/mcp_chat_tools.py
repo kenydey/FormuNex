@@ -59,13 +59,20 @@ def maybe_run_selected_mcp(
         except json.JSONDecodeError:
             args = {}
 
-    # Prefer probing to validate tool exists (soft)
+    # Prefer probing to validate tool exists (soft); the probe's descriptors also
+    # carry the read/write annotations used for the grant check below.
+    descriptors: list | None = None
     try:
-        probe_server(enabled[sid])
+        probed = probe_server(enabled[sid])
+        if isinstance(probed, dict) and probed.get("ok"):
+            descriptors = probed.get("tools")
     except Exception:  # noqa: BLE001
         pass
 
-    if is_writeish_tool(tool):
+    if is_writeish_tool(tool, next(
+            (t.get("annotations") if isinstance(t, dict) else None
+             for t in (descriptors or []) if isinstance(t, dict) and t.get("name") == tool),
+            None)):
         from .mcp_session_grants import is_granted
 
         if not session_id or not is_granted(session_id, sid, tool):
@@ -80,7 +87,7 @@ def maybe_run_selected_mcp(
             }
 
     result = call_tool_with_session(
-        sid, tool, args, session_id=session_id, settings=settings
+        sid, tool, args, session_id=session_id, settings=settings, descriptors=descriptors
     )
     if result.get("mcp_permission_required"):
         return {"results": [], "mcp_permission_required": result["mcp_permission_required"]}

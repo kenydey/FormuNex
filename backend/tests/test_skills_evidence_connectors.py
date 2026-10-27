@@ -8,7 +8,7 @@ from app.main import app
 from app.services.scholar_helpers import extract_dois, verify_dois
 from app.services.chat_skills import list_chat_skills, skill_prompt_block
 from app.services.evidence_synthesis import enrich_chat_prompt, LITERATURE_DISCIPLINE
-from app.services.mcp_client import _is_writeish
+from app.services.mcp_client import classify_tool, is_writeish_tool
 
 
 def _client(tmp_path, monkeypatch):
@@ -76,10 +76,16 @@ def test_extract_and_verify_dois_offline():
     assert all(r["status"] == "skipped" for r in rows)
 
 
-def test_mcp_writeish_heuristic():
-    assert _is_writeish("write_file")
-    assert _is_writeish("shell_exec")
-    assert not _is_writeish("search_papers")
+def test_mcp_write_classification_is_metadata_not_name():
+    # W0: the old name wordlist is gone. Classification follows the tool's own
+    # annotations; undeclared tools default to write-class (default-deny),
+    # whatever their name looks like.
+    assert classify_tool("write_file", {"destructiveHint": True}) == "write"
+    assert classify_tool("shell_exec", {"readOnlyHint": False}) == "write"
+    assert classify_tool("search_papers", {"readOnlyHint": True}) == "read"
+    assert classify_tool("search_papers", None) == "unknown"
+    assert is_writeish_tool("search_papers", None) is True
+    assert is_writeish_tool("search_papers", {"readOnlyHint": True}) is False
 
 
 def test_connectors_list(tmp_path, monkeypatch):

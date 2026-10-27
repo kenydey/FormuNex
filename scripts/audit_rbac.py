@@ -26,10 +26,52 @@ sys.path.insert(0, str(ROOT / "backend"))
 WRITE = {"POST", "PUT", "PATCH", "DELETE"}
 
 
+def _permission_atoms() -> set[str]:
+    """Every permission code the guard tables can hand to ``Principal.can``.
+
+    W0 (P0-2's survival cause): the audit used to count layers but never
+    checked that the permission strings themselves exist in the catalogue, so
+    ``chemical.read`` / ``plm.document.read`` shipped unmapped and every JWT
+    call to those routes died with 500 (KeyError, no handler). A code that is
+    not in ``PERMISSIONS`` now fails this audit instead of production.
+    """
+    import re
+
+    from app.api import _admin_guard as admin_guard_mod
+    from app.api import _rbac_guard as rbac
+    from app.services.identity.rbac import PERMISSIONS
+
+    atoms: set[str] = set()
+    for _pattern, permission in rbac._RULES:
+        atoms.add(permission)
+    for _pattern, permission in rbac._SENSITIVE_READS:
+        atoms.add(permission)
+    for _pattern, permission, _exempt in admin_guard_mod._RULES:
+        atoms.add(permission)
+    # ENDPOINT_ENFORCED notes are free text ("a OR b", "ownership (...)"): only
+    # dotted tokens can be permission codes; the rest is prose by construction.
+    for _pattern, note in rbac.ENDPOINT_ENFORCED:
+        atoms.update(re.findall(r"[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+", note))
+    for _pattern, note in rbac.ENDPOINT_SENSITIVE_READS:
+        atoms.update(re.findall(r"[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+", note))
+    unknown = sorted(atoms - set(PERMISSIONS))
+    if unknown:
+        print(f"UNKNOWN permission atoms ({len(unknown)}):")
+        for u in unknown:
+            print(f"  {u}")
+        print("RBAC audit: FAIL — guard tables reference permissions outside PERMISSIONS")
+        return None
+    return atoms
+
+
 def main() -> int:
     from app.api import _admin_guard as admin_guard_mod
     from app.api import _rbac_guard as rbac
     from app.main import app
+
+    if _permission_atoms() is None:
+        return 1
+    print("permission atoms: all in PERMISSIONS")
 
     openapi = app.openapi()
     uncovered: list[str] = []

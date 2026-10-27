@@ -26,6 +26,7 @@ _RULES: list[tuple[re.Pattern[str], str, tuple[re.Pattern[str], ...]]] = [
         re.compile(r"^/api/connectors/builtin/[^/]+/search$"),
         re.compile(r"^/api/connectors/mcp/call$"),
         re.compile(r"^/api/connectors/mcp/[^/]+/approve-session$"),
+        re.compile(r"^/api/connectors/mcp/[^/]+/revoke-session$"),
     )),
 ]
 

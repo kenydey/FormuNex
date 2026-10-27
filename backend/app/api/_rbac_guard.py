@@ -14,10 +14,11 @@ sensitive reads, via four layers (exactly one per route — see
    cannot express (lab amend, signoff approve, label-templates), or where the
    check is ownership rather than a permission (task cancel).
 4. Policy-exempt (``POLICY_EXEMPT``): routes that deliberately need no
-   permission — auth flows (they establish the session), the conversational
-   interface (chat / session-plans / session save), and per-session safety
-   decisions (MCP approve / decide). Documented here so the audit can verify
-   the exemption is intentional, not a gap.
+   permission — auth flows (they establish the session) and the conversational
+   interface (chat / session-plans / session save). MCP approve-session /
+   revoke-session / decide used to sit here; they are personal actions now and
+   live in ``ENDPOINT_ENFORCED`` instead. Documented here so the audit can
+   verify the exemption is intentional, not a gap.
 
 Semantics (mirroring ``admin_guard``):
 - Reads (GET / HEAD / OPTIONS) are never blocked here, except the sensitive
@@ -178,6 +179,16 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/plm/formula-mappings(/|$)"), "plm.document.write (import) OR formulation.freeze (create-revision)"),
     # Task cancel — ownership (assert_owner), not a permission.
     (re.compile(r"^/api/tasks/[^/]+/cancel$"), "ownership (assert_owner)"),
+    # G7 Excel imports — already endpoint-enforced (user.require in plm.py),
+    # only never registered here; the audit flagged them as uncovered.
+    (re.compile(r"^/api/plm/import/(formulas|companies)$"), "plm.document.write"),
+    # MCP approval decision — the endpoint itself enforces current_user plus
+    # session/project attribution (admin.connectors for global scope).
+    (re.compile(r"^/api/mcp/approvals/[^/]+/decide$"), "mcp approval (current_user + attribution)"),
+    # MCP session grant / revoke — per-chat personal actions; the endpoint
+    # itself enforces current_user plus owner-or-admin.
+    (re.compile(r"^/api/connectors/mcp/[^/]+/approve-session$"), "mcp session grant (current_user + owner)"),
+    (re.compile(r"^/api/connectors/mcp/[^/]+/revoke-session$"), "mcp session revoke (current_user + owner/admin)"),
 ]
 
 # Endpoint-enforced sensitive reads (the endpoint itself calls require()).
@@ -195,12 +206,11 @@ POLICY_EXEMPT: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/chat(/|$)"), "conversational interface"),
     (re.compile(r"^/api/session-plans(/|$)"), "conversational session state"),
     (re.compile(r"^/api/session(/|$)"), "conversational session state"),
-    # Per-session safety decisions (same class as admin_guard's approve-session).
-    (re.compile(r"^/api/mcp/approvals/[^/]+/decide$"), "per-session safety decision"),
     # admin_guard exemptions (per-chat actions every user takes while working).
     (re.compile(r"^/api/connectors/builtin/[^/]+/search$"), "admin_guard exempt: per-chat search"),
     (re.compile(r"^/api/connectors/mcp/call$"), "admin_guard exempt: approved MCP tool call"),
-    (re.compile(r"^/api/connectors/mcp/[^/]+/approve-session$"), "admin_guard exempt: per-chat approval"),
+    # NOTE: approve-session / revoke-session / decide are NOT exempt: they are
+    # endpoint-enforced (current_user + ownership) in ENDPOINT_ENFORCED above.
 ]
 
 

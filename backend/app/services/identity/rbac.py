@@ -31,7 +31,9 @@ PERMISSIONS: dict[str, str] = {
     "lab.review": "复核测量值",
     "regulatory.read": "查看法规数据与分类结果",
     "regulatory.review": "复核并锁定物质法规数据",
+    "chemical.read": "化学计算（结构识别、物质富集等纯计算，不落库）",
     "plm.document.write": "编制 SDS / TDS / 标签",
+    "plm.document.read": "渲染预览 SDS / TDS / 标签（纯渲染，不落库）",
     "plm.document.review": "审核 SDS / TDS / 标签",
     "qc.write": "录入批次质检结果",
     "coa.sign": "签发 COA",
@@ -68,27 +70,30 @@ BUILTIN_ROLES: tuple[RoleDef, ...] = (
     _role("rd_engineer", "研发工程师", "R&D Engineer", [
         "knowledge.read", "knowledge.write", "project.write", "spec.read", "formulation.read", "formulation.read_exact",
         "formulation.write", "doe.write", "optimize.run", "lab.execute", "regulatory.read",
-        "plm.document.write",
+        "chemical.read", "plm.document.write", "plm.document.read",
     ]),
     _role("project_lead", "项目负责人", "Project Lead", [
         "knowledge.read", "knowledge.write", "project.write", "spec.read", "spec.write", "formulation.read",
         "formulation.read_exact", "formulation.write", "formulation.freeze", "doe.write", "optimize.run",
-        "lab.execute", "lab.review", "regulatory.read", "plm.document.write", "release.submit",
+        "lab.execute", "lab.review", "regulatory.read", "chemical.read",
+        "plm.document.write", "plm.document.read", "release.submit",
         "release.sign",
     ]),
     _role("lab_technician", "实验员", "Lab Technician", [
-        "knowledge.read", "spec.read", "formulation.read", "lab.execute",
+        "knowledge.read", "spec.read", "formulation.read", "lab.execute", "chemical.read",
     ]),
     _role("ehs_regulatory", "EHS/法规专员", "EHS / Regulatory", [
         "knowledge.read", "spec.read", "formulation.read", "formulation.read_exact", "regulatory.read",
-        "regulatory.review", "plm.document.write", "plm.document.review", "release.sign",
+        "regulatory.review", "chemical.read", "plm.document.write", "plm.document.read", "plm.document.review",
+        "release.sign",
     ]),
     _role("quality", "质量", "Quality", [
         "knowledge.read", "spec.read", "formulation.read", "lab.review", "regulatory.read", "qc.write",
-        "coa.sign", "plm.document.review", "release.sign",
+        "coa.sign", "chemical.read", "plm.document.read", "plm.document.review", "release.sign",
     ]),
     _role("release_manager", "发布管理员", "Release Manager", [
-        "knowledge.read", "spec.read", "formulation.read", "regulatory.read", "plm.document.review",
+        "knowledge.read", "spec.read", "formulation.read", "regulatory.read", "chemical.read",
+        "plm.document.read", "plm.document.review",
         "release.sign", "release.publish", "release.withdraw", "audit.read",
     ]),
     _role("sys_admin", "系统管理员", "System Administrator", [
@@ -97,7 +102,10 @@ BUILTIN_ROLES: tuple[RoleDef, ...] = (
         # could log in and then get 403 on every retrieval call. Business-data
         # permissions (formulation.*, spec.*, doe.*, release.*) stay out on purpose —
         # trade secrets remain segregated by design; grant a second role for those.
-        "knowledge.read",
+        # chemical.read rides with knowledge.read: it is input-only compute, no
+        # business data is exposed. plm.document.read stays out: previews can render
+        # real document content, which is business data.
+        "knowledge.read", "chemical.read",
         "admin.users", "admin.templates", "admin.companies", "admin.llm", "admin.connectors", "audit.read",
     ]),
 )
@@ -116,8 +124,11 @@ class Principal:
     project_permissions: dict[str, frozenset[str]]
 
     def can(self, permission: str, project_id: str | None = None) -> bool:
+        # Fail-closed: an unknown permission string is never granted. (Previously this
+        # raised KeyError, which no handler mapped, so a JWT call to a route whose guard
+        # referenced a missing permission died with 500 instead of 403.)
         if permission not in PERMISSIONS:
-            raise KeyError(f"unknown permission {permission!r}")
+            return False
         if permission in self.global_permissions:
             return True
         if project_id is not None:
@@ -161,14 +172,39 @@ def require(principal: Principal, permission: str, project_id: str | None = None
         raise PermissionDenied(permission, project_id)
 
 
+def validate_role_permissions(role_permissions: dict[str, Iterable[str]]) -> list[str]:
+    """Return the unknown permission strings in a role table.
+
+    There is no API endpoint that creates or edits roles (roles enter the table
+    via ``sync_builtin_roles`` — already validated by :func:`_role` — or via direct
+    database / seed writes), so this is the validation seam: call it wherever a
+    role table is written, and :func:`load_principal` enforces it at load time.
+    """
+    unknown: list[str] = []
+    for code, perms in role_permissions.items():
+        for p in perms:
+            if p not in PERMISSIONS:
+                unknown.append(f"{code}:{p}")
+    return sorted(set(unknown))
+
+
 def load_principal(session, user_id: str) -> Principal:
     """Build a :class:`Principal` from the database (roles table included, so custom
-    roles and edited permission sets apply)."""
+    roles and edited permission sets apply).
+
+    Fail-closed on dirty role rows: permission strings that are not in
+    :data:`PERMISSIONS` (typo'd or deleted codes written directly to the roles
+    table) are dropped, so a later ``can()`` denies with 403 instead of dying
+    with 500.
+    """
     from sqlalchemy import select
 
     from ...db.models_identity import ProjectMemberRow, RoleRow, UserRoleRow
 
-    table = {r.code: list(r.permissions or []) for r in session.execute(select(RoleRow)).scalars()}
+    table = {
+        r.code: [p for p in (r.permissions or []) if p in PERMISSIONS]
+        for r in session.execute(select(RoleRow)).scalars()
+    }
     global_roles = session.execute(
         select(UserRoleRow.role_code).where(UserRoleRow.user_id == user_id)
     ).scalars().all()

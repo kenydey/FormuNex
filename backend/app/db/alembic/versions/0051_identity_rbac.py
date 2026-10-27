@@ -34,36 +34,44 @@ def _has_table(table: str) -> bool:
 # Kept in sync with the live definition by convention: test_identity_audit
 # compares this file's _ROLES against rbac.BUILTIN_ROLES and fails on drift.
 # (Approved exception, 2026-10-19: this file is updated in place when live
-# roles change; existing databases pick the change up via migration 0066.)
+# roles change; existing databases pick the change up via a data migration —
+# 0066 did this for knowledge.read. W0 (2026-10-27) adds chemical.read /
+# plm.document.read here for fresh databases; the matching data migration
+# for already-migrated databases is deliberately NOT created in W0 and must
+# be decided separately — until it lands, existing databases keep the old
+# role rows and need sync_builtin_roles to converge.)
 _ROLES: list[tuple[str, str, str, list[str]]] = [
     ("rd_engineer", "研发工程师", "R&D Engineer", [
         "knowledge.read", "knowledge.write", "project.write", "spec.read", "formulation.read", "formulation.read_exact",
         "formulation.write", "doe.write", "optimize.run", "lab.execute", "regulatory.read",
-        "plm.document.write",
+        "chemical.read", "plm.document.write", "plm.document.read",
     ]),
     ("project_lead", "项目负责人", "Project Lead", [
         "knowledge.read", "knowledge.write", "project.write", "spec.read", "spec.write", "formulation.read",
         "formulation.read_exact", "formulation.write", "formulation.freeze", "doe.write", "optimize.run",
-        "lab.execute", "lab.review", "regulatory.read", "plm.document.write", "release.submit",
+        "lab.execute", "lab.review", "regulatory.read", "chemical.read",
+        "plm.document.write", "plm.document.read", "release.submit",
         "release.sign",
     ]),
     ("lab_technician", "实验员", "Lab Technician", [
-        "knowledge.read", "spec.read", "formulation.read", "lab.execute",
+        "knowledge.read", "spec.read", "formulation.read", "lab.execute", "chemical.read",
     ]),
     ("ehs_regulatory", "EHS/法规专员", "EHS / Regulatory", [
         "knowledge.read", "spec.read", "formulation.read", "formulation.read_exact", "regulatory.read",
-        "regulatory.review", "plm.document.write", "plm.document.review", "release.sign",
+        "regulatory.review", "chemical.read", "plm.document.write", "plm.document.read", "plm.document.review",
+        "release.sign",
     ]),
     ("quality", "质量", "Quality", [
         "knowledge.read", "spec.read", "formulation.read", "lab.review", "regulatory.read", "qc.write",
-        "coa.sign", "plm.document.review", "release.sign",
+        "coa.sign", "chemical.read", "plm.document.read", "plm.document.review", "release.sign",
     ]),
     ("release_manager", "发布管理员", "Release Manager", [
-        "knowledge.read", "spec.read", "formulation.read", "regulatory.read", "plm.document.review",
+        "knowledge.read", "spec.read", "formulation.read", "regulatory.read", "chemical.read",
+        "plm.document.read", "plm.document.review",
         "release.sign", "release.publish", "release.withdraw", "audit.read",
     ]),
     ("sys_admin", "系统管理员", "System Administrator", [
-        "knowledge.read",
+        "knowledge.read", "chemical.read",
         "admin.users", "admin.templates", "admin.companies", "admin.llm", "admin.connectors", "audit.read",
     ]),
 ]
