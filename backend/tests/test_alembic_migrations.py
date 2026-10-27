@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0073(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0073_g6_test_records``)."""
+def test_revision_chain_head_is_0074(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0074_builtin_role_new_permissions``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0073(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0073"
+    assert heads[0] == "0074"
 
 
 def test_migrations_partial_columns_branch(
@@ -542,6 +542,78 @@ def test_migration_0066_sys_admin_knowledge_read(tmp_db_url: str, monkeypatch: p
     run_upgrade(tmp_db_url, monkeypatch, "head")
     run_upgrade(tmp_db_url, monkeypatch, "head")
     assert "knowledge.read" in _sys_admin_perms()
+
+
+def test_migration_0074_builtin_role_new_permissions(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0074 adds W0's ``chemical.read`` / ``plm.document.read`` to the stored
+    built-in role rows (all seven gain ``chemical.read``; only the five
+    business roles gain ``plm.document.read``); downgrade removes exactly
+    those two strings; re-upgrade is idempotent and leaves custom rows
+    untouched.
+
+    (A fresh DB seeds the new permissions already — the 0051 file copy was
+    updated in place to match live — so the old-database path is exercised
+    by downgrading to 0073 first, which strips both strings, then
+    re-upgrading: rows at 0073 without the new permissions are exactly what
+    a pre-W0 database looks like.)
+    """
+    import json
+
+    from tests.alembic_helpers import run_downgrade
+
+    _BUSINESS = ("rd_engineer", "project_lead", "ehs_regulatory", "quality", "release_manager")
+    _ALL = _BUSINESS + ("lab_technician", "sys_admin")
+
+    def _role_perms(code: str) -> list[str]:
+        rows = _fetch_all(
+            tmp_db_url, f"SELECT permissions FROM roles WHERE code='{code}'"
+        )
+        assert rows, f"{code} seed row missing"
+        perms = rows[0][0]
+        return json.loads(perms) if isinstance(perms, str) else list(perms)
+
+    def _assert_upgraded() -> None:
+        for code in _ALL:
+            perms = _role_perms(code)
+            assert "chemical.read" in perms
+            assert perms.count("chemical.read") == 1
+            if code in _BUSINESS:
+                assert "plm.document.read" in perms
+                assert perms.count("plm.document.read") == 1
+            else:
+                assert "plm.document.read" not in perms
+
+    def _assert_downgraded() -> None:
+        for code in _ALL:
+            perms = _role_perms(code)
+            assert "chemical.read" not in perms
+            assert "plm.document.read" not in perms
+
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    _assert_upgraded()
+
+    run_downgrade(tmp_db_url, monkeypatch, "0073")
+    _assert_downgraded()
+
+    # A custom role row present at 0073 must survive the 0074 upgrade untouched.
+    # (created_at is NOT NULL in the migrated DDL, so the row carries one.)
+    _exec(
+        tmp_db_url,
+        "INSERT INTO roles (code, name_zh, name_en, permissions, builtin, created_at) "
+        "VALUES ('custom_role', '自定义', 'Custom', '[\"knowledge.read\"]', 0, '2026-10-27 00:00:00')",
+    )
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    _assert_upgraded()
+    rows = _fetch_all(
+        tmp_db_url, "SELECT permissions FROM roles WHERE code='custom_role'"
+    )
+    custom = rows[0][0]
+    assert (json.loads(custom) if isinstance(custom, str) else list(custom)) == ["knowledge.read"]
+
+    # Re-upgrade is idempotent (twice): no duplicated permission strings.
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    run_upgrade(tmp_db_url, monkeypatch, "head")
+    _assert_upgraded()
 
 
 def test_migration_0065_substances_name_lower_indexes(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
