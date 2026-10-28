@@ -12,7 +12,7 @@ import settings from "@/features/settings/module";
 import desktopModule from "@/features/desktop/module";
 
 /** Navigation groups a feature module can add pages to (方案 §3.2). */
-export type NavGroup = "/knowledge" | "/knowledge-library" | "/spec" | "/lab" | "/cockpit" | "/plm" | "/materials" | "/admin";
+export type NavGroup = "/data" | "/spec" | "/lab" | "/cockpit" | "/product" | "/materials" | "/admin";
 
 /** A feature area's routes (children of the authenticated shell) and its navigation entries. */
 export interface FeatureModule {

@@ -12,9 +12,9 @@ const module: FeatureModule = {
   ],
   nav: {
     "/admin": [
-      { path: "/admin/settings", key: "nav.admin.settings", zh: "设置中心", permission: "admin.llm", order: 3 },
-      { path: "/admin/mcp-approvals", key: "nav.admin.mcp_approvals", zh: "MCP 工具审批", order: 0 },
-      { path: "/admin/org-dashboard", key: "nav.admin.org_dashboard", zh: "组织看板", order: 5 },
+      { path: "/admin/settings", key: "nav.admin.settings", zh: "设置中心", permission: "admin.llm", order: 3, desc: "模型、连接器与系统设置" },
+      { path: "/admin/mcp-approvals", key: "nav.admin.mcp_approvals", zh: "MCP 工具审批", order: 0, desc: "审批 MCP 工具调用" },
+      { path: "/admin/org-dashboard", key: "nav.admin.org_dashboard", zh: "组织看板", order: 5, desc: "组织级数据看板" },
     ],
   },
 };

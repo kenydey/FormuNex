@@ -13,11 +13,9 @@ const module: FeatureModule = {
     { path: "knowledge/graph", element: L(() => import("./KgGraphPage")) },
   ],
   nav: {
-    "/knowledge-library": [
-      { path: "/knowledge/wiki", key: "nav.knowledge.wiki", zh: "Wiki 知识库", order: 5 },
-    ],
-    "/materials": [
-      { path: "/knowledge/graph", key: "nav.knowledge.graph", zh: "材料知识图谱", order: 3 },
+    "/data": [
+      { path: "/knowledge/wiki", key: "nav.knowledge.wiki", zh: "Wiki 知识库", order: 9, sub: "knowledge", desc: "团队 Wiki：按项目组织的知识页" },
+      { path: "/knowledge/graph", key: "nav.knowledge.graph", zh: "材料知识图谱", order: 10, sub: "knowledge", desc: "材料关系图谱画布与统计" },
     ],
   },
 };

@@ -10,9 +10,9 @@ const module: FeatureModule = {
     { path: "knowledge/reviews/:runId", element: L(() => import("./Reviewer")) },
   ],
   nav: {
-    "/knowledge": [
-      { path: "/knowledge/chat", key: "nav.knowledge.chat", zh: "知识问答", order: 2 },
-      { path: "/knowledge/reviews", key: "nav.knowledge.reviews", zh: "检索证据审计", order: 3 },
+    "/data": [
+      { path: "/knowledge/chat", key: "nav.knowledge.chat", zh: "知识问答", order: 2, sub: "qa", desc: "用自然语言提问，答案带引用" },
+      { path: "/knowledge/reviews", key: "nav.knowledge.reviews", zh: "检索证据审计", order: 3, sub: "qa", desc: "复核检索证据与引用链" },
     ],
   },
 };

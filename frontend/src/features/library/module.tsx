@@ -21,8 +21,8 @@ const module: FeatureModule = {
     { path: "knowledge/parsing", element: <TabRedirect to="/knowledge/search" tab="ops" extra={{ opstab: "parsing" }} /> },
   ],
   nav: {
-    "/knowledge-library": [
-      { path: "/knowledge/library", key: "nav.knowledge.library", zh: "文献库", order: 0 },
+    "/data": [
+      { path: "/knowledge/library", key: "nav.knowledge.library", zh: "文献库", order: 4, sub: "knowledge", desc: "文献编目、集合与记忆" },
     ],
   },
 };

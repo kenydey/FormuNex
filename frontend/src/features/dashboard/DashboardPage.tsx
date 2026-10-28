@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
 import { useSession } from "@/app/session";
 import { StatusTag } from "@/shared/tags";
+import { NovicePath } from "./NovicePath";
 
 interface Task { id: string; task_no: string; status: string; sample_no: string | null; requested_metrics: { metric: string }[] }
 interface PendingPackage { id: string; product_code: string; rev: string; current_step: { seq: number; role: string } | null }
@@ -38,6 +39,9 @@ export default function DashboardPage() {
         <StatisticCard colSpan={{ xs: 24, md: 6 }} statistic={{ title: t("dashboard.open_tasks", "待领取任务"), value: openTasks.data?.length ?? 0 }} />
         <StatisticCard colSpan={{ xs: 24, md: 6 }} statistic={{ title: t("dashboard.review", "待复核测量值"), value: can("lab.review") ? review.data?.length ?? 0 : "—" }} />
         <StatisticCard colSpan={{ xs: 24, md: 6 }} statistic={{ title: t("dashboard.signoff", "待我签批"), value: mine.length }} />
+      </ProCard>
+      <ProCard style={{ marginTop: 16 }} bordered>
+        <NovicePath />
       </ProCard>
       <ProCard gutter={16} ghost style={{ marginTop: 16 }} wrap>
         <ProCard colSpan={{ xs: 24, md: 12 }} title={t("dashboard.my_tasks", "我的实验任务")} bordered>

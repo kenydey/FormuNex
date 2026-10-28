@@ -20,8 +20,8 @@ const module: FeatureModule = {
   ],
   nav: {
     "/lab": [
-      { path: "/lab/work-records", key: "nav.lab.work_records", zh: "实验工作记录", order: 3 },
-      { path: "/lab/recommend", key: "nav.lab.recommend", zh: "AI 配方推荐", order: 0 },
+      { path: "/lab/work-records", key: "nav.lab.work_records", zh: "实验工作记录", order: 3, desc: "实验台账：填报实测与跨批次检索" },
+      { path: "/lab/recommend", key: "nav.lab.recommend", zh: "AI 配方推荐", order: 0, desc: "AI 检索并推荐 Top-N 配方" },
     ],
   },
 };
