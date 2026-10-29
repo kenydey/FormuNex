@@ -929,7 +929,7 @@
      "tasks"
     ],
     "summary": "List Tasks",
-    "description": "The caller's recent background tasks, newest first, from the durable on-disk task snapshots.\n\nOwnership follows ``assert_owner``: in single-user mode (owner ``default``) every task is listed; with\n``FORMUNEX_MULTI_USER`` only tasks whose ``owner_id`` is the caller's.",
+    "description": "The caller's recent background tasks, newest first, from the durable on-disk task snapshots.\n\nOwnership follows ``assert_owner``: in single-user mode (owner ``default``) every task is listed; with\n``FORMUNEX_MULTI_USER`` the caller's own tasks plus those without an owner (written before ownership was\nrecorded), which ``GET /tasks/{id}`` already serves to anyone.",
     "operationId": "list_tasks_api_tasks_get",
     "parameters": [
      {
@@ -1525,6 +1525,22 @@
        "type": "string",
        "default": "",
        "title": "Domain"
+      }
+     },
+     {
+      "name": "project_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Project Id"
       }
      },
      {
@@ -5053,7 +5069,7 @@
      "kb"
     ],
     "summary": "Chunks By Source",
-    "description": "Retrieve chunks for a source document with page/paragraph/offset info.\n\nP-6: paginated — previously the endpoint returned every chunk of the\nsource in a single response. The default limit keeps existing callers\nworking (first page); pass explicit limit/offset for the rest.",
+    "description": "Retrieve chunks for a source document with page/paragraph/offset info.\n\nP-6: paginated — previously the endpoint returned every chunk of the\nsource in a single response. The default limit keeps existing callers\nworking (first page); pass explicit limit/offset for the rest.\nP1-2: ``total`` is the source's full chunk count, so a caller that only\nreads the first page can tell it was truncated.",
     "operationId": "chunks_by_source_api_kb_chunks_by_source__source_id__get",
     "parameters": [
      {
@@ -5692,6 +5708,7 @@
      "plm"
     ],
     "summary": "Classify Formulation Version",
+    "description": "Classify a saved formulation version.\n\nP1-25 (same redaction as the P0-1 WebSocket fix): the gate stays\n``plm.document.write`` (via ``_rbac_guard``), but callers without\n``formulation.read_exact`` receive the banded response — no exact pct.\nComputation and persistence still use the exact values; only the echoed\nresponse is banded. A service key / auth-disabled caller (``user`` is\nNone) keeps exact values, mirroring ``_can_read_exact`` in\n``api/formulations.py``. The caller-supplied ``/ghs/classify`` endpoint is\nunaffected: its inputs are the caller's own data, not a saved version.",
     "operationId": "classify_formulation_version_api_plm_ghs_classify_formulation_versions__version_id__post",
     "parameters": [
      {
@@ -5785,6 +5802,368 @@
           "additionalProperties": true
          },
          "title": "Response Search Substances Api Plm Substances Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/{substance_id}/test-records": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Get Test Records",
+    "description": "G6: a substance's measured tox / eco records and eco profile.",
+    "operationId": "get_test_records_api_plm_substances__substance_id__test_records_get",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Test Records Api Plm Substances  Substance Id  Test Records Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/{substance_id}/oel": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Get Substance Oel",
+    "description": "G4: all OEL rows for a substance, every standard (GBZ + EH40).",
+    "operationId": "get_substance_oel_api_plm_substances__substance_id__oel_get",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response Get Substance Oel Api Plm Substances  Substance Id  Oel Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/{substance_id}/tox-records": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Create Tox Record",
+    "operationId": "create_tox_record_api_plm_substances__substance_id__tox_records_post",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ToxRecordIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Create Tox Record Api Plm Substances  Substance Id  Tox Records Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/{substance_id}/tox-records/{record_id}": {
+   "delete": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Delete Tox Record",
+    "operationId": "delete_tox_record_api_plm_substances__substance_id__tox_records__record_id__delete",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     },
+     {
+      "name": "record_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Record Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Delete Tox Record Api Plm Substances  Substance Id  Tox Records  Record Id  Delete"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/{substance_id}/eco-records": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Create Eco Record",
+    "operationId": "create_eco_record_api_plm_substances__substance_id__eco_records_post",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EcoRecordIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Create Eco Record Api Plm Substances  Substance Id  Eco Records Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/{substance_id}/eco-records/{record_id}": {
+   "delete": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Delete Eco Record",
+    "operationId": "delete_eco_record_api_plm_substances__substance_id__eco_records__record_id__delete",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     },
+     {
+      "name": "record_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Record Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Delete Eco Record Api Plm Substances  Substance Id  Eco Records  Record Id  Delete"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/{substance_id}/eco-profile": {
+   "put": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Put Eco Profile",
+    "description": "Upsert the substance's fate descriptions (at least one required).",
+    "operationId": "put_eco_profile_api_plm_substances__substance_id__eco_profile_put",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EcoProfileIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Put Eco Profile Api Plm Substances  Substance Id  Eco Profile Put"
         }
        }
       }
@@ -6084,6 +6463,96 @@
     }
    }
   },
+  "/api/plm/products/{product_id}/archive": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Archive Product Route",
+    "description": "G9: archive a product (lifecycle_state -> withdrawn). Withdrawal-grade\naction: requires release.publish on the product's project.",
+    "operationId": "archive_product_route_api_plm_products__product_id__archive_post",
+    "parameters": [
+     {
+      "name": "product_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Product Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Archive Product Route Api Plm Products  Product Id  Archive Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/products/{product_id}/restore": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Restore Product Route",
+    "description": "G9: restore an archived product (lifecycle_state -> rd). The\npre-archive state is not stored; a restored product re-enters as rd.",
+    "operationId": "restore_product_route_api_plm_products__product_id__restore_post",
+    "parameters": [
+     {
+      "name": "product_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Product Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Restore Product Route Api Plm Products  Product Id  Restore Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/plm/products/{product_id}/revisions": {
    "post": {
     "tags": [
@@ -6252,7 +6721,7 @@
      "plm"
     ],
     "summary": "Generate Document",
-    "description": "Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).",
+    "description": "Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).\n\nG2: for SDS / label, ``body.regulations`` selects the versions to\ngenerate (one per regulation); omitted means the default company's\napplicable_regulations, or [\"CN\"] when the company has no default.\nA single version keeps the historical single-document response shape;\nmultiple versions return {\"documents\": [...]}.",
     "operationId": "generate_document_api_plm_revisions__revision_id__documents_post",
     "parameters": [
      {
@@ -7733,6 +8202,33 @@
     }
    }
   },
+  "/api/plm/regulations": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Regulations",
+    "description": "G2: applicable-regulation registry for the company-config checkboxes\nand the document-generation regulation selector.",
+    "operationId": "list_regulations_api_plm_regulations_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array",
+         "title": "Response List Regulations Api Plm Regulations Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/plm/companies": {
    "get": {
     "tags": [
@@ -8140,7 +8636,7 @@
      "plm"
     ],
     "summary": "Create Batch Export",
-    "description": "Batch-export documents (整合方案 §4): latest revision per product × latest version per\ndoc_type → one ZIP (files grouped per product + manifest.json). Missing documents are\nreported in ``missing``, never silently skipped.",
+    "description": "Batch-export documents (整合方案 §4): latest revision per product × latest version per\ndoc_type → one ZIP (files grouped per product + manifest.json). Missing documents are\nreported in ``missing``, never silently skipped. 仅导出已批准或已发布文档；仅有草稿/\n未批准版的文档不进入导出包，记为 draft_only 缺失。",
     "operationId": "create_batch_export_api_plm_documents_batch_export_post",
     "requestBody": {
      "content": {
@@ -8367,6 +8863,162 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/import/formulas": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Import Formulas Excel",
+    "description": "G7: import formulation records from a .xlsx file (Chinese headers; see\nthe template endpoint). ``dry_run`` (default) validates without writing;\nerrors carry spreadsheet row numbers.",
+    "operationId": "import_formulas_excel_api_plm_import_formulas_post",
+    "parameters": [
+     {
+      "name": "dry_run",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": true,
+       "title": "Dry Run"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_import_formulas_excel_api_plm_import_formulas_post"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Import Formulas Excel Api Plm Import Formulas Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/import/companies": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Import Companies Excel",
+    "description": "G7: import company records from a .xlsx file. Existing names are\nskipped, never overwritten; import never flips ``is_default``.",
+    "operationId": "import_companies_excel_api_plm_import_companies_post",
+    "parameters": [
+     {
+      "name": "dry_run",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": true,
+       "title": "Dry Run"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_import_companies_excel_api_plm_import_companies_post"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Import Companies Excel Api Plm Import Companies Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/import/templates/formulas": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Import Formulas Template",
+    "description": "Header-only .xlsx template for formulation import.",
+    "operationId": "import_formulas_template_api_plm_import_templates_formulas_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "title": "Response Import Formulas Template Api Plm Import Templates Formulas Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/import/templates/companies": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Import Companies Template",
+    "description": "Header-only .xlsx template for company import.",
+    "operationId": "import_companies_template_api_plm_import_templates_companies_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "title": "Response Import Companies Template Api Plm Import Templates Companies Get"
         }
        }
       }
@@ -9456,7 +10108,7 @@
      "cockpit"
     ],
     "summary": "Color Page",
-    "description": "色度：各配方 Lab + 与参考色的双口径 ΔE（ΔE00 / ΔE*ab）。\n\ndelta_e_00 为 CIEDE2000（colour-science 未安装时为 null，不静默 fallback）；\ndelta_e_ab 为 CIE76 欧氏距离（始终可用）；delta_e 为兼容键，等于\ndelta_e_00（有）或 delta_e_ab（无），delta_e_method 说明实际口径。",
+    "description": "色度：各配方 Lab + 与参考色的双口径 ΔE（ΔE00 / ΔE*ab）。\n\ndelta_e_00 为 CIEDE2000（colour-science 未安装时为 null，不静默 fallback）；\ndelta_e_ab 为 CIE76 欧氏距离（始终可用）；delta_e 为兼容键，等于\ndelta_e_00（有）或 delta_e_ab（无），delta_e_method 说明实际口径。\n无色素配方返回 L/a/b/delta_e_* 全部为 null、delta_e_method 为 null。",
     "operationId": "color_page_api_cockpit_color_post",
     "requestBody": {
      "content": {
@@ -14829,7 +15481,7 @@
      "mcp-approvals"
     ],
     "summary": "List Pending",
-    "description": "Return currently pending MCP tool approval requests, with their (redacted) tool-call arguments.",
+    "description": "Return the caller's decidable pending MCP tool approval requests, with their (redacted) tool-call arguments.",
     "operationId": "list_pending_api_mcp_approvals_pending_get",
     "responses": {
      "200": {
@@ -18995,7 +19647,7 @@
   "/api/qc/report": {
    "post": {
     "summary": "Ingest Qc Report",
-    "description": "Upload a test report and bind its results to an experiment.\n\nThe report is stored, its measurements extracted with unit / test method /\nspec window, and both bound to the experiment in one transaction. With\n``sync_measured`` the values are folded into the experiment's flat\n``measured`` column, which is what makes them training data.",
+    "description": "Upload a test report and bind its results to an experiment.\n\nThe report is stored, its measurements extracted with unit / test method /\nspec window, and both bound to the experiment in one transaction. With\n``sync_measured`` only already-*reviewed* values are folded into the\nexperiment's flat ``measured`` column (P1-13): a freshly uploaded QC value\nis staged as an unreviewed typed row and reaches training data only after\na reviewer accepts it, so an upload can no longer overwrite a reviewed lab\nvalue or resurrect a rejected one.",
     "operationId": "ingest_qc_report_api_qc_report_post",
     "requestBody": {
      "content": {
@@ -19563,102 +20215,13 @@
     }
    }
   },
-  "/api/notebooklm/auth-status": {
-   "get": {
-    "tags": [
-     "notebooklm"
-    ],
-    "summary": "Auth Status",
-    "operationId": "auth_status_api_notebooklm_auth_status_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Auth Status Api Notebooklm Auth Status Get"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/notebooklm/config": {
-   "post": {
-    "tags": [
-     "notebooklm"
-    ],
-    "summary": "Set Config",
-    "operationId": "set_config_api_notebooklm_config_post",
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/NotebookLMConfig"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Set Config Api Notebooklm Config Post"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/notebooklm/login": {
-   "post": {
-    "tags": [
-     "notebooklm"
-    ],
-    "summary": "Login",
-    "operationId": "login_api_notebooklm_login_post",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Login Api Notebooklm Login Post"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
   "/api/chemical/lookup": {
    "get": {
     "tags": [
      "chemistry"
     ],
     "summary": "Chemical Lookup",
-    "description": "Look up chemical metadata by name or CAS (catalog → PubChem → SureChEMBL).",
+    "description": "Look up chemical metadata by name or CAS (catalog → local 131k library → PubChem → SureChEMBL).",
     "operationId": "chemical_lookup_api_chemical_lookup_get",
     "parameters": [
      {
@@ -21903,7 +22466,7 @@
      "connectors"
     ],
     "summary": "Approve Mcp Session",
-    "description": "Grant writeish MCP tools for one chat session (not global permanent).",
+    "description": "Grant writeish MCP tools for one chat session (not global permanent).\n\nPersonal action: the grant is bound to the granting login (owner), expires\n(24 h for session grants, 1 h otherwise), and is hash-chain audited.",
     "operationId": "approve_mcp_session_api_connectors_mcp__server_id__approve_session_post",
     "parameters": [
      {
@@ -21935,6 +22498,61 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Approve Mcp Session Api Connectors Mcp  Server Id  Approve Session Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connectors/mcp/{server_id}/revoke-session": {
+   "post": {
+    "tags": [
+     "connectors"
+    ],
+    "summary": "Revoke Mcp Session",
+    "description": "Revoke a chat session's MCP write grant(s). Owner-or-admin only.",
+    "operationId": "revoke_mcp_session_api_connectors_mcp__server_id__revoke_session_post",
+    "parameters": [
+     {
+      "name": "server_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Server Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/McpRevokeSessionBody"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Revoke Mcp Session Api Connectors Mcp  Server Id  Revoke Session Post"
         }
        }
       }
@@ -22347,6 +22965,22 @@
       "title": "Process Window",
       "description": "工艺窗口（规格契约）"
      },
+     "process_window_custom": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Process Window Custom",
+      "description": "自定义工艺窗口参数"
+     },
      "ph_target": {
       "anyOf": [
        {
@@ -22400,6 +23034,22 @@
       "type": "object",
       "title": "Constraint Values",
       "description": "工艺约束 SSOT {名称: 值}，含 catalog 标签与自定义项"
+     },
+     "custom_constraints": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Custom Constraints",
+      "description": "自定义工艺约束结构化行"
      },
      "active_formulation": {
       "anyOf": [
@@ -22959,6 +23609,17 @@
       "type": "boolean",
       "title": "Include Docx",
       "default": false
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Batch Id"
      }
     },
     "type": "object",
@@ -23092,6 +23753,20 @@
     ],
     "title": "BatchUpdateRequest"
    },
+   "Body_import_companies_excel_api_plm_import_companies_post": {
+    "properties": {
+     "file": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "File"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ],
+    "title": "Body_import_companies_excel_api_plm_import_companies_post"
+   },
    "Body_import_experiments_csv_api_experiments_import_csv_post": {
     "properties": {
      "file": {
@@ -23105,6 +23780,20 @@
      "file"
     ],
     "title": "Body_import_experiments_csv_api_experiments_import_csv_post"
+   },
+   "Body_import_formulas_excel_api_plm_import_formulas_post": {
+    "properties": {
+     "file": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "File"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ],
+    "title": "Body_import_formulas_excel_api_plm_import_formulas_post"
    },
    "Body_import_instrument_file_api_lab_measurements_import_post": {
     "properties": {
@@ -24063,6 +24752,11 @@
       },
       "type": "array",
       "title": "Chunks"
+     },
+     "total": {
+      "type": "integer",
+      "title": "Total",
+      "default": 0
      }
     },
     "type": "object",
@@ -24070,7 +24764,7 @@
      "chunks"
     ],
     "title": "ChunkListResponse",
-    "description": "Wrapper for chunk retrieval responses."
+    "description": "Wrapper for chunk retrieval responses.\n\nP1-2: ``total`` is the full chunk count for the source, independent of\nthe page window (``limit``/``offset``). Callers must page until\n``len(chunks)`` reaches ``total`` — a first page alone is a truncation,\nnot the whole document."
    },
    "ClarificationOption": {
     "properties": {
@@ -24440,6 +25134,18 @@
       "type": "boolean",
       "title": "Is Default",
       "default": false
+     },
+     "applicable_regulations": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Applicable Regulations"
+     },
+     "coding_rules": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Coding Rules"
      }
     },
     "type": "object",
@@ -25368,17 +26074,6 @@
       "type": "string",
       "title": "Query",
       "default": ""
-     },
-     "notebooklm_notebook_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Notebooklm Notebook Id"
      }
     },
     "type": "object",
@@ -25768,6 +26463,20 @@
       ],
       "title": "Lang",
       "default": "zh-CN"
+     },
+     "regulations": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Regulations"
      },
      "properties": {
       "anyOf": [
@@ -26371,6 +27080,78 @@
      "model_id"
     ],
     "title": "DownloadResponse"
+   },
+   "EcoProfileIn": {
+    "properties": {
+     "persistence": {
+      "type": "string",
+      "title": "Persistence",
+      "default": ""
+     },
+     "bioaccum": {
+      "type": "string",
+      "title": "Bioaccum",
+      "default": ""
+     },
+     "mobility": {
+      "type": "string",
+      "title": "Mobility",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "title": "EcoProfileIn"
+   },
+   "EcoRecordIn": {
+    "properties": {
+     "organism_group": {
+      "type": "string",
+      "title": "Organism Group",
+      "default": ""
+     },
+     "endpoint": {
+      "type": "string",
+      "title": "Endpoint",
+      "default": "LC50"
+     },
+     "value": {
+      "type": "string",
+      "title": "Value",
+      "default": ""
+     },
+     "unit": {
+      "type": "string",
+      "title": "Unit",
+      "default": "mg/L"
+     },
+     "duration": {
+      "type": "string",
+      "title": "Duration",
+      "default": ""
+     },
+     "species": {
+      "type": "string",
+      "title": "Species",
+      "default": ""
+     },
+     "method": {
+      "type": "string",
+      "title": "Method",
+      "default": ""
+     },
+     "source": {
+      "type": "string",
+      "title": "Source",
+      "default": "manual"
+     },
+     "source_ref": {
+      "type": "string",
+      "title": "Source Ref",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "title": "EcoRecordIn"
    },
    "EmbeddingModelInfo": {
     "properties": {
@@ -31927,6 +32708,22 @@
       "title": "Process Window",
       "description": "工艺窗口（规格契约）"
      },
+     "process_window_custom": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Process Window Custom",
+      "description": "自定义工艺窗口参数"
+     },
      "ph_target": {
       "anyOf": [
        {
@@ -31980,6 +32777,22 @@
       "type": "object",
       "title": "Constraint Values",
       "description": "工艺约束 SSOT {名称: 值}，含 catalog 标签与自定义项"
+     },
+     "custom_constraints": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Custom Constraints",
+      "description": "自定义工艺约束结构化行"
      },
      "active_formulation": {
       "anyOf": [
@@ -32354,6 +33167,28 @@
       "additionalProperties": true,
       "type": "object",
       "title": "Arguments"
+     },
+     "session_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Session Id"
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
      }
     },
     "type": "object",
@@ -32449,6 +33284,33 @@
     },
     "type": "object",
     "title": "McpImportJsonBody"
+   },
+   "McpRevokeSessionBody": {
+    "properties": {
+     "session_id": {
+      "type": "string",
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Session Id"
+     },
+     "tool_name": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 120
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tool Name"
+     }
+    },
+    "type": "object",
+    "required": [
+     "session_id"
+    ],
+    "title": "McpRevokeSessionBody"
    },
    "McpServerEnableBody": {
     "properties": {
@@ -33253,34 +34115,6 @@
     },
     "type": "object",
     "title": "NoteUpdateRequest"
-   },
-   "NotebookLMConfig": {
-    "properties": {
-     "enabled": {
-      "anyOf": [
-       {
-        "type": "boolean"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Enabled"
-     },
-     "notebook_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Notebook Id"
-     }
-    },
-    "type": "object",
-    "title": "NotebookLMConfig"
    },
    "ObjectiveIn": {
     "properties": {
@@ -34290,9 +35124,24 @@
     "properties": {
      "code": {
       "type": "string",
-      "maxLength": 64,
-      "minLength": 1,
-      "title": "Code"
+      "title": "Code",
+      "default": ""
+     },
+     "category_identifier": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Category Identifier"
+     },
+     "legacy_code": {
+      "type": "string",
+      "title": "Legacy Code",
+      "default": ""
      },
      "name_zh": {
       "type": "string",
@@ -34319,7 +35168,6 @@
     },
     "type": "object",
     "required": [
-     "code",
      "name_zh"
     ],
     "title": "ProductIn"
@@ -34525,9 +35373,6 @@
      }
     },
     "type": "object",
-    "required": [
-     "workspace"
-    ],
     "title": "ProjectUpdateRequest",
     "description": "Partial/presence-based workspace update (2026-09-05).\n\n``workspace`` 以 dict 传入并在 store 做**字段级合并**: 请求中出现的键才写入,\n未出现字段保持 DB 现值 —— 杜绝「空 state 覆盖」事故。两个保护例外:\n``chat_history`` 由后端从 chat_messages 表重建镜像(权威在表);\n``sources`` 非空→空的覆盖会被拒绝(记 warning)。"
    },
@@ -34544,17 +35389,6 @@
       },
       "type": "array",
       "title": "Source Types"
-     },
-     "notebooklm_notebook_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Notebooklm Notebook Id"
      },
      "sources": {
       "items": {
@@ -36325,6 +37159,22 @@
       "title": "Process Window",
       "description": "工艺窗口（规格契约）"
      },
+     "process_window_custom": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Process Window Custom",
+      "description": "自定义工艺窗口参数"
+     },
      "ph_target": {
       "anyOf": [
        {
@@ -36378,6 +37228,22 @@
       "type": "object",
       "title": "Constraint Values",
       "description": "工艺约束 SSOT {名称: 值}，含 catalog 标签与自定义项"
+     },
+     "custom_constraints": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Custom Constraints",
+      "description": "自定义工艺约束结构化行"
      },
      "active_formulation": {
       "anyOf": [
@@ -36530,6 +37396,22 @@
       "title": "Process Window",
       "description": "工艺窗口（规格契约）"
      },
+     "process_window_custom": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Process Window Custom",
+      "description": "自定义工艺窗口参数"
+     },
      "ph_target": {
       "anyOf": [
        {
@@ -36583,6 +37465,22 @@
       "type": "object",
       "title": "Constraint Values",
       "description": "工艺约束 SSOT {名称: 值}，含 catalog 标签与自定义项"
+     },
+     "custom_constraints": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Custom Constraints",
+      "description": "自定义工艺约束结构化行"
      },
      "active_formulation": {
       "anyOf": [
@@ -37467,17 +38365,6 @@
       "minimum": 1,
       "title": "Total Limit",
       "default": 300
-     },
-     "notebooklm_notebook_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Notebooklm Notebook Id"
      }
     },
     "type": "object",
@@ -39446,17 +40333,6 @@
       "minimum": 1,
       "title": "Per Source Cap",
       "default": 30
-     },
-     "notebooklm_notebook_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Notebooklm Notebook Id"
      }
     },
     "type": "object",
@@ -39464,6 +40340,52 @@
      "query"
     ],
     "title": "TopicSweepRequest"
+   },
+   "ToxRecordIn": {
+    "properties": {
+     "endpoint": {
+      "type": "string",
+      "title": "Endpoint",
+      "default": "LD50"
+     },
+     "route": {
+      "type": "string",
+      "title": "Route",
+      "default": "oral"
+     },
+     "value": {
+      "type": "string",
+      "title": "Value",
+      "default": ""
+     },
+     "unit": {
+      "type": "string",
+      "title": "Unit",
+      "default": "mg/kg"
+     },
+     "species": {
+      "type": "string",
+      "title": "Species",
+      "default": "大鼠"
+     },
+     "method": {
+      "type": "string",
+      "title": "Method",
+      "default": ""
+     },
+     "source": {
+      "type": "string",
+      "title": "Source",
+      "default": "manual"
+     },
+     "source_ref": {
+      "type": "string",
+      "title": "Source Ref",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "title": "ToxRecordIn"
    },
    "TradeOffAnalysis": {
     "properties": {

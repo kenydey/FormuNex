@@ -93,7 +93,7 @@ real Windows 10/11 desktop was not observed, and the same command line is expect
 Install tiers, in order:
 
 1. **core** — `requirements.txt`, then `.[dev,llm]`. API + Celery worker boot.
-2. **extras (no torch)** — `science,optimize,intel,file_ingest,report_export,parse_pro,export,embedding,pydoe,baybe,color,crag,notebooklm,dev,postgres`
+2. **extras (no torch)** — `science,optimize,intel,file_ingest,report_export,parse_pro,export,embedding,pydoe,baybe,color,crag,dev,postgres`
 3. **torch** (`-Full`) — `bo`, `heavy`, plus `colbert` when ≤ 3.12, with
    `--extra-index-url https://download.pytorch.org/whl/cpu` (the default wheel
    bundles CUDA and is ~2.5 GB).

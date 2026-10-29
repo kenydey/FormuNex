@@ -1,6 +1,6 @@
 /** Wire types of the research area (federated search, grounded Q&A, deep research, artifacts, IP, embodiment drafts). */
 
-export type SourceType = "patents" | "surechembl" | "literature" | "internet" | "notebooklm";
+export type SourceType = "patents" | "surechembl" | "literature" | "internet";
 
 export interface Evidence {
   source: string;

@@ -377,7 +377,8 @@ export interface paths {
          * @description The caller's recent background tasks, newest first, from the durable on-disk task snapshots.
          *
          *     Ownership follows ``assert_owner``: in single-user mode (owner ``default``) every task is listed; with
-         *     ``FORMUNEX_MULTI_USER`` only tasks whose ``owner_id`` is the caller's.
+         *     ``FORMUNEX_MULTI_USER`` the caller's own tasks plus those without an owner (written before ownership was
+         *     recorded), which ``GET /tasks/{id}`` already serves to anyone.
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -2108,6 +2109,8 @@ export interface paths {
          *     P-6: paginated — previously the endpoint returned every chunk of the
          *     source in a single response. The default limit keeps existing callers
          *     working (first page); pass explicit limit/offset for the rest.
+         *     P1-2: ``total`` is the source's full chunk count, so a caller that only
+         *     reads the first page can tell it was truncated.
          */
         get: operations["chunks_by_source_api_kb_chunks_by_source__source_id__get"];
         put?: never;
@@ -2419,7 +2422,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Classify Formulation Version */
+        /**
+         * Classify Formulation Version
+         * @description Classify a saved formulation version.
+         *
+         *     P1-25 (same redaction as the P0-1 WebSocket fix): the gate stays
+         *     ``plm.document.write`` (via ``_rbac_guard``), but callers without
+         *     ``formulation.read_exact`` receive the banded response — no exact pct.
+         *     Computation and persistence still use the exact values; only the echoed
+         *     response is banded. A service key / auth-disabled caller (``user`` is
+         *     None) keeps exact values, mirroring ``_can_read_exact`` in
+         *     ``api/formulations.py``. The caller-supplied ``/ghs/classify`` endpoint is
+         *     unaffected: its inputs are the caller's own data, not a saved version.
+         */
         post: operations["classify_formulation_version_api_plm_ghs_classify_formulation_versions__version_id__post"];
         delete?: never;
         options?: never;
@@ -2440,6 +2455,134 @@ export interface paths {
          */
         get: operations["search_substances_api_plm_substances_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/{substance_id}/test-records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Test Records
+         * @description G6: a substance's measured tox / eco records and eco profile.
+         */
+        get: operations["get_test_records_api_plm_substances__substance_id__test_records_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/{substance_id}/oel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Substance Oel
+         * @description G4: all OEL rows for a substance, every standard (GBZ + EH40).
+         */
+        get: operations["get_substance_oel_api_plm_substances__substance_id__oel_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/{substance_id}/tox-records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Tox Record */
+        post: operations["create_tox_record_api_plm_substances__substance_id__tox_records_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/{substance_id}/tox-records/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Tox Record */
+        delete: operations["delete_tox_record_api_plm_substances__substance_id__tox_records__record_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/{substance_id}/eco-records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Eco Record */
+        post: operations["create_eco_record_api_plm_substances__substance_id__eco_records_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/{substance_id}/eco-records/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Eco Record */
+        delete: operations["delete_eco_record_api_plm_substances__substance_id__eco_records__record_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/{substance_id}/eco-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Eco Profile
+         * @description Upsert the substance's fate descriptions (at least one required).
+         */
+        put: operations["put_eco_profile_api_plm_substances__substance_id__eco_profile_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2553,6 +2696,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plm/products/{product_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Product Route
+         * @description G9: archive a product (lifecycle_state -> withdrawn). Withdrawal-grade
+         *     action: requires release.publish on the product's project.
+         */
+        post: operations["archive_product_route_api_plm_products__product_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/products/{product_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Product Route
+         * @description G9: restore an archived product (lifecycle_state -> rd). The
+         *     pre-archive state is not stored; a restored product re-enters as rd.
+         */
+        post: operations["restore_product_route_api_plm_products__product_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plm/products/{product_id}/revisions": {
         parameters: {
             query?: never;
@@ -2617,6 +2802,12 @@ export interface paths {
         /**
          * Generate Document
          * @description Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).
+         *
+         *     G2: for SDS / label, ``body.regulations`` selects the versions to
+         *     generate (one per regulation); omitted means the default company's
+         *     applicable_regulations, or ["CN"] when the company has no default.
+         *     A single version keeps the historical single-document response shape;
+         *     multiple versions return {"documents": [...]}.
          */
         post: operations["generate_document_api_plm_revisions__revision_id__documents_post"];
         delete?: never;
@@ -3126,6 +3317,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plm/regulations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Regulations
+         * @description G2: applicable-regulation registry for the company-config checkboxes
+         *     and the document-generation regulation selector.
+         */
+        get: operations["list_regulations_api_plm_regulations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plm/companies": {
         parameters: {
             query?: never;
@@ -3250,7 +3462,8 @@ export interface paths {
          * Create Batch Export
          * @description Batch-export documents (整合方案 §4): latest revision per product × latest version per
          *     doc_type → one ZIP (files grouped per product + manifest.json). Missing documents are
-         *     reported in ``missing``, never silently skipped.
+         *     reported in ``missing``, never silently skipped. 仅导出已批准或已发布文档；仅有草稿/
+         *     未批准版的文档不进入导出包，记为 draft_only 缺失。
          */
         post: operations["create_batch_export_api_plm_documents_batch_export_post"];
         delete?: never;
@@ -3331,6 +3544,89 @@ export interface paths {
          *     never overwritten; ``dry_run`` validates without writing.
          */
         post: operations["import_formula_mappings_api_plm_formula_mappings_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/import/formulas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Formulas Excel
+         * @description G7: import formulation records from a .xlsx file (Chinese headers; see
+         *     the template endpoint). ``dry_run`` (default) validates without writing;
+         *     errors carry spreadsheet row numbers.
+         */
+        post: operations["import_formulas_excel_api_plm_import_formulas_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/import/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Companies Excel
+         * @description G7: import company records from a .xlsx file. Existing names are
+         *     skipped, never overwritten; import never flips ``is_default``.
+         */
+        post: operations["import_companies_excel_api_plm_import_companies_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/import/templates/formulas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Import Formulas Template
+         * @description Header-only .xlsx template for formulation import.
+         */
+        get: operations["import_formulas_template_api_plm_import_templates_formulas_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/import/templates/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Import Companies Template
+         * @description Header-only .xlsx template for company import.
+         */
+        get: operations["import_companies_template_api_plm_import_templates_companies_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3814,6 +4110,7 @@ export interface paths {
          *     delta_e_00 为 CIEDE2000（colour-science 未安装时为 null，不静默 fallback）；
          *     delta_e_ab 为 CIE76 欧氏距离（始终可用）；delta_e 为兼容键，等于
          *     delta_e_00（有）或 delta_e_ab（无），delta_e_method 说明实际口径。
+         *     无色素配方返回 L/a/b/delta_e_* 全部为 null、delta_e_method 为 null。
          */
         post: operations["color_page_api_cockpit_color_post"];
         delete?: never;
@@ -5798,7 +6095,7 @@ export interface paths {
         };
         /**
          * List Pending
-         * @description Return currently pending MCP tool approval requests, with their (redacted) tool-call arguments.
+         * @description Return the caller's decidable pending MCP tool approval requests, with their (redacted) tool-call arguments.
          */
         get: operations["list_pending_api_mcp_approvals_pending_get"];
         put?: never;
@@ -7312,8 +7609,11 @@ export interface paths {
          *
          *     The report is stored, its measurements extracted with unit / test method /
          *     spec window, and both bound to the experiment in one transaction. With
-         *     ``sync_measured`` the values are folded into the experiment's flat
-         *     ``measured`` column, which is what makes them training data.
+         *     ``sync_measured`` only already-*reviewed* values are folded into the
+         *     experiment's flat ``measured`` column (P1-13): a freshly uploaded QC value
+         *     is staged as an unreviewed typed row and reaches training data only after
+         *     a reviewer accepts it, so an upload can no longer overwrite a reviewed lab
+         *     value or resurrect a rejected one.
          */
         post: operations["ingest_qc_report_api_qc_report_post"];
         delete?: never;
@@ -7602,57 +7902,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/notebooklm/auth-status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Auth Status */
-        get: operations["auth_status_api_notebooklm_auth_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/notebooklm/config": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Set Config */
-        post: operations["set_config_api_notebooklm_config_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/notebooklm/login": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Login */
-        post: operations["login_api_notebooklm_login_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/chemical/lookup": {
         parameters: {
             query?: never;
@@ -7662,7 +7911,7 @@ export interface paths {
         };
         /**
          * Chemical Lookup
-         * @description Look up chemical metadata by name or CAS (catalog → PubChem → SureChEMBL).
+         * @description Look up chemical metadata by name or CAS (catalog → local 131k library → PubChem → SureChEMBL).
          */
         get: operations["chemical_lookup_api_chemical_lookup_get"];
         put?: never;
@@ -8457,8 +8706,31 @@ export interface paths {
         /**
          * Approve Mcp Session
          * @description Grant writeish MCP tools for one chat session (not global permanent).
+         *
+         *     Personal action: the grant is bound to the granting login (owner), expires
+         *     (24 h for session grants, 1 h otherwise), and is hash-chain audited.
          */
         post: operations["approve_mcp_session_api_connectors_mcp__server_id__approve_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connectors/mcp/{server_id}/revoke-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Mcp Session
+         * @description Revoke a chat session's MCP write grant(s). Owner-or-admin only.
+         */
+        post: operations["revoke_mcp_session_api_connectors_mcp__server_id__revoke_session_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8702,6 +8974,13 @@ export interface components {
             process_window?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Process Window Custom
+             * @description 自定义工艺窗口参数
+             */
+            process_window_custom?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Ph Target */
             ph_target?: number | null;
             /**
@@ -8724,6 +9003,13 @@ export interface components {
             constraint_values?: {
                 [key: string]: number;
             };
+            /**
+             * Custom Constraints
+             * @description 自定义工艺约束结构化行
+             */
+            custom_constraints?: {
+                [key: string]: unknown;
+            }[] | null;
             active_formulation?: components["schemas"]["Formulation"] | null;
             /**
              * Existing Records
@@ -8971,6 +9257,8 @@ export interface components {
              * @default false
              */
             include_docx: boolean;
+            /** Batch Id */
+            batch_id?: string | null;
         };
         /** BatchIn */
         BatchIn: {
@@ -8999,8 +9287,18 @@ export interface components {
             /** Campaign State */
             campaign_state?: string | null;
         };
+        /** Body_import_companies_excel_api_plm_import_companies_post */
+        Body_import_companies_excel_api_plm_import_companies_post: {
+            /** File */
+            file: string;
+        };
         /** Body_import_experiments_csv_api_experiments_import_csv_post */
         Body_import_experiments_csv_api_experiments_import_csv_post: {
+            /** File */
+            file: string;
+        };
+        /** Body_import_formulas_excel_api_plm_import_formulas_post */
+        Body_import_formulas_excel_api_plm_import_formulas_post: {
             /** File */
             file: string;
         };
@@ -9358,10 +9656,20 @@ export interface components {
         /**
          * ChunkListResponse
          * @description Wrapper for chunk retrieval responses.
+         *
+         *     P1-2: ``total`` is the full chunk count for the source, independent of
+         *     the page window (``limit``/``offset``). Callers must page until
+         *     ``len(chunks)`` reaches ``total`` — a first page alone is a truncation,
+         *     not the whole document.
          */
         ChunkListResponse: {
             /** Chunks */
             chunks: components["schemas"]["DocumentChunkResponse"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
         };
         /** ClarificationOption */
         ClarificationOption: {
@@ -9507,6 +9815,12 @@ export interface components {
              * @default false
              */
             is_default: boolean;
+            /** Applicable Regulations */
+            applicable_regulations?: string[];
+            /** Coding Rules */
+            coding_rules?: {
+                [key: string]: unknown;
+            };
         };
         /** CompositionItem */
         CompositionItem: {
@@ -9864,8 +10178,6 @@ export interface components {
              * @default
              */
             query: string;
-            /** Notebooklm Notebook Id */
-            notebooklm_notebook_id?: string | null;
         };
         /** DefaultLeversResponse */
         DefaultLeversResponse: {
@@ -10035,6 +10347,8 @@ export interface components {
              * @enum {string}
              */
             lang: "zh-CN" | "en-US";
+            /** Regulations */
+            regulations?: string[] | null;
             properties?: components["schemas"]["PropertiesIn"] | null;
             /** Sds Properties */
             sds_properties?: {
@@ -10314,6 +10628,72 @@ export interface components {
             task_id: string;
             /** Model Id */
             model_id: string;
+        };
+        /** EcoProfileIn */
+        EcoProfileIn: {
+            /**
+             * Persistence
+             * @default
+             */
+            persistence: string;
+            /**
+             * Bioaccum
+             * @default
+             */
+            bioaccum: string;
+            /**
+             * Mobility
+             * @default
+             */
+            mobility: string;
+        };
+        /** EcoRecordIn */
+        EcoRecordIn: {
+            /**
+             * Organism Group
+             * @default
+             */
+            organism_group: string;
+            /**
+             * Endpoint
+             * @default LC50
+             */
+            endpoint: string;
+            /**
+             * Value
+             * @default
+             */
+            value: string;
+            /**
+             * Unit
+             * @default mg/L
+             */
+            unit: string;
+            /**
+             * Duration
+             * @default
+             */
+            duration: string;
+            /**
+             * Species
+             * @default
+             */
+            species: string;
+            /**
+             * Method
+             * @default
+             */
+            method: string;
+            /**
+             * Source
+             * @default manual
+             */
+            source: string;
+            /**
+             * Source Ref
+             * @default
+             */
+            source_ref: string;
         };
         /** EmbeddingModelInfo */
         EmbeddingModelInfo: {
@@ -12654,6 +13034,13 @@ export interface components {
             process_window?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Process Window Custom
+             * @description 自定义工艺窗口参数
+             */
+            process_window_custom?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Ph Target */
             ph_target?: number | null;
             /**
@@ -12676,6 +13063,13 @@ export interface components {
             constraint_values?: {
                 [key: string]: number;
             };
+            /**
+             * Custom Constraints
+             * @description 自定义工艺约束结构化行
+             */
+            custom_constraints?: {
+                [key: string]: unknown;
+            }[] | null;
             active_formulation?: components["schemas"]["Formulation"] | null;
             /**
              * Optimize Iterations
@@ -12817,6 +13211,10 @@ export interface components {
             arguments?: {
                 [key: string]: unknown;
             };
+            /** Session Id */
+            session_id?: string | null;
+            /** Project Id */
+            project_id?: string | null;
         };
         /** McpImportConfirmBody */
         McpImportConfirmBody: {
@@ -12850,6 +13248,13 @@ export interface components {
              * @default true
              */
             dry_run: boolean;
+        };
+        /** McpRevokeSessionBody */
+        McpRevokeSessionBody: {
+            /** Session Id */
+            session_id: string;
+            /** Tool Name */
+            tool_name?: string | null;
         };
         /** McpServerEnableBody */
         McpServerEnableBody: {
@@ -13169,13 +13574,6 @@ export interface components {
         NoteUpdateRequest: {
             /** Note */
             note?: string | null;
-        };
-        /** NotebookLMConfig */
-        NotebookLMConfig: {
-            /** Enabled */
-            enabled?: boolean | null;
-            /** Notebook Id */
-            notebook_id?: string | null;
         };
         /** ObjectiveIn */
         ObjectiveIn: {
@@ -13595,8 +13993,18 @@ export interface components {
         ProductDomain: "anticorrosion_coating" | "degreaser" | "surface_treatment" | "autodeposition_coating";
         /** ProductIn */
         ProductIn: {
-            /** Code */
+            /**
+             * Code
+             * @default
+             */
             code: string;
+            /** Category Identifier */
+            category_identifier?: string | null;
+            /**
+             * Legacy Code
+             * @default
+             */
+            legacy_code: string;
             /** Name Zh */
             name_zh: string;
             /**
@@ -13730,7 +14138,7 @@ export interface components {
          */
         ProjectUpdateRequest: {
             /** Workspace */
-            workspace: {
+            workspace?: {
                 [key: string]: unknown;
             };
             /** Title */
@@ -13753,8 +14161,6 @@ export interface components {
             search_query: string;
             /** Source Types */
             source_types?: string[];
-            /** Notebooklm Notebook Id */
-            notebooklm_notebook_id?: string | null;
             /** Sources */
             sources?: components["schemas"]["Evidence"][];
             /** Selected Sources */
@@ -14486,6 +14892,13 @@ export interface components {
             process_window?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Process Window Custom
+             * @description 自定义工艺窗口参数
+             */
+            process_window_custom?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Ph Target */
             ph_target?: number | null;
             /**
@@ -14508,6 +14921,13 @@ export interface components {
             constraint_values?: {
                 [key: string]: number;
             };
+            /**
+             * Custom Constraints
+             * @description 自定义工艺约束结构化行
+             */
+            custom_constraints?: {
+                [key: string]: unknown;
+            }[] | null;
             active_formulation?: components["schemas"]["Formulation"] | null;
         };
         /** RerunRequest */
@@ -14592,6 +15012,13 @@ export interface components {
             process_window?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Process Window Custom
+             * @description 自定义工艺窗口参数
+             */
+            process_window_custom?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Ph Target */
             ph_target?: number | null;
             /**
@@ -14614,6 +15041,13 @@ export interface components {
             constraint_values?: {
                 [key: string]: number;
             };
+            /**
+             * Custom Constraints
+             * @description 自定义工艺约束结构化行
+             */
+            custom_constraints?: {
+                [key: string]: unknown;
+            }[] | null;
             active_formulation?: components["schemas"]["Formulation"] | null;
             /** Sources */
             sources?: components["schemas"]["Evidence"][];
@@ -15004,8 +15438,6 @@ export interface components {
              * @default 300
              */
             total_limit: number;
-            /** Notebooklm Notebook Id */
-            notebooklm_notebook_id?: string | null;
         };
         /** SearchResponse */
         SearchResponse: {
@@ -15868,8 +16300,49 @@ export interface components {
              * @default 30
              */
             per_source_cap: number;
-            /** Notebooklm Notebook Id */
-            notebooklm_notebook_id?: string | null;
+        };
+        /** ToxRecordIn */
+        ToxRecordIn: {
+            /**
+             * Endpoint
+             * @default LD50
+             */
+            endpoint: string;
+            /**
+             * Route
+             * @default oral
+             */
+            route: string;
+            /**
+             * Value
+             * @default
+             */
+            value: string;
+            /**
+             * Unit
+             * @default mg/kg
+             */
+            unit: string;
+            /**
+             * Species
+             * @default 大鼠
+             */
+            species: string;
+            /**
+             * Method
+             * @default
+             */
+            method: string;
+            /**
+             * Source
+             * @default manual
+             */
+            source: string;
+            /**
+             * Source Ref
+             * @default
+             */
+            source_ref: string;
         };
         /** TradeOffAnalysis */
         TradeOffAnalysis: {
@@ -17784,6 +18257,7 @@ export interface operations {
             query?: {
                 name?: string;
                 domain?: string;
+                project_id?: string | null;
                 limit?: number;
             };
             header?: never;
@@ -20738,6 +21212,251 @@ export interface operations {
             };
         };
     };
+    get_test_records_api_plm_substances__substance_id__test_records_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_substance_oel_api_plm_substances__substance_id__oel_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_tox_record_api_plm_substances__substance_id__tox_records_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToxRecordIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_tox_record_api_plm_substances__substance_id__tox_records__record_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_eco_record_api_plm_substances__substance_id__eco_records_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EcoRecordIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_eco_record_api_plm_substances__substance_id__eco_records__record_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_eco_profile_api_plm_substances__substance_id__eco_profile_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EcoProfileIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     import_supplier_sds_api_plm_substances_sds_import_post: {
         parameters: {
             query?: never;
@@ -20909,6 +21628,72 @@ export interface operations {
         };
     };
     get_product_api_plm_products__product_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_product_route_api_plm_products__product_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_product_route_api_plm_products__product_id__restore_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -22064,6 +22849,28 @@ export interface operations {
             };
         };
     };
+    list_regulations_api_plm_regulations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
     list_companies_api_plm_companies_get: {
         parameters: {
             query?: never;
@@ -22524,6 +23331,120 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_formulas_excel_api_plm_import_formulas_post: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_formulas_excel_api_plm_import_formulas_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_companies_excel_api_plm_import_companies_post: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_companies_excel_api_plm_import_companies_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_formulas_template_api_plm_import_templates_formulas_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    import_companies_template_api_plm_import_templates_companies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -30474,85 +31395,6 @@ export interface operations {
             };
         };
     };
-    auth_status_api_notebooklm_auth_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-        };
-    };
-    set_config_api_notebooklm_config_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NotebookLMConfig"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    login_api_notebooklm_login_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-        };
-    };
     chemical_lookup_api_chemical_lookup_get: {
         parameters: {
             query: {
@@ -32171,6 +33013,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["McpApproveSessionBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_mcp_session_api_connectors_mcp__server_id__revoke_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpRevokeSessionBody"];
             };
         };
         responses: {

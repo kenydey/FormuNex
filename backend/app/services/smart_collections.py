@@ -478,8 +478,6 @@ def is_due(collection: dict[str, Any], now: float | None = None) -> bool:
 
 def _run_search(
     query: str, filters: dict[str, Any], settings: Any = None,
-    # v15: per-project NotebookLM notebook（None = 用全局配置）
-    notebooklm_notebook_id: str | None = None,
 ) -> list[Any]:
     from .federated_search import FederatedSearchEngine
 
@@ -489,7 +487,6 @@ def _run_search(
         date_from=filters.get("date_from"),
         date_to=filters.get("date_to"),
         domain_allowlist=filters.get("domain_allowlist"),
-        notebooklm_notebook_id=notebooklm_notebook_id,
     )
     return list(result.evidence or [])
 
@@ -578,18 +575,8 @@ def refresh_collection(
         # silently refreshing with every new item left "unset".
         screening_preset = _validate_preset(col.get("screening_preset"))
 
-    # v15: per-project NotebookLM notebook — resolved by the single source
-    # in notebooklm.resolve_notebook_id (P1-7); see below.
-
-    # P1-7: single-source NotebookLM resolution — the smart-collection
-    # refresh previously did its own project-store lookup here; it now
-    # goes through notebooklm.resolve_notebook_id like every other path.
-    from .notebooklm import resolve_notebook_id
-
-    nb_id = resolve_notebook_id(project_id=project_id)
-
     # 阶段 2：耗时 IO（外部文献搜索），不持有任何 store 锁。
-    evidence = _run_search(query, filters, settings=settings, notebooklm_notebook_id=nb_id)
+    evidence = _run_search(query, filters, settings=settings)
 
     # 阶段 3：持久化（manifest 合并 + 快照），按 project 串行。
     with _project_txn(project_id) as store:

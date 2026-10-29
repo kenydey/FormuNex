@@ -12,7 +12,7 @@ export interface KbSource {
   archived: boolean;
 }
 
-export type SearchSourceType = "patents" | "surechembl" | "literature" | "internet" | "local" | "notebooklm";
+export type SearchSourceType = "patents" | "surechembl" | "literature" | "internet" | "local";
 
 export interface SourceStatus {
   available: boolean;
@@ -290,18 +290,6 @@ export interface MemoryItem {
   created_at: string;
   updated_at: string;
 }
-
-export interface NotebookLMStatus {
-  available: boolean;
-  hint?: string | null;
-  lib_installed?: boolean;
-  enabled?: boolean;
-  notebook_id?: string | null;
-  session_present?: boolean;
-  auth_ready?: boolean;
-}
-
-export interface NotebookLMLogin { started: boolean; mode: string; hint?: string | null; command?: string | null; manual_url?: string | null }
 
 export interface ParseAvailability { gpu_available: boolean; mineru_key_present: boolean; vision_available: boolean; active_rag_backend: string }
 

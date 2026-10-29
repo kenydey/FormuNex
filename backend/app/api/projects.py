@@ -1,4 +1,4 @@
-"""Project workspace CRUD — NotebookLM-style persistent sessions."""
+"""Project workspace CRUD — persistent sessions."""
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile

@@ -6,7 +6,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ui import click_if_present, close_modal, in_modal, open_modal  # noqa: E402
+from _ui import click_if_present, close_modal, in_modal, open_modal, system_chromium  # noqa: E402
 
 IMAGES = Path(__file__).parent.parent / "docs" / "images"
 BASE = "http://localhost:5173"
@@ -22,7 +22,7 @@ async def main():
     IMAGES.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"], executable_path=system_chromium())
         ctx = await browser.new_context(viewport={"width": 1440, "height": 900})
         page = await ctx.new_page()
 
@@ -36,10 +36,8 @@ async def main():
         print("02-search…")
         await page.locator("textarea").first.fill("低 VOC 水性防腐蚀涂料配方研究")
         await asyncio.sleep(0.3)
-        # Toggle Internet + NotebookLM on
+        # Toggle Internet on
         await page.locator("button:has-text('互联网')").click()
-        await asyncio.sleep(0.2)
-        await page.locator("button:has-text('NotebookLM')").click()
         await asyncio.sleep(0.2)
         await shot(page, "02-search.png")
 

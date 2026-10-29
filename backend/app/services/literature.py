@@ -54,15 +54,12 @@ def _search_cache_key(
     per_source_cap: int,
     domain,
     req=None,
-    notebooklm_notebook_id: "str | None" = None,
     max_rounds: int = 5,
 ) -> str:
-    """sha256(query | 排序后 source_types | total_limit | per_source_cap | domain | req指纹 | notebook | max_rounds)。
+    """sha256(query | 排序后 source_types | total_limit | per_source_cap | domain | req指纹 | max_rounds)。
 
     P1-2: req 指纹（substrate 等）必须进 key。_merge_filter_rank 用 req 做
     substrate 过滤，旧 key 缺 req 维度，换需求后 600s 内命中脏缓存。
-    v14-2: notebooklm_notebook_id 是 iter_search 的独立形参（Requirement
-    schema 无此字段），必须单独进 key，否则同 query 切 notebook 命中脏缓存。
     v16 P3-7: max_rounds 进 key —— 轮数影响终态（早停条件），不同轮数
     不应共享缓存。
     """
@@ -73,11 +70,8 @@ def _search_cache_key(
             str(getattr(req, "salt_spray_hours", "") or ""),
             str(getattr(req, "product_type", "") or ""),
             str(getattr(req, "project_id", "") or ""),
-            str(getattr(req, "notebooklm_notebook_id", "") or ""),
         ]
         req_fp = hashlib.sha256("|".join(fp_parts).encode("utf-8")).hexdigest()[:16]
-    # v14-2: 独立形参优先（Requirement 无此字段，getattr 恒为空）
-    nb_id = notebooklm_notebook_id or ""
     payload = "|".join(
         [
             str(query or ""),
@@ -86,7 +80,6 @@ def _search_cache_key(
             str(per_source_cap),
             str(domain or ""),
             req_fp,
-            str(nb_id),
             str(max_rounds),
         ]
     )
@@ -950,11 +943,10 @@ def _build_streams(
     *,
     ipc_codes: tuple[str, ...] | list[str] = (),
     chinese_query: str = "",
-    notebooklm_notebook_id: str | None = None,
     western_terms: "Sequence[str] | None" = None,
 ) -> list[dict]:
     """One paged stream per source. ``paged`` sources support offset/round paging;
-    single-shot sources (chemcrow/notebooklm) yield once then finish."""
+    single-shot sources (chemcrow) yield once then finish."""
     streams: list[dict] = []
 
     def add(name: str, fetch, paged: bool) -> None:
@@ -1075,13 +1067,6 @@ def _build_streams(
             ),
             True,
         )
-    if "notebooklm" in source_types:
-        def _nb(off: int, q=western_query, nid=notebooklm_notebook_id) -> list[Evidence]:
-            from .notebooklm import search_notebooklm  # 延迟导入：未装库时零开销
-
-            return search_notebooklm(q, page_size, notebook_id=nid)
-
-        add("notebooklm", _nb, False)
     return streams
 
 
@@ -1115,7 +1100,6 @@ def iter_search(
     per_source_cap: int = 50,
     max_rounds: int = 5,
     progress_cb=None,
-    notebooklm_notebook_id: str | None = None,
 ) -> tuple[list[Evidence], dict]:
     """Incremental multi-source retrieval — fetch in rounds until no source turns
     up new related results (no fixed time budget).
@@ -1132,27 +1116,11 @@ def iter_search(
     """
     from ..config import get_settings
 
-    # P1-7: external search without an explicit notebook id resolves the
-    # project binding (via the single notebooklm resolver) instead of
-    # silently falling back to the legacy global inside search_notebooklm.
-    # Resolving before the cache key also keeps two projects' bindings
-    # from sharing one cache entry.
-    if not (notebooklm_notebook_id or "").strip() and req is not None:
-        try:
-            from .notebooklm import resolve_notebook_id
-
-            notebooklm_notebook_id = resolve_notebook_id(
-                project_id=getattr(req, "project_id", "") or ""
-            )
-        except Exception:  # noqa: BLE001 - fail-open to legacy fallback
-            pass
     _cache_settings = get_settings()
     cache_ttl_s = int(_cache_settings.search_cache_ttl_s or 0)
     domain_hint = getattr(req, "domain", None) if req is not None else None
     cache_key = _search_cache_key(
         query, source_types, total_limit, per_source_cap, domain_hint, req,
-        # v14-2: 独立形参进 key，防跨 notebook 脏缓存
-        notebooklm_notebook_id=notebooklm_notebook_id,
         # v16 P3-7: max_rounds 进 key
         max_rounds=max_rounds,
     )
@@ -1185,7 +1153,6 @@ def iter_search(
     streams = _build_streams(
         patent_q, western_q, source_types, req, page_size,
         ipc_codes=ipc_codes, chinese_query=chinese_q,
-        notebooklm_notebook_id=notebooklm_notebook_id,
         western_terms=western_terms,
     )
 
@@ -1498,11 +1465,10 @@ def search_by_types(
     req: Requirement | None = None,
     limit_per_source: int = 50,
     total_limit: int = 300,
-    notebooklm_notebook_id: str | None = None,
 ) -> list[Evidence]:
     """多源检索，合并结果（同步、一次性返回——薄封装 :func:`iter_search`）。
 
-    source_types: 任意子集 ["patents", "literature", "internet", "surechembl", "notebooklm"]。
+    source_types: 任意子集 ["patents", "literature", "internet", "surechembl"]。
     "local" 由 /api/ingest 处理，不在此检索。
     """
     return iter_search(
@@ -1511,7 +1477,6 @@ def search_by_types(
         req=req,
         total_limit=total_limit,
         per_source_cap=limit_per_source,
-        notebooklm_notebook_id=notebooklm_notebook_id,
     )[0]
 
 
@@ -1604,7 +1569,6 @@ def get_source_availability() -> dict[str, dict]:
     def _ok(*pkgs: str) -> bool:
         return any(optional_import(pkg) for pkg in pkgs)
 
-    from .notebooklm import get_setup_status
     from ..config import get_settings
 
     s = get_settings()
@@ -1704,7 +1668,6 @@ def get_source_availability() -> dict[str, dict]:
             "deprecated": True,
             "hint": "ChemCrow 集成已于 2026-09 退役，无需安装（化学增强检索由 paper-qa 与网络源提供）",
         },
-        "notebooklm": get_setup_status(),
         "surechembl": {
             "available": s.surechembl,
             "offline_fallback": False,

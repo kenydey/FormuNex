@@ -6,7 +6,7 @@
 
 统计（123 个组件）：✅ 已迁移 114，🟡 部分 0，⬜ 待迁移 0，➖ 废弃 / 取代 9
 
-验证：`frontend/e2e/routes.spec.ts` 在运行中的后端上逐一打开全部页面（未选 / 已选项目两遍），无未捕获异常、控制台错误、错误边界或 5xx；`e2e/smoke.spec.ts` 走主路径。两者都需手动运行（见 e2e/README.md），不在 CI 中。
+验证（2026-10-30 随 Chromium 剔除，Playwright 页面扫描已删除）：现以 vitest 单元测试 + 桌面冒烟测试（`frontend/e2e-desktop/README.md`）覆盖；Web 端全页扫描不再运行。
 
 另外，新前端还包含旧前端没有的功能：账号登录与用户角色、审计日志、物质法规库检索、PageIndex 深度检索与目录树、规格契约（工艺窗口 / 红线 / 出厂 / 验收）、
 约束混料 / 正交 / D-最优 DOE 与合规预筛、实验任务单 / 测量复核 / 方法与仪器 / ELN 同步、Conformal 覆盖率、PLM 产品修订 / 文档生成与校对 / 发布门禁 / 四级签批 / 标签设计器。
@@ -42,9 +42,9 @@
 | ① 知识 | `ManifestDetailPanel` | ✅ 已迁移 | library/ManifestPage /knowledge/manifest |
 | ① 知识 | `MarkdownMessage` | ✅ 已迁移 | shared/Markdown（GFM、KaTeX、SMILES、Mermaid） |
 | ① 知识 | `MermaidBlock` | ✅ 已迁移 | shared/Markdown MermaidBlock |
-| ① 知识 | `NotebookLMPanel` | ✅ 已迁移 | library/NotebookLMPage /knowledge/notebooklm |
+| ① 知识 | `NotebookLMPanel` | ❌ 已下线（2026-10-30 NotebookLM 后端下线） | 原 library/NotebookLMPage /knowledge/notebooklm，已删除 |
 | ① 知识 | `OcsrPanel` | ✅ 已迁移 | library/ParsingPage /knowledge/parsing（识别状态 + SMILES 输入绘制；旧组件本身也只有状态面板，Ketcher 从未接入） |
-| ① 知识 | `ProjectNotebookLMModal` | ✅ 已迁移 | library/NotebookLMPage（项目笔记本 ID 存入项目） |
+| ① 知识 | `ProjectNotebookLMModal` | ❌ 已下线（2026-10-30 NotebookLM 后端下线） | 原 library/NotebookLMPage（项目笔记本 ID 存入项目），已删除 |
 | ① 知识 | `PublicationPreflightPanel` | ✅ 已迁移 | research/PreflightPanel（产出页 ?tab=preflight） |
 | ① 知识 | `RagPrewarmBar` | ✅ 已迁移 | chat/ChatToolbar |
 | ① 知识 | `RelatedWikiList` | ✅ 已迁移 | wiki/RelatedWikiList（问答与研究问答回答下方） |

@@ -25,7 +25,6 @@ const en: Record<string, string> = {
   "hub.library.catalog": "Catalog & import",
   "hub.library.frozen": "Freeze & screening",
   "hub.library.smart": "Smart collections (scheduled rules)",
-  "hub.library.notebooklm": "NotebookLM",
   "hub.wiki.pages": "Browse & read pages",
   "hub.wiki.graph": "Link graph",
   "hub.doe.designer": "Designer",

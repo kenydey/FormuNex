@@ -29,9 +29,6 @@ class FederatedSearchEngine:
 
     def effective_sources(self) -> list[str]:
         sources = list(self._settings.federated_sources)
-        if self._settings.federated_sources_notebooklm or self._settings.notebooklm_enabled:
-            if "notebooklm" not in sources:
-                sources.append("notebooklm")
         return sources
 
     def search(
@@ -47,8 +44,6 @@ class FederatedSearchEngine:
         date_from: str | int | None = None,
         date_to: str | int | None = None,
         domain_allowlist: list[str] | None = None,
-        # v15: per-project NotebookLM notebook（None = 用全局配置；透传 iter_search）
-        notebooklm_notebook_id: str | None = None,
     ) -> FederatedSearchResult:
         types = source_types or self.effective_sources()
         limit = total_limit or min(120, self._settings.search_total_limit)
@@ -64,9 +59,6 @@ class FederatedSearchEngine:
                 total_limit=limit,
                 per_source_cap=cap,
                 progress_cb=progress_cb,
-                # v15: per-project notebook 透传（Requirement schema 无该字段，
-                # 故走独立形参，与 v14-2 的 _search_cache_key 模式一致）
-                notebooklm_notebook_id=notebooklm_notebook_id,
             )[0]
         except Exception as exc:
             logger.exception("FederatedSearch failed: {}", exc)

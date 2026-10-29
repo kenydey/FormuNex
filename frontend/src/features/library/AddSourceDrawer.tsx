@@ -15,7 +15,7 @@ import { UPLOAD_ACCEPT, UPLOAD_BATCH_MAX, canIngestFulltext, chunk, mergeEvidenc
 import { SourceTypePicker, useSourceTypeLabel } from "./SourceTypePicker";
 import type { EmbodimentDraft, Evidence, IngestEvidenceResult, IngestResponse, SearchSourceType, SourceStatus } from "./types";
 
-const SEARCH_TYPES: SearchSourceType[] = ["patents", "surechembl", "literature", "internet", "notebooklm"];
+const SEARCH_TYPES: SearchSourceType[] = ["patents", "surechembl", "literature", "internet"];
 
 function Warnings({ warnings }: { warnings: string[] }) {
   const { t } = useTranslation();
@@ -161,7 +161,7 @@ function SimpleImport({ kind, onDone }: { kind: "url" | "text" | "id"; onDone: (
 
 type RowState = { status: string; source_id?: string | null; error?: string | null };
 
-/** Federated web search (patents / literature / internet / NotebookLM); hits can be ingested into the KB one by one. */
+/** Federated web search (patents / literature / internet); hits can be ingested into the KB one by one. */
 function WebSearchTab({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -177,12 +177,6 @@ function WebSearchTab({ onDone }: { onDone: () => void }) {
   const [seed, setSeed] = useState(false);
   const task = useRef<{ id?: string; ctrl?: AbortController }>({});
   const status = useQuery({ queryKey: ["search", "status"], queryFn: () => call<Record<string, SourceStatus>>("GET", "/api/search/status") });
-  const project = useQuery({
-    queryKey: ["project", projectId], enabled: !!projectId && types.includes("notebooklm"),
-    queryFn: () => call<{ workspace?: { notebooklm_notebook_id?: string | null } }>("GET", `/api/projects/${projectId}`),
-  });
-  const notebookId = (project.data?.workspace?.notebooklm_notebook_id ?? "").trim();
-  const needNotebook = types.includes("notebooklm") && !notebookId;
 
   const search = useMutation({
     mutationFn: async () => {
@@ -192,7 +186,6 @@ function WebSearchTab({ onDone }: { onDone: () => void }) {
       const sel = searchableTypes(types);
       const acc = await call<AsyncTaskAccepted>("POST", "/api/search/stream", {
         query: query.trim(), source_types: sel, total_limit: 300,
-        notebooklm_notebook_id: sel.includes("notebooklm") ? notebookId || undefined : undefined,
       });
       task.current = { id: acc.task_id, ctrl };
       const onData = (d: Record<string, unknown> | undefined) => {
@@ -266,9 +259,8 @@ function WebSearchTab({ onDone }: { onDone: () => void }) {
     <Space direction="vertical" style={{ width: "100%" }}>
       <Input.Search value={query} onChange={(e) => setQuery(e.target.value)} enterButton={t("library.search.run", "检索")}
         placeholder={t("library.search.placeholder", "输入检索关键词，例如：水性环氧 防腐 盐雾")} loading={search.isPending}
-        onSearch={() => { if (query.trim() && searchableTypes(types).length && !needNotebook) search.mutate(); }} />
+        onSearch={() => { if (query.trim() && searchableTypes(types).length) search.mutate(); }} />
       <SourceTypePicker value={types} onChange={setTypes} status={status.data} types={SEARCH_TYPES} />
-      {needNotebook && <Alert type="warning" showIcon message={<span>{t("library.search.need_notebook", "所选项目未绑定 NotebookLM Notebook ID")} <Link to="/knowledge/notebooklm">{t("library.search.bind", "去绑定")}</Link></span>} />}
       {search.isPending && (
         <Space>
           <Typography.Text type="secondary">{ev?.message || t("library.add.queued", "排队中…")} · {t("library.search.count", "{{n}} 条", { n: hits.length })}</Typography.Text>

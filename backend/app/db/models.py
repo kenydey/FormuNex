@@ -653,7 +653,7 @@ class KGEntityLink(Base):
 
 
 class ProjectRow(Base):
-    """NotebookLM-style project workspace (JSON payload)."""
+    """Project workspace (JSON payload)."""
 
     __tablename__ = "projects"
 

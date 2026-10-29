@@ -3,7 +3,6 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services import ingestion, literature
-from app.services.notebooklm import get_setup_status
 
 client = TestClient(app)
 
@@ -294,7 +293,7 @@ def test_source_status_endpoint():
     assert r.status_code == 200
     body = r.json()
     # All retrieval sources must be present, including the chemcrow key (v0.9).
-    for src in ("patents", "literature", "internet", "notebooklm", "chemcrow"):
+    for src in ("patents", "literature", "internet", "chemcrow"):
         assert src in body, f"Missing source: {src}"
         assert "available" in body[src]
     # chemcrow is a library-optional source; not available without intel extra.
@@ -309,7 +308,7 @@ def test_search_response_includes_source_status():
         "/api/search",
         json={
             "query": "epoxy",
-            "source_types": ["patents", "literature", "internet", "notebooklm"],
+            "source_types": ["patents", "literature", "internet"],
         },
     )
     assert r.status_code == 200
@@ -328,25 +327,11 @@ def test_search_response_includes_source_status():
         if not st["available"]:
             assert st["hint"] is not None
 
-    # NotebookLM defaults to unconfigured.
-    nb = body["source_status"]["notebooklm"]
-    assert nb["available"] is False
-    assert nb["reason"] is not None
-    assert nb["hint"] is not None
-
     # The ChemCrow key stays in the payload (public contract) but the integration is retired: never available,
     # explains itself, and is marked deprecated so clients stop reading it.
     cc = body["source_status"]["chemcrow"]
     assert cc["available"] is False and cc["reason"] == "retired" and cc["deprecated"] is True
     assert cc["hint"]
-
-
-def test_notebooklm_setup_status_default():
-    # Default config → library_missing or not_enabled, never ready.
-    status = get_setup_status()
-    assert status["available"] is False
-    assert status["reason"] in ("library_missing", "not_enabled", "no_notebook_id", "session_missing")
-    assert status["hint"] is not None
 
 
 def test_source_availability_patents_always_present():

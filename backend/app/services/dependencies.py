@@ -165,11 +165,6 @@ CATALOG: tuple[Dependency, ...] = (
     Dependency("pydoe", "pydoe", "pydoe", "pyDOE 经典实验设计（LHS/CCD/混合物/Sobol）"),
     Dependency("baybe", "baybe", "baybe", "BayBE 约束贝叶斯主动学习 Campaign"),
     Dependency("pandas", "pandas", "baybe", "BayBE 测量数据 DataFrame 依赖"),
-    # ── NotebookLM ─────────────────────────────────────────────────────────
-    Dependency(
-        "notebooklm-py", "notebooklm", "notebooklm", "NotebookLM 资料来源（非官方 SDK + 浏览器）",
-        spec="notebooklm-py[browser]>=0.1",
-    ),
 )
 
 # Packages that make "online mode" work end-to-end — the one-click target.

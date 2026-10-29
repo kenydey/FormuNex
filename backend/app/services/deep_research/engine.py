@@ -102,8 +102,6 @@ class DeepResearchEngine:
         total_limit: int | None = None,
         per_source_cap: int | None = None,
         progress_cb: Callable[[list[Evidence]], None] | None = None,
-        # v15: per-project NotebookLM notebook（None = 用全局配置）
-        notebooklm_notebook_id: str | None = None,
     ) -> tuple[list[Evidence], ExpandedQuery]:
         """QueryExpander + iter_search 多源检索。"""
         domain = getattr(req, "domain", None) if req is not None else None
@@ -121,7 +119,6 @@ class DeepResearchEngine:
             total_limit=limit,
             per_source_cap=cap,
             progress_cb=progress_cb,
-            notebooklm_notebook_id=notebooklm_notebook_id,
         )[0]
 
         # Full-text acquisition: upgrade the top fetchable hits (patent PDF /
@@ -146,8 +143,6 @@ class DeepResearchEngine:
         total_limit: int | None = None,
         per_source_cap: int | None = None,
         progress_cb: Callable[[list[RetrievalHit]], None] | None = None,
-        # v16: per-project NotebookLM notebook（None = 用全局配置）
-        notebooklm_notebook_id: str | None = None,
     ) -> RetrievalReport:
         def _on_progress(evidence_list: list[Evidence]) -> None:
             if progress_cb is not None:
@@ -160,7 +155,6 @@ class DeepResearchEngine:
             total_limit=total_limit,
             per_source_cap=per_source_cap,
             progress_cb=_on_progress if progress_cb else None,
-            notebooklm_notebook_id=notebooklm_notebook_id,
         )
         results = [RetrievalHit.from_evidence(e) for e in evidence]
         engine = "llm" if self._settings.get_active_api_key() else "offline"

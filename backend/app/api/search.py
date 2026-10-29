@@ -24,7 +24,6 @@ class SearchRequest(BaseModel):
     requirement: Requirement | None = None
     limit_per_source: int = Field(default=50, ge=1, le=200)
     total_limit: int = Field(default=300, ge=1, le=1000)
-    notebooklm_notebook_id: str | None = None
 
 
 def _effective_source_types(request_types: list[str]) -> list[str]:
@@ -157,7 +156,6 @@ def search_sources(req: SearchRequest):
         req=req.requirement,
         total_limit=req.total_limit,
         per_source_cap=req.limit_per_source,
-        notebooklm_notebook_id=req.notebooklm_notebook_id,
     )
     return SearchResponse(
         evidence=evidence,
@@ -177,7 +175,6 @@ def search_stream(req: SearchRequest) -> JSONResponse:
         "requirement": req.requirement.model_dump() if req.requirement else None,
         "total_limit": req.total_limit,
         "per_source_cap": req.limit_per_source,
-        "notebooklm_notebook_id": req.notebooklm_notebook_id,
     }, "search")
 
 
@@ -188,7 +185,6 @@ class TopicSweepRequest(BaseModel):
     requirement: Requirement | None = None
     total_limit: int = Field(default=100, ge=1, le=1000)
     per_source_cap: int = Field(default=30, ge=1, le=200)
-    notebooklm_notebook_id: str | None = None
 
 
 @router.post("/search/topic-sweep", status_code=202)
@@ -206,5 +202,4 @@ def topic_sweep(req: TopicSweepRequest) -> JSONResponse:
         "requirement": req.requirement.model_dump() if req.requirement else None,
         "total_limit": req.total_limit,
         "per_source_cap": req.per_source_cap,
-        "notebooklm_notebook_id": req.notebooklm_notebook_id,
     }, "topic_sweep")

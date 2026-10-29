@@ -9,7 +9,6 @@ import type { ChatTurn, ComprehensiveReport, Evidence, FilterReport, SourceType 
 interface ResearchState {
   query: string;
   sourceTypes: SourceType[];
-  notebookId: string;
   sources: Evidence[];
   selected: string[];
   usedSeedFallback: boolean;
@@ -18,7 +17,6 @@ interface ResearchState {
   report: ComprehensiveReport | null;
   setQuery: (q: string) => void;
   setSourceTypes: (t: SourceType[]) => void;
-  setNotebookId: (id: string) => void;
   /** Merge rows (deduplicated) and select the new ones. */
   addSources: (rows: Evidence[]) => void;
   resetSources: () => void;
@@ -32,7 +30,6 @@ interface ResearchState {
 export const useResearch = create<ResearchState>()((set) => ({
   query: "",
   sourceTypes: DEFAULT_SOURCE_TYPES,
-  notebookId: "",
   sources: [],
   selected: [],
   usedSeedFallback: false,
@@ -41,7 +38,6 @@ export const useResearch = create<ResearchState>()((set) => ({
   report: null,
   setQuery: (query) => set({ query }),
   setSourceTypes: (sourceTypes) => set({ sourceTypes }),
-  setNotebookId: (notebookId) => set({ notebookId }),
   addSources: (rows) => set((s) => {
     const { merged, added } = mergeEvidence(s.sources, rows);
     return added.length ? { sources: merged, selected: [...s.selected, ...added.filter((k) => !s.selected.includes(k))] } : {};

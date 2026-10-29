@@ -48,8 +48,6 @@ class ResearchGraphState(TypedDict, total=False):
     topic: str
     query: str
     req: Requirement | None
-    # v15: per-project NotebookLM notebook（None = 用全局配置；fallback 透传）
-    notebooklm_notebook_id: str | None
     pre_index: list[Evidence]
     evidence: list[Evidence]
     grounded_evidence: list[Evidence]
@@ -314,8 +312,6 @@ def fallback_node(
     settings = settings or get_settings()
     query = state.get("query") or state.get("topic") or ""
     req = state.get("req")
-    # v15: per-project notebook 透传（Requirement schema 无该字段，走 state 独立键）
-    nb_id = state.get("notebooklm_notebook_id")
 
     # The fallback is itself a network call, and CRAG only gets here because
     # local retrieval was already judged insufficient. Letting an upstream
@@ -336,11 +332,10 @@ def fallback_node(
                 total_limit=30,
                 per_source_cap=10,
                 max_rounds=1,
-                notebooklm_notebook_id=nb_id,
             )[0]
         else:
             fed = FederatedSearchEngine(settings)
-            result = fed.search(query, req=req, notebooklm_notebook_id=nb_id)
+            result = fed.search(query, req=req)
             evidence = result.evidence
     except Exception as exc:
         evidence = degrade_return(logger, exc, "CRAG fallback search failed", [])
@@ -654,8 +649,6 @@ def run_research_graph(
     mode: Literal["recommend", "deep"] = "deep",
     modify_prompt: str = "",
     base_formulas: list[Formulation] | None = None,
-    # v16: per-project NotebookLM notebook（None = 用全局配置）
-    notebooklm_notebook_id: str | None = None,
 ) -> ResearchGraphState:
     """Execute CRAG pipeline (LangGraph-compatible linear runner).
 
@@ -667,19 +660,6 @@ def run_research_graph(
     settings = settings or get_settings()
     q = build_research_query(query or topic, req)
 
-    # v16: 未显式传入时，从项目工作区解析 per-project notebook（fail-open）。
-    # P1-7: via the single resolver in notebooklm (same function the
-    # external-search and smart-collection paths use).
-    if notebooklm_notebook_id is None and req is not None:
-        try:
-            from ..services.notebooklm import resolve_notebook_id
-
-            notebooklm_notebook_id = resolve_notebook_id(
-                project_id=getattr(req, "project_id", "") or ""
-            )
-        except Exception:  # noqa: BLE001 - fail-open
-            notebooklm_notebook_id = None
-
     state: ResearchGraphState = {
         "topic": topic,
         "query": q,
@@ -688,8 +668,6 @@ def run_research_graph(
         "fallback_used": False,
         "modify_prompt": modify_prompt,
         "base_formulas": base_formulas or [],
-        # v16: per-project NotebookLM notebook 传给 fallback_node
-        "notebooklm_notebook_id": notebooklm_notebook_id,
     }
 
     state = _run_crag_retrieval(state, settings, mode, progress_cb)

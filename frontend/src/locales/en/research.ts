@@ -36,8 +36,6 @@ const en: Record<string, string> = {
 
   "research.search.run": "Search",
   "research.search.placeholder": "Search external patents, literature and the web, e.g. waterborne epoxy zinc dust salt spray",
-  "research.search.notebook": "NotebookLM notebook ID",
-  "research.search.need_notebook": "Enter a NotebookLM notebook ID first",
   "research.search.append": "Add search (keep current sources)",
   "research.search.queued": "Queued…",
   "research.search.done": "Search complete, {{n}} sources",
@@ -47,8 +45,6 @@ const en: Record<string, string> = {
   "research.search.total": "{{n}} so far",
   "research.search.fallback": "Streaming search interrupted ({{e}}); fell back to synchronous search",
   "research.search.seed": "Some results come from the offline sample corpus (external sources unavailable); do not use them as formal evidence.",
-  "research.search.notebook_bound": "Project is bound to Notebook {{id}} (you may enter another ID)",
-  "research.search.notebook_unbound": "The selected project has no NotebookLM Notebook ID bound",
   "research.search.filtered": "Quality filter: kept {{k}}, dropped {{d}}",
 
   "research.kb.building": "Building the knowledge base in the background…",

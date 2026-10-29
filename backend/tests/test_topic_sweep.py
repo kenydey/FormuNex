@@ -18,7 +18,7 @@ def test_topic_sweep_searches_and_dispatches(monkeypatch):
     called = {}
 
     def fake_iter(query, source_types, req=None, total_limit=0, per_source_cap=0, progress_cb=None, **_kwargs):
-        # **_kwargs absorbs notebooklm_notebook_id and future iter_search options.
+        # **_kwargs absorbs future iter_search options.
         called["query"] = query
         called["source_types"] = source_types
         return ([_ev("10.1000/example")], {"kept": 1, "dropped": 0})

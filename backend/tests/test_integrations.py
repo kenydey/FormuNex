@@ -398,18 +398,3 @@ def test_complete_json_helper_safe_without_llm():
     assert result is None or isinstance(result, dict)
 
 
-# ── v0.7: NotebookLM retrieval source (disabled by default) ───────────────────
-
-def test_search_notebooklm_source_offline_returns_empty():
-    from fastapi.testclient import TestClient
-    from app.main import app
-
-    client = TestClient(app)
-    # notebooklm-py absent / feature disabled in CI → no results, status 200.
-    resp = client.post("/api/search", json={
-        "source_types": ["notebooklm"],
-        "query": "epoxy resin anticorrosion",
-        "limit_per_source": 3,
-    })
-    assert resp.status_code == 200
-    assert resp.json()["evidence"] == []

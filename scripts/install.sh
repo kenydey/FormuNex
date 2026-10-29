@@ -57,5 +57,5 @@ echo "   5. Verify: curl -s localhost:8000/health  # datalab.reachable=true, tas
 echo ""
 echo "   Or one-shot: bash scripts/start_all.sh"
 echo "   More extras (optional engines only — native DOE/optimizer works without them):"
-echo "     pip install -e \".[intel,science,embedding,optimize,bo,baybe,pydoe,color,file_ingest,export,notebooklm,colbert,crag]\""
+echo "     pip install -e \".[intel,science,embedding,optimize,bo,baybe,pydoe,color,file_ingest,export,colbert,crag]\""
 echo "   Docker full stack: cp .env.example .env && docker compose -f docker-compose.yml -f docker-compose.eln.yml up"

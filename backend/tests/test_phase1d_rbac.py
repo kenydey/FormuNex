@@ -74,7 +74,6 @@ def test_guard_table_covers_new_prefixes():
         ("POST", "/api/cockpit/pareto", "formulation.read"),
         ("POST", "/api/design/inverse", "optimize.run"),
         ("POST", "/api/search", "knowledge.read"),
-        ("POST", "/api/notebooklm/config", "admin.llm"),
         ("POST", "/api/ops/datalab-orphans/cleanup", "admin.llm"),
         ("POST", "/api/chat", None),  # 对话接口：策略豁免（触发的动作另行受检）
         ("GET", "/api/identity/users", "admin.users"),

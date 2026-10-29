@@ -58,7 +58,6 @@ from .api import surechembl as surechembl_router
 from .api import org as org_router
 from .api import compliance as compliance_router
 from .api import meta as meta_router
-from .api import notebooklm as notebooklm_router
 from .api import session_plans as session_plans_router
 from .api import tech_reports as tech_reports_router
 from .api import memories as memories_router
@@ -343,7 +342,6 @@ app.include_router(loop_router.router)
 app.include_router(design_router.router)
 app.include_router(intent_router.router)
 app.include_router(dependencies_router.router)
-app.include_router(notebooklm_router.router)
 app.include_router(chemistry_router.router)
 app.include_router(projects_router.router)
 app.include_router(formulation_skills_router.router)

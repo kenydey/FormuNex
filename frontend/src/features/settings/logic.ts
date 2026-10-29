@@ -11,7 +11,6 @@ const LEGACY_TAB_MAP: Record<string, SettingsTab> = {
   api: "keys",
   secrets: "keys",
   skills: "capabilities",
-  notebooklm: "capabilities",
   advanced: "env",
   maintenance: "kb",
 };
@@ -47,7 +46,7 @@ export function envFlagUpdates(flags: EnvFlag[], drafts: Record<string, boolean>
 /** Display order of the optional-dependency extras; unknown extras are listed last. */
 export const DEP_EXTRA_ORDER = [
   "llm", "intel", "embedding", "colbert", "crag", "science", "optimize", "bo", "pydoe", "baybe", "color", "file_ingest",
-  "parse_pro", "export", "notebooklm",
+  "parse_pro", "export",
 ];
 
 export function groupDependencies(deps: DependencyInfo[]): { extra: string; items: DependencyInfo[] }[] {

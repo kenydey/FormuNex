@@ -29,7 +29,7 @@ REQUEST_BUDGET_S = 30.0
 # endpoints that stream, return files, or reach the public internet — not what this walk is for
 SKIP = re.compile(
     r"/stream$|/events$|/download$|/export|/shutdown|/search|/research|/chat|/ingest/(url|task)|/connectors/mcp/call"
-    r"|/skills/install|/mcp/import|/kb/golden-eval|/intent|/surechembl|/dependencies/install|/notebooklm|/molscribe"
+    r"|/skills/install|/mcp/import|/kb/golden-eval|/intent|/surechembl|/dependencies/install|/molscribe"
 )
 METHODS = ("get", "post", "put", "patch", "delete")
 

@@ -81,7 +81,6 @@ it is installed.
 | Patent search | `patent_client` (optional, `.[patents]` — see the warning in the install section) | curated seed corpus per domain |
 | Literature search | `arxiv`, Semantic Scholar (HTTP API, no SDK), OpenAlex | (offline returns no extra hits) |
 | Internet search | `duckduckgo-search` | (offline returns no extra hits) |
-| **NotebookLM source** | `notebooklm-py` (browser-session auth) | (off → no extra hits) |
 | File ingestion | `markitdown` (PDF/DOCX/XLSX/PPTX/HTML/images…) → `pypdf`/`python-docx` | plain-text decoder |
 | RAG (session chat) | ColBERT/PyLate (GPU) · **BM25+FAISS** (CPU) · sentence-transformers | in-memory TF-IDF |
 | RAG (persistent KB) | **hybrid BM25 + embedding cosine** over `document_chunks` (`/api/kb/hybrid-search`); BM25 prefilter when near scan cap / hot p95 | keyword-only without embeddings |
@@ -129,9 +128,9 @@ most pages show only an empty state.
 | System admin | MCP tool approvals, Users & roles, Company configuration, Settings center, Audit log, Organization dashboard (plus a desktop-only entry: Desktop & local services) |
 
 Entries no longer in the left nav, still reachable (routes kept): **quality-ops**
-lives on the search hub's ops tab; **NotebookLM** on the library hub tab;
-**connectors** on the settings-center tab; **agent memory** in the knowledge-Q&A
-page header; **project sources** only via the contract page header.
+lives on the search hub's ops tab; **connectors** on the settings-center tab;
+**agent memory** in the knowledge-Q&A page header; **project sources** only via
+the contract page header.
 
 **Research page (Literature & research → External search & deep research)**
 uses tabs instead of the old three columns: **External search** (multi-source
@@ -271,7 +270,7 @@ also links to **internal KB search** and **research artifacts**.
    claim → evidence grades (supported / partial / unsupported / contradicted).
 
 > Offline, the patent search returns the curated seed corpus; literature,
-> internet and NotebookLM search need their optional extras (see §12).
+> internet search needs its optional extra (see §12).
 > After loading, source status indicators reflect which sources are actually
 > available in the current environment.
 
@@ -534,11 +533,6 @@ offline fallbacks:
 - **Patents** — `patent_client` (optional, `.[patents]`; offline: curated seed corpus per domain);
 - **Literature** — arXiv + Semantic Scholar;
 - **Internet** — DuckDuckGo (no API key required);
-- **NotebookLM** — `notebooklm-py` direct library: a single fixed Google
-  NotebookLM notebook is queried via the unofficial SDK. One-time browser
-  sign-in (`notebooklm login`) writes a session file; the adapter then maps
-  `chat.ask` results to `Evidence(source="NotebookLM")`. Disabled by default,
-  silently returns `[]` when off, not logged in, or the library is missing.
 - **Local files** — upload PDF/DOCX/XLSX/PPTX/HTML/images; **markitdown**
   converts them to text (falling back to `pypdf` / `python-docx`), then splits
   the text into evidence chunks.
@@ -595,9 +589,6 @@ deterministic offline path, so behaviour never breaks.
 - **Color metrology** — with **`colour-science`** installed (the `color`
   extra), CIELAB and CIEDE2000 ΔE₀₀ are computed from spectral data; the
   leaderboard card renders a real color swatch.
-- **NotebookLM source** — with **`notebooklm-py`** installed (the `notebooklm`
-  extra) and `FORMUNEX_NOTEBOOKLM_ENABLED=true`, queries against the
-  configured notebook return as `source="NotebookLM"` evidence.
 
 ### 5.10 NL intent parser (✨)
 
@@ -853,7 +844,7 @@ The legacy Knowledge Hub modal has been split into three left-nav hub pages
 | Page | Tabs | Purpose |
 |---|---|---|
 | Knowledge retrieval → Search (search hub) | Quick search, Deep search, Ops | Ops holds the quality dashboard, retrieval probe, and parsing & structure recognition |
-| Literature & research → Library (library hub) | Catalog & import, Frozen & screening, Smart collections (scheduled rules), NotebookLM | Shares Capture / Freeze / OA-enrich with the report freeze strip |
+| Literature & research → Library (library hub) | Catalog & import, Frozen & screening, Smart collections (scheduled rules) | Shares Capture / Freeze / OA-enrich with the report freeze strip |
 | Literature & research → Wiki knowledge base | Page browse, Link graph | Compiled-memory pages; summaries can embed into dual-track retrieval (`wiki_embed_enabled`; Claims still filter wiki); link graph is **not** the materials KG |
 
 **Gates (defaults):** topicality enforce on (`kb_relevance_shadow=False`);
@@ -905,9 +896,9 @@ Still **off** unless explicitly enabled:
 - **Left nav (third slimming round, 41 web entries)**: recommend first in the
   formulation group, models and surface first in the optimization group,
   research artifacts moved up in the literature group, raw materials first in
-  the materials group; the 5 entries removed from the menu each have a home
-  and their routes are kept — quality-ops → search hub ops tab, NotebookLM →
-  library hub tab, connectors → settings-center tab, agent memory → knowledge-Q&A
+  the materials group; the 4 entries removed from the menu each have a home
+  and their routes are kept — quality-ops → search hub ops tab,
+  connectors → settings-center tab, agent memory → knowledge-Q&A
   page header, project sources → contract page header only. MCP tool approvals
   keep their top-level entry (5-minute approval window; expired requests are
   auto-rejected).
@@ -1033,7 +1024,7 @@ The **Export ▾** menu on each leaderboard card offers:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/search` | multi-source retrieval (patents / literature / internet / NotebookLM) → merged, de-duped evidence |
+| POST | `/api/search` | multi-source retrieval (patents / literature / internet) → merged, de-duped evidence |
 | POST | `/api/ingest` | upload a local file → extracted evidence chunks |
 | GET | `/api/auth/status` | whether platform bearer auth is required (public) |
 | GET/POST | `/api/settings` | LLM provider, model, key, base URL; `POST /api/settings/test` |
@@ -1328,9 +1319,6 @@ defaults.
 | `FORMUNEX_SEARCH_LIMIT_PER_SOURCE` | `5` | max results fetched per source type |
 | `FORMUNEX_RAG_BACKEND` | `auto` | RAG store: `auto` (embedding if installed, else TF-IDF) / `embedding` / `tfidf` |
 | `FORMUNEX_ENRICH_COMPOUNDS` | `false` | backfill SMILES/molar-mass via PubChem on startup (needs `intel` + network) |
-| `FORMUNEX_NOTEBOOKLM_ENABLED` | `false` | enable the NotebookLM retrieval source |
-| `FORMUNEX_NOTEBOOKLM_NOTEBOOK_ID` | empty | the fixed notebook id to query |
-| `FORMUNEX_NOTEBOOKLM_STORAGE_PATH` | `./data/notebooklm_auth.json` | session file written by `notebooklm login` |
 | `FORMUNEX_DB_URL` | `sqlite:///./data/formunex.db` | **Production must use Postgres** (`postgresql://user:pass@host:5432/formunex`). SQLite is for single-process / CI only — multi-worker write load risks `database is locked`. |
 | `FORMUNEX_REDIS_URL` | `redis://localhost:6379/0` | Celery broker |
 | `FORMUNEX_REDIS_PROTOCOL` | `2` | Redis wire protocol: `2` works with any Redis (Windows ports, Ubuntu 20.04); `3` needs Redis ≥ 6.0 |
@@ -1421,7 +1409,6 @@ pip install -e ".[file_ingest]"  # markitdown, pypdf, python-docx (local file up
 pip install -e ".[embedding]"    # sentence-transformers → embeddings (session RAG / KB hybrid)
 pip install -e ".[color]"        # colour-science (CIELAB / CIEDE2000)
 pip install -e ".[colbert,crag]"   # ColBERT index + LangGraph CRAG pipeline
-pip install -e ".[notebooklm]"   # notebooklm-py[browser] (NotebookLM source; run `notebooklm login` once)
 pip install -e ".[heavy]"        # torch, deepchem, transformers (MoLFormer), ase
 pip install -e ".[export]"       # openpyxl (XLSX export; CSV needs nothing)
 ```
@@ -1448,19 +1435,9 @@ when `sentence-transformers` is installed (see §5.9). The IP analyser and NL
 intent parser share `complete_json()` against the configured LLM. None of these
 are required — each lights up automatically.
 
-### NotebookLM setup (one-time)
+### NotebookLM (fully removed, 2026-10-30)
 
-```bash
-pip install -e ".[notebooklm]"
-notebooklm login                   # opens a browser for Google sign-in (~170 MB Chromium)
-# Then in .env:
-FORMUNEX_NOTEBOOKLM_ENABLED=true
-FORMUNEX_NOTEBOOKLM_NOTEBOOK_ID=<your-notebook-id>
-```
-
-> NotebookLM has no official public API; `notebooklm-py` calls unofficial
-> Google endpoints that may change. Treat the NotebookLM source as an R&D
-> convenience, not a production crawl.
+The NotebookLM retrieval source has been fully removed with the backend removal: API, service, configuration, project-workspace binding and library tab are all gone, and old project binding fields are no longer read. Use literature / internet search or local file upload instead.
 
 ---
 
@@ -1523,10 +1500,6 @@ carry a machine translation alongside the original.
 
 The IP analyser uses the same retrieval.
 
-**Q: Is NotebookLM safe to use in production?**
-`notebooklm-py` uses undocumented Google endpoints that may change at any time.
-The integration is therefore **off by default**, fully degradable to no-op, and
-should be treated as an R&D aid rather than a production crawl.
 
 **Q: Where is session history stored?**
 Browser localStorage (up to 20 entries), never uploaded to the server.
@@ -1585,10 +1558,10 @@ which also proves the broker connection. If you still see it, rebuild.
 > (§5.19); and a referential-integrity check for the references that cannot
 > carry a database constraint (§5.20).
 >
-> All of it sits on the earlier platform: a NotebookLM-style three-pane layout
+> All of it sits on the earlier platform: a three-pane layout
 > (Sources / Research / Actions) with a ten-button Actions toolbar, multi-LLM
 > support across nine providers, multi-source research (patents / literature /
-> internet / **NotebookLM** / local files), RAG-grounded Q&A with
+> internet / local files), RAG-grounded Q&A with
 > semantic-embedding upgrade, auto-detected intelligence engines
 > (BoTorch/Optuna optimization, active-learning DOE, ChemCrow/paper-qa
 > Q&A, PubChem enrichment, thermo-grounded VOC, Fox/Mooney rheology,

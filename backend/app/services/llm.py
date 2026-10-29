@@ -1591,7 +1591,7 @@ def _build_context(evidence: list[Evidence], *, max_chars: int | None = None) ->
     The old prompt truncated each snippet to 400 chars and kept only 8 items,
     so the model saw at most ~3.2K chars of abstract-level text. Full chunks
     (up to ``chat_context_max_chars``) let it synthesise across documents the
-    way NotebookLM does — the rerank stage already narrowed to the most relevant.
+    way a notebook-style assistant does — the rerank stage already narrowed to the most relevant.
 
     W3: Wiki rows are labeled as compiled memory vs raw excerpts.
     """

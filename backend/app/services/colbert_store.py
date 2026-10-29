@@ -23,7 +23,7 @@ from . import rag
 
 logger = logging.getLogger(__name__)
 
-SourceType = Literal["patents", "literature", "internet", "local", "notebooklm"]
+SourceType = Literal["patents", "literature", "internet", "local"]
 
 _LOCK = threading.Lock()
 _MODEL_CACHE: dict[str, object] = {}
@@ -96,8 +96,6 @@ def _infer_source_type(ev: Evidence) -> SourceType:
     ident = (ev.identifier or "").lower()
     if any(x in src for x in ("uspto", "epo", "patent", "wipo")) or ident.startswith(("us", "ep", "wo")):
         return "patents"
-    if "notebooklm" in src:
-        return "notebooklm"
     if src == "local" or "upload" in src or "ingest" in src:
         return "local"
     if any(x in src for x in ("web", "duck", "internet", "chemcrow-web", "serp")):

@@ -276,7 +276,7 @@ function Install-Native {
   # 可选引擎的档位。分档的原因见文件头：一个不可满足的 extra 会让整条 pip 命令失败。
   $extras = @(
     "science", "optimize", "intel", "file_ingest", "report_export", "parse_pro",
-    "export", "embedding", "pydoe", "baybe", "color", "crag", "notebooklm",
+    "export", "embedding", "pydoe", "baybe", "color", "crag",
     "dev", "postgres"
   )
   $torchExtras = @("bo", "heavy")

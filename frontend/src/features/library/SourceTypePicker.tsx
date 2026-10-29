@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { sourceStatusColor } from "./logic";
 import type { SearchSourceType, SourceStatus } from "./types";
 
-export const SOURCE_TYPES: SearchSourceType[] = ["patents", "surechembl", "literature", "internet", "local", "notebooklm"];
+export const SOURCE_TYPES: SearchSourceType[] = ["patents", "surechembl", "literature", "internet", "local"];
 
 export function useSourceTypeLabel() {
   const { t } = useTranslation();
@@ -13,7 +13,6 @@ export function useSourceTypeLabel() {
     literature: t("library.type.literature", "文献"),
     internet: t("library.type.internet", "互联网"),
     local: t("library.type.local", "本地文件"),
-    notebooklm: "NotebookLM",
   }[id] ?? id);
 }
 

@@ -151,7 +151,7 @@ def test_ingest_evidence_unsupported():
     client = TestClient(app)
     r = client.post(
         "/api/kb/ingest-evidence",
-        json={"identifier": "just a title", "source": "notebooklm"},
+        json={"identifier": "just a title", "source": "unknown-source-xyz"},
     )
     assert r.status_code == 200
     body = r.json()

@@ -56,7 +56,7 @@ def test_classify_skips_chunks_seeds_and_unknown():
     seed = Evidence(source="seed", identifier="US999", title="s", snippet="x",
                     relevance=0.5, is_seed_corpus=True)
     assert ff.classify(seed) is None
-    assert ff.classify(_ev("just a title", source="notebooklm")) is None
+    assert ff.classify(_ev("just a title", source="example")) is None
 
 
 def test_arxiv_pdf_url_resolution_needs_no_network():
@@ -117,7 +117,7 @@ def test_patent_hit_replaced_by_fulltext_chunks(monkeypatch):
     monkeypatch.setattr(ff, "_persist_fulltext", lambda text, ev, kind, **kw: persisted.append((ev.identifier, kind)) or "sid")
 
     before = _ev("US1234567")
-    out, report = ff.enrich_search_results([before, _ev("plaintitle", source="notebooklm")])
+    out, report = ff.enrich_search_results([before, _ev("plaintitle", source="example")])
 
     chunk_ids = [e.identifier for e in out if e.identifier.startswith("US1234567#p")]
     assert len(chunk_ids) >= 3  # full text became multiple chunks

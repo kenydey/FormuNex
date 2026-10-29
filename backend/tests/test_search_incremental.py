@@ -1,15 +1,13 @@
-"""Tests for incremental search, relevance filtering, and NotebookLM auth.
+"""Tests for incremental search and relevance filtering.
 
-All offline-safe: online retrieval libs degrade to [] and the NotebookLM auth
-flow is gated, so these assert the contract that holds with no extras installed.
+All offline-safe: online retrieval libs degrade to [].
 """
 import time
 
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
 from app.main import app
-from app.services import literature, notebooklm
+from app.services import literature
 
 client = TestClient(app)
 
@@ -25,10 +23,6 @@ _REQUIREMENT = {
     "notes": "",
     "objectives": [],
 }
-
-
-def _reset_settings():
-    get_settings.cache_clear()
 
 
 # ── Incremental search ────────────────────────────────────────────────────────
@@ -187,72 +181,3 @@ def test_build_patent_query_used_in_search_patents():
     assert "US9982145B2" in zinc_ids
 
 
-# ── NotebookLM authorization / runtime config ────────────────────────────────
-
-def test_notebooklm_auth_status_has_granular_flags():
-    r = client.get("/api/notebooklm/auth-status")
-    assert r.status_code == 200
-    body = r.json()
-    for key in ("available", "lib_installed", "enabled", "notebook_id_set",
-                "session_present", "can_launch_browser"):
-        assert key in body
-
-
-def test_notebooklm_runtime_config_sets_notebook_id():
-    _reset_settings()
-    try:
-        st = notebooklm.set_runtime_config(enabled=True, notebook_id="nb-xyz")
-        assert st["enabled"] is True
-        assert st["notebook_id"] == "nb-xyz"
-        assert st["notebook_id_set"] is True
-    finally:
-        notebooklm.set_runtime_config(enabled=False, notebook_id="")
-        _reset_settings()
-
-
-def test_notebooklm_config_endpoint():
-    _reset_settings()
-    try:
-        r = client.post("/api/notebooklm/config", json={"enabled": True, "notebook_id": "nb-1"})
-        assert r.status_code == 200
-        assert r.json()["notebook_id"] == "nb-1"
-    finally:
-        notebooklm.set_runtime_config(enabled=False, notebook_id="")
-        _reset_settings()
-
-
-def test_notebooklm_login_manual_fallback_when_lib_missing(monkeypatch):
-    """With notebooklm-py absent, login returns a manual fallback (never raises)."""
-    monkeypatch.setattr(notebooklm, "_lib_installed", lambda: False)
-    r = client.post("/api/notebooklm/login", json={})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["started"] is False
-    assert body["mode"] == "manual"
-    assert body["manual_url"]
-
-
-def test_notebooklm_login_spawns_when_browser_available(monkeypatch):
-    """When the lib is present and a browser can launch, login spawns the CLI."""
-    monkeypatch.setattr(notebooklm, "_lib_installed", lambda: True)
-    monkeypatch.setattr(notebooklm, "can_launch_browser", lambda: True)
-    calls = {}
-
-    def fake_popen(cmd, **kwargs):
-        calls["cmd"] = cmd
-        return object()
-
-    monkeypatch.setattr(notebooklm.subprocess, "Popen", fake_popen)
-    res = notebooklm.start_login()
-    assert res["started"] is True
-    assert res["mode"] == "browser"
-    assert calls["cmd"] == ["notebooklm", "login"]
-
-
-def test_notebooklm_login_manual_when_headless(monkeypatch):
-    monkeypatch.setattr(notebooklm, "_lib_installed", lambda: True)
-    monkeypatch.setattr(notebooklm, "can_launch_browser", lambda: False)
-    res = notebooklm.start_login()
-    assert res["started"] is False
-    assert res["mode"] == "manual"
-    assert "notebooklm login" in (res["command"] or "")

@@ -101,8 +101,6 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
     # SureChEMBL — extract is compute; confirm / KG ingest persist.
     (re.compile(r"^/api/surechembl/extract-example-draft$"), "knowledge.read"),
     (re.compile(r"^/api/surechembl/(confirm-example-draft|kg/ingest-document)$"), "knowledge.write"),
-    # NotebookLM config persists an external-integration config.
-    (re.compile(r"^/api/notebooklm/config$"), "admin.llm"),
     # Ops cleanup is a platform-admin action (no dedicated ops permission).
     (re.compile(r"^/api/ops(/|$)"), "admin.llm"),
     # PLM — batch QC results are QC data; the rest is PLM master data /
@@ -201,7 +199,6 @@ ENDPOINT_SENSITIVE_READS: list[tuple[re.Pattern[str], str]] = [
 POLICY_EXEMPT: list[tuple[re.Pattern[str], str]] = [
     # Auth flows establish the session; they cannot require a permission.
     (re.compile(r"^/api/identity/(login|logout|refresh|password)$"), "auth flow"),
-    (re.compile(r"^/api/notebooklm/login$"), "external auth flow"),
     # Conversational interface — the actions it triggers are gated separately.
     (re.compile(r"^/api/chat(/|$)"), "conversational interface"),
     (re.compile(r"^/api/session-plans(/|$)"), "conversational session state"),

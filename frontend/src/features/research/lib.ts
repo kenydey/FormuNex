@@ -10,7 +10,6 @@ export const SOURCE_TYPES: { id: SourceType; zh: string }[] = [
   { id: "surechembl", zh: "专利化学 SureChEMBL" },
   { id: "literature", zh: "文献" },
   { id: "internet", zh: "互联网" },
-  { id: "notebooklm", zh: "NotebookLM" },
 ];
 
 export const DEFAULT_SOURCE_TYPES: SourceType[] = ["patents", "literature"];
