@@ -1,12 +1,18 @@
 """Inspect the DOM of the running frontend to understand button/input structure."""
 import asyncio
+import sys
+from pathlib import Path
+
 from playwright.async_api import async_playwright
+
+sys.path.insert(0, str(Path(__file__).parent))
+from _ui import system_chromium  # noqa: E402
 
 BASE = "http://localhost:5174"
 
 async def main():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"], executable_path=system_chromium())
         ctx = await browser.new_context(viewport={"width": 1440, "height": 900})
         page = await ctx.new_page()
         await page.goto(BASE, wait_until="networkidle")

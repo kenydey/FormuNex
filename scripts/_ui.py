@@ -23,6 +23,35 @@ user can actually perceive.
 from __future__ import annotations
 
 import asyncio
+import glob
+import os
+import shutil
+
+
+def system_chromium() -> str:
+    """Path to a system-installed Chromium/Chrome binary.
+
+    Screenshot scripts must never fall back to Playwright's bundled browser
+    download: the repo removed Playwright-managed Chromium (B+C, 2026-10-30).
+    Resolution order: $FX_CHROMIUM, then well-known binary names on PATH,
+    then a preinstalled Playwright browsers dir ($PLAYWRIGHT_BROWSERS_PATH,
+    default /opt/pw-browsers). Raises instead of downloading when absent.
+    """
+    if (env := os.environ.get("FX_CHROMIUM")):
+        return env
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
+        if (found := shutil.which(name)):
+            return found
+    root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
+    for pattern in (f"{root}/chromium-*/chrome-linux/chrome",
+                    f"{root}/chromium_headless_shell-*/chrome-linux/headless_shell"):
+        found = sorted(glob.glob(pattern))
+        if found:
+            return found[-1]
+    raise RuntimeError(
+        "no system Chromium/Chrome found: install one or set FX_CHROMIUM to its path "
+        "(Playwright's bundled browser is no longer used)"
+    )
 
 
 def modal(page, name: str):

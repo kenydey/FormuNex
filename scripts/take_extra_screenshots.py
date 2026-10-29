@@ -6,7 +6,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ui import click_if_present, close_modal, in_modal, open_modal  # noqa: E402
+from _ui import click_if_present, close_modal, in_modal, open_modal, system_chromium  # noqa: E402
 
 IMAGES = Path(__file__).parent.parent / "docs" / "images"
 BASE = "http://localhost:5174"
@@ -20,7 +20,7 @@ async def shot(page, path: str):
 
 async def main():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"], executable_path=system_chromium())
         ctx = await browser.new_context(viewport={"width": 1440, "height": 900})
         page = await ctx.new_page()
 

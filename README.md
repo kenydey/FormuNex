@@ -253,7 +253,6 @@ pip install -e ".[file_ingest]"  # markitdown, pypdf, python-docx (local file up
 pip install -e ".[embedding]"    # sentence-transformers semantic RAG
 pip install -e ".[colbert,crag]" # ColBERT index + LangGraph CRAG research pipeline
 pip install -e ".[color]"        # colour-science CIELAB / CIEDE2000
-pip install -e ".[notebooklm]"   # notebooklm-py + Playwright (NotebookLM source)
 pip install -e ".[heavy]"        # torch, deepchem, transformers (MoLFormer), ase
 pip install -e ".[export]"       # openpyxl (XLSX DOE worksheet export; CSV needs nothing)
 ```

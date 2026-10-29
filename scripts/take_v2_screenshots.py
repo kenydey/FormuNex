@@ -24,37 +24,19 @@ throwaway database for a clean capture.
 """
 import asyncio
 import sys
-import glob
-import os
 import urllib.request
 from pathlib import Path
 
 from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _ui import in_any_modal  # noqa: E402
+from _ui import in_any_modal, system_chromium  # noqa: E402
 
 IMAGES = Path(__file__).parent.parent / "docs" / "images"
 BASE = "http://localhost:5174"
 API = "http://localhost:8000"
 VIEWPORT = {"width": 1440, "height": 900}
 
-
-def chromium_path() -> str | None:
-    """A preinstalled Chromium, if this environment ships one.
-
-    Playwright pins an exact browser build per release, so an image that
-    preinstalls browsers goes stale the moment the pip package is upgraded.
-    Pointing at what is actually on disk avoids re-downloading ~170 MB to take
-    four screenshots. None means "use Playwright's own managed browser".
-    """
-    root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
-    for pattern in (f"{root}/chromium-*/chrome-linux/chrome",
-                    f"{root}/chromium_headless_shell-*/chrome-linux/headless_shell"):
-        found = sorted(glob.glob(pattern))
-        if found:
-            return found[-1]
-    return None
 
 
 def seed_experiments() -> None:
@@ -176,10 +158,9 @@ async def main() -> None:
     seed_experiments()
 
     async with async_playwright() as p:
-        launch_args: dict = {"headless": True, "args": ["--no-sandbox", "--disable-gpu"]}
-        if (chrome := chromium_path()):
-            launch_args["executable_path"] = chrome
-            print(f"using preinstalled chromium: {chrome}")
+        launch_args: dict = {"headless": True, "args": ["--no-sandbox", "--disable-gpu"],
+                             "executable_path": system_chromium()}
+        print(f"using system chromium: {launch_args['executable_path']}")
         browser = await p.chromium.launch(**launch_args)
         ctx = await browser.new_context(viewport=VIEWPORT)
         page = await ctx.new_page()

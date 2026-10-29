@@ -133,9 +133,6 @@ baybe = ["baybe>=0.14", "pandas>=2.0"]
 # CIELAB / CIEDE2000 colorimetry. Pure Python, no GPU.
 # Activates delta_e + lab_L/a/b metrics in the predictor.
 color = ["colour-science>=0.4"]
-# NotebookLM as a retrieval source (unofficial SDK; browser-session auth).
-# [browser] pulls Playwright + Chromium for the one-time `notebooklm login`.
-notebooklm = ["notebooklm-py[browser]>=0.1"]
 # ColBERT late-interaction retrieval (RAGatouille + torch CPU).
 colbert = ["ragatouille>=0.0.8", "torch>=2.2"]
 # LangGraph CRAG workflow + structured logging.

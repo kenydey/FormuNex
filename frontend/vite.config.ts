@@ -37,7 +37,7 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"], // e2e/ is Playwright (see e2e/README.md)
+    include: ["src/**/*.test.{ts,tsx}"],
     testTimeout: 20000,
     css: false,
   },
