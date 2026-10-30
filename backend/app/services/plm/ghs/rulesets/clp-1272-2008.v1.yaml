@@ -18,6 +18,11 @@
 version: clp-1272-2008.v1
 standard: EC 1272/2008 (CLP)
 status: draft
+# P1-1: for EU documents the harmonised Annex VI classification is legally
+# binding, so it outranks supplier SDS and the China catalogue here (manual
+# EHS locks still win — see source_priority.effective). Other rule sets
+# keep the default order, where clp_annex_vi only fills gaps.
+source_priority: [manual, clp_annex_vi, supplier_sds, cn_catalog, pubchem, inferred]
 
 acute_toxicity:            # GB 30000.18
   include_category_5: false        # China catalogue uses categories 1-4

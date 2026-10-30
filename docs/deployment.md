@@ -100,3 +100,30 @@ docker compose start backend worker
 
 代码回滚：`git checkout <上一个 tag/commit>` 后重建镜像。
 数据恢复：用 `scripts/restore_db.sh` 恢复最近一次备份。
+
+## 法规库月度更新（P1-1 更新包流程）
+
+静态法规库不再靠改代码更新。每月一次（人工执行，不是自动任务——
+更新必须经 EHS 审批才生效）：
+
+1. **抓取/建包**：EHS 专员用管理端点建包——EPA CTX 按 CAS 抓取物质
+    enrichment（`POST /api/plm/regulatory/updates/ctx-fetch`，需
+   `FORMUNEX_EPA_CTX_API_KEY`；沙箱网络不通，生产网络执行；CTX 搜索端点
+   只返回 DTXSID/首选名/SMILES，不含分子式与别名，建包内容以此为准），或把
+   ECHA 当期 ATP 表转成 JSON 后建包（`POST /api/plm/regulatory/updates/clp-stage`；
+   ECHA 只发 XLS、无公开批量 API，ATP 文件由 EHS 从 ECHA 官网下载转换）。
+   建包只写草稿文件，不动线上数据。
+2. **审批**：EHS 专员检查包内容后批准（`POST /api/plm/regulatory/updates/{id}/approve`，
+   需 `regulatory.review` 权限）。批准时包文件提升进线上资源目录
+   （旧文件归档进包目录 `archive/`），并种子出一个新的 **approved** 版本；
+   草稿版本对门禁不可见，批准前存量文档不受影响。
+3. **生效与门禁**：新版本生效后，引用旧版本的 SDS/标签在发布门禁
+   被判“法规数据已更新”，须重分类后重新发布（fail-closed）。
+4. **回退**：某版本有问题时用 `POST /api/plm/regulatory/releases/{id}/rollback`
+   恢复归档文件并重种子，生成一个新的回退版本（可追溯，不是静默改写）。
+   线上文件在批准后被手动改过时拒绝自动回退，需人工处理。
+5. **版本展示**：SDS §16 同时印规则集版本与法规数据版本
+   （`data_release`，含各来源文件的 version/last_updated），两者并列不混用。
+
+前提：批准步骤要写线上资源目录（默认 `backend/app/resources/regulatory`），
+生产部署须保证该目录可写，否则批准会失败并自动还原文件。

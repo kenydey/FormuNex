@@ -124,8 +124,17 @@ def statement_texts(session: Session, codes: list[str]) -> dict[str, dict[str, s
 
 
 def latest_data_release(session: Session) -> str | None:
+    """Latest *approved* regulatory data release (P1-1).
+
+    Draft (staged, not yet EHS-approved) releases are invisible here, so a
+    fetched update cannot take effect — or fail the release gate for
+    existing documents — before approval. Pre-0076 rows are approved.
+    """
     return session.execute(
-        select(RegulatoryDataRelease.id).order_by(RegulatoryDataRelease.created_at.desc()).limit(1)
+        select(RegulatoryDataRelease.id)
+        .where(RegulatoryDataRelease.status == "approved")
+        .order_by(RegulatoryDataRelease.created_at.desc())
+        .limit(1)
     ).scalar_one_or_none()
 
 

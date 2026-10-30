@@ -161,10 +161,20 @@ def seed_regulatory_db(
     label: str | None = None,
     include_common: bool = True,
     force: bool = False,
+    status: str = "approved",
+    extra_files: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Import the bundled regulatory data. Returns run statistics."""
+    """Import the bundled regulatory data. Returns run statistics.
+
+    ``status`` is the new release's approval state (P1-1): bundled seeds are
+    approved; update packages are applied with an explicit status. ``extra_files``
+    are update-package files present in ``resources`` (e.g. ``ctx_enrichment.json``,
+    ``clp_atp.json``): they join the digest (so a changed package is not
+    mistaken for an unchanged seed) and are merged by the steps below.
+    """
     resources = resources or RESOURCES_DIR
     files = [f for f in _FILES if include_common or f != "common_chemicals.json.gz"]
+    files = files + [f for f in extra_files if (resources / f).exists()]
     digest = _digest(resources, files)
     with engine.begin() as conn:
         prior = conn.execute(
@@ -177,7 +187,7 @@ def seed_regulatory_db(
         release_id = _uid()
         conn.execute(insert(RegulatoryDataRelease).values(
             id=release_id, label=label or f"seed-{_now():%Y%m%d-%H%M%S}", source="seed", stats={},
-            input_digest=digest, created_at=_now(),
+            input_digest=digest, created_at=_now(), status=status,
         ))
         review = _Review(release_id)
         stats: dict[str, Any] = {}
@@ -191,9 +201,172 @@ def seed_regulatory_db(
         _mark_iecsc(conn, resources, stats)
         _upsert_statements(conn, resources, stats)
         _replace_review_items(conn, review, stats)
+        # P1-1: update-package merges + per-file source versions.
+        _record_source_versions(resources, files, stats)
+        _merge_ctx_enrichment(conn, resources, release_id, stats)
+        _merge_clp_atp(conn, resources, release_id, stats)
         conn.execute(update(RegulatoryDataRelease).where(RegulatoryDataRelease.id == release_id).values(stats=stats))
     log.info("regulatory seed %s: %s", release_id, stats)
     return {"skipped": False, "release_id": release_id, "stats": stats}
+
+
+def _record_source_versions(resources: Path, files: list[str], stats: dict[str, Any]) -> None:
+    """Record per-file source/version/last_updated into stats (P1-1).
+
+    This is the version unification the SDS display reads: the rule-set
+    version and the substance-data version are shown side by side, never
+    mixed. Files without version metadata are skipped, not invented.
+    """
+    sources: dict[str, Any] = {}
+    for name in files:
+        path = resources / name
+        if not path.exists():
+            continue
+        try:
+            data = _load_json(path)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        meta = {k: data[k] for k in ("source", "version", "last_updated") if k in data}
+        if meta:
+            sources[name] = meta
+    if sources:
+        stats["sources"] = sources
+
+
+def _merge_ctx_enrichment(conn: Connection, resources: Path, release_id: str, stats: dict[str, Any]) -> None:
+    """Merge enrichment into substance rows (P1-1, additive only).
+
+    Only aliases (deduped) and missing molecular formula / SMILES are
+    filled; the curated Chinese/English names, catalogue numbers and
+    classifications are never overwritten. Entries for unknown CAS numbers
+    are counted as skipped, not invented as new substances.
+    """
+    path = resources / "ctx_enrichment.json"
+    if not path.exists():
+        return
+    try:
+        data = _load_json(path)
+    except Exception as exc:
+        stats["ctx_enrichment"] = {"error": f"unparsable: {exc}"}
+        return
+    entries = data.get("entries", {}) if isinstance(data, dict) else {}
+    merged = skipped = 0
+    for cas_raw, entry in entries.items():
+        cas_list = [c for c, _ in (cas_mod.repair(x) for x in cas_mod.split_many(cas_raw)) if c]
+        found = None
+        for cas in cas_list:
+            found = conn.execute(
+                select(SubstanceRow.id, SubstanceRow.aliases, SubstanceRow.mf, SubstanceRow.smiles)
+                .where(SubstanceRow.cas_no == cas)
+            ).first()
+            if found is not None:
+                break
+        if found is None or not isinstance(entry, dict):
+            skipped += 1
+            continue
+        aliases = list(found.aliases or [])
+        for alias in entry.get("synonyms") or []:
+            alias = str(alias).strip()
+            if alias and alias not in aliases:
+                aliases.append(alias)
+        values: dict[str, Any] = {"aliases": aliases}
+        if not found.mf and entry.get("mf"):
+            values["mf"] = str(entry["mf"])[:120]
+        if not found.smiles and entry.get("smiles"):
+            values["smiles"] = str(entry["smiles"])
+        conn.execute(update(SubstanceRow).where(SubstanceRow.id == found.id).values(**values))
+        merged += 1
+    stats["ctx_enrichment"] = {"merged": merged, "skipped_unknown": skipped}
+
+
+def _merge_clp_atp(conn: Connection, resources: Path, release_id: str, stats: dict[str, Any]) -> None:
+    """Merge staged CLP Annex VI rows as ``clp_annex_vi`` classifications.
+
+    Per-substance replace: existing ``clp_annex_vi`` rows for a touched
+    substance are deleted first, so an ATP amendment cannot leave stale
+    rows behind; other sources' rows are never touched. Rows that fail
+    mapping are counted, not stored.
+    """
+    from .clp_atp import map_entry
+
+    path = resources / "clp_atp.json"
+    if not path.exists():
+        return
+    try:
+        data = _load_json(path)
+    except Exception as exc:
+        stats["clp_atp"] = {"error": f"unparsable: {exc}"}
+        return
+    if not isinstance(data, dict):
+        stats["clp_atp"] = {"error": "top level is not an object"}
+        return
+    atp = str(data.get("atp") or "")
+    source_ref = f"CLP Annex VI {atp} ({data.get('regulation') or ''})".strip()
+    entries = data.get("entries", [])
+    now = _now()
+    inserted = skipped = 0
+    touched: set[str] = set()
+    # Substances an ATP explicitly clears: drop their CLP rows outright.
+    for cas_raw in data.get("cleared_cas", []) or []:
+        cas_list = [c for c, _ in (cas_mod.repair(x) for x in cas_mod.split_many(cas_raw)) if c]
+        for cas in cas_list:
+            found = conn.execute(
+                select(SubstanceRow.id).where(SubstanceRow.cas_no == cas)
+            ).first()
+            if found is not None:
+                conn.execute(delete(SubstanceClassificationRow).where(
+                    SubstanceClassificationRow.substance_id == found.id,
+                    SubstanceClassificationRow.source == "clp_annex_vi",
+                ))
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            skipped += 1
+            continue
+        cas_list = [c for c, _ in (cas_mod.repair(x) for x in cas_mod.split_many(entry.get("cas") or "")) if c]
+        found = None
+        for cas in cas_list:
+            found = conn.execute(
+                select(SubstanceRow.id).where(SubstanceRow.cas_no == cas)
+            ).first()
+            if found is not None:
+                break
+        if found is None:
+            skipped += 1
+            continue
+        # Staged rows already carry mapped codes (validate_entries); rows
+        # seeded directly from a file are mapped here. Either way an
+        # unmappable row is skipped, never stored.
+        if entry.get("hazard_class_code") and entry.get("category_code"):
+            code, category = entry["hazard_class_code"], entry["category_code"]
+        else:
+            try:
+                code, category = map_entry(entry)
+            except ValueError:
+                skipped += 1
+                continue
+        if found.id not in touched:
+            conn.execute(delete(SubstanceClassificationRow).where(
+                SubstanceClassificationRow.substance_id == found.id,
+                SubstanceClassificationRow.source == "clp_annex_vi",
+            ))
+            touched.add(found.id)
+        notes = str(entry.get("notes") or "").strip()
+        qualifier = notes[:200]
+        conn.execute(insert(SubstanceClassificationRow).values(
+            id=_uid(), substance_id=found.id, hazard_class=code, category=category,
+            h_code=(str(entry.get("h_code"))[:16] if entry.get("h_code") else None),
+            is_minimum=False, qualifier=qualifier,
+            scl=None,
+            m_factor_acute=entry.get("m_acute"), m_factor_chronic=entry.get("m_chronic"),
+            ate_value=entry.get("ate_value"), ate_unit=(str(entry.get("ate_unit"))[:16] if entry.get("ate_unit") else None),
+            source="clp_annex_vi", source_ref=source_ref[:300],
+            confidence=SOURCE_CONFIDENCE["clp_annex_vi"],
+            locked_by=None, locked_at=None, release_id=release_id, created_at=now,
+        ))
+        inserted += 1
+    stats["clp_atp"] = {"atp": atp, "inserted": inserted, "skipped": skipped}
 
 
 # --------------------------------------------------------------------------- substances

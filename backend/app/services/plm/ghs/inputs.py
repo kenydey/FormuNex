@@ -43,9 +43,12 @@ class BuiltInputs:
     origins: list[int] = field(default_factory=list)
 
 
-def _hazards(rows: list[SubstanceClassificationRow]) -> list[ComponentHazard]:
+def _hazards(
+    rows: list[SubstanceClassificationRow],
+    order: tuple[str, ...] | list[str] | None = None,
+) -> list[ComponentHazard]:
     out = []
-    for r in effective(rows):
+    for r in effective(rows, order):
         if r.hazard_class == NOT_CLASSIFIED:
             continue
         out.append(ComponentHazard(
@@ -64,6 +67,9 @@ class _Lookup:
     def __init__(self, session: Session, rs: RuleSet) -> None:
         self.session = session
         self.assessed_cas = set(rs["assessed_not_classified_cas"])
+        # P1-1: a rule set may override source priority (EU ruleset puts
+        # harmonised CLP classifications right after manual locks).
+        self.source_order = rs.get("source_priority")
 
     def substance(self, substance_id: str | None = None, cas: str | None = None) -> SubstanceRow | None:
         if substance_id:
@@ -98,7 +104,7 @@ class _Lookup:
         rows = self.classifications(sub.id)
         assessed = bool(rows) or sub.hazardous_catalog_no is not None or (sub.cas_no in self.assessed_cas)
         return Component(name=name or sub.name_zh or sub.name_en or sub.cas_no or sub.id, pct=pct,
-                         cas=sub.cas_no, substance_id=sub.id, hazards=_hazards(list(rows)),
+                         cas=sub.cas_no, substance_id=sub.id, hazards=_hazards(list(rows), self.source_order),
                          assessed=assessed, via=via)
 
 

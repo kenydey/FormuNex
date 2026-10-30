@@ -99,6 +99,11 @@ class SdsContext:
     # Chinese legislation list, other regulations their registry lines.
     regulation: str = "CN"
     regulation_standard: str = "GB 30000"
+    # P1-1: the regulatory data release the classification was computed
+    # against ({id, label, sources}); None for documents built before the
+    # release info was threaded through, in which case no version line is
+    # rendered and nothing is invented.
+    data_release: dict[str, Any] | None = None
 
 
 def _cls_name(hazard_class: str, lang: str) -> str:
@@ -146,7 +151,11 @@ def build_sds(ctx: SdsContext) -> dict:
                 "version": ctx.revision.get("version"), "revision_date": ctx.revision.get("date"),
                 "standard": "GB/T 16483-2008, GB/T 17519-2013"},
         meta={"rule_set_version": cls.get("rule_set_version"), "inputs_hash": cls.get("inputs_hash"),
-              "template_sections": [4, 5, 6, 7, 10, 13]},
+              "template_sections": [4, 5, 6, 7, 10, 13],
+              # P1-1: rule-set version and substance-data version side by
+              # side, never mixed.
+              "data_release_id": (ctx.data_release or {}).get("id"),
+              "data_release_label": (ctx.data_release or {}).get("label")},
     )
     S = {key: doc.section(i + 1, key, t(lang, zh, en)) for i, (key, zh, en) in enumerate(SECTION_TITLES)}
     flammable = _has(cls, "flammable_liquid", ("1", "2", "3"))
@@ -501,6 +510,18 @@ def build_sds(ctx: SdsContext) -> dict:
     s.add("changes", t(lang, "修订说明", "Revision notes"), ctx.revision.get("change_summary") or "—", "manual")
     s.add("basis", t(lang, "分类依据", "Classification basis"),
           f"{ctx.regulation_standard}（{cls.get('rule_set_version')}）", "computed")
+    if ctx.data_release:
+        sources = ctx.data_release.get("sources") or {}
+        sources_text = "；".join(
+            f"{name} {meta.get('version', '')}".strip()
+            for name, meta in sources.items()
+            if isinstance(meta, dict)
+        )
+        detail = ctx.data_release.get("label") or ""
+        if sources_text:
+            detail = f"{detail}（{sources_text}）" if detail else sources_text
+        s.add("data_release", t(lang, "法规数据版本", "Regulatory data version"),
+              detail or (ctx.data_release.get("id") or ""), "computed")
     s.paragraphs.append(t(lang, "本 SDS 的信息基于目前掌握的知识和数据，仅供安全处置本品参考，不构成任何质量保证。",
                           "The information in this SDS reflects current knowledge and is intended for safe handling only; "
                           "it does not constitute a warranty of properties."))

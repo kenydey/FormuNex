@@ -121,6 +121,10 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/plm/documents/batch-export$"), "plm.document.write"),
     (re.compile(r"^/api/plm/substances(/|$)"), "knowledge.write"),
     (re.compile(r"^/api/plm/regulatory/ask$"), "knowledge.read"),
+    # P1-1: regulatory update packages — staging, approval and rollback
+    # are EHS-reviewed actions, never open writes.
+    (re.compile(r"^/api/plm/regulatory/updates(/|$)"), "regulatory.review"),
+    (re.compile(r"^/api/plm/regulatory/releases(/|$)"), "regulatory.review"),
     # Wiki — report / export / lint / preflight-review generate a view;
     # everything else persists wiki state or rebuilds an index.
     (re.compile(r"^/api/wiki/(dossier/report|storm/report|export|lint/run|preflight/review)"), "knowledge.read"),

@@ -34,6 +34,11 @@ class RegulatoryDataRelease(Base):
     stats: Mapped[dict] = mapped_column(JSON, default=dict)
     input_digest: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # P1-1: draft (staged, invisible to the gate) / approved (effective) /
+    # rejected / superseded. Pre-0076 rows are the shipped baseline: approved.
+    status: Mapped[str] = mapped_column(String(16), default="approved")
+    approved_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class SubstanceRow(Base):

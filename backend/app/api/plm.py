@@ -119,6 +119,125 @@ def get_ruleset() -> dict[str, Any]:
     return {"version": rs.version, "status": rs.status, "available": available_rulesets(), "parameters": rs.as_dict()}
 
 
+# ── Regulatory update packages (P1-1) ────────────────────────────────────────
+
+class ClpStageIn(BaseModel):
+    atp: str
+    regulation: str
+    applies_from: str = ""
+    entries: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CtxFetchIn(BaseModel):
+    cas_list: list[str] = Field(default_factory=list)
+
+
+def _updates_error(exc: Exception) -> HTTPException:
+    from ..services.plm.regulatory import updates as reg_updates
+
+    if isinstance(exc, reg_updates.Forbidden):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/regulatory/updates")
+def list_regulatory_updates(user: CurrentUser = Depends(current_user)) -> list[dict[str, Any]]:
+    """Staged regulatory update packages (draft / approved / rejected)."""
+    user.require("regulatory.read")
+    from ..services.plm.regulatory import updates as reg_updates
+
+    return reg_updates.list_packages()
+
+
+@router.get("/regulatory/releases")
+def list_regulatory_releases(user: CurrentUser = Depends(current_user)) -> list[dict[str, Any]]:
+    """Applied regulatory data releases, newest first."""
+    user.require("regulatory.read")
+    from sqlalchemy import select
+
+    from ..db.models_regulatory import RegulatoryDataRelease
+
+    with _session() as session:
+        rows = session.execute(
+            select(RegulatoryDataRelease).order_by(RegulatoryDataRelease.created_at.desc()).limit(50)
+        ).scalars().all()
+        return [
+            {"id": r.id, "label": r.label, "source": r.source, "status": r.status,
+             "input_digest": r.input_digest, "created_at": r.created_at.isoformat() if r.created_at else None,
+             "approved_by": r.approved_by,
+             "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+             "stats": r.stats or {}}
+            for r in rows
+        ]
+
+
+@router.post("/regulatory/updates/clp-stage")
+def stage_clp_update(body: ClpStageIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Stage an ECHA ATP table as a draft package (EHS approval still required)."""
+    user.require("regulatory.review")
+    from ..services.plm.regulatory import updates as reg_updates
+
+    try:
+        return reg_updates.stage_clp_package(
+            atp=body.atp, regulation=body.regulation, applies_from=body.applies_from,
+            entries=body.entries, created_by=user.id,
+        )
+    except Exception as exc:
+        raise _updates_error(exc) from None
+
+
+@router.post("/regulatory/updates/ctx-fetch")
+def fetch_ctx_update(body: CtxFetchIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Fetch EPA CTX enrichment for CAS numbers and stage it as a draft package."""
+    user.require("regulatory.review")
+    from ..services.plm.regulatory import ctx_client
+
+    try:
+        return ctx_client.build_ctx_package(body.cas_list, created_by=user.id)
+    except Exception as exc:
+        raise _updates_error(exc) from None
+
+
+@router.post("/regulatory/updates/{package_id}/approve")
+def approve_regulatory_update(package_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """EHS approval: promote the package files and seed the new release."""
+    user.require("regulatory.review")
+    from ..services.plm.regulatory import updates as reg_updates
+
+    with _session() as session:
+        try:
+            engine = session.get_bind()
+            return reg_updates.approve_package(engine, package_id, user.principal)
+        except Exception as exc:
+            raise _updates_error(exc) from None
+
+
+@router.post("/regulatory/updates/{package_id}/reject")
+def reject_regulatory_update(package_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Reject a draft package (files kept for audit)."""
+    user.require("regulatory.review")
+    from ..services.plm.regulatory import updates as reg_updates
+
+    try:
+        return reg_updates.reject_package(package_id, user.principal)
+    except Exception as exc:
+        raise _updates_error(exc) from None
+
+
+@router.post("/regulatory/releases/{release_id}/rollback")
+def rollback_regulatory_release(release_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Restore the archived files of a release and re-seed (new release)."""
+    user.require("regulatory.review")
+    from ..services.plm.regulatory import updates as reg_updates
+
+    with _session() as session:
+        try:
+            engine = session.get_bind()
+            return reg_updates.rollback_release(engine, release_id, user.principal)
+        except Exception as exc:
+            raise _updates_error(exc) from None
+
+
 @router.post("/rulesets/{version}/recompute")
 def recompute_ruleset(version: str, apply: bool = Query(default=False)) -> dict[str, Any]:
     """Plan 3-10: batch re-classification on a rule-set release.

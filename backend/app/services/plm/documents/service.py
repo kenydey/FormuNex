@@ -21,13 +21,18 @@ from ....clock import utcnow
 from ....db.models_plm import (
     BatchQcResultRow,
     BatchRow,
+    ClassificationResultRow,
     DocTemplateRow,
     ProductRevisionRow,
     ProductRow,
     RegulatoryDocumentRow,
     TsTemplateRow,
 )
-from ....db.models_regulatory import SubstanceOELRow, SubstanceRow
+from ....db.models_regulatory import (
+    RegulatoryDataRelease,
+    SubstanceOELRow,
+    SubstanceRow,
+)
 from ...provenance import link_many_in_session
 from .. import storage
 from ..diff import diff_documents
@@ -224,6 +229,27 @@ def _classify_revision(session: Session, rev: ProductRevisionRow, properties: di
     return ghs_service.to_response(session, result), row.id
 
 
+def _data_release(session: Session, classification_id: str | None) -> dict[str, Any] | None:
+    """Release info for an SDS's classification, for the §16 version line (P1-1).
+
+    Returns None when the classification or its release is unknown — the
+    builder then renders no version line rather than inventing one.
+    """
+    if not classification_id:
+        return None
+    row = session.get(ClassificationResultRow, classification_id)
+    if row is None or not row.data_release_id:
+        return None
+    release = session.get(RegulatoryDataRelease, row.data_release_id)
+    if release is None:
+        return {"id": row.data_release_id, "label": None, "sources": {}}
+    return {
+        "id": release.id,
+        "label": release.label,
+        "sources": (release.stats or {}).get("sources", {}),
+    }
+
+
 def _oel(session: Session, cas_numbers: list[str]) -> dict[str, dict]:
     """SDS §8 limits: GBZ only. EH40 rows share the table (standard
     EH40/2005) and would otherwise collapse into the same CAS key
@@ -377,6 +403,7 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
             tox_eco = _tox_eco(session, cas)
             content = build_sds(SdsContext(
                 product=prod, company=company, classification=cls, statements=cls["statements"], properties=props,
+                data_release=_data_release(session, classification_id),
                 components=_components(cls["disclosure"], payload.get("trade_secrets")), oel=_oel(session, cas),
                 tox_records=tox_eco["tox"], eco_records=tox_eco["eco"], eco_profiles=tox_eco["profiles"],
                 # Ingredient listings are China-jurisdiction data (hazard

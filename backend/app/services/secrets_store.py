@@ -467,8 +467,10 @@ def probe_secret(secret_id: str) -> dict:
             return {"ok": False, "message": "EPA CTX key 未配置"}
         try:
             with make_client(timeout=15.0) as client:
+                # P1-1: documented Chemical API 1.1.1 endpoint (the previous
+                # by-casrn path returned 404 and was never confirmed).
                 r = client.get(
-                    "https://api-ccte.epa.gov/chemical/search/by-casrn/7732-18-5",
+                    "https://comptox.epa.gov/ctx-api/chemical/search/equal/7732-18-5",
                     headers={"x-api-key": key},
                 )
         except Exception as exc:
@@ -478,7 +480,7 @@ def probe_secret(secret_id: str) -> dict:
         if r.status_code in (401, 403):
             return {"ok": False, "message": "EPA CTX 拒绝了该密钥（无效或已停用）"}
         if r.status_code == 404:
-            return {"ok": False, "message": "EPA CTX 端点路径待确认（HTTP 404），密钥有效性未验证"}
+            return {"ok": False, "message": "EPA CTX 未找到测试物质，密钥有效性未验证"}
         return {"ok": False, "message": f"EPA CTX 返回 HTTP {r.status_code}"}
 
     if secret_id in ("langfuse_public_key", "langfuse_secret_key", "langfuse_host"):
