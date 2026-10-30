@@ -94,6 +94,59 @@ def apply_kg_chemical_gate(plan: DOEPlan, requirement) -> DOEPlan:
     return plan
 
 
+def apply_wt_sum_gate(plan) -> object:
+    """P0-2: flag runs whose continuous wt% factors sum above the cap.
+
+    The cap reuses the BayBE-side ``_max_lever_sum`` (min(100, sum of
+    highs)): a formulation cannot exceed 100 wt% because solvent absorbs
+    the remainder. Runs already flagged (e.g. rotatable star points outside
+    the box) keep their original reason — this gate only adds flags, so the
+    "flagged == out-of-box" CCD contract is preserved whenever in-box sums
+    stay within the cap. Plans without a factors list (e.g. test doubles)
+    pass through untouched; the gate never breaks DOE generation.
+    """
+    factors = getattr(plan, "factors", None)
+    if not factors:
+        return plan
+    wt_factors = [
+        f for f in factors if f.unit == "wt%" and f.kind == "continuous"
+    ]
+    if len(wt_factors) < 2:
+        return plan
+    try:
+        from .adapters.baybe_space_builder import _max_lever_sum
+
+        cap = _max_lever_sum(factors)
+    except Exception as exc:
+        logger.warning("wt sum gate skipped (%s); allowing", exc)
+        return plan
+    names = {f.name for f in wt_factors}
+    newly_flagged = 0
+    for run in getattr(plan, "runs", []) or []:
+        if run.infeasible:
+            continue
+        natural = getattr(run, "natural", None) or {}
+        total = sum(
+            v
+            for name, v in natural.items()
+            if name in names and isinstance(v, (int, float))
+        )
+        if total > cap + 1e-9:
+            run.infeasible = True
+            run.infeasible_reason = (
+                f"连续 wt% 因子合计 {total:.1f} 超过上限 {cap:.1f}"
+                "（配方总和不得超过 100 wt%，溶剂补余量不足）"
+            )
+            newly_flagged += 1
+    if newly_flagged:
+        note = (
+            f"wt sum gate: {newly_flagged} run(s) marked infeasible "
+            f"(continuous wt% sum above {cap:.1f})"
+        )
+        plan.notes = f"{plan.notes}\n{note}".strip() if plan.notes else note
+    return plan
+
+
 def build_doe_plan(
     factors: list[DOEFactor],
     design: str,
@@ -133,7 +186,9 @@ def build_doe_plan(
         # which is face-centred by another name. A rotatable (or explicit-alpha) CCD keeps its star points outside the
         # box and flags them infeasible, so it is built by the native generator whichever engine was asked for.
         plan = build_native_plan(factors, design, n=n, ccd_alpha=ccd_alpha, seed=seed)
-        return _with_n_hint(apply_kg_chemical_gate(plan, requirement))
+        return _with_n_hint(
+            apply_wt_sum_gate(apply_kg_chemical_gate(plan, requirement))
+        )
     resolved = resolve_doe_engine(engine, design)
     if resolved == "pydoe":
         plan = build_plan_with_fallback(
@@ -142,4 +197,6 @@ def build_doe_plan(
     else:
         plan = build_native_plan(factors, design, n=n, ccd_alpha=ccd_alpha, seed=seed)
     # P1-5: gate runs for every engine, not just pydoe.
-    return _with_n_hint(apply_kg_chemical_gate(plan, requirement))
+    return _with_n_hint(
+        apply_wt_sum_gate(apply_kg_chemical_gate(plan, requirement))
+    )

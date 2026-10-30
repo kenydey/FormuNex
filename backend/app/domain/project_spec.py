@@ -1,6 +1,7 @@
 """ProjectSpec helpers — normalize free-text requirements and derive DOE levers."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .levers import substrate_default_levers
@@ -15,8 +16,21 @@ from .schemas import (
     substrate_value,
 )
 
+logger = logging.getLogger(__name__)
+
 # Roles typically held fixed (solvent fills to 100%).
 _FIXED_ROLES = frozenset({"solvent", "pigment", "filler", "additive"})
+
+# P0-2: generic lever names that denote a material role, not a specific
+# material. A user lever named "树脂" means "the resin knob", i.e. it should
+# replace the baseline resin lever instead of coexisting with it (the
+# duplication that broke the DOE sum gate: DGEBA + 树脂 as separate factors).
+_GENERIC_ROLE_NAMES = {
+    "树脂": "resin",
+    "固化剂": "hardener",
+    "resin": "resin",
+    "hardener": "hardener",
+}
 _PROCESS_KEYS = frozenset({"cure_temperature_c"})
 
 _DOMAIN_LABELS: dict[ProductDomain, str] = {
@@ -435,6 +449,13 @@ def default_levers_for(
     return resolve_levers(req)
 
 
+def _role_of_lever(name: str) -> str | None:
+    """Catalogue role of a lever name, via alias normalisation (P0-2)."""
+    from .knowledge import RAW_MATERIALS, resolve_material_name
+
+    return RAW_MATERIALS.get(resolve_material_name(name), {}).get("role")
+
+
 def _merge_explicit_levers(
     derived: list[LeverSpec], explicit: list[LeverSpec] | None
 ) -> list[LeverSpec]:
@@ -444,18 +465,81 @@ def _merge_explicit_levers(
     Without this, ``resolve_levers`` priority 1 (formulation-derived) silently
     discards everything the user configured in LeversEditor — including
     Up-4A discrete factors — on the real ``generateDoe`` path.
+
+    P0-2 dedup: a user lever also replaces a derived lever when it denotes
+    the same material under a different name, resolved in precedence order:
+
+    1. exact name (the original F-2 behaviour);
+    2. alias normalisation — ``resolve_material_name`` on both sides, so
+       "双酚a环氧树脂" replaces "Bisphenol-A epoxy (DGEBA)" and "磷酸锌"
+       replaces "Zinc phosphate" whichever side carries the alias;
+    3. generic role — a generic name (``_GENERIC_ROLE_NAMES``, e.g. "树脂")
+       replaces the derived lever of that role, but only when exactly one
+       derived lever holds the role. With zero or several candidates the
+       match is ambiguous: the explicit lever is appended unchanged and a
+       warning names the candidates (fail-open, never a guessed replace).
+
+    Several explicit levers targeting the same derived slot behave like a
+    dict: the last one wins, earlier ones are dropped (logged), so the
+    merged set never contains the same material twice under two names.
     """
     if not explicit:
         return derived
-    explicit_by_name = {e.name: e for e in explicit}
-    merged: list[LeverSpec] = []
-    seen: set[str] = set()
-    for lever in derived:
-        merged.append(explicit_by_name.get(lever.name, lever))
-        seen.add(lever.name)
-    for lever in explicit:
-        if lever.name not in seen:
-            merged.append(lever)
+    from .knowledge import resolve_material_name
+
+    derived_by_resolved = {resolve_material_name(d.name): d for d in derived}
+    # target slot (derived lever) per explicit lever, in explicit order.
+    target_of: dict[int, LeverSpec | None] = {}
+    for idx, lever in enumerate(explicit):
+        target: LeverSpec | None = None
+        for d in derived:
+            if d.name == lever.name:
+                target = d
+                break
+        if target is None:
+            # Normalised on both sides: either side may carry the alias
+            # ("磷酸锌" derived + "Zinc phosphate" explicit, or the reverse).
+            # Exact matches were already handled above, so a hit here is a
+            # genuine alias equivalence, not a self-match.
+            target = derived_by_resolved.get(resolve_material_name(lever.name))
+        if target is None:
+            generic_role = _GENERIC_ROLE_NAMES.get(
+                lever.name.strip()
+            ) or _GENERIC_ROLE_NAMES.get(lever.name.strip().lower())
+            if generic_role:
+                candidates = [
+                    d for d in derived if _role_of_lever(d.name) == generic_role
+                ]
+                if len(candidates) == 1:
+                    target = candidates[0]
+                elif len(candidates) > 1:
+                    logger.warning(
+                        "P0-2 dedup: user lever %r (role %s) is ambiguous "
+                        "among derived levers %s; keeping both",
+                        lever.name,
+                        generic_role,
+                        [d.name for d in candidates],
+                    )
+        target_of[idx] = target
+    # Last explicit lever per slot wins; superseded ones are dropped.
+    replacement: dict[str, LeverSpec] = {}
+    for idx, lever in enumerate(explicit):
+        target = target_of[idx]
+        if target is not None:
+            superseded = replacement.get(target.name)
+            if superseded is not None and superseded is not lever:
+                logger.warning(
+                    "P0-2 dedup: user lever %r supersedes %r for derived "
+                    "lever %r; dropping the superseded lever",
+                    lever.name,
+                    superseded.name,
+                    target.name,
+                )
+            replacement[target.name] = lever
+    merged = [replacement.get(d.name, d) for d in derived]
+    # Targeted explicit levers are consumed whether they won their slot or
+    # were superseded; only untargeted ones are appended as new levers.
+    merged.extend(e for idx, e in enumerate(explicit) if target_of[idx] is None)
     return merged
 
 
