@@ -400,6 +400,51 @@ def list_formulations(limit: int = 50) -> List[Dict[str, Any]]:
         return []
 
 
+def record_rebuild_meta(
+    *,
+    source: str,
+    entities: int,
+    links: int,
+    skipped: int,
+    failed: int,
+) -> bool:
+    """Stamp one ``RebuildMeta`` node per rebuild source (P1-3).
+
+    The node carries the rebuild source and the last rebuild time, so a
+    projection's freshness is readable from the graph itself without a
+    separate table or migration. It is deliberately not counted by
+    ``get_stats`` (which only counts Compound / Formulation /
+    ExperimentReport), so it cannot pollute graph statistics.
+    """
+    drv = _get_driver()
+    if drv is None:
+        return False
+    try:
+        with drv.session() as s:
+            s.run(
+                """
+                MERGE (m:RebuildMeta {uid: $uid})
+                ON CREATE SET m.created_at = datetime()
+                SET m.source = $source,
+                    m.entities = $entities,
+                    m.links = $links,
+                    m.skipped = $skipped,
+                    m.failed = $failed,
+                    m.rebuilt_at = datetime()
+                """,
+                uid=source,
+                source=source,
+                entities=entities,
+                links=links,
+                skipped=skipped,
+                failed=failed,
+            )
+        return True
+    except Exception as e:
+        logger.warning("record_rebuild_meta failed: %s", e)
+        return False
+
+
 def get_stats() -> Dict[str, int]:
     drv = _get_driver()
     if drv is None:
