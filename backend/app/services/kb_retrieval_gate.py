@@ -8,8 +8,9 @@ same rules so Hub retrieval probe and recommend hybrid fuse stay aligned.
 
 The same blocked-domain / garbage-text rules also run at ``index_source`` so
 dirty sources never become ``document_chunks`` — not only get filtered from
-top-k. Wiki exclusion applies at *retrieval* only; wiki must still be able to
-ingest.
+top-k. Wiki exclusion applies at *retrieval* only when
+``wiki_retrieval_enabled`` is off (Batch 2 default is on: wiki chunks are
+admitted and down-weighted instead); wiki must still be able to ingest.
 
 Process-local drop counters (``record_gate_drop`` / ``gate_drop_stats``) feed
 the Hub retrieval probe and ``GET /api/kb/stats`` so operators can see how
@@ -270,6 +271,11 @@ def _wiki_source_ids() -> set[str]:
         return set()
 
 
+def wiki_source_ids() -> set[str]:
+    """Public accessor for the wiki-track source ids (see ``_wiki_source_ids``)."""
+    return _wiki_source_ids()
+
+
 def drop_reason_for_chunk(
     chunk,
     *,
@@ -283,7 +289,10 @@ def drop_reason_for_chunk(
 
     sid = getattr(chunk, "source_id", None) or ""
     wiki = wiki_ids if wiki_ids is not None else _wiki_source_ids()
-    if sid and sid in wiki:
+    # Batch 2 (Q3=A): wiki admission — when wiki retrieval is enabled, wiki
+    # chunks compete (down-weighted at the hybrid stage) instead of being
+    # dropped here. Disabled restores the old wiki_track exclusion.
+    if sid and sid in wiki and not getattr(settings, "wiki_retrieval_enabled", False):
         return "wiki_track"
 
     meta = (source_meta or {}).get(sid) if sid else None

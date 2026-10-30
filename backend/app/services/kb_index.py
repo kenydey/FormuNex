@@ -1065,6 +1065,9 @@ def _chunk_to_evidence(chunk, source_meta: dict, score: float) -> Evidence:
     # PageIndex 借鉴 A5: 跨页末页透传
     page_end = getattr(chunk, "page_end", None)
     paragraph = getattr(chunk, "paragraph_idx", None)
+    # Batch 2 (Q3=A): wiki evidence carries its compile source / original link
+    # in url; the wiki label itself is source="wiki" (see is_wiki_evidence).
+    wiki_url = meta.get("origin_url") if meta.get("source_kind") == "wiki" else None
     return Evidence(
         source=meta.get("source_kind") or "kb",
         identifier=f"kb:{chunk.source_id}#c{chunk.ord}",
@@ -1076,6 +1079,7 @@ def _chunk_to_evidence(chunk, source_meta: dict, score: float) -> Evidence:
         # PageIndex 借鉴 A5: 跨页末页（None = 单页）
         page_end=int(page_end) if page_end is not None else None,
         paragraph=int(paragraph) if paragraph is not None else None,
+        url=wiki_url or None,
     )
 
 
@@ -1097,9 +1101,9 @@ def _source_meta() -> dict:
 
     with get_source_store()._session_factory() as session:
         rows = session.query(
-            SourceDocument.id, SourceDocument.title, SourceDocument.source_kind
+            SourceDocument.id, SourceDocument.title, SourceDocument.source_kind, SourceDocument.origin_url
         ).all()
-    return {rid: {"title": title, "source_kind": kind} for rid, title, kind in rows}
+    return {rid: {"title": title, "source_kind": kind, "origin_url": origin} for rid, title, kind, origin in rows}
 
 
 def _query_chem_context(query: str) -> dict:
@@ -1221,17 +1225,25 @@ def search_chunks(
         if not chunks:
             return []
 
-        # Dual-track: Wiki summary chunks are Track A only (Phase 3).
+        # Batch 2 (Q3=A): wiki admission — when wiki_retrieval_enabled,
+        # wiki chunks stay and are down-weighted below (same weight as the
+        # hybrid path); disabled restores the old Track-A-only pre-filter.
+        wiki_ids: set[str] = set()
         try:
             from .wiki.embed import list_wiki_source_ids
 
-            wiki_ids = list_wiki_source_ids()
-            if wiki_ids:
-                chunks = [c for c in chunks if c.source_id not in wiki_ids]
-                if not chunks:
-                    return []
+            wiki_ids = set(list_wiki_source_ids() or [])
         except Exception:
-            pass
+            wiki_ids = set()
+        wiki_weight = 1.0
+        if wiki_ids and not getattr(get_settings(), "wiki_retrieval_enabled", False):
+            chunks = [c for c in chunks if c.source_id not in wiki_ids]
+            if not chunks:
+                return []
+        elif wiki_ids:
+            wiki_weight = float(
+                getattr(get_settings(), "wiki_evidence_weight", 1.0) or 1.0
+            )
 
         if langs:
             chunks = [c for c in chunks if (getattr(c, "lang", "") or "") in langs]
@@ -1296,6 +1308,13 @@ def search_chunks(
         if has_chem_query:
             scored = [(s + _entity_boost(c, qctx), c) for s, c in scored]
 
+        if wiki_ids and wiki_weight != 1.0:
+            scored = [
+                (s * wiki_weight if getattr(c, "source_id", "") in wiki_ids else s, c)
+                for s, c in scored
+            ]
+            scored.sort(key=lambda pair: pair[0], reverse=True)
+
         scored = [(s, c) for s, c in scored if s > 0.05]
         scored.sort(key=lambda pair: pair[0], reverse=True)
         # v7 检索-1: legacy 路径同样走质量门（blocked 域名/垃圾文本），
@@ -1325,6 +1344,83 @@ def search_chunks(
         return [_chunk_to_evidence(c, meta, s) for s, c in scored[:k]]
     except Exception as exc:
         return degrade_return(logger, exc, "kb search failed", [])
+
+
+def rerank_evidence(query: str, evidence: list) -> list:
+    """Batch 2 (§4.3): rerank parity with the stream / literature path.
+
+    Same gate (``search_rerank_enabled``, more than one candidate) and same
+    fail-open passthrough when no backend applies. Ordering only — never
+    drops candidates. Pure ordering step, unit-testable via monkeypatched
+    ``rag.rerank_scored``.
+    """
+    if len(evidence) <= 1:
+        return list(evidence)
+    settings = get_settings()
+    if not settings.search_rerank_enabled:
+        return list(evidence)
+    try:
+        from .rag import rerank_scored
+
+        batch = min(len(evidence), int(settings.search_rerank_llm_batch or len(evidence)))
+        scored, rerank_meta = rerank_scored(query, evidence[:batch], k=batch)
+        head = (
+            [it.evidence for it in scored]
+            if rerank_meta.get("applied")
+            else list(evidence[:batch])
+        )
+        if not rerank_meta.get("applied"):
+            logger.warning(
+                "kb rerank not applied (backend=%s reason=%s); keeping hybrid order",
+                rerank_meta.get("backend"),
+                rerank_meta.get("reason"),
+            )
+        head_keys = {e.identifier or e.title for e in head}
+        tail = [
+            e
+            for e in evidence[batch:]
+            if (e.identifier or e.title) not in head_keys
+        ]
+        return head + tail
+    except Exception as exc:
+        return degrade_return(logger, exc, "kb rerank failed", list(evidence))
+
+
+def _apply_nav(query: str, evidence: list, meta: dict) -> list:
+    """Batch 2 (Q4=A): PageIndex navigation layer for general retrieval.
+
+    ``nav_layer.apply_nav`` decides boosts / extra chunks / tables; this
+    wrapper converts them to Evidence with the caller's source meta.
+    Fail-open: any nav error leaves the hybrid list untouched.
+    """
+    try:
+        from .pageindex.nav_layer import apply_nav
+
+        boosted, extra_chunks, extra_tables, _nav_meta = apply_nav(query, evidence)
+    except Exception:  # noqa: BLE001 - nav is supplementary
+        logger.debug("pageindex nav skipped (fail-open)", exc_info=True)
+        return list(evidence)
+    out = list(boosted)
+    floor = min((float(e.relevance or 0) for e in out), default=0.0)
+    for ch in extra_chunks:
+        out.append(_chunk_to_evidence(ch, meta, floor))
+    for t in extra_tables:
+        title = (meta.get(t.source_id) or {}).get("title") or "知识库文档"
+        md = t.raw_markdown or ""
+        snip = chunk_snippet(md)
+        if len(snip) > 4000:
+            snip = snip[:4000] + "…（表格过长已截断）"
+        out.append(
+            Evidence(
+                source="kb",
+                identifier=f"kb:{t.table_id}",
+                title=f"{title} · 表格：{t.caption or t.table_id}",
+                snippet=snip,
+                relevance=floor,
+                page=int(t.page_no) if t.page_no else None,
+            )
+        )
+    return out
 
 
 def search_chunks_hybrid(
@@ -1399,10 +1495,16 @@ def search_chunks_hybrid(
             _mx = max(scores) if scores else 0.0
             if _mx > 0:
                 scores = [x / _mx for x in scores]
-        return [
+        evidence = [
             _chunk_to_evidence(s.chunk, meta, sc)
             for s, sc in zip(scored, scores)
         ]
+        # Batch 2: PageIndex nav layer, then rerank parity with the
+        # stream / literature path. Both are ordering/supplementary steps;
+        # neither drops hybrid candidates.
+        evidence = _apply_nav(query, evidence, meta)
+        evidence = rerank_evidence(query, evidence)
+        return evidence
     except Exception as exc:
         return degrade_return(logger, exc, "kb hybrid search failed", [])
 

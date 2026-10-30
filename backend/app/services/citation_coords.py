@@ -1,9 +1,10 @@
 """v25: reviewer 引用坐标对齐的共享函数。
 
-答案中的 ``[^n]`` 基于完整 citations 编号，LLM reviewer 看到的却是过滤 wiki
-编译页后的列表。调用方先用 :func:`claims_evidence_with_mapping` 拿到
-``(过滤后列表, old_idx → new_idx 映射)``，再用 :func:`remap_citation_numbers`
-重写答案中的 ``[^n]``；指向被过滤条目的标记会被删除。
+Batch 2 (Q3=A): Wiki 证据不再从 Claims 剥离 —— 答案中的 ``[^n]`` 指向
+wiki 条目时不再被删除。Wiki 证据以 ``source="wiki"`` 标注（见
+``wiki.retrieve.is_wiki_evidence``），纯 wiki 支撑的论断在
+``chat_claims.build_sourced_claims`` 里置信度封顶，低于原始文献。
+``claims_evidence`` 保留为兼容入口（现为恒等），映射函数随之成为恒等映射。
 
 chat.py 与 reviewer_fix_loop.py 共用，消除双实现漂移。
 """
@@ -11,13 +12,13 @@ from __future__ import annotations
 
 
 def claims_evidence(evidence: list) -> list:
-    """Strip Wiki rows so claims cannot cite compiled pages as Raw proof."""
-    try:
-        from .wiki.retrieve import filter_raw_evidence
+    """Batch 2: Wiki rows stay citable (labeled, confidence-capped downstream).
 
-        return filter_raw_evidence(evidence)
-    except Exception:
-        return evidence
+    Previously stripped Wiki rows so claims could not cite compiled pages
+    as Raw proof. Q3=A reverses that: wiki evidence enters Claims with its
+    ``source="wiki"`` label; the confidence cap lives in build_sourced_claims.
+    """
+    return list(evidence)
 
 
 def claims_evidence_with_mapping(evidence: list) -> tuple[list, dict[int, int]]:
@@ -44,7 +45,7 @@ def remap_citation_numbers(
 
     v27 P2-17: 越界引用（如 ``[^99]`` 而原文只有 5 条 evidence）不再无痕删除 ——
     传 ``n_evidence``（过滤前原文条数）时记 warning，调用方可在 reviewer 前看到。
-    指向被过滤 wiki 条目的删除仍是预期的（v25 设计），不告警。
+    Batch 2 起 wiki 条目不再被过滤，映射为恒等，wiki 引用不再删除。
     """
     import logging
     import re
@@ -58,7 +59,7 @@ def remap_citation_numbers(
         if new_idx is None:
             if n_evidence is not None and old_idx >= n_evidence:
                 dangling.append(old_idx + 1)  # 记回 1-based
-            return ""  # 指向 wiki（被过滤）或越界，删除标记
+            return ""  # 越界或映射外，删除标记
         return f"[^{new_idx + 1}]"
 
     out = re.sub(r"\[\^(\d+)\]", _repl, answer)

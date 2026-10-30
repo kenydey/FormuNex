@@ -146,8 +146,9 @@ def test_claims_still_raw_only_after_embed(wiki_env):
     assert any(c.identifier == "doi:1" for c in claims)
 
 
-def test_search_chunks_excludes_wiki_sources(wiki_env):
-    """Track B must not return wiki summary chunks."""
+def test_search_chunks_admits_wiki_sources(wiki_env, monkeypatch):
+    """Batch 2 (Q3=A): wiki summary chunks enter general retrieval, labeled
+    with source="wiki"; the switch restores the old exclusion."""
     wiki, factory, chunks = wiki_env
     path = _seed_system(wiki)
     embed_wiki_page(path)
@@ -171,14 +172,25 @@ def test_search_chunks_excludes_wiki_sources(wiki_env):
         chunks.replace_for_source_in(
             session,
             "raw-src-1",
-            [{"text": "环氧固化催化剂窗口 来自专利原文", "heading_path": "intro"}],
+            # NOTE: chunk must clear the retrieval gate floor (20 chars);
+            # the old test's 16-char chunk was gate-dropped, so its
+            # assertions held vacuously over an empty hit list.
+            [{"text": "环氧固化催化剂窗口的工艺控制要点，来自专利原文的实验记录。", "heading_path": "intro"}],
         )
 
     from app.services.kb_index import search_chunks
 
     hits = search_chunks("环氧固化催化剂", k=10)
-    assert all(h.source != "wiki" for h in hits)
-    assert all(not (h.identifier or "").startswith(f"kb:{sid}") for h in hits)
+    wiki_hits = [h for h in hits if h.source == "wiki"]
+    assert wiki_hits, "wiki chunks must be admitted by default (Batch 2)"
+    assert all(h.identifier.startswith(f"kb:{sid}") for h in wiki_hits)
+    assert any(h.identifier.startswith("kb:raw-src-1") for h in hits)
+
+    monkeypatch.setenv("FORMUNEX_WIKI_RETRIEVAL_ENABLED", "false")
+    get_settings.cache_clear()
+    hits_off = search_chunks("环氧固化催化剂", k=10)
+    assert all(h.source != "wiki" for h in hits_off)
+    assert all(not h.identifier.startswith(f"kb:{sid}") for h in hits_off)
 
 
 def test_embed_rebuild_api(wiki_env):

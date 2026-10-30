@@ -39,6 +39,11 @@ class WikiStore:
             return self._root
         return wiki_root_from_db_url(get_settings().db_url)
 
+    @property
+    def session_factory(self) -> sessionmaker[Session]:
+        """Session factory the wiki pages (and their FTS index) live in."""
+        return self._session_factory
+
     def _abs(self, rel_path: str) -> Path:
         root = self.root().resolve()
         path = (root / rel_path).resolve()

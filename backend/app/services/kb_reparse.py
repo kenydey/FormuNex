@@ -101,11 +101,12 @@ def reparse_source(
         parser=(parser or None),
     )
     if parsed is not None:
-        from .ingestion import _maybe_persist_mineru_structured
+        from .ingestion import _maybe_persist_mineru_structured, _maybe_persist_ocr_text_tables
         from .parsing import maybe_persist_table_sidecar
 
         maybe_persist_table_sidecar(source_id, parsed)
         _maybe_persist_mineru_structured(True, source_id, parsed)
+        _maybe_persist_ocr_text_tables(True, source_id, parsed)
 
     _p("重建分块与索引…", 0.7)
     # The old ToC tree points at chunk ids that are about to be replaced; when

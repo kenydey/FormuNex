@@ -100,10 +100,29 @@ def build_sourced_claims(
         return None
 
     out: list[SourcedClaim] = []
+    from .wiki.retrieve import is_wiki_evidence
+
+    # _indices_to_chunk_ids strips the "kb:" prefix, so index both forms.
+    by_id: dict[str, object] = {}
+    for e in sources:
+        by_id[e.identifier] = e
+        if (e.identifier or "").startswith("kb:"):
+            by_id[e.identifier[3:]] = e
+    cap = float(getattr(settings, "wiki_claim_confidence_cap", 1.0) or 1.0)
     for v in verified:
         chunk_ids = _indices_to_chunk_ids(v.evidence_indices, sources)
         status = _map_verdict(v.verdict)
         conf = 0.9 if status == "supported" else 0.4 if status == "weak" else 0.1
+        # Batch 2 (Q3=A): a claim supported ONLY by wiki evidence is labeled
+        # by its evidence (source="wiki") and capped below literature-backed
+        # claims. Unknown identifiers never trigger the cap (conservative).
+        known = [by_id[c] for c in chunk_ids if c in by_id]
+        if (
+            chunk_ids
+            and len(known) == len(chunk_ids)
+            and all(is_wiki_evidence(e) for e in known)
+        ):
+            conf = min(conf, cap)
         out.append(
             SourcedClaim(
                 text=v.text,

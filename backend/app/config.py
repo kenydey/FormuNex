@@ -854,11 +854,18 @@ class Settings(BaseSettings):
     wiki_enabled: bool = True
     wiki_compile_on_ingest: bool = True
     wiki_chat_blend: bool = True
-    # Chat 双轨权重：balanced | wiki_first | raw_first（不影响 Claims 只认 Raw）
+    # Chat 双轨权重：balanced | wiki_first | raw_first（Batch 2 起 Claims 可引 wiki，见 wiki_retrieval_enabled）
     wiki_chat_mode: str = Field(
         default="balanced",
         description="Wiki/Raw blend mode for chat: balanced | wiki_first | raw_first",
     )
+    # Batch 2 (Q3=A)：Wiki 进通用检索与 Claims —— 检索质量门不再丢 wiki 块，
+    # 改按 wiki_evidence_weight 降权参与排序；Claims 中纯 wiki 支撑的论断
+    # 置信度封顶 wiki_claim_confidence_cap。关掉 wiki_retrieval_enabled
+    # 即回到旧行为（检索排除 wiki，Claims 只认 Raw）。
+    wiki_retrieval_enabled: bool = True
+    wiki_evidence_weight: float = 0.7
+    wiki_claim_confidence_cap: float = 0.6
     wiki_doe_constraints: bool = True
     wiki_lint_on_compile: bool = True
     wiki_neo4j_project: bool = False
@@ -926,7 +933,7 @@ class Settings(BaseSettings):
     # Top-5 #3：默认 ON（unreviewed draft；不进 Claims/DOE；可关）。
     wiki_chat_save_draft: bool = True
     # Phase 3: embed wiki page summaries into document_chunks (source_kind=wiki).
-    # Top-5‴ #1（2026-09-25）：默认 ON — 双轨；不关 Raw RAG；Claims 仍滤 wiki。
+    # Top-5‴ #1（2026-09-25）：默认 ON — 双轨；不关 Raw RAG；Batch 2 起 Claims 可引 wiki（标注 + 置信度封顶）。
     wiki_embed_enabled: bool = True
     # Top-5‴ #2：下一轮 predicted 用台账 prediction_bias.mean_error 软校准。
     # 默认关 —— 避免静默改分；需 Settings / 显式环境变量打开。
@@ -986,6 +993,12 @@ class Settings(BaseSettings):
     pageindex_summarize_on_ingest: bool = True
     # 第二阶段只对至少这么多页的文档自动触发（显式 deep=True 时不受限）。
     pageindex_min_pages: int = 20
+    # Batch 2 (Q4=A)：PageIndex 通用检索导航层 —— 长文档（≥ min_pages）
+    # 先由目录树定位匹配章节，命中章节的 chunk 加权、并补取该章节内
+    # 未进 top-k 的 chunk 与表格；短文档走现有检索，不受影响。
+    pageindex_nav_enabled: bool = True
+    pageindex_nav_boost: float = 0.15
+    pageindex_nav_max_extra_chunks: int = 6
     # 每篇文档的寻址预算：最多跳数，以及交给 LLM 的节点正文总字符数（约 16k token）。
     pageindex_max_hops: int = 6
     pageindex_max_input_chars: int = 48000

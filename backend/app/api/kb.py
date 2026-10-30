@@ -649,7 +649,10 @@ class QueryTestRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
     mode: Literal["keyword", "hybrid", "hybrid_rerank"] = "hybrid"
     top_k: int = Field(default=10, ge=1, le=50)
-    alpha: float = Field(default=0.3, ge=0.0, le=1.0)
+    # Batch 2 (§4.3): probe alpha aligns with online — None means
+    # run_query_test falls back to settings.kb_hybrid_alpha (0.85).
+    # The old 0.3 default made probe results incomparable with production.
+    alpha: float | None = Field(default=None, ge=0.0, le=1.0)
     project_id: str | None = None
     include_global: bool = True
     rerank: bool | None = None

@@ -747,6 +747,138 @@ def load_tables(source_id: str) -> list[TableAsset]:
         return []
 
 
+_TABLE_TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
+
+
+def _table_tokens(text: str) -> set[str]:
+    return {t.lower() for t in _TABLE_TOKEN_RE.findall(text or "")}
+
+
+def search_source_tables(
+    source_id: str, query: str, k: int = 5
+) -> list[TableAsset]:
+    """Batch 2 table read path: keyword search over a source's sidecar tables.
+
+    Scores caption + headers + markdown by token overlap (query tokens
+    against table tokens); ties keep sidecar order. Empty on any error.
+    Tables reconstructed from OCR text carry ``provenance.confidence =
+    "low"`` and must be presented as such by callers.
+    """
+    q = (query or "").strip()
+    if not q or k <= 0:
+        return []
+    qtoks = _table_tokens(q)
+    if not qtoks:
+        qtoks = {q.lower()}
+    scored: list[tuple[int, int, TableAsset]] = []
+    for i, t in enumerate(load_tables(source_id)):
+        blob = " ".join(
+            [t.caption or "", " ".join(str(h) for h in t.headers)]
+            + [" ".join(str(c) for c in row) for row in t.rows]
+            + [t.raw_markdown or ""]
+        )
+        blob_lower = blob.lower()
+        blob_tokens = _table_tokens(blob)
+        # CJK queries arrive as one contiguous token ("磷酸锌含量") while
+        # cells hold the parts ("磷酸锌", "含量"): substring both ways.
+        hits = 0
+        for qtok in qtoks:
+            if qtok in blob_lower:
+                hits += 1
+            elif any(len(b) >= 2 and b in qtok for b in blob_tokens):
+                hits += 1
+        if hits > 0:
+            scored.append((hits, -i, t))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [t for _, _, t in scored[:k]]
+
+
+_SPLIT_COLS_RE = re.compile(r"\t|\s{2,}")
+
+
+def _split_grid_row(line: str) -> list[str]:
+    return [c.strip() for c in _SPLIT_COLS_RE.split(line.strip()) if c.strip()]
+
+
+def reconstruct_text_tables(
+    source_id: str,
+    chunks: list,
+    *,
+    min_rows: int = 3,
+    min_cols: int = 2,
+) -> list[TableAsset]:
+    """Batch 2: heuristic grid-table reconstruction from plain OCR text.
+
+    RapidOCR output has no markdown table blocks, so parse-time
+    ``extract_tables`` finds nothing. This scans chunk text for runs of
+    consecutive lines that split into a consistent column count
+    (>= ``min_cols`` cells, >= ``min_rows`` lines) and emits them as
+    :class:`TableAsset` with ``provenance.confidence = "low"`` and
+    ``provenance.method = "grid_heuristic"``. First row becomes headers.
+    Never raises (fail-open: returns what was reconstructed so far).
+    """
+    out: list[TableAsset] = []
+    per_page_idx: dict[int, int] = {}
+    try:
+        for ch in chunks or []:
+            text = getattr(ch, "text", "") or ""
+            page_no = int(getattr(ch, "page_no", 0) or 0) or 1
+            lines = [ln for ln in text.splitlines()]
+            run: list[list[str]] = []
+            runs: list[list[list[str]]] = []
+
+            def _flush() -> None:
+                if len(run) >= min_rows:
+                    runs.append(list(run))
+                run.clear()
+
+            for ln in lines:
+                cells = _split_grid_row(ln) if ln.strip() else []
+                if len(cells) >= min_cols and (not run or len(cells) == len(run[0])):
+                    run.append(cells)
+                else:
+                    _flush()
+                    if len(cells) >= min_cols:
+                        run.append(cells)
+            _flush()
+            for grid in runs:
+                ncols = len(grid[0])
+                if any(len(r) != ncols for r in grid):
+                    continue
+                flat = " ".join(" ".join(r) for r in grid)
+                has_digit = any(c.isdigit() for c in flat)
+                if not has_digit and len(grid) < 4:
+                    continue
+                idx = per_page_idx.get(page_no, 0)
+                per_page_idx[page_no] = idx + 1
+                headers = grid[0]
+                rows = grid[1:]
+                md_lines = [
+                    "| " + " | ".join(headers) + " |",
+                    "| " + " | ".join("---" for _ in headers) + " |",
+                ] + ["| " + " | ".join(r) + " |" for r in rows]
+                out.append(
+                    TableAsset(
+                        table_id=f"{source_id}#p{page_no:02d}-h{idx:02d}",
+                        source_id=source_id,
+                        page_no=page_no,
+                        caption="",
+                        provenance={
+                            "parser": "rapidocr_heuristic",
+                            "confidence": "low",
+                            "method": "grid_heuristic",
+                        },
+                        kind="other",
+                        headers=headers,
+                        rows=rows,
+                        raw_markdown="\n".join(md_lines),
+                    )
+                )
+    except Exception:  # noqa: BLE001 - fail-open
+        logger.exception("table_contract: text table reconstruction failed (fail-open)")
+    return out
+
+
 def load_property_sets(source_id: str) -> list[dict]:
     """Load normalised PropertySet dicts (W3-1) for a source id.
 

@@ -1,4 +1,9 @@
-"""Wiki keyword retrieve for Chat dual-track (W3)."""
+"""Wiki keyword retrieve for Chat dual-track (W3).
+
+Batch 2: blend retrieval is FTS-first (``wiki/fts.py``) merged with the
+keyword + embedded results from :func:`search_wiki`; substring keyword
+search remains the fallback when FTS and embedded both come back empty.
+"""
 from __future__ import annotations
 
 import re
@@ -124,6 +129,76 @@ def search_wiki(
     return keyword_hits
 
 
+def _fts_blend_hits(
+    question: str, top_k: int, project_id: str | None = None
+) -> list[Evidence]:
+    """FTS hits as Evidence, relevance mapped from FTS rank order.
+
+    SQLite FTS5 bm25 ranks are on an arbitrary scale, so relevance is a
+    relative mapping inside this hit list (best 0.9 → worst 0.5, single
+    hit 0.7) — never presented as an absolute relevance score. Empty on
+    any failure (caller falls back to :func:`search_wiki`).
+
+    Project-scoped blends skip FTS: the FTS table carries no project
+    dimension, so merging it would leak cross-project pages. Project
+    blends keep keyword + embedded (both project-filtered).
+    """
+    settings = get_settings()
+    if project_id is not None:
+        return []
+    if not getattr(settings, "wiki_fts_enabled", False):
+        return []
+    try:
+        from .fts import search_fts
+
+        rows = search_fts(get_wiki_store().session_factory, question, limit=top_k)
+    except Exception:
+        return []
+    if not rows:
+        return []
+    n = len(rows)
+    out: list[Evidence] = []
+    for i, row in enumerate(rows):
+        rel = 0.7 if n == 1 else 0.9 - 0.4 * (i / max(1, n - 1))
+        title = (row.get("title") or row.get("path") or "").strip()
+        out.append(
+            Evidence(
+                source="wiki",
+                identifier=f"wiki:{row.get('path')}",
+                title=f"[Wiki/{row.get('kind')}] {title}",
+                snippet=(row.get("snippet") or "")[:800],
+                relevance=round(rel, 4),
+                url=None,
+            )
+        )
+    return out
+
+
+def _wiki_blend_hits(
+    question: str, *, k: int, project_id: str | None = None
+) -> list[Evidence]:
+    """Blend retrieval: FTS merged with keyword + embedded, substring fallback.
+
+    FTS and :func:`search_wiki` (keyword + embedded merge) results are
+    combined by identifier, keeping the higher relevance on collision,
+    sorted by relevance, capped at ``k``. When FTS is off or empty, the
+    result is exactly :func:`search_wiki` (pre-Batch-2 behavior).
+    """
+    base = search_wiki(question, k=k, project_id=project_id)
+    fts = _fts_blend_hits(question, k, project_id)
+    if not fts:
+        return base
+    by_id: dict[str, Evidence] = {ev.identifier: ev for ev in base}
+    for ev in fts:
+        prev = by_id.get(ev.identifier)
+        if prev is None or float(ev.relevance or 0) > float(prev.relevance or 0):
+            by_id[ev.identifier] = ev
+    merged = sorted(
+        by_id.values(), key=lambda e: float(e.relevance or 0), reverse=True
+    )
+    return merged[: max(1, k)]
+
+
 def blend_wiki_evidence(
     question: str,
     sources: list[Evidence],
@@ -146,7 +221,7 @@ def blend_wiki_evidence(
     else:
         default_k = min(5, max(2, settings.kb_chat_top_k // 4 or 2))
     top_k = k if k is not None else default_k
-    hits = search_wiki(question, k=top_k, project_id=project_id)
+    hits = _wiki_blend_hits(question, k=top_k, project_id=project_id)
     if not hits:
         return sources, 0
     seen = {ev.identifier for ev in sources}

@@ -335,6 +335,27 @@ def _faiss_vector_scores(
         return None
 
 
+def apply_wiki_weight(
+    combined: "np.ndarray",
+    chunks: list,
+    wiki_ids: set[str],
+    weight: float,
+) -> "np.ndarray":
+    """Down-weight wiki chunks in fused scores (Batch 2, Q3=A).
+
+    Wiki evidence competes below equal-relevance literature instead of being
+    dropped by the retrieval gate. ``weight`` 1.0 (or empty wiki set) leaves
+    scores untouched. Pure function — unit-testable without the store.
+    """
+    if weight == 1.0 or not wiki_ids:
+        return combined
+    out = combined.copy()
+    for i, ch in enumerate(chunks):
+        if getattr(ch, "source_id", "") in wiki_ids:
+            out[i] = float(out[i]) * weight
+    return out
+
+
 def hybrid_search_scored(
     query: str,
     top_k: int = 10,
@@ -595,6 +616,22 @@ def hybrid_search_scored(
                 )
         else:
             combined = alpha * bm25_scores + (1.0 - alpha) * cosine_scores
+
+        # Batch 2 (Q3=A): wiki admission with down-weight. The gate no longer
+        # drops wiki chunks when wiki_retrieval_enabled; they rank below
+        # equal-relevance literature by wiki_evidence_weight.
+        if getattr(settings, "wiki_retrieval_enabled", False):
+            try:
+                from .kb_retrieval_gate import wiki_source_ids
+
+                combined = apply_wiki_weight(
+                    combined,
+                    chunks,
+                    wiki_source_ids(),
+                    float(getattr(settings, "wiki_evidence_weight", 1.0) or 1.0),
+                )
+            except Exception:  # noqa: BLE001 - fail-open: weight skipped
+                logger.debug("hybrid wiki weight skipped (fail-open)", exc_info=True)
 
         order = [i for i in range(n) if float(combined[i]) > 0.0]
         order.sort(key=lambda i: float(combined[i]), reverse=True)

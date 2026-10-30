@@ -281,6 +281,35 @@ def _maybe_persist_mineru_structured(
         logger.exception("structured persist failed (fail-open)")
 
 
+def _maybe_persist_ocr_text_tables(
+    persist: bool, source_id: str | None, parsed
+) -> None:
+    """Batch 2: RapidOCR 纯文本网格表启发式重建 → 表 sidecar。
+
+    仅 parser == "rapidocr" 时运行 —— 其余 tier 的 markdown 表格已由解析层
+    extract_tables 处理，重复跑会双计。重建表以低置信度标注，合并进
+    已有 sidecar（保留 property_sets，不覆盖 MinerU 资产）。
+    Fail-open: 失败只记日志，不破坏已成功的入库。
+    """
+    if not persist or not source_id or getattr(parsed, "parser", None) != "rapidocr":
+        return
+    try:
+        from ..db.chunk_store import get_chunk_store
+        from . import table_contract as _tc
+
+        chunks = get_chunk_store().get_by_source(source_id) or []
+        new_tables = _tc.reconstruct_text_tables(source_id, chunks)
+        if not new_tables:
+            return
+        existing = _tc.load_tables(source_id)
+        seen = {t.table_id for t in existing}
+        merged = list(existing) + [t for t in new_tables if t.table_id not in seen]
+        ps = _tc.load_property_sets(source_id)
+        _tc.save_tables(source_id, merged, property_sets=ps if ps else None)
+    except Exception:  # noqa: BLE001
+        logger.exception("ocr text table reconstruction failed (fail-open)")
+
+
 def _no_ocr_hint(ext: str) -> str:
     """What to do about a PDF with no text layer when nothing on this machine can read pixels.
 
@@ -359,6 +388,7 @@ def ingest_file(
     # Fail-open: a structured-persist failure must never break the ingest
     # that already succeeded.
     _maybe_persist_mineru_structured(persist, outcome.source_id, parsed)
+    _maybe_persist_ocr_text_tables(persist, outcome.source_id, parsed)
     # W2-3/P2: table sidecar persisted here (not inside parse_document) so the
     # key is the real SourceDocument UUID — the same key load_tables(doc.id)
     # reads. Fail-open: a sidecar failure must never break the ingest that
@@ -736,6 +766,7 @@ def ingest_url(url: str, *, persist: bool = True) -> IngestOutcome:
         maybe_persist_table_sidecar(outcome.source_id, parsed)
     # P2: MinerU 结构化产物 —— URL 路径此前漏接。
     _maybe_persist_mineru_structured(persist, outcome.source_id, parsed)
+    _maybe_persist_ocr_text_tables(persist, outcome.source_id, parsed)
     # P2: 解析截断提示带回给用户。
     outcome.warnings.extend(_url_parse_warnings)
     return outcome

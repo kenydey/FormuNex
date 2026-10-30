@@ -59,6 +59,11 @@ class TocTreeStore:
             ).scalars().all()
             return {r.source_id: r for r in rows}
 
+    def list_all(self) -> list[DocumentTocTreeRow]:
+        """All stored tree rows (coverage stats / rebuild scans)."""
+        with self._session_factory() as session:
+            return list(session.execute(select(DocumentTocTreeRow)).scalars().all())
+
     def put(self, source_id: str, built: dict[str, Any], *, builder_version: str) -> DocumentTocTreeRow:
         stats = built.get("stats") or {}
         with self._session_factory() as session:
