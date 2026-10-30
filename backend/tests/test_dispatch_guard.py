@@ -98,10 +98,11 @@ def test_dispatch_failure_after_a_passing_probe_is_still_503(
     monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
     from app.worker import tasks
 
-    def explode(_payload):
+    def explode(*_args, **_kwargs):
         raise RuntimeError("Retry limit exceeded while trying to reconnect")
 
-    monkeypatch.setattr(tasks.run_recommend_task, "delay", explode)
+    # P2-1: the publish call is apply_async with the pre-recorded id.
+    monkeypatch.setattr(tasks.run_recommend_task, "apply_async", explode)
 
     response = client.post("/api/research/recommend", json=REQUIREMENT)
     assert response.status_code == 503

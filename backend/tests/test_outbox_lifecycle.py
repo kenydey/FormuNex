@@ -553,12 +553,18 @@ def test_submit_records_the_celery_id_it_hands_out_via_the_broker(db, monkeypatc
     monkeypatch.setenv("FORMUNEX_CELERY_EAGER", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
-    monkeypatch.setattr(_dispatch, "_delay_with_timeout", lambda task, payload: SimpleNamespace(id="broker-id-9"))
+    # P2-1: the id is fixed before publishing and the broker uses it, so
+    # the stub echoes the id it is given instead of inventing its own.
+    monkeypatch.setattr(
+        _dispatch, "_delay_with_timeout",
+        lambda task, payload, task_id=None: SimpleNamespace(id=task_id),
+    )
     payload = {"k": "broker-submit"}
     with db() as s:
         row = _add_row(s, "doe_cycle", payload, age=timedelta(seconds=1))
         row_id = row.id
     response = _dispatch.submit(object(), payload, "doe_cycle", outbox_id=row_id)
-    assert json.loads(response.body)["task_id"] == "broker-id-9"
+    task_id = json.loads(response.body)["task_id"]
+    assert task_id
     with db() as s:
-        assert s.get(TaskOutbox, row_id).task_id == "broker-id-9"
+        assert s.get(TaskOutbox, row_id).task_id == task_id

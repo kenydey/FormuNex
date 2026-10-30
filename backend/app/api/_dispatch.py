@@ -97,11 +97,11 @@ def broker_reachable() -> bool:
         return False
 
 
-def _record_outbox_task_id(outbox_id: str | None, task_id: str) -> None:
+def _record_outbox_task_id(outbox_id: str | None, task_id: str) -> bool:
     """Remember which Celery id the client holds, so recovery can replay under it."""
     from ..db.outbox_store import record_task_id
 
-    record_task_id(outbox_id, task_id)
+    return record_task_id(outbox_id, task_id)
 
 
 def submit(
@@ -113,6 +113,18 @@ def submit(
     owner_id: str | None = None,
 ) -> JSONResponse:
     """Dispatch ``task`` with ``payload`` and return the 202 accepted response.
+
+    P2-1 ordering (non-eager path): the Celery id is fixed *before* the
+    publish, recorded on the outbox row first, and then handed to the
+    broker — the same register-before-start order the eager path already
+    uses. The old order (publish, then record) left a crash window in
+    which the task was already running but the row still had no id, so
+    ``recover_stalled`` replayed it under a *new* id and the client's
+    original id never resolved. With the id fixed first, every outcome
+    of the publish keeps the same id: success (client polls it),
+    publish failure (503, row PENDING with the id, recovery replays
+    under it), and even a publish that lands after the producer timeout
+    (the replay reuses the id the client already holds).
 
     Raises:
         HTTPException: 503 when the broker is unreachable or (non-eager)
@@ -136,8 +148,18 @@ def submit(
         _submit_eager_background(task, payload, kind, task_id=task_id)
         return response
 
+    # The id is the source of truth: it is recorded first, then published
+    # under exactly that id, and the same id is handed to the client.
+    task_id = str(uuid.uuid4())
+    if outbox_id and not _record_outbox_task_id(outbox_id, task_id):
+        logger.warning(
+            "outbox {}: task id {} not recorded before publish; "
+            "recovery will replay under a new id",
+            outbox_id,
+            task_id,
+        )
     try:
-        async_result = _delay_with_timeout(task, payload)
+        _delay_with_timeout(task, payload, task_id=task_id)
     except _DispatchTimeout as exc:
         # 2026-09-05: uvicorn 进程内 celery producer 首建曾无限卡(所有 submit
         # 端点挂起→前端 502)。预热(lifespan)已把首建移出请求路径; 此处兜底
@@ -151,12 +173,13 @@ def submit(
         # The probe passed a moment ago, so this is a broker that died mid-
         # submission or a payload Celery could not serialise. Do not always
         # claim "Redis is down" — that mislabels ELN/serialisation failures.
+        # The row already carries task_id (recorded above), so recovery
+        # replays under the id the client would have held.
         logger.exception("celery dispatch failed for {}", kind)
         raise HTTPException(
             status_code=503, detail=f"{DISPATCH_FAILURE_DETAIL}（{exc}）"
         ) from exc
-    _record_outbox_task_id(outbox_id, async_result.id)
-    return accepted_response(async_result.id, kind, outbox_id=outbox_id, owner_id=owner_id)
+    return accepted_response(task_id, kind, outbox_id=outbox_id, owner_id=owner_id)
 
 
 def _submit_eager_background(
@@ -193,17 +216,25 @@ class _DispatchTimeout(Exception):
     pass
 
 
-def _delay_with_timeout(task, payload: dict, timeout_s: float = 10.0):
-    """task.delay in a worker thread with a hard cap (non-eager only).
+def _delay_with_timeout(task, payload: dict, task_id: str | None = None, timeout_s: float = 10.0):
+    """Publish in a worker thread with a hard cap (non-eager only).
 
     Celery's producer pool can block for minutes on first use inside a
     long-lived uvicorn process; the request must never hang on it.
+
+    When *task_id* is given the publish uses ``apply_async`` with exactly
+    that id (P2-1: the id recorded on the outbox row before publishing);
+    without it the call falls back to ``task.delay`` and Celery assigns
+    the id, as before.
     """
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
     pool = ThreadPoolExecutor(max_workers=1)
     try:
-        fut = pool.submit(task.delay, payload)
+        if task_id is not None:
+            fut = pool.submit(task.apply_async, args=(payload,), task_id=task_id)
+        else:
+            fut = pool.submit(task.delay, payload)
         try:
             return fut.result(timeout=timeout_s)
         except FuturesTimeout:
