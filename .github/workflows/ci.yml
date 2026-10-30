@@ -22,6 +22,10 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The migration-discipline step below diffs origin/main...HEAD, so
+          # it needs the full history, not the default shallow checkout.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -51,6 +55,44 @@ jobs:
         # Bug-class rules only (see [tool.ruff] in pyproject.toml): undefined
         # names, syntax errors, invalid comparisons, shadowed definitions.
         run: ruff check .
+
+      - name: Migration discipline (P2-2)
+        # New migrations must not drop tables or columns: a destructive
+        # schema change needs a separate proposal first (row-count audit +
+        # data migration before the drop) — see AGENTS.md "迁移纪律".
+        # Only files ADDED on this branch are checked; existing migrations
+        # are never rewritten. On pushes to main the diff is empty and the
+        # step passes vacuously (the review already happened on the branch).
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+            echo "::warning::origin/main not found; migration-discipline check skipped"
+            exit 0
+          fi
+          mapfile -t added < <(git diff --name-only --diff-filter=A origin/main...HEAD -- backend/app/db/alembic/versions/)
+          if [ "${#added[@]}" -eq 0 ]; then
+            echo "No new migration files; nothing to check."
+            exit 0
+          fi
+          echo "New migration files:"
+          printf '%s\n' "${added[@]}"
+          # Only the upgrade path counts: a downgrade() that drops columns
+          # the same migration added is just undoing it, not destroying
+          # data. The awk filter removes the downgrade() body (up to the
+          # next top-level def) before grepping.
+          hits=""
+          for f in "${added[@]}"; do
+            if awk '(/^def downgrade\(/){skip=1} (/^def / && !/^def downgrade\(/){skip=0} !skip' "$f" \
+              | grep -q -E '\.drop_(table|column)\('; then
+              hits="$hits $f"
+            fi
+          done
+          if [ -n "$hits" ]; then
+            echo "::error::New migration(s) drop a table or column on the upgrade path. File a separate proposal first (row-count audit + data migration before the drop); see AGENTS.md."
+            printf '%s\n' $hits
+            exit 1
+          fi
+          echo "Migration discipline: OK."
 
       - name: Run tests
         # golden_eval is the slow QA-dataset suite; everything else must pass.
