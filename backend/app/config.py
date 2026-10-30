@@ -410,6 +410,18 @@ class Settings(BaseSettings):
     pdf_quality_gate_enabled: bool = True
     # 质量门密度阈值：hybrid 输出每页字符数低于此值视为内容大面积丢失。
     pdf_quality_gate_min_chars_per_page: int = 50
+    # PDF 分片（Q1 全取消 + 分片续跑）：页数超 pdf_shard_pages 的 PDF 按页切分，
+    # 每片走现有级联；关掉则回旧 cap 行为（2000 页拒绝、10/30 页截断）。
+    pdf_shard_enabled: bool = True
+    # 分片大小（页）：与 MinerU 整篇上限对齐，分片后各档 cap 不再触发。
+    pdf_shard_pages: int = 10
+    # 分片断点续跑：按内容哈希缓存已完成片的解析结果；关掉则不读写缓存。
+    pdf_shard_resume: bool = True
+    # 分片缓存行保留天数：合并成功后删除，崩溃残留由下次分片解析顺带清理。
+    pdf_shard_stale_days: int = 7
+    # MinerU 分片预算：单篇分片解析中 MinerU tier 的调用上限，0 = 不限。
+    # 按 tier 调用次数计；自适应跳过不产生云调用但仍计次，属保守口径。
+    mineru_shard_budget: int = 0
     # 版面分析（pymupdf4llm 的 hybrid 层）。实测代价与收益：
     #   开：~350MB 峰值、~176ms/页；关：~150MB、~12ms/页
     # 关掉快 25 倍且省一半内存，单栏页面输出完全一致——但**双栏页面会左右

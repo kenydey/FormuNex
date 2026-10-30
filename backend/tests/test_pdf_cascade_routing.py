@@ -187,6 +187,10 @@ def test_router_drops_markitdown_for_fully_scanned(monkeypatch):
 
 def test_router_skips_mineru_for_oversized_scanned(monkeypatch):
     _gate_settings(monkeypatch)
+    # Batch 1: sharding supersedes this skip for oversized docs (each shard is
+    # within the cap, so mineru runs per shard). The skip below is the
+    # switch-off fallback: it still applies when sharding is disabled.
+    monkeypatch.setattr(get_settings(), "pdf_shard_enabled", False)
     monkeypatch.setattr(parsing, "_parse_hybrid", lambda c: None)
     attempted = []
 

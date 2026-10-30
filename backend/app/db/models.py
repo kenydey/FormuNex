@@ -1087,3 +1087,27 @@ class McpApprovalRequestRow(Base):
 # FormuNex domain tables live in sibling modules; importing them here registers
 # them on ``Base.metadata`` so create_all / alembic baseline see every table.
 from . import models_identity, models_lab, models_plm, models_regulatory  # noqa: E402,F401
+
+
+class ParseShard(Base):
+    """Transient per-shard parse cache for sharded PDF parsing (batch 1).
+
+    Keyed by content SHA-256 + shard index so a crashed or retried parse of
+    the same bytes resumes from completed shards instead of re-OCRing them.
+    Rows are deleted after a successful merge; stale rows (crash residue)
+    are swept opportunistically on the next sharded parse.
+    """
+
+    __tablename__ = "parse_shards"
+
+    content_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    shard_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    page_start: Mapped[int] = mapped_column(Integer)  # 1-based, inclusive
+    page_end: Mapped[int] = mapped_column(Integer)  # 1-based, inclusive
+    parser: Mapped[str] = mapped_column(String(32), default="")
+    markdown: Mapped[str] = mapped_column(Text, default="")
+    # JSON blob of the shard's enrichment (tables / structured blocks /
+    # formulas, page numbers already offset to global) so a resumed merge
+    # does not lose them for cached shards. "" = none (fail-open).
+    extras_json: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

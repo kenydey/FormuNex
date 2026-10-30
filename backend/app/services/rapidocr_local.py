@@ -258,15 +258,37 @@ def ocr_pdf(content: bytes) -> str | None:
 
     dpi = settings.rapidocr_dpi
     rendered: list[tuple[int, str]] = []
+    scores: list[float] = []
     for page_no in range(1, min(total, cap) + 1):
         png = pdf_local.page_as_png(content, page_no, dpi=dpi)
         if not png:
             continue
-        text = ocr_png(png)
+        text, score = ocr_png_scored(png)
         del png  # an A4 page at 150 dpi is several MB; do not hold the batch
         if text:
             rendered.append((page_no, text))
+            scores.append(score)
     if not rendered:
         return None
+    # Batch 1 confidence gate: the whole-doc path used to discard scores
+    # (ocr_png) so a garbled scan entered the KB unchecked. The mixed-page
+    # path already gates at rapidocr_min_confidence; apply the same bar here.
+    # 0 keeps the old behaviour (never gate on quality).
+    threshold = settings.rapidocr_min_confidence
+    if threshold > 0 and scores:
+        mean = sum(scores) / len(scores)
+        if mean < threshold:
+            logger.warning(
+                "rapidocr: mean confidence %.2f below %.2f — discarding whole-doc OCR",
+                mean,
+                threshold,
+            )
+            from .parse_notices import note
+
+            note(
+                f"文档 OCR 平均置信度 {mean:.2f} 低于门限 {threshold}，"
+                "该结果未入库（疑难片：请用 MinerU 或人工复核）"
+            )
+            return None
     logger.info("rapidocr: %d/%d pages produced text", len(rendered), min(total, cap))
     return pdf_local.assemble(rendered) or None

@@ -24,6 +24,7 @@ parser produced the output so provenance can be persisted.
 """
 from __future__ import annotations
 
+import contextvars
 import io
 import logging
 import re
@@ -1093,10 +1094,13 @@ def _bookmarks_to_page_map(
     return page_map
 
 
-def _inject_approximate_page_markers(content: bytes, text: str) -> str:
+def _inject_approximate_page_markers(
+    content: bytes, text: str, *, n_pages: int | None = None, start_page: int = 1
+) -> str:
     """PageIndex 借鉴 P1: 对无页码 tier 的输出按字符均分插入页码 marker。
 
     近似页码（按字符数均分，尽量在换行处切分），chunk 引用时显示页码。
+    ``start_page`` 供分片解析用：片内页码按全局偏移编号。
     Fail-open: 页数获取失败或文本过短时原文返回。
     """
     from . import pdf_local
@@ -1105,7 +1109,8 @@ def _inject_approximate_page_markers(content: bytes, text: str) -> str:
     if not text or "<!-- page:" in text:
         return text
     try:
-        n_pages = int(pdf_local.page_count(content) or 0)
+        if n_pages is None:
+            n_pages = int(pdf_local.page_count(content) or 0)
     except Exception:
         return text
     if n_pages <= 1 or len(text.strip()) < 100:
@@ -1119,16 +1124,16 @@ def _inject_approximate_page_markers(content: bytes, text: str) -> str:
     parts: list[str] = []
     buf: list[str] = []
     acc = 0
-    cur_page = 1
-    parts.append(page_marker(1))
+    idx = 1
+    parts.append(page_marker(start_page))
     for ln in lines:
         buf.append(ln)
         acc += len(ln)
-        if acc >= per_page * cur_page and cur_page < n_pages:
+        if acc >= per_page * idx and idx < n_pages:
             parts.append("".join(buf))
             buf = []
-            cur_page += 1
-            parts.append(page_marker(cur_page))
+            idx += 1
+            parts.append(page_marker(start_page + idx - 1))
     if buf:
         parts.append("".join(buf))
     return "\n".join(parts)
@@ -1272,6 +1277,298 @@ def extract_latex_formulas(markdown: str) -> list[tuple[str, int]]:
     return formulas
 
 
+# Batch 1 分片解析：分片内递归调用 parse_document 时用这两个 contextvar
+# 传递片内全局页码偏移与单篇 MinerU 预算；整篇解析时均为默认值，行为不变。
+_SHARD_OFFSET: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "pdf_shard_offset", default=0
+)
+# (budget, used-count); None = 不限。
+_MINERU_BUDGET: contextvars.ContextVar[tuple[int, list[int]] | None] = (
+    contextvars.ContextVar("pdf_mineru_budget", default=None)
+)
+
+
+def _shard_offset() -> int:
+    return _SHARD_OFFSET.get()
+
+
+def _apply_mineru_budget(
+    order: list[tuple[str, object]],
+) -> list[tuple[str, object]]:
+    """按单篇 MinerU 预算过滤/计数 mineru tier；无预算上下文时原样返回。"""
+    budget = _MINERU_BUDGET.get()
+    if budget is None:
+        return order
+    limit, used = budget
+    if used[0] >= limit:
+        return [t for t in order if t[0] != "mineru"]
+    wrapped: list[tuple[str, object]] = []
+    for name, fn in order:
+        if name == "mineru":
+
+            def _counted(c, e, _fn=fn):  # type: ignore[no-untyped-def]
+                used[0] += 1
+                return _fn(c, e)  # type: ignore[operator]
+
+            wrapped.append((name, _counted))
+        else:
+            wrapped.append((name, fn))
+    return wrapped
+
+
+def _renumber_page_markers(text: str, offset: int) -> str:
+    """把 <!-- page:N --> 全部平移 offset（分片合并时恢复全局页码）。"""
+    if offset <= 0 or not text:
+        return text
+    return re.sub(
+        r"<!-- page:(\d+) -->",
+        lambda m: f"<!-- page:{int(m.group(1)) + offset} -->",
+        text,
+    )
+
+
+def _pdf_total_pages(content: bytes) -> int | None:
+    """分片决策用总页数；加密/损坏/无法打开时返回 None（走旧路径）。"""
+    try:
+        from . import pdf_local
+
+        if pdf_local.is_encrypted(content):
+            return None
+    except Exception:
+        return None
+    stats = _pdf_page_text_stats(content)
+    if stats is not None:
+        return stats[0]
+    try:
+        from . import pdf_local
+
+        return pdf_local.page_count(content) or None
+    except Exception:
+        return None
+
+
+def _split_pdf_pages(content: bytes, start: int, end: int) -> bytes | None:
+    """按 1-based 闭区间 [start, end] 切出子 PDF；失败返回 None（fail-open）。"""
+    try:
+        import fitz  # type: ignore
+
+        src = fitz.open(stream=content, filetype="pdf")
+        try:
+            dst = fitz.open()
+            try:
+                dst.insert_pdf(src, from_page=start - 1, to_page=end - 1)
+                return dst.tobytes()
+            finally:
+                dst.close()
+        finally:
+            src.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pdf shard split [%d-%d] failed: %s", start, end, exc)
+        return None
+
+
+def _offset_extras(res: ParseResult, offset: int, tables: list, blocks: list, formulas: list) -> None:
+    """把一片的 tables/blocks/formulas 页码平移到全局，并入合并列表。"""
+    for t in res.tables or []:
+        if getattr(t, "page_no", None) is not None:
+            t.page_no += offset
+        tables.append(t)
+    if res.structured is not None:
+        for b in res.structured.blocks or []:
+            if getattr(b, "page_no", None) is not None:
+                b.page_no += offset
+            blocks.append(b)
+    for latex, page_no in res.formulas or []:
+        formulas.append((latex, page_no + offset if page_no is not None else None))
+
+
+def _serialize_extras(res: ParseResult) -> str:
+    """一片的 enrichment 序列化为 JSON；失败返回 ""（fail-open）。"""
+    try:
+        import dataclasses
+        import json
+
+        return json.dumps(
+            {
+                "tables": [
+                    dataclasses.asdict(t) for t in (res.tables or [])
+                ],
+                "blocks": [
+                    dataclasses.asdict(b)
+                    for b in ((res.structured.blocks or []) if res.structured is not None else [])
+                ],
+                "formulas": [[latex, page_no] for latex, page_no in (res.formulas or [])],
+            },
+            ensure_ascii=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail-open cache
+        logger.warning("pdf sharded: extras serialize failed (fail-open): %s", exc)
+        return ""
+
+
+def _restore_extras(
+    extras_json: str, tables: list, blocks: list, formulas: list
+) -> None:
+    """把缓存的 enrichment 恢复并入合并列表；失败静默（fail-open）。"""
+    if not extras_json:
+        return
+    try:
+        import json
+
+        from .mineru_structured import StructuredBlock
+        from .table_contract import TableAsset
+
+        data = json.loads(extras_json)
+        for d in data.get("tables") or []:
+            tables.append(TableAsset(**d))
+        for d in data.get("blocks") or []:
+            blocks.append(StructuredBlock(**d))
+        for latex, page_no in data.get("formulas") or []:
+            formulas.append((latex, page_no))
+    except Exception as exc:  # noqa: BLE001 - fail-open cache
+        logger.warning("pdf sharded: extras restore failed (fail-open): %s", exc)
+
+
+def _parse_pdf_sharded(
+    content: bytes, ext: str, prefer: str | None, n_pages: int
+) -> ParseResult:
+    """Batch 1: 按页分片解析并合并。
+
+    每片递归走 parse_document（即现有级联 + §8 路由/质量门），片内页码
+    经 _SHARD_OFFSET 平移为全局页码；已完成片按内容哈希缓存，崩溃重跑
+    时跳过；合并失败片记疑难、整篇标部分完成，不静默丢页。
+    """
+    from . import ingest_timing as timing
+    from .parse_notices import note
+    from .parse_shards import (
+        content_sha256,
+        delete_for_content,
+        get_shard,
+        put_shard,
+        sweep_stale,
+    )
+
+    settings = get_settings()
+    shard_size = max(1, int(settings.pdf_shard_pages or 10))
+    resume = bool(settings.pdf_shard_resume)
+    ranges = [
+        (s, min(s + shard_size - 1, n_pages))
+        for s in range(1, n_pages + 1, shard_size)
+    ]
+    sha = content_sha256(content)
+    if resume:
+        try:
+            sweep_stale(int(settings.pdf_shard_stale_days or 7))
+        except Exception:
+            pass
+    budget_token = None
+    budget = int(settings.mineru_shard_budget or 0)
+    if budget > 0:
+        budget_token = _MINERU_BUDGET.set((budget, [0]))
+
+    parts: list[str] = []
+    failed: list[tuple[int, int]] = []
+    shard_parsers: list[str] = []
+    tables: list = []
+    blocks: list = []
+    formulas: list = []
+    bookmarks: list = []
+    try:
+        for idx, (start, end) in enumerate(ranges):
+            cached = get_shard(sha, idx) if resume else None
+            if (
+                cached is not None
+                and cached["page_start"] == start
+                and cached["page_end"] == end
+                and (cached["markdown"] or "").strip()
+            ):
+                parts.append(cached["markdown"])
+                shard_parsers.append(cached["parser"])
+                _restore_extras(cached.get("extras_json") or "", tables, blocks, formulas)
+                continue
+            shard_bytes = _split_pdf_pages(content, start, end)
+            if shard_bytes is None:
+                failed.append((start, end))
+                continue
+            token = _SHARD_OFFSET.set(start - 1)
+            try:
+                res = parse_document(shard_bytes, "pdf", prefer=prefer)
+            finally:
+                _SHARD_OFFSET.reset(token)
+            if res.markdown and res.markdown.strip():
+                parts.append(res.markdown)
+                shard_parsers.append(res.parser)
+                _offset_extras(res, start - 1, tables, blocks, formulas)
+                bookmarks.extend(res.bookmarks or [])
+                if resume:
+                    put_shard(
+                        sha,
+                        idx,
+                        start,
+                        end,
+                        res.parser,
+                        res.markdown,
+                        _serialize_extras(res),
+                    )
+            else:
+                failed.append((start, end))
+    finally:
+        if budget_token is not None:
+            _MINERU_BUDGET.reset(budget_token)
+
+    timing.note(parser="sharded", shards=len(ranges), failed_shards=len(failed))
+    parsed_pages = sum(end - start + 1 for start, end in ranges) - sum(
+        end - start + 1 for start, end in failed
+    )
+    if not parts:
+        note(f"文档共 {n_pages} 页，分片解析全部失败，未入库任何内容")
+        r = ParseResult("", "sharded")
+        r.table_stats = {
+            "sharded": True,
+            "pages": n_pages,
+            "parsed_pages": 0,
+            "failed_shards": [f"{s}-{e}" for s, e in failed],
+        }
+        r.failure_category = "sharded_failed"
+        return r
+    merged = "\n\n".join(parts)
+    final = ParseResult(merged, "sharded")
+    final.tables = tables
+    final.formulas = formulas
+    if blocks:
+        try:
+            from .mineru_structured import MinerUStructured
+
+            final.structured = MinerUStructured(markdown=merged, blocks=blocks)
+        except Exception as exc:  # noqa: BLE001 - structured 是附加信息，不杀正文
+            logger.warning("pdf sharded: structured merge failed: %s", exc)
+    # 书签以整篇为准（片内书签可能不全），失败时 fail-open。
+    try:
+        from ..config import get_settings as _gs
+
+        if bool(_gs().pdf_bookmark_headings_enabled):
+            final.bookmarks = _read_pdf_bookmarks(content) or bookmarks
+        else:
+            final.bookmarks = bookmarks
+    except Exception:
+        final.bookmarks = bookmarks
+    final.table_stats = {
+        "sharded": True,
+        "pages": n_pages,
+        "parsed_pages": parsed_pages,
+        "failed_shards": [f"{s}-{e}" for s, e in failed],
+        "shard_parsers": shard_parsers,
+    }
+    if failed:
+        note(
+            f"文档共 {n_pages} 页，{len(failed)} 个分片未解析"
+            f"（{', '.join(f'{s}-{e}' for s, e in failed)}），缺失页未入库"
+        )
+    elif resume:
+        delete_for_content(sha)
+    return final
+
+
 def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> ParseResult:
     """Parse *content* (with file extension *ext*, no dot) into Markdown/text.
 
@@ -1298,6 +1595,12 @@ def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> Pa
         r.table_stats = {"error": f"文件超限（{_max_mb:.0f}MB）"}
         r.failure_category = "oversized"
         return r
+    if ext == "pdf" and get_settings().pdf_shard_enabled:
+        # Batch 1: 超分片大小的 PDF 不再走 2000 页拒绝，改按页分片解析。
+        # 页数取不到（加密/损坏）时返回 None，走旧路径的守卫处理。
+        _shard_total = _pdf_total_pages(content)
+        if _shard_total and _shard_total > int(get_settings().pdf_shard_pages or 10):
+            return _parse_pdf_sharded(content, ext, prefer, _shard_total)
     if ext == "pdf":
         _max_pages = int(get_settings().parse_max_pdf_pages or 2000)
         try:
@@ -1352,6 +1655,8 @@ def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> Pa
                             )
                     else:
                         timing.note(pdf_route="standard")
+            # Batch 1 MinerU 分片预算：无预算上下文时原样返回。
+            order = _apply_mineru_budget(order)
             for name, fn in order:
                 # v18-15: tier 异常不杀整篇 —— 记 note 后继续下一 tier。
                 # 违背 fail-open 承诺是数据丢失级 bug。
@@ -1374,7 +1679,9 @@ def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> Pa
                     # PageIndex 借鉴 P1+P2: 无 marker 的 tier（marker/markitdown
                     # 返回纯文本）获胜时补近似页码；补不上则记 warning。
                     if name in _PAGELESS_TIERS:
-                        _patched = _inject_approximate_page_markers(content, text)
+                        _patched = _inject_approximate_page_markers(
+                            content, text, start_page=_shard_offset() + 1
+                        )
                         if _patched != text:
                             logger.info(
                                 "parse_document: tier %s 无页码，已补近似页码分段",
@@ -1432,8 +1739,16 @@ def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> Pa
                     except Exception:
                         _bm_on = False
                     if _bm_on and not final.bookmarks:
-                        final.bookmarks = _read_pdf_bookmarks(content)
-                    return _maybe_extract_embedded_structures(_maybe_extract_tables(final, content), content)
+                        _off = _shard_offset()
+                        final.bookmarks = [
+                            (t, l, p + _off) for (t, l, p) in _read_pdf_bookmarks(content)
+                        ]
+                    _out = _maybe_extract_embedded_structures(
+                        _maybe_extract_tables(final, content), content
+                    )
+                    if _shard_offset():
+                        _out.markdown = _renumber_page_markers(_out.markdown, _shard_offset())
+                    return _out
             timing.note(parser="none")
             return ParseResult("", "none")
 
