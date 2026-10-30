@@ -91,7 +91,8 @@ def test_no_profile_costs_the_pdf_cascade_its_best_local_parsers(monkeypatch, pr
     monkeypatch.setattr(pp, "probe_availability", lambda: {"ok": True})
     pp.apply_profile(profile)
     names = [n for n, _ in parsing._pdf_tier_order(get_settings().pdf_parser)]
-    assert names[:3] == ["hybrid", "docling", "marker"], (profile, names)
+    # v2 cascade: default order no longer contains the dormant docling/marker tiers.
+    assert names == ["hybrid", "mineru", "rapidocr", "markitdown", "pypdf"], (profile, names)
 
 
 def test_apply_rejects_unknown_profile():

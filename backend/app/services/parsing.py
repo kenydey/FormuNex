@@ -1012,6 +1012,13 @@ _PDF_TIERS: tuple[tuple[str, object], ...] = (
 # PageIndex 借鉴 P1: 不发射 <!-- page:N --> 的 tier —— 获胜后需补近似页码。
 _PAGELESS_TIERS = frozenset({"marker", "markitdown"})
 
+# v2 级联优化：默认顺序不再含 Docling/marker（见 _PDF_AUTO_TIERS）。
+# _PDF_TIERS 保留完整七档，仅用于显式 pin 的顺位解析，保证 pin 语义不变。
+_PDF_AUTO_NAMES = ("hybrid", "mineru", "rapidocr", "markitdown", "pypdf")
+_PDF_AUTO_TIERS: tuple[tuple[str, object], ...] = tuple(
+    t for t in _PDF_TIERS if t[0] in _PDF_AUTO_NAMES
+)
+
 # PageIndex 借鉴 A2: PDF 书签 → heading_path 补充源。
 # 只做"书签按页区间展开为 page → heading_path 映射"，不做章节树融合。
 _BOOKMARK_GENERIC_RE = re.compile(r"^(page|slide|folie|document page)?\d+$", re.IGNORECASE)
@@ -1161,13 +1168,13 @@ def _mineru_usable() -> bool:
 
 def _pdf_tier_order(prefer: str) -> list[tuple[str, object]]:
     global _dead_mineru_pin_warned
-    tiers = list(_PDF_TIERS)
     if prefer in ("auto", ""):
-        return tiers
+        return list(_PDF_AUTO_TIERS)
+    tiers = list(_PDF_TIERS)
     names = [n for n, _ in tiers]
     if prefer not in names:
         logger.warning("unknown FORMUNEX_PDF_PARSER=%r — using auto order", prefer)
-        return tiers
+        return list(_PDF_AUTO_TIERS)
     if prefer == "mineru" and not _mineru_usable():
         # Pinning a tier means "this one first, then the lighter ones below it" - so pinning the cloud tier while it cannot
         # run also dropped hybrid, Docling and marker, the best local parsers. The "高配" profile did exactly that (it
@@ -1179,10 +1186,69 @@ def _pdf_tier_order(prefer: str) -> list[tuple[str, object]]:
                 "FORMUNEX_PDF_PARSER=mineru but the MinerU cloud tier cannot run (disabled, no token or no SDK): "
                 "using the auto order. Set FORMUNEX_PDF_PARSER=auto to silence this."
             )
-        return tiers
+        return list(_PDF_AUTO_TIERS)
     idx = names.index(prefer)
     # Pinned parser first, then the lighter tiers below it as fallback.
     return tiers[idx:]
+
+
+# v2 路由层与质量门（仅 auto 模式生效；显式 pin 是操作员的明确选择，不覆盖）。
+_BLANK_PAGE_CHARS = 20
+_TABLE_CAPTION_RE = re.compile(r"(表\s*\d+|附表|Table\s*\d+)", re.IGNORECASE)
+_MD_TABLE_SEP_RE = re.compile(r"^\s*\|[\s:|-]+\|\s*$", re.MULTILINE)
+
+
+def _pdf_page_text_stats(content: bytes) -> tuple[int, int] | None:
+    """Cheap pre-scan: (n_pages, blank_pages) from the text layer via fitz.
+
+    Returns None when fitz is unavailable or the doc cannot be opened — the
+    router then stays out of the way and the static order applies.
+    """
+    try:
+        import fitz  # type: ignore
+    except ImportError:
+        return None
+    try:
+        doc = fitz.open(stream=content, filetype="pdf")
+    except Exception:
+        return None
+    try:
+        n_pages = doc.page_count
+        if n_pages <= 0:
+            return None
+        blank = 0
+        for i in range(n_pages):
+            try:
+                text = doc.load_page(i).get_text()
+            except Exception:
+                continue
+            if len(text.strip()) < _BLANK_PAGE_CHARS:
+                blank += 1
+        return (n_pages, blank)
+    except Exception:
+        return None
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+
+def _has_markdown_table(text: str) -> bool:
+    return bool(_MD_TABLE_SEP_RE.search(text))
+
+
+def _hybrid_quality_failed(text: str, n_pages: int | None, min_chars_per_page: int) -> bool:
+    """Conservative quality gate for a hybrid win. Fires only on clear loss:
+    very low chars/page, or table captions present but no markdown table parsed.
+    """
+    stripped = text.strip()
+    if n_pages and n_pages > 0:
+        if len(stripped) / n_pages < min_chars_per_page:
+            return True
+    if _TABLE_CAPTION_RE.search(text) and not _has_markdown_table(text):
+        return True
+    return False
 
 
 def extract_latex_formulas(markdown: str) -> list[tuple[str, int]]:
@@ -1255,7 +1321,37 @@ def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> Pa
 
     with timing.span("parse"):
         if ext == "pdf":
-            order = _pdf_tier_order(prefer if prefer is not None else get_settings().pdf_parser)
+            settings = get_settings()
+            prefer_resolved = prefer if prefer is not None else settings.pdf_parser
+            auto_mode = prefer_resolved in ("auto", "")
+            order = _pdf_tier_order(prefer_resolved)
+            # v2 路由层：仅 auto 模式生效。显式 pin 是操作员的明确选择，不覆盖。
+            route_pages: int | None = None
+            if auto_mode and settings.pdf_routing_enabled:
+                stats = _pdf_page_text_stats(content)
+                if stats is not None:
+                    route_pages, blank_pages = stats
+                    fully_scanned = route_pages > 0 and blank_pages >= route_pages
+                    if fully_scanned:
+                        # 扫描件上 markitdown provably useless（无 OCR），去掉；
+                        # hybrid 仍在首位——它内部才有最好的扫描件处理
+                        # （语言投票 + Tesseract 英文快线 + 视觉兜底）。
+                        order = [t for t in order if t[0] != "markitdown"]
+                        timing.note(pdf_route="scanned")
+                        if route_pages > settings.mineru_max_pages_per_doc:
+                            # 堵 10 页 cap 旁路：hybrid 内拒收的超限扫描件不得
+                            # 再经 mineru 整篇 tier 无上限消费配额，改走
+                            # RapidOCR（30 页截断 + note）。
+                            order = [t for t in order if t[0] != "mineru"]
+                            timing.note(pdf_route_mineru_skipped="over_page_cap")
+                            logger.warning(
+                                "pdf route: fully scanned doc has %d pages over mineru_max_pages_per_doc=%d; "
+                                "mineru whole-doc tier skipped for this parse",
+                                route_pages,
+                                settings.mineru_max_pages_per_doc,
+                            )
+                    else:
+                        timing.note(pdf_route="standard")
             for name, fn in order:
                 # v18-15: tier 异常不杀整篇 —— 记 note 后继续下一 tier。
                 # 违背 fail-open 承诺是数据丢失级 bug。
@@ -1291,6 +1387,42 @@ def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> Pa
                                 name,
                             )
                     final = result if result is not None else ParseResult(text, name)
+                    # v2 质量门：仅 auto 模式 + hybrid 胜出 + MinerU 可用时评估。
+                    # 不过门则以 MinerU 整篇作挑战者；挑战失败保留 hybrid 结果，
+                    # 不再继续下探更弱的 tier（已有可用文本，继续只会降级）。
+                    if (
+                        auto_mode
+                        and name == "hybrid"
+                        and settings.pdf_quality_gate_enabled
+                        and _mineru_usable()
+                        and _hybrid_quality_failed(
+                            text, route_pages, settings.pdf_quality_gate_min_chars_per_page
+                        )
+                    ):
+                        timing.note(quality_gate="fail")
+                        logger.info("pdf quality gate: hybrid output failed gate; trying mineru challenger")
+                        try:
+                            challenger = _parse_mineru(content)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("pdf quality gate: mineru challenger failed: %s", exc)
+                            challenger = None
+                        challenger_text = None
+                        if isinstance(challenger, ParseResult):
+                            challenger_text = challenger.markdown
+                        elif isinstance(challenger, str):
+                            challenger_text = challenger
+                        if challenger_text and challenger_text.strip():
+                            timing.note(parser="mineru:challenger")
+                            final = (
+                                challenger
+                                if isinstance(challenger, ParseResult)
+                                else ParseResult(challenger_text, "mineru")
+                            )
+                            text = challenger_text
+                        else:
+                            timing.note(challenger="mineru:rejected")
+                    elif auto_mode and name == "hybrid" and settings.pdf_quality_gate_enabled and _mineru_usable():
+                        timing.note(quality_gate="pass")
                     # PageIndex 借鉴 A2: PDF 书签 → heading_path 补充源。
                     # 开关默认关；只读一次，异常即 []（fail-open）。
                     try:

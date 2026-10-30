@@ -1,7 +1,8 @@
 """Chemistry-aware parsing & chunking (KB stream P1).
 
 Covers:
-1. Docling tier — first in the auto cascade, markdown + numbered page markers,
+1. Docling tier — opt-in in the cascade (v2: no longer in the default auto
+   order; pinned explicitly in these tests), markdown + numbered page markers,
    graceful skip when not installed (fake module injection, CI stays light);
 2. math atomicity — ``$$…$$`` / ``\\[…\\]`` / ``\\begin{…}`` blocks are never
    split by the chunker (reaction equations survive whole);
@@ -100,11 +101,12 @@ def _install_fake_docling(monkeypatch, markdown: str, *, supports_page_break: bo
     return DocumentConverter
 
 
-def test_docling_is_first_auto_tier_and_numbers_pages(monkeypatch):
+def test_docling_pinned_tier_numbers_pages(monkeypatch):
+    # v2 cascade: docling left the default order (opt-in only); pin it explicitly.
     _install_fake_docling(
         monkeypatch, "第一页内容。\n\n@@PB@@\n\n第二页内容。"
     )
-    result = parsing.parse_document(b"%PDF-fake", "pdf")
+    result = parsing.parse_document(b"%PDF-fake", "pdf", prefer="docling")
     assert result.parser == "docling"
     assert "<!-- page:1 -->" in result.markdown
     assert "<!-- page:2 -->" in result.markdown
@@ -115,7 +117,7 @@ def test_docling_formula_enrichment_flag_reaches_options(monkeypatch):
     monkeypatch.setenv("FORMUNEX_PDF_FORMULA_ENRICHMENT", "true")
     get_settings.cache_clear()
     converter_cls = _install_fake_docling(monkeypatch, "内容")
-    parsing.parse_document(b"%PDF-fake", "pdf")
+    parsing.parse_document(b"%PDF-fake", "pdf", prefer="docling")
     opts = converter_cls.last_options
     assert opts, "format options must be passed"
     (fmt_option,) = opts.values()
@@ -124,7 +126,7 @@ def test_docling_formula_enrichment_flag_reaches_options(monkeypatch):
 
 def test_docling_old_api_without_page_break_kwarg(monkeypatch):
     _install_fake_docling(monkeypatch, "旧版输出@@PB@@继续", supports_page_break=False)
-    result = parsing.parse_document(b"%PDF-fake", "pdf")
+    result = parsing.parse_document(b"%PDF-fake", "pdf", prefer="docling")
     assert result.parser == "docling"
     assert "旧版输出" in result.markdown
     assert "<!-- page:" not in result.markdown  # old API → no fabricated markers

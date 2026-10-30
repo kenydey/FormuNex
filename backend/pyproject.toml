@@ -96,9 +96,10 @@ report_export = [
 # app/services/pdf_local.py so this can be swapped without an audit.
 #
 # docling / marker-pdf 需要 torch 权重或 GPU，在 CPU-only 主机上不实用
-# （marker 实测 ~54 s/page），在 _PDF_TIERS 中为 dormant stub（未安装时跳过）；
+# （marker 实测 ~54 s/page）；v2 起二者已移出默认级联，仅在显式 pin 时
+# 才进入 _PDF_TIERS 顺序（未安装时跳过）。有 GPU 的主机可自行 pin 回。
 # 高保真解析走 hybrid 的云端 MinerU（mineru-open-sdk）。本地 magic-pdf 路径
-# 已退役（见 app/services/parsing.py::_parse_mineru）。有 GPU 的主机可自行加回。
+# 已退役（见 app/services/parsing.py::_parse_mineru）。
 parse_pro = [
     # Local OCR for scanned pages. rapidocr>=3.9 ships the PP-OCRv6 small ONNX
     # weights inside the wheel, so no model download at deploy time.

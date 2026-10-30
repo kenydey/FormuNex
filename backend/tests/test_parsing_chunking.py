@@ -36,8 +36,9 @@ def test_pdf_tier_order_auto_and_pinned():
     # rapidocr sits below the cloud tier and above the text-layer ones: it is the
     # only tier that reads pixels, so it must not pre-empt a parser that can use
     # a real text layer, and it must run before the ones that give up on a scan.
+    # v2 cascade: the dormant docling/marker tiers left the default order.
     assert names == [
-        "hybrid", "docling", "marker", "mineru", "rapidocr", "markitdown", "pypdf",
+        "hybrid", "mineru", "rapidocr", "markitdown", "pypdf",
     ]
     names = [n for n, _ in parsing._pdf_tier_order("markitdown")]
     assert names == ["markitdown", "pypdf"]  # pinned + lighter fallbacks only

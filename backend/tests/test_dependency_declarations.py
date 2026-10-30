@@ -67,8 +67,8 @@ def _dockerfile_extras() -> list[str]:
 
 # Catalog entries that are deliberately not in any extra: the one-click installer is the only way to add them.
 CATALOG_ONLY = {
-    "docling": "needs torch weights; a dormant stub in the PDF tiers (see the parse_pro comment in pyproject.toml)",
-    "marker-pdf": "needs torch weights, ~54 s/page on CPU; a dormant stub in the PDF tiers",
+    "docling": "needs torch weights; an opt-in-only PDF tier, not in the default order (see the parse_pro comment in pyproject.toml)",
+    "marker-pdf": "needs torch weights, ~54 s/page on CPU; an opt-in-only PDF tier, not in the default order",
 }
 
 

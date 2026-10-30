@@ -70,11 +70,12 @@ def factory():
 
 def test_auto_order_keeps_mineru_slot() -> None:
     # The default chain is structurally unchanged: the mineru tier keeps its
-    # 4th slot. Unconfigured it returns None immediately (same as the dead
+    # slot. Unconfigured it returns None immediately (same as the dead
     # magic_pdf tier it replaced), so auto behaviour is identical.
+    # v2 cascade: the dormant docling/marker tiers left the default order,
+    # so mineru is now 2nd (was 4th) in the 5-tier auto list.
     names = [n for n, _ in parsing._pdf_tier_order("auto")]
-    assert names == ["hybrid", "docling", "marker", "mineru", "rapidocr",
-                    "markitdown", "pypdf"]
+    assert names == ["hybrid", "mineru", "rapidocr", "markitdown", "pypdf"]
 
 
 def test_prefer_mineru_pins_first_with_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,8 +91,9 @@ def test_a_pin_on_mineru_that_cannot_run_keeps_the_whole_cascade(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Pinning a tier drops everything above it; pinning one that cannot run (switched off, no token, no SDK) would
-    drop hybrid, Docling and marker for nothing. The 高配 profile pinned the retired local path this way, and every
-    install that had applied it kept parsing PDFs with MarkItDown / pypdf only."""
+    drop hybrid for nothing. The 高配 profile pinned the retired local path this way, and every
+    install that had applied it kept parsing PDFs with MarkItDown / pypdf only.
+    v2 cascade: the fallback is the 5-tier auto order (docling/marker are opt-in only)."""
     import logging
 
     monkeypatch.setattr(parsing, "_mineru_usable", lambda: False)
@@ -99,7 +101,7 @@ def test_a_pin_on_mineru_that_cannot_run_keeps_the_whole_cascade(
     with caplog.at_level(logging.WARNING, logger=parsing.logger.name):
         first = [n for n, _ in parsing._pdf_tier_order("mineru")]
         second = [n for n, _ in parsing._pdf_tier_order("mineru")]
-    assert first == second == [n for n, _ in parsing._PDF_TIERS]
+    assert first == second == [n for n, _ in parsing._PDF_AUTO_TIERS]
     warnings = [r for r in caplog.records if "MinerU cloud tier cannot run" in r.getMessage()]
     assert len(warnings) == 1, "said once, not on every document"
 

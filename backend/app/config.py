@@ -397,9 +397,19 @@ class Settings(BaseSettings):
     # 个子问题；每多 1 次 HyDE = 1 次 LLM 调用。0 = 完全关闭（旧行为）。
     deep_hyde_subquestions: int = 2
 
-    # PDF 解析器层级（KB P1）："auto" = hybrid → Docling → marker → MinerU →
-    # MarkItDown → pypdf 逐级回退；指定名称则固定首选（仍向下回退）。
+    # PDF 解析器层级（KB P1 + v2 级联优化）："auto" = hybrid → MinerU →
+    # RapidOCR → MarkItDown → pypdf 逐级回退；Docling/marker 已移出默认顺序，
+    # 仅在显式 pin 时进入级联（GPU 主机 opt-in）。指定名称则固定首选（仍向下回退）。
     pdf_parser: str = "auto"
+    # PDF 路由层：auto 模式下先按文档特征分流（全扫描文档跳过无意义 tier、
+    # 超 MinerU 页数上限的扫描件不再走云端整篇 tier），再进级联；
+    # 关掉则回到静态顺序。显式 pin 某 tier 时路由与质量门均不生效。
+    pdf_routing_enabled: bool = True
+    # PDF 质量门：auto 模式下 hybrid 胜出后做廉价质检（密度、表格丢失），
+    # 不过门且 MinerU 可用时以 MinerU 整篇作挑战者；挑战失败保留 hybrid 结果。
+    pdf_quality_gate_enabled: bool = True
+    # 质量门密度阈值：hybrid 输出每页字符数低于此值视为内容大面积丢失。
+    pdf_quality_gate_min_chars_per_page: int = 50
     # 版面分析（pymupdf4llm 的 hybrid 层）。实测代价与收益：
     #   开：~350MB 峰值、~176ms/页；关：~150MB、~12ms/页
     # 关掉快 25 倍且省一半内存，单栏页面输出完全一致——但**双栏页面会左右

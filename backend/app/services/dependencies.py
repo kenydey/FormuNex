@@ -153,12 +153,14 @@ CATALOG: tuple[Dependency, ...] = (
         spec="pymupdf4llm==1.28.0",
     ),
     Dependency(
-        "docling", "docling", "parse_pro",
-        "Docling 版面/表格感知 PDF → Markdown（IBM，公式→LaTeX，需 torch）",
+        "docling", "docling", "parse_optin",
+        "Docling 版面/表格感知 PDF → Markdown（IBM，公式→LaTeX，需 torch；"
+        "不在默认 PDF 级联中，GPU 主机显式 pin 时才进入级联）",
     ),
     Dependency(
-        "marker-pdf", "marker", "parse_pro",
-        "marker 版面感知 PDF → Markdown（表格保真，重型）",
+        "marker-pdf", "marker", "parse_optin",
+        "marker 版面感知 PDF → Markdown（表格保真，重型；"
+        "不在默认 PDF 级联中，GPU 主机显式 pin 时才进入级联）",
     ),
     # ── Export ─────────────────────────────────────────────────────────────
     Dependency("openpyxl", "openpyxl", "export", "DOE / 结果 Excel 导出"),
