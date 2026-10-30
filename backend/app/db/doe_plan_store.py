@@ -113,7 +113,15 @@ def save(
     UUID).  If a row with that id already exists the ``IntegrityError``
     is caught inside a savepoint so the caller's pending changes survive
     (idempotent — existing row is left untouched).
+
+    P1-2 tightening: ``project_id`` is required. A plan without a project
+    cannot be stored — it would be invisible to every project-scoped read
+    and unrecoverable by the backfill (no parent to attribute it from).
+    Callers that only compute a plan without storing it must not call
+    this function.
     """
+    if not project_id or not str(project_id).strip():
+        raise ValueError("doe_plan_store.save requires a non-empty project_id")
     row = _plan_to_row(
         plan,
         campaign_id=campaign_id,

@@ -60,7 +60,9 @@ class LabTaskRow(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     task_no: Mapped[str] = mapped_column(String(40), unique=True, index=True)
-    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # P1-2 tightening (0077): NOT NULL — create_task refuses project-less
+    # tasks, and dispatch falls back to the stored plan's project.
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)
     doe_plan_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     run_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     formulation_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

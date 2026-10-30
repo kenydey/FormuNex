@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ...clock import utcnow
 from ...db import doe_plan_store
-from ...db.models import ExperimentRow, MeasurementRow, ProjectRow
+from ...db.models import DOEPlanRow, ExperimentRow, MeasurementRow, ProjectRow
 from ...db.models_lab import LabTaskRow, SampleRow
 from ...domain.project_spec import check_process_window
 from ...domain.schemas import ProductDomain
@@ -91,6 +91,11 @@ def create_task(session: Session, *, factors: dict[str, Any], metrics: list[Any]
                 project_id: str | None = None, doe_plan_id: str | None = None, run_index: int | None = None,
                 formulation_version_id: str | None = None, assignee_id: str | None = None, due_at=None,
                 notes: str = "", substrate: str = "") -> LabTaskRow:
+    # P1-2 tightening: a task without a project is invisible to every
+    # project-scoped read and unrecoverable by the backfill. Fail closed
+    # (the API maps LabError to 422) instead of writing a NULL row.
+    if not project_id or not str(project_id).strip():
+        raise LabError("创建 lab 任务必须提供 project_id")
     try:
         domain = ProductDomain(domain).value
     except ValueError:
@@ -121,6 +126,15 @@ def dispatch_plan(session: Session, plan_id: str, *, metrics: list[Any], user_id
     plan = doe_plan_store.load(session, plan_id)
     if plan is None:
         raise LabError("DOE 计划不存在")
+    # P1-2 tightening: the task's project comes from the request, falling
+    # back to the stored plan's project (plans are project-scoped since
+    # 0077). Neither present means the dispatch cannot be scoped: fail
+    # closed rather than creating project-less tasks.
+    if not project_id or not str(project_id).strip():
+        row = session.get(DOEPlanRow, plan_id)
+        project_id = (row.project_id if row is not None else None) or None
+    if not project_id or not str(project_id).strip():
+        raise LabError("下发 lab 任务必须提供 project_id（请求或 DOE 计划均未带项目）")
     domain = domain or (plan.domain.value if plan.domain else None)
     if not domain:
         raise LabError("请指定产品领域（DOE 计划未记录 domain）")

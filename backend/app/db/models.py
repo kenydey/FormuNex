@@ -786,11 +786,9 @@ class DOEPlanRow(Base):
     # Closed-loop round this plan was generated for (1-based); NULL = manual/unassociated.
     round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
-    # P0-1 (Phase 0): project scope for isolation. NULL = legacy / unscoped.
-    # Index is declared explicitly in __table_args__ (single index).
-    project_id: Mapped[str | None] = mapped_column(
-        String(36), nullable=True, default=None
-    )
+    # P0-1 (Phase 0): project scope for isolation. P1-2 tightening (0077):
+    # NOT NULL — the store refuses project-less plans, so NULL is impossible.
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
     # C-4b (Phase C): plan lifecycle status — draft → active → completed,
     # draft/active → aborted. Distinct from ``doe_cycle_runs.status``, which
     # records a cycle execution result (success|error), not a plan lifecycle.

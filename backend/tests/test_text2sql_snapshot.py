@@ -68,10 +68,10 @@ def engine(tmp_path):
             # id, own project, experiment, campaign
             ("plan-A", "p1", None, "c-alice"),
             ("plan-B", "p1", None, "c-bob"),
-            ("plan-C", None, "e-p2-alice", None),  # no project of its own: the experiment's
-            ("plan-D", None, None, "c-shared"),  # ... or the campaign's
+            ("plan-C", "", "e-p2-alice", None),  # no project of its own ("": unscoped, NULLIF): the experiment's
+            ("plan-D", "", None, "c-shared"),  # ... or the campaign's
             ("plan-E", "p2", None, None),
-            ("plan-F", None, None, None),  # legacy: nowhere
+            ("plan-F", "", None, None),  # legacy: nowhere
             ("plan-G", "p1", "e-p2-alice", None),  # its own project wins over the experiment's
         )
         for pid, project, exp, c in plans:

@@ -47,7 +47,10 @@ def lab(tmp_path, monkeypatch):
 
 
 def _plan(c, factors=2):
-    body = {"factors": [{"name": f"F{i}", "levels": [10 * i, 20 * i]} for i in range(1, factors + 1)], "persist": True}
+    # P1-2 tightening: persisted plans require a project (dispatch falls
+    # back to the plan's project when the dispatch body omits one).
+    body = {"factors": [{"name": f"F{i}", "levels": [10 * i, 20 * i]} for i in range(1, factors + 1)],
+            "persist": True, "project_id": "proj-test"}
     r = c.post("/api/doe/designs/orthogonal", json=body)
     assert r.status_code == 200, r.text
     return r.json()["plan"]["plan_id"]
@@ -556,7 +559,7 @@ def test_2_15_pull_since_passthrough(tmp_path):
     Base.metadata.create_all(engine)
     session = make_session_factory(engine)()
     task_id = str(uuid.uuid4())
-    session.add(LabTaskRow(id=task_id, task_no="LT-1", status="open"))
+    session.add(LabTaskRow(id=task_id, task_no="LT-1", status="open", project_id="proj-test"))
     session.add(ElnLinkRow(id=str(uuid.uuid4()), connector="fake", external_id="ext-1",
                            local_type="lab_task", local_id=task_id,
                            content_hash=sync._digest({}) + sync._digest({})))

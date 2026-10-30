@@ -134,7 +134,7 @@ def _make_plan(client):
               DOERun(run_id=2, coded={"a": 0.5}, natural={"a": 3.0})],
     )
     with default_session_factory()() as session:
-        plan_id = doe_plan_store.save(session, plan)
+        plan_id = doe_plan_store.save(session, plan, project_id="proj-test")
         session.commit()
     return plan_id
 

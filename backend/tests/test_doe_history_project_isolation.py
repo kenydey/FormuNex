@@ -2,7 +2,9 @@
 
 - ``doe_plan_store.save`` stamps ``project_id``; ``list_history`` filters by it.
 - ``GET /doe/history`` is fail-closed: empty ``project_id`` -> 422.
-- Legacy rows (NULL project_id) are excluded from project-scoped reads.
+- P1-2 tightening (0077): ``save`` refuses a missing project outright, so
+  legacy NULL rows are impossible now (their exclusion used to be tested
+  here; the migration guard covers the pre-tightening database instead).
 """
 from __future__ import annotations
 
@@ -51,7 +53,6 @@ def _seed(session_factory) -> None:
         _save(s, "pa-1", "proj-A")
         _save(s, "pa-2", "proj-A")
         _save(s, "pb-1", "proj-B")
-        _save(s, "legacy-1", None)
 
 
 def _ids(items: list[dict]) -> set[str]:
@@ -66,7 +67,7 @@ def test_save_stamps_project_id(session_factory):
     assert total == 2
 
 
-def test_project_filter_excludes_other_project_and_legacy(session_factory):
+def test_project_filter_excludes_other_project(session_factory):
     _seed(session_factory)
     with session_factory() as s:
         items_b, total_b = doe_plan_store.list_history(s, project_id="proj-B")
@@ -74,8 +75,18 @@ def test_project_filter_excludes_other_project_and_legacy(session_factory):
         assert total_b == 1
         # Unfiltered (back-compat for internal callers) still sees everything.
         items_all, total_all = doe_plan_store.list_history(s)
-        assert _ids(items_all) == {"pa-1", "pa-2", "pb-1", "legacy-1"}
-        assert total_all == 4
+        assert _ids(items_all) == {"pa-1", "pa-2", "pb-1"}
+        assert total_all == 3
+
+
+def test_save_without_project_is_refused(session_factory):
+    """P1-2 tightening: legacy NULL rows are impossible now — save fails
+    closed instead of writing a row no project-scoped read can ever see."""
+    with session_factory() as s:
+        with pytest.raises(ValueError, match="project_id"):
+            doe_plan_store.save(s, _plan("no-proj"), project_id=None)
+        with pytest.raises(ValueError, match="project_id"):
+            doe_plan_store.save(s, _plan("blank-proj"), project_id="  ")
 
 
 def test_project_filter_combines_with_campaign(session_factory):

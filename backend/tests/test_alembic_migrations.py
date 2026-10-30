@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0076(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0076_regulatory_release_approval``)."""
+def test_revision_chain_head_is_0077(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0077_doe_lab_project_not_null``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0076(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0076"
+    assert heads[0] == "0077"
 
 
 def test_migrations_partial_columns_branch(
@@ -483,7 +483,11 @@ def test_0014_converts_legacy_string_references_to_integers(
             " '2026-01-01 00:00:00')",
         )
 
-    run_upgrade(tmp_db_url, monkeypatch)
+    # Pinned to 0076, not head: these fixture rows are deliberately
+    # project-less (their whole point is the reference conversion), and
+    # 0077's guard would refuse to tighten over them. The guard itself is
+    # covered by test_p12_tightening; this test is about 0014 only.
+    run_upgrade(tmp_db_url, monkeypatch, "0076")
 
     types = _column_types(tmp_db_url, "doe_plans")
     assert "INTEGER" in types["experiment_id"]

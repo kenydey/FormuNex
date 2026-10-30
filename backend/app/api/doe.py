@@ -45,7 +45,16 @@ def _persist_doe_plan(
     a stale / foreign workbench id) is dropped instead of letting the FK
     violation be swallowed by ``save``'s duplicate-id guard — that used to
     lose the plan silently, so dispatching it as lab tasks then failed.
+
+    P1-2 tightening: a missing project means NO write at all (the store
+    would refuse it anyway). Compute-only generation keeps working, but
+    the plan is not stored and cannot be read back or dispatched — the
+    caller that promises a retrievable plan id (``/doe/active``) validates
+    the project upfront instead of hitting this path.
     """
+    if not project_id or not str(project_id).strip():
+        logger.warning("persist doe plan skipped: no project_id (plan not stored)")
+        return ""
     saved = ""
     try:
         from ..db import doe_plan_store
@@ -147,6 +156,13 @@ class ActiveDoeRequest(Requirement):
 @router.post("/doe/active", response_model=ActiveDoeResult)
 def active_doe(req: ActiveDoeRequest) -> ActiveDoeResult:
     """Generate a DOE plan with AI-selected most-informative experiments flagged."""
+    # P1-2 tightening: this endpoint returns a plan_id that must resolve
+    # (GET /doe/plans/{id}, dispatch), so a missing project fails closed
+    # here instead of returning an unresolvable id.
+    if not (req.project_id or "").strip():
+        raise HTTPException(
+            status_code=422, detail="project_id is required to persist the active-learning plan"
+        )
     base_req = Requirement(
         **req.model_dump(
             exclude={

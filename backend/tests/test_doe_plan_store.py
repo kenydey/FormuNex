@@ -57,7 +57,7 @@ def _row_count(session: Session) -> int:
 def test_save_and_load_roundtrip(session: Session) -> None:
     """save → load_for_campaign returns the persisted plan."""
     plan = _stub_plan(plan_id="rp-1")
-    save(session, plan)
+    save(session, plan, project_id="proj-test")
     session.commit()
 
     rows = load_for_campaign(session, "c-1")
@@ -80,12 +80,12 @@ def test_save_and_load_roundtrip(session: Session) -> None:
 def test_save_idempotent(session: Session) -> None:
     """save same plan_id twice → IntegrityError swallowed, only 1 row."""
     plan = _stub_plan(plan_id="idem-1")
-    save(session, plan)
+    save(session, plan, project_id="proj-test")
     session.commit()
     assert _row_count(session) == 1
 
     plan2 = _stub_plan(plan_id="idem-1", design="ccd")
-    save(session, plan2)
+    save(session, plan2, project_id="proj-test")
     session.commit()
     # IntegrityError caught, rollback on duplicate → still 1 row
     assert _row_count(session) == 1
@@ -127,18 +127,21 @@ def test_load_for_campaign_filters(session: Session) -> None:
     # Direct ORM insert with campaign_id (bypassing save which sets None)
     r1 = DOEPlanRow(
         id="ca-1-a",
+        project_id="proj-a",
         campaign_id=campaign_a,
         design_type="lhs",
         parameters={"factors": [], "runs": []},
     )
     r2 = DOEPlanRow(
         id="ca-1-b",
+        project_id="proj-a",
         campaign_id=campaign_a,
         design_type="ccd",
         parameters={"factors": [], "runs": []},
     )
     r3 = DOEPlanRow(
         id="cb-1-a",
+        project_id="proj-b",
         campaign_id=campaign_b,
         design_type="full_factorial",
         parameters={"factors": [], "runs": []},
@@ -168,6 +171,7 @@ def test_plan_referencing_a_missing_campaign_is_rejected(session: Session) -> No
     session.add(
         DOEPlanRow(
             id="orphan-1",
+            project_id="proj-x",
             campaign_id=424242,
             design_type="lhs",
             parameters={"factors": [], "runs": []},

@@ -51,7 +51,7 @@ def _save(session, plan: DOEPlan, **kw) -> None:
 
 def test_save_then_load(session_factory, campaign_id):
     with session_factory() as session:
-        _save(session, _plan("p1"), campaign_id=campaign_id, round_no=3)
+        _save(session, _plan("p1"), campaign_id=campaign_id, round_no=3, project_id="proj-test")
 
     with session_factory() as session:
         loaded = doe_plan_store.load(session, "p1")
@@ -68,7 +68,7 @@ def test_load_missing_returns_none(session_factory):
 def test_list_history_pagination(session_factory, campaign_id):
     with session_factory() as session:
         for i in range(5):
-            _save(session, _plan(f"p{i}"), campaign_id=campaign_id, round_no=i + 1)
+            _save(session, _plan(f"p{i}"), campaign_id=campaign_id, round_no=i + 1, project_id="proj-test")
 
     with session_factory() as session:
         items, total = doe_plan_store.list_history(
@@ -88,8 +88,8 @@ def test_list_history_campaign_filter(session_factory, campaign_id):
         other_id = other.id
 
     with session_factory() as session:
-        _save(session, _plan("a"), campaign_id=campaign_id, round_no=1)
-        _save(session, _plan("b"), campaign_id=other_id, round_no=1)
+        _save(session, _plan("a"), campaign_id=campaign_id, round_no=1, project_id="proj-test")
+        _save(session, _plan("b"), campaign_id=other_id, round_no=1, project_id="proj-test")
 
     with session_factory() as session:
         items, total = doe_plan_store.list_history(session, campaign_id=campaign_id)
@@ -100,7 +100,7 @@ def test_list_history_campaign_filter(session_factory, campaign_id):
 def test_list_history_includes_orphans(session_factory):
     # 无 campaign_id 的孤立记录，全局查询（campaign_id=None）能看到
     with session_factory() as session:
-        _save(session, _plan("orphan"))
+        _save(session, _plan("orphan"), project_id="proj-test")
 
     with session_factory() as session:
         items, total = doe_plan_store.list_history(session)
