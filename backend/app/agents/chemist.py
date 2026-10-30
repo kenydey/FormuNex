@@ -59,6 +59,106 @@ def _has_free_isocyanate(smiles: str | None) -> bool:
     return bool(mol is not None and patt is not None and mol.HasSubstructMatch(patt))
 
 
+# P0-3: NCO:OH molar-balance advisory (deterministic, never intercepts).
+# Scope is deliberately narrow: only SMILES-visible free isocyanate counts.
+# Blocked isocyanates (no free N=C=O in SMILES) contribute NCO on cure but
+# are invisible to this check — a formulation using only blocked crosslinker
+# yields no balance issue, not a false pass claim. Approved interval below.
+NCO_OH_LOW = 0.95
+NCO_OH_HIGH = 1.15
+_ALCOHOL_OH_SMARTS = "[OX2H]"
+_CARBOXYL_OH_SMARTS = "[CX3](=O)[OX2H]"
+
+
+def _count_matches(Chem, smiles: str | None, smarts: str) -> int | None:
+    """Number of SMARTS matches in a SMILES, or None when not computable."""
+    if Chem is None or not smiles:
+        return None
+    mol = Chem.MolFromSmiles(smiles)
+    patt = Chem.MolFromSmarts(smarts)
+    if mol is None or patt is None:
+        return None
+    return len(mol.GetSubstructMatches(patt))
+
+
+def _nco_oh_issues(form: Formulation) -> list[AgentIssue]:
+    """Molar NCO:OH balance for two-component polyurethane systems.
+
+    Returns [] when the check does not apply (no RDKit, or no SMILES-visible
+    free isocyanate — i.e. not a free-NCO PU system). A single low-severity
+    issue when a PU system is detected but the balance cannot be computed
+    (missing molar mass / unparseable binder or crosslinker structure); a
+    medium issue when the computed ratio falls outside [NCO_OH_LOW,
+    NCO_OH_HIGH]. Moles per 100 g come from weight_pct / molar_mass times
+    the SMARTS group count; polymer SMILES are representative structures,
+    so the ratio is an estimate — hence advisory (warn), never intercept.
+    """
+    Chem = _rdkit_chem()
+    if Chem is None:
+        return []
+    nco_mol = 0.0
+    oh_mol = 0.0
+    nco_seen = False
+    incomplete = False
+    for ing in form.ingredients:
+        if ing.weight_pct <= 0 or ing.role == "solvent":
+            continue
+        nco_count = _count_matches(Chem, ing.smiles, rules.FREE_ISOCYANATE_SMARTS)
+        oh_count = _count_matches(Chem, ing.smiles, _ALCOHOL_OH_SMARTS)
+        acid_count = _count_matches(Chem, ing.smiles, _CARBOXYL_OH_SMARTS)
+        if nco_count is None or oh_count is None or acid_count is None:
+            # Unparseable binder/crosslinker structure: genuinely unknown
+            # whether it participates; other roles without SMILES (pigments,
+            # fillers) are not NCO/OH carriers and do not block the balance.
+            if ing.role in ("resin", "hardener"):
+                incomplete = True
+            continue
+        oh_groups = max(0, oh_count - acid_count)
+        if nco_count > 0:
+            # Detection counts even when moles cannot be computed: a PU
+            # system with an unquantifiable crosslinker still deserves the
+            # data-insufficient notice rather than silence.
+            nco_seen = True
+        if ing.molar_mass is None or ing.molar_mass <= 0:
+            if nco_count > 0 or oh_groups > 0:
+                incomplete = True
+            continue
+        moles = ing.weight_pct / ing.molar_mass
+        nco_mol += moles * nco_count
+        oh_mol += moles * oh_groups
+    if not nco_seen:
+        return []
+    if oh_mol <= 0 or incomplete:
+        return [
+            AgentIssue(
+                code="nco_oh_data_insufficient",
+                severity="low",
+                ingredient=None,
+                message=(
+                    "检测到游离异氰酸酯体系，但 NCO:OH 摩尔配平无法核算"
+                    "（缺少摩尔质量或粘合剂 / 固化剂结构无法解析）；"
+                    "请补齐原料摩尔质量与 SMILES 后复核配平。"
+                ),
+            )
+        ]
+    ratio = nco_mol / oh_mol
+    if NCO_OH_LOW <= ratio <= NCO_OH_HIGH:
+        return []
+    return [
+        AgentIssue(
+            code="nco_oh_imbalance",
+            severity="medium",
+            ingredient=None,
+            message=(
+                f"NCO:OH 摩尔比为 {ratio:.2f}，超出可接受区间 "
+                f"[{NCO_OH_LOW:.2f}, {NCO_OH_HIGH:.2f}]"
+                f"（NCO {nco_mol:.3f} mol / OH {oh_mol:.3f} mol，每 100 g 计，"
+                "按 SMILES 结构估算）；请复核异氰酸酯与多元醇配比。"
+            ),
+        )
+    ]
+
+
 def _alternatives_for(role: str, offender: str) -> list[Recommendation]:
     """Build waterborne replacement recommendations for an offending ingredient."""
     recs: list[Recommendation] = []
@@ -157,6 +257,9 @@ class ChemistAgent:
                     message=warning,
                 )
             )
+
+        # P0-3: NCO:OH molar-balance advisory (deterministic, warn at most).
+        issues.extend(_nco_oh_issues(form))
 
         status = (
             "intercept"
