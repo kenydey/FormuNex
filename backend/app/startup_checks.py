@@ -122,6 +122,26 @@ def run_startup_checks(settings) -> list[str]:
             "(e.g. `openssl rand -base64 48`)."
         )
 
+    # 7. SQLite without a Redis URL: the cross-process write lock in
+    #    db/sqlite_lock.py degrades to a silent no-op for an empty URL
+    #    (it yields unlocked without logging), so uvicorn + celery writers
+    #    fall back to busy_timeout + retry. Surface it at startup instead.
+    #    :memory: has no cross-process contention by construction.
+    #    (An unreachable Redis is a different case: the lock attempt itself
+    #    logs "Redis write lock unavailable" at lock time.)
+    if (
+        scheme == "sqlite"
+        and sqlite_path is not None
+        and str(sqlite_path) != ":memory:"
+        and not (getattr(settings, "redis_url", "") or "").strip()
+    ):
+        warnings.append(
+            "SQLite db_url with FORMUNEX_REDIS_URL unset/empty: the cross-process "
+            "SQLite write lock is disabled, so concurrent writers (uvicorn + celery) "
+            "fall back to busy_timeout + retry. Set FORMUNEX_REDIS_URL, or point "
+            "FORMUNEX_DB_URL at PostgreSQL for multi-process deployments."
+        )
+
     if errors:
         raise RuntimeError("Startup configuration check failed:\n- " + "\n- ".join(errors))
     return warnings

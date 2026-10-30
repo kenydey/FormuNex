@@ -13,6 +13,7 @@ from app.startup_checks import run_startup_checks
 def _settings(**overrides):
     base = {
         "db_url": "sqlite:///./data/formunex.db",
+        "redis_url": "redis://localhost:6379/0",
         "datalab_required": False,
         "datalab_api_url": "http://localhost:5001",
         "environment": "development",
@@ -28,6 +29,28 @@ def test_happy_path_no_errors_no_warnings(tmp_path, monkeypatch):
     (tmp_path / "data").mkdir()
     warnings = run_startup_checks(_settings())
     assert warnings == []
+
+
+def test_sqlite_without_redis_url_warns_lock_disabled(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    warnings = run_startup_checks(_settings(redis_url=""))
+    assert any("write lock is disabled" in w for w in warnings)
+
+
+def test_sqlite_with_redis_url_is_quiet_about_lock(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    warnings = run_startup_checks(_settings(redis_url="redis://localhost:6379/0"))
+    assert not any("write lock is disabled" in w for w in warnings)
+
+
+def test_memory_sqlite_without_redis_url_is_quiet(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    warnings = run_startup_checks(
+        _settings(db_url="sqlite:///:memory:", redis_url="")
+    )
+    assert not any("write lock is disabled" in w for w in warnings)
 
 
 def test_unsupported_db_scheme_fails_fast():

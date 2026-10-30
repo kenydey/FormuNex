@@ -90,6 +90,7 @@ docker compose start backend worker
 |------|------|
 | 后端启动即退出，日志 `Startup configuration check failed` | 按错误信息补 `.env` 缺失项（token / DB URL / Datalab URL） |
 | 日志 `SQLite ... production ... postgresql` 警告 | 单机可忽略；多 worker 生产必须切 Postgres（SQLite 写锁） |
+| 日志 `SQLite ... write lock is disabled ...` 警告 | 未配 `FORMUNEX_REDIS_URL`，跨进程写锁已关闭：单进程可忽略；uvicorn + celery 共写或多 worker 请配 Redis 或切 Postgres |
 | 前端 502 / 空白 | 先看 `backend` healthcheck 是否 healthy，再看 `docker compose logs backend` |
 | 401 UNAUTHORIZED（ELN 相关） | `FORMUNEX_DATALAB_API_TOKEN` 缺失或错误，值放 `.env` |
 | 文档审核提示“PDF 未嵌入中文字体” | 后端未找到可嵌入的 TrueType 中文字体：确认用的是当前镜像，或 `FORMUNEX_PLM_DOC_FONT_PATH` 指向的文件存在且为 TrueType |
