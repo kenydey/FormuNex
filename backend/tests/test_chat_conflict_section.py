@@ -75,16 +75,17 @@ def _wiki_ev():
 
 
 def test_conflict_section_maps_filtered_to_full_indices():
-    """P0-3：verified.evidence_indices 是过滤后下标，渲染必须映射回完整序号。
+    """P0-3：verified.evidence_indices 是完整序号下标，冲突段直接按完整序号渲染。
 
-    citations=[wiki, rawA, rawB]，过滤后 verified 指向 [0,1]（即 rawA/rawB），
+    第二批起 claims_evidence 不再过滤 wiki，校验器看到的即完整证据列；
+    citations=[wiki, rawA, rawB]，verified 指向完整序号 [1,2]（即 rawA/rawB），
     冲突段应渲染 [^2], [^3]，而非 [^1], [^2]。
     """
     s = get_settings()
     citations = [_wiki_ev(), _ev("rawA"), _ev("rawB")]
     verified = [
         VerifiedClaim(text="pH 应控制在 4", verdict=ClaimVerdict.conflicting,
-                      evidence_indices=[0, 1], reason="x"),
+                      evidence_indices=[1, 2], reason="x"),
     ]
     answer = "pH 应控制在 4[^2][^3]。"
     gated, _, abstained, _ = _apply_answer_gates(
