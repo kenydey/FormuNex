@@ -45,6 +45,25 @@ FLOW_TEMPLATE = "release_4_step"
 OPEN_PACKAGE_STATES = ("under_review",)
 
 
+def _lock_row(session: Session, model, row_id: str):
+    """Row lock for the concurrent-write paths (W1-4).
+
+    On PostgreSQL this is SELECT ... FOR UPDATE: a second writer blocks
+    until the first transaction commits, then sees the first writer's
+    state change (and its own state check refuses). On SQLite the
+    dialect drops FOR UPDATE — SQLite serializes writers via its own
+    file lock — so the same code is a harmless no-op there. The
+    returned row is the session's identity-mapped instance, so later
+    state checks read the locked row. ``populate_existing`` matters: the
+    row may already be loaded from an earlier read in this transaction,
+    and without it the state check would see the pre-lock snapshot
+    instead of the state at lock time.
+    """
+    return session.execute(
+        select(model).where(model.id == row_id).with_for_update()
+        .execution_options(populate_existing=True)).scalar_one_or_none()
+
+
 class ReleaseError(ValueError):
     """A request that is not valid in the current state (HTTP 409 / 422)."""
 
@@ -81,7 +100,7 @@ def _audit(session: Session, actor: str, action: str, entity_type: str, entity_i
 def approve_document(session: Session, document_id: str, *, user_id: str, principal: Principal, password: str,
                      comment: str = "") -> RegulatoryDocumentRow:
     """Review sign-off of one document (draft → approved); COA approval is its issue."""
-    doc = session.get(RegulatoryDocumentRow, document_id)
+    doc = _lock_row(session, RegulatoryDocumentRow, document_id)
     if doc is None:
         raise ReleaseError("文档不存在")
     rev, product = _rev(session, doc.revision_id)
@@ -159,6 +178,7 @@ def add_waiver(session: Session, revision_id: str, *, check_key: str, item: str,
 def submit(session: Session, revision_id: str, *, user_id: str, principal: Principal) -> ReleasePackageRow:
     """Run the gate; when it passes freeze the package and open the 4-step sign-off."""
     rev, product = _rev(session, revision_id)
+    _lock_row(session, ProductRevisionRow, rev.id)
     _require(principal, "release.submit", product.project_id)
     if rev.state != "candidate":
         raise ReleaseError(f"修订版状态为 {rev.state}，只有候选版可以提交发布")
@@ -211,7 +231,7 @@ def _holds_role(session: Session, user_id: str, role: str, project_id: str | Non
 
 def sign_step(session: Session, package_id: str, *, decision: str, user_id: str, principal: Principal, password: str,
               comment: str = "") -> ReleasePackageRow:
-    pkg = session.get(ReleasePackageRow, package_id)
+    pkg = _lock_row(session, ReleasePackageRow, package_id)
     if pkg is None:
         raise ReleaseError("发布包不存在")
     if pkg.status != "under_review":
@@ -221,6 +241,8 @@ def sign_step(session: Session, package_id: str, *, decision: str, user_id: str,
     rev, product = _rev(session, pkg.revision_id)
     flow, steps = _flow(session, pkg.id)
     step = next((s for s in steps if s.seq == flow.current_step), None)
+    if step is not None:
+        _lock_row(session, ApprovalStepRow, step.id)
     if step is None or step.status != "pending":
         raise ReleaseError("没有待签的步骤")
     last = step.seq == len(steps)

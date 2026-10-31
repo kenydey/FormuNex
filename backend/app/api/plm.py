@@ -1190,6 +1190,8 @@ class WithdrawIn(PasswordConfirm):
 def _release_call(session, fn, *args, **kwargs):
     """Run a sign-off operation, mapping its errors to HTTP. A wrong password is committed first so the
     failed attempt (and lock-out counter) is kept."""
+    from sqlalchemy.exc import IntegrityError
+
     from ..services.identity.accounts import AuthError
     from ..services.plm.release import gate, signoff
 
@@ -1198,6 +1200,13 @@ def _release_call(session, fn, *args, **kwargs):
     except AuthError as exc:
         session.commit()
         raise HTTPException(status_code=401, detail=f"电子签名身份验证失败：{exc}") from None
+    except IntegrityError:
+        # W1-4: a unique-constraint race (double sign, double submit) lands
+        # here once the row locks / constraints have done their job. The
+        # request transaction is dead, so roll it back and report a
+        # retryable conflict; the retry then sees the winner's state.
+        session.rollback()
+        raise HTTPException(status_code=409, detail="并发冲突，请重试") from None
     except signoff.GateFailed as exc:
         session.commit()  # keeps the gate_failed audit record
         raise HTTPException(status_code=409, detail={"message": str(exc), "gate": exc.result}) from None

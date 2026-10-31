@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -192,6 +192,15 @@ class BatchQcResultRow(Base):
 
 class ReleasePackageRow(Base):
     __tablename__ = "release_packages"
+    # W1-4: at most one package under review per revision — this closes the
+    # double-submit race. It is PARTIAL on purpose: a rejected package
+    # returns its revision to candidate, and resubmission must stay possible,
+    # so a plain unique constraint on revision_id would break that flow.
+    __table_args__ = (
+        Index("uq_active_package_per_revision", "revision_id", unique=True,
+              sqlite_where=text("status = 'under_review'"),
+              postgresql_where=text("status = 'under_review'")),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     revision_id: Mapped[str] = mapped_column(
@@ -275,6 +284,12 @@ class ApprovalStepRow(Base):
 
 class ESignatureRow(Base):
     __tablename__ = "e_signatures"
+    # W1-4: one signature per (step, user, meaning) — closes the double-sign
+    # race on a sign-off step. NULL step_id rows (document review, withdraw)
+    # stay distinct under both SQLite and Postgres NULL semantics.
+    __table_args__ = (
+        UniqueConstraint("step_id", "user_id", "meaning", name="uq_esignature_step_user_meaning"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), index=True)

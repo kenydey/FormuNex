@@ -9,6 +9,7 @@ released document stays exactly what was signed.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
@@ -37,6 +38,24 @@ from ...provenance import link_many_in_session
 from .. import storage
 from ..diff import diff_documents
 from ..ghs import service as ghs_service
+
+log = logging.getLogger(__name__)
+
+
+def _cleanup_rendered_keys(keys: list[str | None]) -> None:
+    """Best-effort delete of rendered files whose row will never exist.
+
+    A key that cannot be deleted is logged (not swallowed silently) so a
+    later reclamation sweep can find it by scanning the storage dir for
+    files no row references.
+    """
+    for key in keys:
+        if not key:
+            continue
+        try:
+            storage.delete(key)
+        except Exception:  # noqa: BLE001 - cleanup must never mask the original error
+            log.error("plm document cleanup failed, orphaned render needs reclamation: key=%s", key)
 from ..render.docx import render_docx
 from ..render.label_pdf import render_label_pdf
 from ..render.pdf import render_pdf
@@ -95,8 +114,12 @@ def create_product(session: Session, *, code: str = "", name_zh: str, name_en: s
     ``category_identifier`` + ``code`` together is ambiguous (422);
     a category without configured default-company rules is 422; without
     either, a manual code is required (previous behaviour). Auto-codes
-    retry on unique-constraint races (fresh row per attempt; the rollback
-    only discards the failed row because callers use a fresh session).
+    retry on unique-constraint races (fresh row per attempt, inside a
+    SAVEPOINT, so the retry no longer requires the caller to use a
+    fresh session — W1-4). A pre-flush first moves the caller's pending
+    work into the outer transaction, so rolling the savepoint back
+    cannot discard it. The savepoint is left open on success (see
+    ``chunk_store.replace_for_source_in`` for why it is not committed).
     The code belongs to the product: revisions never change it.
     """
     from sqlalchemy.exc import IntegrityError
@@ -119,7 +142,11 @@ def create_product(session: Session, *, code: str = "", name_zh: str, name_en: s
         except ValueError as exc:
             raise DocumentError(str(exc)) from None
         last_error: Exception | None = None
+        # See the docstring: flush the caller's pending work first so the
+        # savepoint below contains only this attempt's row.
+        session.flush()
         for _ in range(5):
+            sp = session.begin_nested()
             row = ProductRow(id=str(uuid.uuid4()), code=auto_code, name_zh=name_zh, name_en=name_en,
                              project_id=project_id, lifecycle_state="rd", created_by=created_by,
                              category_identifier=category_identifier,
@@ -129,8 +156,9 @@ def create_product(session: Session, *, code: str = "", name_zh: str, name_en: s
                 session.flush()
                 return row
             except IntegrityError as exc:
-                # A concurrent creation won this serial; recompute and retry.
-                session.rollback()
+                # A concurrent creation won this serial; only this attempt
+                # is undone, then recompute and retry with a fresh row.
+                sp.rollback()
                 last_error = exc
                 try:
                     auto_code = generate_product_code(session, rules, category_identifier)
@@ -543,46 +571,58 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     # historical name, so existing downloads / links do not change).
     stem = f"{doc_type}-{lang}-v{version_no}" if regulation == "CN" \
         else f"{doc_type}-{lang}-{regulation}-v{version_no}"
-    if doc_type == "label":
-        layout_id = content["meta"].get("layout_template_id")
-        _id, layout = label_layout(session, lang, layout_id) if layout_id else (None, None)
-        if layout is not None:
-            from ..render.label_layout import render_layout_pdf
+    # W1-4: renders are written to storage BEFORE the row that references
+    # them exists, so any failure after a put used to leave orphaned
+    # files. Track every key written here; on failure delete them
+    # (best-effort) and log what could not be deleted for reclamation,
+    # then re-raise the original error unchanged.
+    written_keys: list[str] = []
+    try:
+        if doc_type == "label":
+            layout_id = content["meta"].get("layout_template_id")
+            _id, layout = label_layout(session, lang, layout_id) if layout_id else (None, None)
+            if layout is not None:
+                from ..render.label_layout import render_layout_pdf
 
-            pdf, info = render_layout_pdf(content, layout, content["meta"].get("variables"), pdfa=pdfa)
-            # The layout-element check is GB 15258-specific: only warn for CN labels.
-            if regulation == "CN" and info["missing_elements"]:
-                content["validation"]["warnings"].append(
-                    "标签版式缺少 GB 15258 要素：" + "、".join(info["missing_elements"]))
+                pdf, info = render_layout_pdf(content, layout, content["meta"].get("variables"), pdfa=pdfa)
+                # The layout-element check is GB 15258-specific: only warn for CN labels.
+                if regulation == "CN" and info["missing_elements"]:
+                    content["validation"]["warnings"].append(
+                        "标签版式缺少 GB 15258 要素：" + "、".join(info["missing_elements"]))
+            else:
+                pdf, info = render_label_pdf(content, pdfa=pdfa)
+            if info.get("overflow"):
+                content["validation"]["warnings"].append("标签内容超出版面（文字被截断），请调整版式或增大标签尺寸")
+            docx_key = None
         else:
-            pdf, info = render_label_pdf(content, pdfa=pdfa)
-        if info.get("overflow"):
-            content["validation"]["warnings"].append("标签内容超出版面（文字被截断），请调整版式或增大标签尺寸")
-        docx_key = None
-    else:
-        pdf, info = render_pdf(content, pdfa=pdfa)
-        template_id, template = _template(session, doc_type, lang)
-        docx_key = storage.put(f"documents/{doc_id}/{stem}.docx",
-                               render_docx(content, template))
-        extra["template_id"] = template_id
-    content["meta"]["render"] = info
-    if not info.get("font_embedded"):
-        content["validation"]["warnings"].append("PDF 未嵌入中文字体（未找到可嵌入的 TrueType 字体），发布前须配置 plm_doc_font_path")
-    if info.get("pdfa") and not info.get("pdfa_output_intent"):
-        content["validation"]["warnings"].append(
-            "PDF/A-2b 输出缺少 OutputIntent（未获得 sRGB ICC 配置文件）：仅为 PDF/A-2b-ready，"
-            "配置 FORMUNEX_PDFA_ICC_PATH 或安装 liblcms2 后才是完整 PDF/A-2b")
-    pdf_key = storage.put(f"documents/{doc_id}/{stem}.pdf", pdf)
+            pdf, info = render_pdf(content, pdfa=pdfa)
+            template_id, template = _template(session, doc_type, lang)
+            docx_key = storage.put(f"documents/{doc_id}/{stem}.docx",
+                                   render_docx(content, template))
+            written_keys.append(docx_key)
+            extra["template_id"] = template_id
+        content["meta"]["render"] = info
+        if not info.get("font_embedded"):
+            content["validation"]["warnings"].append("PDF 未嵌入中文字体（未找到可嵌入的 TrueType 字体），发布前须配置 plm_doc_font_path")
+        if info.get("pdfa") and not info.get("pdfa_output_intent"):
+            content["validation"]["warnings"].append(
+                "PDF/A-2b 输出缺少 OutputIntent（未获得 sRGB ICC 配置文件）：仅为 PDF/A-2b-ready，"
+                "配置 FORMUNEX_PDFA_ICC_PATH 或安装 liblcms2 后才是完整 PDF/A-2b")
+        pdf_key = storage.put(f"documents/{doc_id}/{stem}.pdf", pdf)
+        written_keys.append(pdf_key)
 
-    row = RegulatoryDocumentRow(
-        id=doc_id, revision_id=rev.id, batch_id=batch_id, doc_type=doc_type, lang=lang,
-        regulation=regulation, version_no=version_no,
-        status="draft", template_id=extra.get("template_id"), content=content, field_sources=field_sources(content),
-        rendered_pdf_key=pdf_key, rendered_docx_key=docx_key, content_hash=content_hash(content),
-        supersedes_id=prev.id if prev else None, created_by=created_by,
-    )
-    session.add(row)
-    session.flush()
+        row = RegulatoryDocumentRow(
+            id=doc_id, revision_id=rev.id, batch_id=batch_id, doc_type=doc_type, lang=lang,
+            regulation=regulation, version_no=version_no,
+            status="draft", template_id=extra.get("template_id"), content=content, field_sources=field_sources(content),
+            rendered_pdf_key=pdf_key, rendered_docx_key=docx_key, content_hash=content_hash(content),
+            supersedes_id=prev.id if prev else None, created_by=created_by,
+        )
+        session.add(row)
+        session.flush()
+    except Exception:
+        _cleanup_rendered_keys(written_keys)
+        raise
     # Phase 2D (2-22): revision -> document edge (same transaction, fail-open).
     link_many_in_session(session, [("product_revision", rev.id, "document", row.id, "documented_as")],
                          created_by=created_by)
@@ -607,9 +647,19 @@ def generate_documents(session: Session, revision_id: str, doc_type: str, *, lan
         raise DocumentError(str(exc)) from None
     if not regs:
         raise DocumentError("请至少选择一个适用法规")
-    return [generate_document(session, revision_id, doc_type, lang=lang, payload=payload,
-                              created_by=created_by, pdfa=pdfa, regulation=r)
-            for r in regs]
+    # W1-4: one loop, not a comprehension — if a later regulation's
+    # document fails, the earlier ones' rows roll back with the session
+    # but their rendered files would not, so clean those up here too
+    # (the failed document cleans its own files inside generate_document).
+    rows: list[RegulatoryDocumentRow] = []
+    try:
+        for r in regs:
+            rows.append(generate_document(session, revision_id, doc_type, lang=lang, payload=payload,
+                                          created_by=created_by, pdfa=pdfa, regulation=r))
+    except Exception:
+        _cleanup_rendered_keys([k for row in rows for k in (row.rendered_pdf_key, row.rendered_docx_key)])
+        raise
+    return rows
 
 
 def save_template(session: Session, *, doc_type: str, lang: str, name: str, data: bytes, is_default: bool = True,

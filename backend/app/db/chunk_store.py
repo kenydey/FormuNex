@@ -61,6 +61,23 @@ class ChunkStore:
         v29 M-5: 并发 replace 的 IntegrityError 重试一次 —— 双线程同时
         delete+insert 时唯一键冲突，重试可恢复（幂等操作）。
 
+        W1-4: the retry used to ``session.rollback()`` the caller's whole
+        transaction — on PostgreSQL that discarded the SourceDocument row
+        the caller had already inserted (P1-D4). The retry now runs
+        inside a SAVEPOINT: only the failed replace is undone, the
+        caller's transaction survives. The explicit ``flush()`` first
+        matters: without it, the inner delete's autoflush would pull
+        the caller's pending rows inside the savepoint, and rolling
+        the savepoint back would discard them too.
+
+        Note the savepoint is deliberately NOT committed on success:
+        on this stack (SQLAlchemy 2.0 + pysqlite) releasing it makes a
+        later outer rollback a no-op for the released rows — verified
+        empirically — while leaving it open keeps all three properties:
+        savepoint rollback undoes only the attempt, outer rollback
+        undoes everything, outer commit persists everything. The open
+        savepoint is released implicitly when the outer transaction ends.
+
         Each chunk dict: {text, heading_path?, page_no?, paragraph_idx?,
         offset_start?, offset_end?, meta?, embedding?, embedding_model?,
         bbox?, block_type?}.
@@ -70,16 +87,20 @@ class ChunkStore:
         """
         from sqlalchemy.exc import IntegrityError
 
+        # Flush the caller's pending work into the outer transaction first
+        # (see the docstring): only then is the savepoint boundary clean.
+        session.flush()
         for attempt in range(2):
+            sp = session.begin_nested()
             try:
                 return self._replace_for_source_inner(session, source_id, chunks)
             except IntegrityError:
+                sp.rollback()
                 if attempt == 0:
                     logger.warning(
                         "chunk_store: 并发 replace 冲突，重试一次 (source=%s)",
                         source_id,
                     )
-                    session.rollback()
                     continue
                 raise
         return 0

@@ -34,5 +34,21 @@ def get(key: str) -> bytes:
     return _path(key).read_bytes()
 
 
+def delete(key: str) -> bool:
+    """Best-effort delete of one key; False when nothing was there.
+
+    W1-4: document generation cleans up files it wrote when the
+    database write that was supposed to reference them fails, so a
+    failed generation leaves no orphaned renders behind. A delete
+    that itself fails is the caller's problem to log for reclamation
+    (a later sweep can list files with no referencing row).
+    """
+    path = _path(key)
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
 def exists(key: str) -> bool:
     return _path(key).is_file()
