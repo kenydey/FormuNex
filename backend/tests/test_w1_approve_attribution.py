@@ -39,10 +39,13 @@ def _principal():
                      project_permissions={})
 
 
+_REV_SEQ = iter("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
 def _doc(session, *, created_by):
     if session.get(ProductRow, "prod-x") is None:
         session.add(ProductRow(id="prod-x", code="P-1", name_zh="产品"))
-    rev = ProductRevisionRow(id=str(uuid.uuid4()), product_id="prod-x", rev="A", state="draft")
+    rev = ProductRevisionRow(id=str(uuid.uuid4()), product_id="prod-x", rev=next(_REV_SEQ), state="draft")
     session.add(rev)
     session.flush()
     doc = RegulatoryDocumentRow(id=str(uuid.uuid4()), revision_id=rev.id, doc_type="sds", lang="zh-CN",
