@@ -342,3 +342,16 @@ export function acceptedTaskId(data: unknown): string | null {
   const id = (data as { task_id?: unknown }).task_id;
   return typeof id === "string" && id ? id : null;
 }
+
+/** Stage 1 / SR-023: a 503 that still hands back a task id (``X-FormuNex-Task-Id``).
+
+Duck-typed on purpose: callers see whatever error class the call layer
+threw (real ``ApiError`` in production, a mock in tests). A 503 without
+the header is a plain failure — only a headed 503 enters task polling,
+so a blind resubmit can never duplicate the work the 503 was hiding. */
+export function taskIdFrom503Error(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as { status?: unknown; taskId?: unknown };
+  if (e.status !== 503 || typeof e.taskId !== "string" || !e.taskId) return null;
+  return e.taskId;
+}

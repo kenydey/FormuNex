@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  acceptedTaskId, applyChatEvent, degradedReasons, evidenceToAnchors, historyForRequest, infraState, kbSourceId, maskCitationMarkers,
+  acceptedTaskId, applyChatEvent, degradedReasons, evidenceToAnchors, historyForRequest, infraState, kbSourceId, maskCitationMarkers, taskIdFrom503Error,
   parseFootnotes, PH_CLOSE, PH_OPEN, progressPct, restoreHistory, splitCitationMarkdown, trailingToken,
 } from "./logic";
 import type { ChatMessage, ChatStreamEvent } from "./types";
@@ -107,5 +107,13 @@ describe("deep mode evidence", () => {
     expect(progressPct(null)).toBe(0);
     expect(acceptedTaskId({ task_id: "t1", stream_url: "/x" })).toBe("t1");
     expect(acceptedTaskId({ id: 1 })).toBeNull();
+  });
+
+  it("reads a task id only from a headed 503", () => {
+    expect(taskIdFrom503Error({ status: 503, taskId: "t9" })).toBe("t9");
+    expect(taskIdFrom503Error({ status: 503 })).toBeNull();
+    expect(taskIdFrom503Error({ status: 500, taskId: "t9" })).toBeNull();
+    expect(taskIdFrom503Error({ status: 503, taskId: "" })).toBeNull();
+    expect(taskIdFrom503Error(null)).toBeNull();
   });
 });

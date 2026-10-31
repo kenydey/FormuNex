@@ -9,24 +9,39 @@ import dayjs from "dayjs";
 import { errorText } from "@/shared/feedback";
 import { usePendingMcp, usePendingPlans, useApprovalUi } from "./Approvals";
 import { ThinkingTimeline } from "./ThinkingTimeline";
-import { acceptedTaskId, progressPct } from "./logic";
+import { acceptedTaskId, progressPct, taskIdFrom503Error } from "./logic";
 import {
   cancelTracked, dismissTask, isTerminal, mergeServerTasks, resumeTracking, trackTask, useTaskCenter, type ServerTask, type TrackedTask,
 } from "./taskStore";
 
-/** Auto-track every mutation that answers with ``{ task_id }`` (HTTP 202), so all pages feed the centre. */
+/** Auto-track every mutation that answers with ``{ task_id }`` (HTTP 202), so all pages feed the centre.
+Stage 1 / SR-023: a mutation that fails with a headed 503 is tracked the
+same way — the submission already exists under that id, so the centre
+polls it and shows "submitted, confirming" instead of an error, and the
+user is never pushed into a blind resubmit that would duplicate work. */
 function useAutoTrack() {
   const qc = useQueryClient();
+  const { t } = useTranslation();
+  const { message } = App.useApp();
   useEffect(() => {
     resumeTracking();
     return qc.getMutationCache().subscribe((ev) => {
-      if (ev.type !== "updated" || ev.action.type !== "success") return;
-      const id = acceptedTaskId(ev.action.data);
-      if (!id) return;
+      if (ev.type !== "updated") return;
       const meta = ev.mutation.options.meta as { taskTitle?: string; taskLink?: string } | undefined;
-      trackTask(id, { title: meta?.taskTitle, link: meta?.taskLink });
+      if (ev.action.type === "success") {
+        const id = acceptedTaskId(ev.action.data);
+        if (!id) return;
+        trackTask(id, { title: meta?.taskTitle, link: meta?.taskLink });
+        return;
+      }
+      if (ev.action.type === "error") {
+        const id = taskIdFrom503Error(ev.action.error);
+        if (!id) return;
+        trackTask(id, { title: meta?.taskTitle, link: meta?.taskLink });
+        message.info(t("chat.task.submitted_confirming", "已提交，正在确认"));
+      }
     });
-  }, [qc]);
+  }, [qc, t, message]);
 }
 
 function TaskRow({ task }: { task: TrackedTask }) {

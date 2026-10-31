@@ -7,7 +7,8 @@ import { saveBlob } from "@/shared/saveFile";
 export const api = createClient<paths>({ baseUrl: window.location.origin, fetch: authFetch });
 
 export class ApiError extends Error {
-  constructor(public status: number, public detail: unknown) {
+  /** Celery id the backend hands back on a 503 (``X-FormuNex-Task-Id`` header), if any. */
+  constructor(public status: number, public detail: unknown, public taskId?: string | null) {
     super(typeof detail === "string" ? detail : detailText(detail) || `HTTP ${status}`);
   }
 }
@@ -26,7 +27,8 @@ function detailText(detail: unknown): string {
 export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
   if (result.error !== undefined || !result.response.ok) {
     const err = result.error as { detail?: unknown } | undefined;
-    throw new ApiError(result.response.status, err?.detail ?? err ?? result.response.statusText);
+    throw new ApiError(result.response.status, err?.detail ?? err ?? result.response.statusText,
+      result.response.headers.get("x-formunex-task-id"));
   }
   return result.data as T;
 }
@@ -40,7 +42,8 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   });
   const text = await res.text();
   const data = text ? safeJson(text) : undefined;
-  if (!res.ok) throw new ApiError(res.status, (data as { detail?: unknown })?.detail ?? data ?? res.statusText);
+  if (!res.ok) throw new ApiError(res.status, (data as { detail?: unknown })?.detail ?? data ?? res.statusText,
+    res.headers.get("x-formunex-task-id"));
   return data as T;
 }
 

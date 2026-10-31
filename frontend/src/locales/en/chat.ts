@@ -155,6 +155,7 @@ const en: Record<string, string> = {
   "chat.task.failed": "Failed",
   "chat.task.follow": "Follow progress",
   "chat.task.pending": "Queued",
+  "chat.task.submitted_confirming": "Submitted, confirming",
   "chat.task.running": "Running",
   "chat.task.server": "Server",
   "chat.task.stop_follow": "Stop following (the task keeps running)",
