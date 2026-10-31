@@ -747,6 +747,10 @@ class TaskOutbox(Base):
     # under the same id, so a client polling it sees the replayed run finish instead of
     # waiting on a task that died.
     task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    # Stage 0 / SR-002: failure summary for FAILED rows (exception class +
+    # truncated message, never tracebacks or sensitive fields). NULL for
+    # non-FAILED rows.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
     # Doubles as the liveness heartbeat: every status flip and every worker heartbeat
     # touches it (``onupdate``), and recovery treats "not touched for N minutes" — not

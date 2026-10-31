@@ -9,13 +9,20 @@ Row lifecycle::
 
     PENDING ──claim──▶ CLAIMED ──dispatch ok──▶ PENDING (attempt_count + 1)
        │                                            │
-       └────────── worker finishes (mark_done) ─────┴──▶ DONE
-                         recovery gives up ──────────────▶ DEAD
+       ├────────── worker succeeds (mark_done) ─────┴──▶ DONE
+       ├────────── worker fails (mark_failed) ──────┴──▶ FAILED
+       └────────── recovery gives up ──────────────▶ DEAD
 
-``DONE`` is the completion mark: the job reached a final state (success *or*
-failure — the failure itself is recorded in the task snapshot), so crash
-recovery must never replay it. ``CONFIRMED`` is reserved for the Datalab
-reconciliation phase.
+``DONE`` is the success mark and ``FAILED`` the failure mark: crash
+recovery replays neither (a FAILED row is visible to operators instead
+of silently vanishing into DONE). ``CONFIRMED`` is reserved for the
+Datalab reconciliation phase.
+
+At-least-once (D-4 decision): the outbox does NOT deduplicate execution.
+A row can run more than once — a crash between dispatch and the
+completion mark, a recovery replay, or a resubmission all re-execute the
+payload. Handlers must stay replay-safe (same slot / upsert); the
+``claim-by-id`` wording elsewhere must not be read as exactly-once.
 
 Liveness: a running job keeps ``updated_at`` fresh through :func:`heartbeat`, and
 recovery only treats a row as stalled once *nothing has touched it* for the cutoff —
@@ -44,11 +51,14 @@ logger = logging.getLogger(__name__)
 STATUS_PENDING = "PENDING"
 STATUS_CLAIMED = "CLAIMED"
 STATUS_DONE = "DONE"
+STATUS_FAILED = "FAILED"
 STATUS_DEAD = "DEAD"
 
 # Statuses a finished job may be re-armed from when the same payload is
-# submitted again (a new submission is a new unit of work).
-_REARMABLE = (STATUS_DONE, STATUS_DEAD)
+# submitted again (a new submission is a new unit of work). FAILED joins
+# DONE/DEAD: resubmitting a failed payload is the stage-0 retry path
+# (a FAILED query/retry entry point is stage 1).
+_REARMABLE = (STATUS_DONE, STATUS_DEAD, STATUS_FAILED)
 
 
 def _utcnow() -> datetime:
@@ -189,6 +199,46 @@ def record_done(operation: str, payload: dict) -> bool:
             return mark_done(session, operation, payload)
     except Exception:
         logger.exception("outbox mark_done failed (non-fatal)")
+        return False
+
+
+def mark_failed(session: Session, operation: str, payload: dict, error: str | None = None) -> bool:
+    """Failure mark in the caller's transaction (stage 0 / SR-002 stopgap).
+
+    Mirrors :func:`mark_done` but lands the row in FAILED with a short
+    summary instead of DONE, so failed jobs stay visible to operators and
+    are never silently replayed as if they had finished. Only in-flight
+    rows (``PENDING`` / ``CLAIMED``) change; an already terminal row is
+    left alone. The caller owns the commit. Returns True when updated.
+    """
+    result = session.execute(
+        update(TaskOutbox)
+        .where(
+            TaskOutbox.operation == operation,
+            TaskOutbox.idempotency_key == idempotency_key(operation, payload),
+            TaskOutbox.status.in_([STATUS_PENDING, STATUS_CLAIMED]),
+        )
+        .values(
+            status=STATUS_FAILED,
+            error=(error or "")[:500] or None,
+            claimed_by=None,
+            claimed_at=None,
+            updated_at=_utcnow(),
+        )
+    )
+    return bool(result.rowcount)
+
+
+def record_failed(operation: str, payload: dict, error: str | None = None) -> bool:
+    """Failure mark in its own transaction. Never raises (mirrors record_done)."""
+    try:
+        from .database import default_session_factory
+        from .session_utils import commit_session
+
+        with commit_session(default_session_factory()) as session:
+            return mark_failed(session, operation, payload, error)
+    except Exception:
+        logger.exception("outbox mark_failed failed (non-fatal)")
         return False
 
 

@@ -344,6 +344,33 @@ def recover_stalled(
             session.commit()
             continue
 
+        # Stage 0 / SR-002 stopgap guard: a job that already finished but
+        # whose row never got its terminal mark (pre-stopgap rows, or an
+        # eager→worker backlog) must never be replayed — a replay would
+        # silently overwrite the delivered result with a new non-deterministic
+        # run. If the row's Celery id already has a terminal snapshot on
+        # disk, close the row from the snapshot instead of re-dispatching.
+        # Deferred import: worker.tasks imports db modules at top level.
+        if row.task_id:
+            try:
+                from ..worker.tasks import load_persisted_task
+
+                snap = load_persisted_task(row.task_id)
+                state = getattr(snap.state, "value", snap.state) if snap is not None else None
+            except Exception:  # noqa: BLE001 — unreadable snapshot means "no guard", replay as before
+                snap, state = None, None
+            if state in ("completed", "failed"):
+                row.status = "DONE" if state == "completed" else "FAILED"
+                if state == "failed":
+                    row.error = (snap.message or "")[:500] or None
+                row.claimed_by = None
+                row.claimed_at = None
+                session.commit()
+                logger.info(
+                    "recover_stalled: outbox row %s already terminal (%s); "
+                    "closed without replay", row.id, state)
+                continue
+
         row.status = "CLAIMED"
         row.claimed_by = _worker_id
         row.claimed_at = _utcnow()

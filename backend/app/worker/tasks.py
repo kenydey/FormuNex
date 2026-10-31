@@ -84,10 +84,12 @@ class _OutboxTask(celery_app.Task):
     ``api/*`` writes the row (``outbox_operation`` × content-hash of the
     payload) before dispatching. When the task reaches a *final* state — Celery
     calls ``on_success`` / ``on_failure`` only after retries are exhausted —
-    the row is flipped to ``DONE`` so ``dispatcher.recover_stalled`` replays
-    only jobs interrupted by a crash, never ones that finished. The failure
-    itself is recorded in the task snapshot, not in the outbox. Never raises:
-    a lost completion mark must not turn a finished task into a failed one.
+    the row is closed: success flips it to ``DONE``, failure to ``FAILED``
+    with a short summary (stage 0 / SR-002 stopgap; previously failure was
+    also marked DONE, which blinded operators and made recovery unable to
+    distinguish the two). ``dispatcher.recover_stalled`` replays only rows
+    interrupted by a crash, never terminal ones. Never raises: a lost
+    completion mark must not turn a finished task into a failed one.
     """
 
     outbox_operation: str = ""
@@ -118,11 +120,27 @@ class _OutboxTask(celery_app.Task):
 
         record_done(self.outbox_operation, payload)
 
+    def _mark_outbox_failed(self, args, kwargs, exc: BaseException | None) -> None:
+        if not self.outbox_operation:
+            return
+        payload = self._payload_of(args, kwargs)
+        if not isinstance(payload, dict):
+            return
+        from ..db.outbox_store import record_failed
+
+        # Class name + truncated message only: never tracebacks (einfo),
+        # never exception args wholesale — they can carry credentials or
+        # payloads that do not belong in an ops-visible row.
+        summary = ""
+        if exc is not None:
+            summary = f"{type(exc).__name__}: {exc}"
+        record_failed(self.outbox_operation, payload, summary[:500])
+
     def on_success(self, retval, task_id, args, kwargs):
         self._mark_outbox_done(args, kwargs)
 
     def on_failure(self, exc, task_id, args, kwargs, einfo):
-        self._mark_outbox_done(args, kwargs)
+        self._mark_outbox_failed(args, kwargs, exc)
 
 
 def _persist_terminal(

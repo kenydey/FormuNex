@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0081(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0081_w1_batch_revision_fk``)."""
+def test_revision_chain_head_is_0083(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0083_stage0_outbox_failed``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0081(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0081"
+    assert heads[0] == "0083"
 
 
 def test_migrations_partial_columns_branch(
@@ -902,3 +902,37 @@ def test_0081_refuses_dirty_revision_ids(tmp_db_url: str, monkeypatch: pytest.Mo
     _create_0080_batch_schema(tmp_db_url, dirty=True)
     with pytest.raises(RuntimeError, match="0081 upgrade refused"):
         run_upgrade(tmp_db_url, monkeypatch)
+
+
+def _create_0082_outbox_schema(db_url: str) -> None:
+    """Minimal 0082-shaped schema: task_outbox without the error column, stamped at 0082.
+
+    An empty database upgraded to 0082 cannot be used here: the 0001 baseline
+    creates tables from the current models, so ``error`` would already exist.
+    """
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE TABLE task_outbox (id VARCHAR(36) PRIMARY KEY, operation VARCHAR(64) NOT NULL, "
+                "idempotency_key VARCHAR(128) NOT NULL, payload JSON NOT NULL, owner_id VARCHAR(64), "
+                "status VARCHAR(16) NOT NULL, claimed_by VARCHAR(128), claimed_at DATETIME, "
+                "attempt_count INTEGER NOT NULL, task_id VARCHAR(64), "
+                "created_at DATETIME, updated_at DATETIME)"))
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+            conn.execute(text("INSERT INTO alembic_version VALUES ('0082')"))
+    finally:
+        engine.dispose()
+
+
+def test_0083_adds_outbox_error_column(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage 0 / SR-002: upgrading an 0082 database adds task_outbox.error; downgrade drops it."""
+    from tests.alembic_helpers import run_downgrade
+
+    _create_0082_outbox_schema(tmp_db_url)
+    assert "error" not in _column_names(tmp_db_url, "task_outbox")
+    run_upgrade(tmp_db_url, monkeypatch)
+    assert "error" in _column_names(tmp_db_url, "task_outbox")
+    run_downgrade(tmp_db_url, monkeypatch, "0082")
+    assert "error" not in _column_names(tmp_db_url, "task_outbox")
+    run_upgrade(tmp_db_url, monkeypatch)

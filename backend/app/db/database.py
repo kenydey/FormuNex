@@ -134,7 +134,9 @@ def make_engine(db_url: str) -> Engine:
     _ensure_experiment_columns(engine)
     _ensure_campaign_columns(engine)
     _ensure_owner_id_column(engine, "task_outbox")
+    _ensure_owner_id_column(engine, "chat_sessions")
     _ensure_outbox_task_id_column(engine)
+    _ensure_outbox_error_column(engine)
     _ensure_source_document_columns(engine)
     _ensure_kb_entity_link_columns(engine)
     _ensure_material_columns(engine)
@@ -493,6 +495,25 @@ def _ensure_owner_id_column(engine: Engine, table: str) -> None:
                 pass
     except Exception as exc:
         # 竞态或已存在：静默（alembic 已加过）
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _ensure_outbox_error_column(engine: Engine) -> None:
+    """``task_outbox.error`` (alembic 0083, stage 0 / SR-002): nullable Text, no
+    backfill. Same rationale as ``task_id`` above: ``on_failure`` writes the
+    column on every failed task, so an unmigrated database would turn each
+    failure into a second error (and lose the FAILED row) until migrated."""
+    from sqlalchemy import inspect, text
+
+    if "task_outbox" not in inspect(engine).get_table_names():
+        return
+    if "error" in {c["name"] for c in inspect(engine).get_columns("task_outbox")}:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text('ALTER TABLE "task_outbox" ADD COLUMN error TEXT'))
+    except Exception as exc:  # a concurrent starter may have added it first
         if "duplicate column" not in str(exc).lower():
             raise
 

@@ -267,7 +267,12 @@ def test_task_success_marks_the_outbox_row_done(db, monkeypatch) -> None:
 
 def test_task_terminal_failure_also_marks_done(db, monkeypatch) -> None:
     """A contract failure is final (recorded in the task snapshot) — replaying
-    it on every restart would just fail again."""
+    it on every restart would just fail again.
+
+    Stage 0 / SR-002 stopgap: the terminal mark is now FAILED with a
+    summary, not DONE. (The test name is historical; the assertion is the
+    new contract: failures stay visible instead of vanishing into DONE.)
+    """
     from app.api._idempotency import enqueue_outbox
     from app.worker.tasks import run_doe_cycle_task
 
@@ -280,7 +285,9 @@ def test_task_terminal_failure_also_marks_done(db, monkeypatch) -> None:
     assert res.failed()
 
     with db() as s:
-        assert s.get(TaskOutbox, outbox_id).status == "DONE"
+        row = s.get(TaskOutbox, outbox_id)
+        assert row.status == "FAILED"
+        assert row.error and "ValueError" in row.error
 
 
 def test_interrupted_task_stays_recoverable(db, monkeypatch) -> None:
