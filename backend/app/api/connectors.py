@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -12,6 +13,8 @@ from ..config import get_settings
 from ..services import connectors_builtin, mcp_client, mcp_import
 from ._principal import CurrentUser, current_user
 from ._uploads import read_upload_capped
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 
@@ -233,9 +236,23 @@ def probe_mcp(server_id: str) -> dict:
 
 
 @router.post("/mcp/call")
-def call_mcp(body: McpCallRequest) -> dict:
+def call_mcp(body: McpCallRequest, user: CurrentUser = Depends(current_user)) -> dict:
+    """Readonly MCP tool proxy (Stage 0 / SR-007).
+
+    Previously this was doubly exempt (POLICY_EXEMPT + admin_guard) with
+    the approval gate off by default, so any token holder could call any
+    enabled server's read tools — including filesystem reads and
+    credential-backed external reads — with no permission, no session
+    attribution and no approval. Now: a signed-in account with
+    ``knowledge.read``; the approval gate inside ``_call_tool`` still
+    applies when ``mcp_approval_enabled``. Each call is logged with the
+    caller's user id (the audit middleware's actor stays ``default`` for
+    JWTs until stage 2's SR-042; the per-call log is the stage-0
+    attribution).
+    """
     settings = get_settings()
-    return mcp_client.call_tool_readonly(
+    user.require("knowledge.read")
+    out = mcp_client.call_tool_readonly(
         body.server_id,
         body.tool_name,
         body.arguments,
@@ -243,6 +260,9 @@ def call_mcp(body: McpCallRequest) -> dict:
         session_id=body.session_id,
         project_id=body.project_id,
     )
+    logger.info("mcp.call user=%s server=%s tool=%s ok=%s",
+                user.id, body.server_id, body.tool_name, out.get("ok"))
+    return out
 
 
 class McpApproveSessionBody(BaseModel):

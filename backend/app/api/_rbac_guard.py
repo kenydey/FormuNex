@@ -222,7 +222,9 @@ POLICY_EXEMPT: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/session(/|$)"), "conversational session state"),
     # admin_guard exemptions (per-chat actions every user takes while working).
     (re.compile(r"^/api/connectors/builtin/[^/]+/search$"), "admin_guard exempt: per-chat search"),
-    (re.compile(r"^/api/connectors/mcp/call$"), "admin_guard exempt: approved MCP tool call"),
+    # mcp/call is exempt from admin.connectors only; since stage 0 / SR-007
+    # the endpoint itself requires a signed-in account with knowledge.read.
+    (re.compile(r"^/api/connectors/mcp/call$"), "admin_guard exempt: endpoint-enforced mcp call"),
     # NOTE: approve-session / revoke-session / decide are NOT exempt: they are
     # endpoint-enforced (current_user + ownership) in ENDPOINT_ENFORCED above.
 ]

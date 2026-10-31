@@ -19,7 +19,9 @@ from ._principal import _bearer, current_user
 _READ = {"GET", "HEAD", "OPTIONS"}
 
 # (path pattern, permission, exempt patterns). Exempt: per-chat actions every user takes while working —
-# searching a built-in connector, calling an approved MCP tool, approving a tool for their own chat session.
+# searching a built-in connector, calling an MCP tool (endpoint-enforced since stage 0 / SR-007:
+# signed-in account + knowledge.read, not an admin.connectors exemption in substance), approving a tool
+# for their own chat session.
 _RULES: list[tuple[re.Pattern[str], str, tuple[re.Pattern[str], ...]]] = [
     (re.compile(r"^/api/(settings|dependencies|embedding-models|skills)(/|$)"), "admin.llm", ()),
     (re.compile(r"^/api/connectors(/|$)"), "admin.connectors", (
