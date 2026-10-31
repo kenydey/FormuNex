@@ -74,6 +74,13 @@ describe("SettingsPage", () => {
     expect(screen.getByText("403")).toBeInTheDocument();
     expect(call).not.toHaveBeenCalled();
   });
+
+  it("opens for a connectors-only user (W1-6/D2 OR gate)", async () => {
+    perms = ["admin.connectors"];
+    renderAt("/admin/settings/model");
+    expect(await screen.findByText("文本模型 · Text")).toBeInTheDocument();
+    expect(screen.queryByText("403")).not.toBeInTheDocument();
+  });
 });
 
 describe("argsPreview", () => {

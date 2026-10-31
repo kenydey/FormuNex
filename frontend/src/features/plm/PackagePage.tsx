@@ -9,7 +9,7 @@ import { useSignature } from "@/shared/SignatureModal";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
 import { GateChecklist } from "./GateChecklist";
-import type { PackageView } from "./types";
+import type { PackageView, Revision } from "./types";
 
 /** 四级签批 (方案 §5.5.10): 研发 → EHS/法规 → 质量 → 发布管理员, e-signed over the package hash. */
 export default function PackagePage() {
@@ -21,6 +21,10 @@ export default function PackagePage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["plm", "package", packageId], queryFn: () => call<PackageView>("GET", `/api/plm/packages/${packageId}`) });
   const p = q.data;
+  // Project scope for the sign/publish/withdraw gates (RevisionPage pattern).
+  const rev = useQuery({ queryKey: ["plm", "revision", p?.revision_id], enabled: !!p,
+    queryFn: () => call<Revision>("GET", `/api/plm/revisions/${p!.revision_id}`) });
+  const pid = rev.data?.product.project_id;
   const current = p?.flow.steps.find((s) => s.current);
   const myTurn = !!current && !!me?.roles.includes(current.role) && !p!.flow.steps.some((s) => s.decided_by === me?.id);
   const last = current && p && current.seq === p.flow.steps.length;
@@ -54,14 +58,14 @@ export default function PackagePage() {
       extra={p && <Space>
         <Link to={`/plm/revisions/${p.revision_id}`}><Button>{t("plm.revision", "修订版")}</Button></Link>
         {p.has_delivery && <Button onClick={() => void download(`/api/plm/packages/${p.id}/delivery`, `release-${p.id.slice(0, 8)}.zip`)}>{t("plm.delivery", "下载交付包 ZIP")}</Button>}
-        {p.status === "released" && can("release.publish") && <Button onClick={() => void run(`/api/plm/packages/${p.id}/publish`, {})}>{t("plm.republish", "重新推送连接器")}</Button>}
-        {p.status === "released" && can("release.withdraw") && <Button danger onClick={() => void withdraw()}>{t("sign.withdraw", "撤回发布")}</Button>}
+        {p.status === "released" && can("release.publish", pid) && <Button onClick={() => void run(`/api/plm/packages/${p.id}/publish`, {})}>{t("plm.republish", "重新推送连接器")}</Button>}
+        {p.status === "released" && can("release.withdraw", pid) && <Button danger onClick={() => void withdraw()}>{t("sign.withdraw", "撤回发布")}</Button>}
       </Space>}>
       {p && <>
         <ProCard bordered>
           <Steps current={p.flow.steps.findIndex((s) => s.current)} status={p.flow.status === "rejected" ? "error" : p.status === "released" ? "finish" : "process"}
             items={p.flow.steps.map((s) => ({ title: t(`role.${s.role}`, s.role), description: <span><StatusTag status={s.status} />{s.comment && <div>{s.comment}</div>}</span> }))} />
-          {myTurn && p.status === "under_review" && (can("release.sign") || can("release.publish")) && (
+          {myTurn && p.status === "under_review" && (can("release.sign", pid) || can("release.publish", pid)) && (
             <Space style={{ marginTop: 16 }}>
               <Button type="primary" onClick={() => void decide("approve")}>{last ? t("sign.release", "最终发布") : t("sign.approve", "签批通过")}</Button>
               <Button danger onClick={() => void decide("reject")}>{t("sign.reject", "驳回")}</Button>

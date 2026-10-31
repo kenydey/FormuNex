@@ -113,14 +113,20 @@ export default function ClassicDoePage() {
       const wb = await call<{ campaign_id: number }>("POST", "/api/experiments/workbench/campaigns", {
         plan: p, strategy: strategyForPlan(p.design, active?.engine), requirement, project_id: projectId,
       });
-      let warn = "";
-      if (p.plan_id) await call("POST", `/api/doe/${encodeURIComponent(p.plan_id)}/activate`, {}).catch((e) => { warn = errorText(e); });
-      return { id: wb.campaign_id, warn };
+      // Activation failure blocks the adopt (W1-6/P2-F4 fail-closed): the campaign already exists,
+      // so the error names it — retrying adopt would create a duplicate campaign.
+      if (p.plan_id) {
+        try {
+          await call("POST", `/api/doe/${encodeURIComponent(p.plan_id)}/activate`, {});
+        } catch (e) {
+          throw new Error(t("design.doe.activate_failed_blocking", "DOE 计划激活失败，实验台账 #{{id}} 已创建，请勿重复采纳：{{e}}", { id: wb.campaign_id, e: errorText(e) }));
+        }
+      }
+      return { id: wb.campaign_id };
     },
-    onSuccess: ({ id, warn }) => {
+    onSuccess: ({ id }) => {
       setCampaignId(id);
       message.success(t("design.doe.adopted", "已创建实验台账 #{{id}}", { id }));
-      if (warn) message.warning(t("design.doe.activate_failed", "DOE 计划状态同步失败（计划已采纳）：{{e}}", { e: warn }));
       void qc.invalidateQueries({ queryKey: ["workbench", "campaigns"] });
       void qc.invalidateQueries({ queryKey: ["design", "doe-history"] });
     },
@@ -246,7 +252,7 @@ export default function ClassicDoePage() {
           extra={<Space wrap>
             <Button onClick={() => exportPlan("csv")}>{t("design.doe.export_csv", "导出 CSV")}</Button>
             <Button onClick={() => exportPlan("xlsx")}>XLSX</Button>
-            <Button loading={adopt.isPending} disabled={!can("lab.execute") || !can("project.write")} onClick={() => adopt.mutate(plan)}>{t("design.doe.adopt", "写入实验台账")}</Button>
+            <Button loading={adopt.isPending} disabled={!can("lab.execute", projectId)} onClick={() => adopt.mutate(plan)}>{t("design.doe.adopt", "写入实验台账")}</Button>
             {dispatchId ? <DispatchButton planId={dispatchId} />
               : <Tooltip title={t("design.doe.not_persisted", "该计划未能保存到 DOE 历史，无法下发为实验任务")}>
                 <Button type="primary" disabled>{t("doe.dispatch", "下发为实验任务")}</Button></Tooltip>}

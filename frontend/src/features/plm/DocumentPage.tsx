@@ -13,7 +13,7 @@ import { useSignature } from "@/shared/SignatureModal";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { PictogramRow } from "@/shared/ghs";
 import { SourceBadge, StatusTag } from "@/shared/tags";
-import { DOC_NAMES, type DocContent, type DocDetail, type DocSection, type DocSummary } from "./types";
+import { DOC_NAMES, type DocContent, type DocDetail, type DocSection, type DocSummary, type Revision } from "./types";
 import { isLocked, loadHistory, loadLocks, lockField, snapshotValue, unlockField, type LockEvent, type LockStore } from "./fieldLocks";
 
 function show(v: unknown): React.ReactNode {
@@ -89,6 +89,10 @@ export default function DocumentPage() {
   const siblings = useQuery({ queryKey: ["plm", "docs", doc.data?.revision_id], enabled: !!doc.data,
     queryFn: () => call<DocSummary[]>("GET", `/api/plm/revisions/${doc.data!.revision_id}/documents`) });
   const d = doc.data;
+  // Project scope for the review gate (RevisionPage pattern): the doc summary itself carries no project_id.
+  const rev = useQuery({ queryKey: ["plm", "revision", d?.revision_id], enabled: !!d,
+    queryFn: () => call<Revision>("GET", `/api/plm/revisions/${d!.revision_id}`) });
+  const pid = rev.data?.product.project_id;
   const sameType = (siblings.data ?? []).filter((x) => d && x.doc_type === d.doc_type && x.batch_id === d.batch_id);
   const sameReg = (x: DocSummary) => (x.regulation ?? "CN") === (d?.regulation ?? "CN");
   const versions = sameType.filter((x) => x.lang === d?.lang && sameReg(x) && x.id !== d?.id);
@@ -126,7 +130,7 @@ export default function DocumentPage() {
         {other && <Link to={`/plm/documents/${d.id}/proofread`}><Button>{t("doc.proofread", "中英并排校对")}</Button></Link>}
         {d.has_pdf && <Button onClick={() => void download(`/api/plm/documents/${d.id}/file/pdf`, `${d.doc_type}-${d.lang}${dlSuffix}-v${d.version_no}.pdf`)}>PDF</Button>}
         {d.has_docx && <Button onClick={() => void download(`/api/plm/documents/${d.id}/file/docx`, `${d.doc_type}-${d.lang}${dlSuffix}-v${d.version_no}.docx`)}>Word</Button>}
-        {d.status === "draft" && can(perm) && <Button type="primary" disabled={d.missing.length > 0 || d.created_by === me?.id} onClick={() => void approve()}>
+        {d.status === "draft" && can(perm, pid) && <Button type="primary" disabled={d.missing.length > 0 || d.created_by === me?.id} onClick={() => void approve()}>
           {d.doc_type === "coa" ? t("doc.issue_coa", "签发 COA") : t("doc.approve", "审核通过")}</Button>}
       </Space>}>
       {d && d.missing.length > 0 && <Alert type="error" showIcon style={{ marginBottom: 8 }} message={t("doc.missing", "缺项：{{m}}", { m: d.missing.join("、") })} />}

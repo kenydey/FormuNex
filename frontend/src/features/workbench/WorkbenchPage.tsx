@@ -44,8 +44,7 @@ export default function WorkbenchPage() {
       p = await call<DoePlan>("POST", `/api/doe?${qs}`, req);
     }
     if (!p) throw new Error(t("workbench.no_plan", "当前项目没有 DOE 计划"));
-    const { campaign, warning } = await adoptPlan(qc, projectId, p, { name: v.name });
-    if (warning) message.warning(t("workbench.plan_status_warn", "DOE 计划状态同步失败（台账已创建）：{{e}}", { e: warning }));
+    const { campaign } = await adoptPlan(qc, projectId, p, { name: v.name });
     message.success(t("workbench.created", "已创建台账 #{{id}}", { id: campaign.campaign_id }));
     navigate(`/cockpit/workbench/${campaign.campaign_id}`);
     return true;

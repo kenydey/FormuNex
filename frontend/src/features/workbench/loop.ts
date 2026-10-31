@@ -67,8 +67,9 @@ const requirementOf = (p: ProjectDetail): Requirement =>
   ({ ...(p.workspace.requirement ?? { domain: p.domain || "anticorrosion_coating", objectives: [] }), project_id: p.id });
 
 /**
- * Create a workbench campaign from a DOE plan for the project (and mark the plan active). Returns the campaign
- * and an optional warning when the plan status could not be synced (the campaign still exists).
+ * Create a workbench campaign from a DOE plan for the project (and mark the plan active). Activation
+ * failure throws (W1-6/P2-F4 fail-closed): the campaign already exists, so the error names it —
+ * retrying adopt would create a duplicate campaign. On throw the workspace is left unmarked.
  */
 export async function adoptPlan(qc: QueryClient, projectId: string | null, plan: DoePlan, opts: { name?: string; engineHint?: string | null } = {}) {
   const project = projectId ? await freshProject(projectId) : null;
@@ -77,12 +78,11 @@ export async function adoptPlan(qc: QueryClient, projectId: string | null, plan:
     plan, name: opts.name || undefined, strategy: strategyForPlan(plan, opts.engineHint ?? ws.last_al_engine ?? ws.loop_report?.engine ?? null),
     requirement: project ? requirementOf(project) : undefined, project_id: projectId ?? undefined,
   });
-  let warning: string | null = null;
   if (plan.plan_id) {
     try {
       await call("POST", `/api/doe/${plan.plan_id}/activate`, {});
     } catch (e) {
-      warning = e instanceof Error ? e.message : String(e);
+      throw new Error(`DOE 计划激活失败，实验台账 #${wb.campaign_id} 已创建，请勿重复采纳：${e instanceof Error ? e.message : String(e)}`);
     }
   }
   if (projectId) {
@@ -90,7 +90,7 @@ export async function adoptPlan(qc: QueryClient, projectId: string | null, plan:
       workbench_adopted_plan_id: plan.plan_id || ws.workbench_adopted_plan_id || null, workbench_objectives_snapshot: wb.objectives_snapshot ?? [] });
   }
   void qc.invalidateQueries({ queryKey: ["workbench", "campaigns"] });
-  return { campaign: wb, warning };
+  return { campaign: wb };
 }
 
 interface LoopRunState {

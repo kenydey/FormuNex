@@ -75,7 +75,7 @@ export default function TasksPage() {
               <Card size="small" title={<Space><StatusTag status={status} /><span>({grouped.get(status)?.length ?? 0})</span></Space>} style={{ marginBottom: 12 }}>
                 {(grouped.get(status) ?? []).map((r) => (
                   <Card key={r.id} size="small" style={{ marginBottom: 8 }} title={<Link to={`/lab/tasks/${r.id}`}>{r.task_no}</Link>}
-                    extra={r.status === "open" && can("lab.execute") ? <Button size="small" loading={claim.isPending} onClick={() => claim.mutate(r.id)}>{t("tasks.claim", "领取")}</Button> : undefined}>
+                    extra={r.status === "open" && can("lab.execute", r.project_id) ? <Button size="small" loading={claim.isPending} onClick={() => claim.mutate(r.id)}>{t("tasks.claim", "领取")}</Button> : undefined}>
                     <div>{t("tasks.sample", "样品号")}：{r.sample_no}</div>
                     <div>{t("tasks.run", "试验点")}：{r.run_index ?? "—"}</div>
                     <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -103,7 +103,7 @@ export default function TasksPage() {
           { title: t("tasks.metrics", "待测指标"), render: (_d, r) => <Space wrap>{r.requested_metrics.map((m) => <Tag key={m.metric}>{m.metric}</Tag>)}</Space> },
           { title: t("tasks.status", "状态"), dataIndex: "status", width: 100, render: (_d, r) => <StatusTag status={r.status} /> },
           { title: t("common.actions", "操作"), valueType: "option", width: 90, render: (_d, r) =>
-            r.status === "open" && can("lab.execute") ? [<a key="c" onClick={() => claim.mutate(r.id)}>{t("tasks.claim", "领取")}</a>] : [] },
+            r.status === "open" && can("lab.execute", r.project_id) ? [<a key="c" onClick={() => claim.mutate(r.id)}>{t("tasks.claim", "领取")}</a>] : [] },
         ]}
       />
       )}

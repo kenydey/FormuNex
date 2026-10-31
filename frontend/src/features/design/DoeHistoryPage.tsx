@@ -101,8 +101,7 @@ export default function DoeHistoryPage() {
   const shown = planQ.data ?? detail;
   const adopt = useMutation({
     mutationFn: (item: DoeHistoryItem) => adoptPlan(qc, projectId, toDoePlan(item as StoredPlan)),
-    onSuccess: ({ campaign, warning }) => {
-      if (warning) message.warning(t("design.doe.activate_failed", "DOE 计划状态同步失败（计划已采纳）：{{e}}", { e: warning }));
+    onSuccess: ({ campaign }) => {
       message.success(t("design.doe.adopted", "已创建实验台账 #{{id}}", { id: campaign.campaign_id }));
       void qc.invalidateQueries({ queryKey: ["design", "doe-history"] });
       navigate(`/cockpit/workbench/${campaign.campaign_id}`);
@@ -155,7 +154,7 @@ export default function DoeHistoryPage() {
         extra={detail?.plan_id && <Space>
           <Button onClick={() => download(`/api/doe/${encodeURIComponent(detail.plan_id!)}/export?format=csv`, `doe_${detail.plan_id}.csv`)
             .catch((e) => message.error(errorText(e)))}>{t("design.doe.export_csv", "导出 CSV")}</Button>
-          <Button loading={adopt.isPending} disabled={!planQ.data || !can("lab.execute") || !can("project.write")} onClick={() => planQ.data && adopt.mutate(planQ.data)}>
+          <Button loading={adopt.isPending} disabled={!planQ.data || !can("lab.execute", projectId)} onClick={() => planQ.data && adopt.mutate(planQ.data)}>
             {t("design.doe.adopt", "写入实验台账")}</Button>
           <DispatchButton planId={detail.plan_id} />
         </Space>}>

@@ -13,8 +13,8 @@ import { DependenciesTab } from "./DependenciesTab";
 import { KbMaintenanceTab } from "./KbMaintenanceTab";
 import ConnectorsPage from "@/features/admin/ConnectorsPage";
 
-/** Server configuration is a system-administrator task (rbac: admin.llm). */
-export const SETTINGS_PERMISSION = "admin.llm";
+/** Settings center opens for either admin role (W1-6/D2: OR gate; connectors tab keeps its own admin.connectors gate). */
+export const SETTINGS_PERMISSIONS = ["admin.llm", "admin.connectors"];
 
 /** 设置中心 /admin/settings/:tab — one routed tab per former settings-modal tab. */
 export default function SettingsPage() {
@@ -25,7 +25,7 @@ export default function SettingsPage() {
   const location = useLocation();
   const tab = normalizeSettingsTab(raw);
   if (raw !== tab) return <Navigate to={`/admin/settings/${tab}${location.search}`} replace />;
-  if (!can(SETTINGS_PERMISSION)) return <Forbidden permission={SETTINGS_PERMISSION} />;
+  if (!SETTINGS_PERMISSIONS.some((p) => can(p))) return <Forbidden permission={SETTINGS_PERMISSIONS.join(" / ")} />;
 
   const tabs: { key: SettingsTab; tab: string }[] = [
     { key: "model", tab: t("settings.tab.model", "模型") },

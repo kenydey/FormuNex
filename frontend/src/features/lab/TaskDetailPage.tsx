@@ -76,9 +76,9 @@ export default function TaskDetailPage() {
       extra={<Space>
         {nav.prev && <Button onClick={() => navigate(`/lab/tasks/${nav.prev!.id}`)}>{t("tasks.prev_run", "上一运行")}</Button>}
         {nav.next && <Button onClick={() => navigate(`/lab/tasks/${nav.next!.id}`)}>{t("tasks.next_run", "下一运行")}</Button>}
-        {data.status === "open" && can("lab.execute") && <Button onClick={() => act.mutate({ path: `/api/lab/tasks/${taskId}/claim` })}>{t("tasks.claim", "领取")}</Button>}
-        {data.status === "in_progress" && mine && <Button type="primary" onClick={() => act.mutate({ path: `/api/lab/tasks/${taskId}/submit` })}>{t("tasks.submit", "提交复核")}</Button>}
-        {["open", "in_progress", "pending_review"].includes(data.status) && can("doe.write") &&
+        {data.status === "open" && can("lab.execute", data.project_id) && <Button onClick={() => act.mutate({ path: `/api/lab/tasks/${taskId}/claim` })}>{t("tasks.claim", "领取")}</Button>}
+        {data.status === "in_progress" && mine && can("lab.execute", data.project_id) && <Button type="primary" onClick={() => act.mutate({ path: `/api/lab/tasks/${taskId}/submit` })}>{t("tasks.submit", "提交复核")}</Button>}
+        {["open", "in_progress", "pending_review"].includes(data.status) && can("doe.write", data.project_id) &&
           <Button danger onClick={() => {
             let reason = "";
             modal.confirm({ title: t("tasks.cancel", "取消任务单"), content: <Input onChange={(e) => { reason = e.target.value; }} placeholder={t("tasks.cancel_reason", "取消理由")} />,
@@ -189,8 +189,8 @@ export default function TaskDetailPage() {
           { title: t("measure.status", "复核"), dataIndex: "review_status", render: (_d, r) => <StatusTag status={r.review_status} /> },
           { title: t("measure.note", "备注"), dataIndex: "note", ellipsis: true },
           { title: t("common.actions", "操作"), valueType: "option", render: (_d, r) => [
-            (r.operator_id === me?.id || can("lab.review")) && r.review_status !== "legacy" && <a key="amend" onClick={() => amend(r)}>{t("measure.amend", "修改")}</a>,
-            r.review_status === "reviewed" && can("lab.review") && <a key="pick" onClick={() => act.mutate({ path: `/api/lab/measurements/${r.id}/pick`, body: { reason: "" } })}>{t("measure.pick", "指定为代表值")}</a>,
+            (can("lab.execute", data.project_id) || can("lab.review", data.project_id)) && r.review_status !== "legacy" && <a key="amend" onClick={() => amend(r)}>{t("measure.amend", "修改")}</a>,
+            r.review_status === "reviewed" && can("lab.review", data.project_id) && <a key="pick" onClick={() => act.mutate({ path: `/api/lab/measurements/${r.id}/pick`, body: { reason: "" } })}>{t("measure.pick", "指定为代表值")}</a>,
             <a key="hist" onClick={async () => setHistory({ id: r.id, rows: await call("GET", `/api/lab/measurements/${r.id}/history`) })}>{t("measure.history", "留痕")}</a>,
           ] },
         ]} />

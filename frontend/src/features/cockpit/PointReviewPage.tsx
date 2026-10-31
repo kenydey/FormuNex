@@ -119,7 +119,7 @@ export default function PointReviewPage() {
                 onChange={(e) => setEdits((prev) => { const cur = prev[r.run_id]; if (!cur) return { ...prev, [r.run_id]: { decision: undefined, note: e.target.value, factors: { ...(r.natural ?? {}) } } }; return { ...prev, [r.run_id]: { ...cur, note: e.target.value } }; })} />
             ) },
           ]} />
-          <Button type="primary" style={{ marginTop: 12 }} disabled={!can("formulation.read")} loading={submit.isPending} onClick={() => submit.mutate()}>{t("review.submit", "提交审核")}</Button>
+          <Button type="primary" style={{ marginTop: 12 }} disabled={!can("doe.write")} loading={submit.isPending} onClick={() => submit.mutate()}>{t("review.submit", "提交审核")}</Button>
         </ProCard>
       )}
       <ProCard bordered style={{ marginTop: 16 }} title={t("review.rules_title", "寻优规则微调（仅 numpy-UCB 引擎与早停读取，立即生效）")}>

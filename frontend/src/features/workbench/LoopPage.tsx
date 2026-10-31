@@ -28,7 +28,7 @@ const stamp = (iso?: string | null) => {
 export default function LoopPage() {
   const { t } = useTranslation();
   const { can } = useSession();
-  const { message, modal } = App.useApp();
+  const { modal } = App.useApp();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [search] = useSearchParams();
@@ -60,8 +60,7 @@ export default function LoopPage() {
   });
   const adopt = useMutation({
     mutationFn: () => adoptPlan(qc, projectId, plan!, { engineHint: report?.engine }),
-    onSuccess: ({ campaign, warning }) => {
-      if (warning) message.warning(t("workbench.plan_status_warn", "DOE 计划状态同步失败（台账已创建）：{{e}}", { e: warning }));
+    onSuccess: ({ campaign }) => {
       navigate(`/cockpit/workbench/${campaign.campaign_id}`);
     },
   });
@@ -233,7 +232,7 @@ export default function LoopPage() {
         <ProCard bordered style={{ marginTop: 16 }} title={t("workbench.next_doe", "下一批推荐实验 · Next DOE")}
           subTitle={<Tag color="purple">{t("workbench.ai_point", "AI = 主动学习选点")}</Tag>}
           extra={<Space>
-            {pendingAdopt && <Button type="primary" disabled={!can("lab.execute") || !can("project.write")} loading={adopt.isPending} onClick={() => adopt.mutate()}>{t("workbench.adopt", "创建实验台账 →")}</Button>}
+            {pendingAdopt && <Button type="primary" disabled={!can("lab.execute", projectId)} loading={adopt.isPending} onClick={() => adopt.mutate()}>{t("workbench.adopt", "创建实验台账 →")}</Button>}
             {!pendingAdopt && ws.workbench_campaign_id != null && <Link to={`/cockpit/workbench/${ws.workbench_campaign_id}`}>{t("workbench.open_ledger", "打开台账")}</Link>}
             {plan.plan_id && <Button icon={<DownloadOutlined />} onClick={() => void download(`/api/doe/${plan.plan_id}/export?format=csv`, `doe_${plan.plan_id}.csv`)}>
               {t("workbench.export_next", "导出下一批 DOE")}</Button>}

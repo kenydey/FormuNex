@@ -9,7 +9,7 @@ import { router } from "./router";
  * 新组：我的工作台 0、资料检索 11、研发需求 2、配方与实验 9、寻优与分析 6、
  * 产品管理 4、材料库 3、系统管理 7（含桌面端限定 1 项，Web 可见 6 项）。
  */
-type Leaf = { path: string; zh: string; permission?: string; hasWhen?: boolean };
+type Leaf = { path: string; zh: string; permission?: string; permissions?: string[]; hasWhen?: boolean };
 type Group = { path: string; zh: string; leaves: Leaf[] };
 
 const EXPECTED: Group[] = [
@@ -92,7 +92,7 @@ const EXPECTED: Group[] = [
       { path: "/admin/mcp-approvals", zh: "MCP 工具审批" },
       { path: "/admin/users", zh: "用户与角色", permission: "admin.users" },
       { path: "/admin/companies", zh: "公司配置", permission: "admin.companies" },
-      { path: "/admin/settings", zh: "设置中心", permission: "admin.llm" },
+      { path: "/admin/settings", zh: "设置中心", permissions: ["admin.llm", "admin.connectors"] },
       { path: "/admin/audit", zh: "审计日志", permission: "audit.read" },
       { path: "/admin/org-dashboard", zh: "组织看板" },
       { path: "/admin/desktop", zh: "桌面端与本机服务", hasWhen: true },
@@ -224,6 +224,7 @@ describe("nav (8-group IA, scheme §2)", () => {
       actual.forEach((leaf, li) => {
         expect(leaf.zh).toBe(expected[li].zh);
         expect(leaf.permission).toBe(expected[li].permission);
+        expect(leaf.permissions).toEqual(expected[li].permissions);
         expect(leaf.order).toBe(li);
         if (expected[li].hasWhen) expect(typeof leaf.when).toBe("function");
         else expect(leaf.when).toBeUndefined();
@@ -248,7 +249,14 @@ describe("nav (8-group IA, scheme §2)", () => {
     for (const old of oldLeaves) {
       const item = newByPath.get(old.path)!;
       expect(item.zh).toBe(old.zh);
-      expect(item.permission).toBe(old.permission);
+      if (old.path === "/admin/settings") {
+        // W1-6/D2: settings gate widened from admin.llm to admin.llm OR admin.connectors (nothing dropped, one added).
+        expect(item.permission).toBeUndefined();
+        expect(item.permissions).toEqual(["admin.llm", "admin.connectors"]);
+      } else {
+        expect(item.permission).toBe(old.permission);
+        expect(item.permissions).toBeUndefined();
+      }
       expect(typeof item.when === "function").toBe(!!old.hasWhen);
     }
     // Every leaf and every group carries a card description (group home subtitle / rail tooltip).
@@ -302,5 +310,13 @@ describe("visibleNav (permission/when filtering)", () => {
       "/admin/mcp-approvals",
       "/admin/org-dashboard",
     ]);
+  });
+
+  it("OR gate: settings is visible with either admin.llm or admin.connectors alone", () => {
+    const adminChildren = (can: (p: string) => boolean) =>
+      visibleNav(can).find((g) => g.path === "/admin")?.children?.map((l) => l.path) ?? [];
+    expect(adminChildren((p) => p === "admin.llm")).toContain("/admin/settings");
+    expect(adminChildren((p) => p === "admin.connectors")).toContain("/admin/settings");
+    expect(adminChildren(() => false)).not.toContain("/admin/settings");
   });
 });

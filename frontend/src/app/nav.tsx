@@ -13,6 +13,8 @@ export interface NavItem {
   icon?: ReactNode;
   children?: NavItem[];
   permission?: string;
+  /** Any-of gate (W1-6/D2): visible when the user holds any listed permission. */
+  permissions?: string[];
   /** Shown only when this returns true (e.g. desktop-only pages). */
   when?: () => boolean;
   /** Display order within the parent (groups: top-level order). NAV is sorted by this, never by append order. */
@@ -90,11 +92,12 @@ export const NAV: NavItem[] = BASE_NAV.map((g) => ({
 export function visibleNav(can: (p: string) => boolean): NavItem[] {
   const out: NavItem[] = [];
   for (const g of NAV) {
+    const groupVisible = (!g.permission || can(g.permission)) && (!g.permissions || g.permissions.some(can)) && (!g.when || g.when());
     if (!g.children) {
-      if ((!g.permission || can(g.permission)) && (!g.when || g.when())) out.push(g);
+      if (groupVisible) out.push(g);
       continue;
     }
-    const children = g.children.filter((l) => (!l.permission || can(l.permission)) && (!l.when || l.when()));
+    const children = g.children.filter((l) => (!l.permission || can(l.permission)) && (!l.permissions || l.permissions.some(can)) && (!l.when || l.when()));
     if (children.length > 0) out.push({ ...g, children });
   }
   return out;
