@@ -58,12 +58,15 @@ def test_auth_status_is_public_without_token(auth_client):
     assert body["auth_required"] is True
 
 
-def test_api_auth_disabled_by_default_in_development(monkeypatch):
+def test_api_auth_enabled_by_default_in_development(monkeypatch):
+    # Stage 0 / SR-013: fail-closed default. Unset means ON even in
+    # development; only an explicit false opts out (see the lifespan
+    # SECURITY warning for that case).
     monkeypatch.delenv("FORMUNEX_API_AUTH_ENABLED", raising=False)
     monkeypatch.setenv("FORMUNEX_ENVIRONMENT", "development")
     get_settings.cache_clear()
     try:
-        assert get_settings().api_auth_enabled is False
+        assert get_settings().api_auth_enabled is True
     finally:
         get_settings.cache_clear()
 

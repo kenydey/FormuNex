@@ -17,6 +17,7 @@
    ```
 2. 必需项（缺失则后端启动直接 fail-fast，见 `backend/app/startup_checks.py`）：
    - `FORMUNEX_API_TOKEN` —— 生产 bearer 令牌（`docker-compose.prod.yml` 强制开启鉴权）
+   - `FORMUNEX_API_AUTH_ENABLED=true` 与 `FORMUNEX_ENVIRONMENT=production` —— 生产必查项（阶段 0 / SR-013：代码默认鉴权已改为 fail-closed，未设置即开启；但生产部署仍须显式核对这两项，缺一不可——只设其一、或误用开发 compose 上生产，都是部署事故）
    - `FORMUNEX_DB_URL` —— 默认 `sqlite:///./data/formunex.db`；多 worker 生产改 `postgresql://…`
    - `FORMUNEX_DATALAB_API_URL` —— 仅当 `FORMUNEX_DATALAB_REQUIRED=true` 时必需
 3. 可选项：LLM vendor key 缺失时自动降级为离线实现，不阻塞启动。
@@ -25,7 +26,7 @@
 ## 启动
 
 ```bash
-# 开发（默认，鉴权关闭，端口全开）
+# 开发（docker-compose.yml 显式设置 FORMUNEX_API_AUTH_ENABLED=false，启动时会打 SECURITY 警告；裸机直接跑 uvicorn 时代码默认鉴权开启，需显式关闭或登录）
 docker compose up -d
 
 # 生产（鉴权强制开、environment=production、前端仅绑 127.0.0.1）

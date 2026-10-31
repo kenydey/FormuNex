@@ -153,6 +153,18 @@ async def lifespan(_app: FastAPI):
             )
     except Exception as exc:
         log_handled_exception(logger, exc, "lifespan: sqlite production warning failed")
+    # Stage 0 / SR-013: an explicit auth opt-out must be loud. The code
+    # default is now fail-closed (on); only FORMUNEX_API_AUTH_ENABLED=false
+    # reaches here, and that must never be a production configuration.
+    try:
+        if not settings.api_auth_enabled:
+            logger.warning(
+                "SECURITY: api_auth_enabled=false — the API accepts unauthenticated requests. "
+                "Local development only; production must set FORMUNEX_API_AUTH_ENABLED=true "
+                "and FORMUNEX_ENVIRONMENT=production (see docs/deployment.md)."
+            )
+    except Exception as exc:
+        log_handled_exception(logger, exc, "lifespan: auth-disabled warning failed")
     # ------------------------------------------------------------------
     # Recover stalled outbox rows (best-effort, must not block startup).
     # Runs in a daemon thread; under celery_eager re-dispatch is skipped so

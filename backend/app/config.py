@@ -1146,7 +1146,8 @@ class Settings(BaseSettings):
     # Experiment training persistence (Headless ELN) — same auto semantics.
     experiment_backend: str = "native"  # native | datalab | auto | sqlite
 
-    # API security — unset env defers to environment: off in dev/test, on in production.
+    # API security — Stage 0 / SR-013 fail-closed: unset means ON in every
+    # environment; only an explicit false turns auth off.
     api_auth_enabled: bool | None = None
     # How many reverse proxies (nginx in the shipped compose) sit in front of the API and append the peer they saw to
     # X-Forwarded-For. 0 = none: the TCP peer is the client. Without this every user behind the proxy shares one
@@ -1167,10 +1168,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _default_api_auth_for_environment(self) -> "Settings":
+        # Stage 0 / SR-013: fail-closed. Unset means ON in every
+        # environment; only an explicit api_auth_enabled=false turns auth
+        # off (and lifespan logs a prominent warning for that case).
+        # Previously unset meant off in dev/test, so a forgotten
+        # FORMUNEX_ENVIRONMENT=production silently left write routes
+        # anonymous. The environment field still drives other defaults
+        # (deps_install, sqlite warnings); it no longer gates auth.
         if self.api_auth_enabled is not None:
             return self
-        env = self.environment.strip().lower()
-        object.__setattr__(self, "api_auth_enabled", env in ("production", "prod"))
+        object.__setattr__(self, "api_auth_enabled", True)
         return self
 
     @model_validator(mode="after")
