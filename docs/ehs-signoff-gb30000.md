@@ -14,6 +14,7 @@
    - 将 `backend/app/services/plm/ghs/rulesets/gb30000-2013.v1.yaml` 的 `status: draft` 改为 `status: released`；
    - 按 §3 签字内容新建 `backend/app/services/plm/ghs/rulesets/signoffs/gb30000-2013.v1.yaml`；
    - 运行 `pytest tests/test_ruleset_signoff.py tests/test_gb30000_golden_cases.py tests/test_sds_baselines.py tests/test_plm_release.py tests/test_plm_lifecycle_e2e.py`，全部通过后，门禁 G5 放行。
+   - **生效条件（W1-2 起）**：改状态 + 签核记录后**无需重启服务**——规则集按文件 mtime/size 失效缓存，门禁 G5 在下一次评估即读取新状态；字体解析同理。签字后如规则集再有修改，仍须新建版本并重新走本表签字流程。
 4. 签字后如规则集再有修改，必须新建版本并重新走本表签字流程；旧版本签核记录不得挪用。
 
 ## §1 黄金案例清单（71 YAML + 2 桥接，合计 73）

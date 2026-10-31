@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -50,11 +49,20 @@ def _try_register(path: str, index: int) -> bool:
         return False
 
 
-@lru_cache(maxsize=1)
-def resolve_font() -> FontChoice:
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+# W1-2: the old ``lru_cache`` keyed on nothing never saw a changed font
+# configuration or a newly installed font. The cache below is validated
+# against the configured path plus every candidate's existence/mtime on
+# every call; a re-resolution (and re-registration) happens only when
+# something actually changed. Registration itself is process-global in
+# ReportLab, so a cache hit correctly skips re-registering.
+_FONT_CACHE: dict[tuple, FontChoice] = {}
 
+
+def _font_cache_clear() -> None:
+    _FONT_CACHE.clear()
+
+
+def _configured_font_path() -> str | None:
     configured = os.environ.get("FORMUNEX_PLM_DOC_FONT_PATH")
     if not configured:
         try:
@@ -63,10 +71,46 @@ def resolve_font() -> FontChoice:
             configured = get_settings().plm_doc_font_path or None
         except Exception:  # noqa: BLE001
             configured = None
+    return configured
+
+
+def _font_cache_key(configured: str | None) -> tuple:
+    key: list = [configured]
+    for path, _index in ([(configured, 0)] if configured else []) + _CANDIDATES:
+        if path:
+            try:
+                stat = Path(path).stat()
+                key.append((path, stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                key.append((path, None, None))
+        else:
+            key.append((None, None, None))
+    return tuple(key)
+
+
+def resolve_font() -> FontChoice:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    configured = _configured_font_path()
+    key = _font_cache_key(configured)
+    cached = _FONT_CACHE.get(key)
+    if cached is not None:
+        return cached
     candidates = ([(configured, 0)] if configured else []) + _CANDIDATES
     for path, index in candidates:
         if path and Path(path).is_file() and _try_register(path, index):
-            return FontChoice("FNX-CJK", "FNX-CJK", True, path)
+            result = FontChoice("FNX-CJK", "FNX-CJK", True, path)
+            _FONT_CACHE.clear()
+            _FONT_CACHE[key] = result
+            return result
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     log.warning("no embeddable CJK TrueType font found; using non-embedded STSong-Light")
-    return FontChoice("STSong-Light", "STSong-Light", False, None)
+    result = FontChoice("STSong-Light", "STSong-Light", False, None)
+    _FONT_CACHE.clear()
+    _FONT_CACHE[key] = result
+    return result
+
+
+# Compatibility: the old lru_cache exposed ``cache_clear``; keep it.
+resolve_font.cache_clear = _font_cache_clear  # type: ignore[attr-defined]

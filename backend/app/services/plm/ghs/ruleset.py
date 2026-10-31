@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +45,18 @@ class RuleSet:
         return dict(self._data)
 
 
-@lru_cache(maxsize=8)
+# W1-2: the old ``lru_cache`` keyed on name alone never saw a file change,
+# so an EHS sign-off flip (draft → released) needed a service restart to
+# take effect. The cache below is validated against the file's mtime and
+# size on every load: a stat call is cheap, a re-parse happens only when
+# the file actually changed.
+_RULESET_CACHE: dict[str, tuple[int, int, RuleSet]] = {}
+
+
+def _ruleset_cache_clear() -> None:
+    _RULESET_CACHE.clear()
+
+
 def load_ruleset(name: str = DEFAULT_RULESET) -> RuleSet:
     # A hostile name must never escape RULESET_DIR (``../`` traversal) or
     # blow up the filesystem call: overlong names raise OSError from
@@ -57,14 +67,25 @@ def load_ruleset(name: str = DEFAULT_RULESET) -> RuleSet:
     path = RULESET_DIR / f"{name}.yaml"
     try:
         exists = path.is_file()
+        stat = path.stat() if exists else None
     except OSError:
-        exists = False
-    if not exists:
+        exists, stat = False, None
+    if not exists or stat is None:
+        _RULESET_CACHE.pop(name, None)
         raise FileNotFoundError(f"unknown GHS rule set {name!r}")
+    cached = _RULESET_CACHE.get(name)
+    if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if data.get("version") != name:
         raise ValueError(f"rule set file {path.name} declares version {data.get('version')!r}")
-    return RuleSet(data)
+    rs = RuleSet(data)
+    _RULESET_CACHE[name] = (stat.st_mtime_ns, stat.st_size, rs)
+    return rs
+
+
+# Compatibility: the old lru_cache exposed ``cache_clear``; keep it.
+load_ruleset.cache_clear = _ruleset_cache_clear  # type: ignore[attr-defined]
 
 
 def available_rulesets() -> list[str]:
