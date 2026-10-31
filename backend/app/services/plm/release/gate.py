@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ....clock import utcnow
 from ....config import get_settings
 from ....db.models import FormulationVersion, MeasurementRow
+from ....db.models_lab import MeasurementPickRow
 from ....db.models_plm import (
     BatchRow,
     ClassificationResultRow,
@@ -239,6 +240,7 @@ def _check_objectives(session: Session, c: Check, rev: ProductRevisionRow) -> No
         c.not_applicable = True
         return
     measured: dict[str, MeasurementRow] = {}
+    picks: dict[str, str] = {}
     if rev.winning_experiment_id is not None:
         for m in session.execute(
             select(MeasurementRow).where(MeasurementRow.experiment_id == rev.winning_experiment_id,
@@ -246,6 +248,19 @@ def _check_objectives(session: Session, c: Check, rev: ProductRevisionRow) -> No
             .order_by(MeasurementRow.created_at)
         ).scalars():
             measured[m.metric] = m
+        # W1-1: a manual pick wins over the latest reviewed value — the same
+        # precedence ``representative_values`` / ``sync_mirror`` already use.
+        # A pick is honoured only while its measurement is still reviewed
+        # (an amend sends a value back to unreviewed); otherwise, and when
+        # there is no pick, behaviour is unchanged (latest reviewed wins).
+        picks = {p.metric: p.measurement_id for p in session.execute(
+            select(MeasurementPickRow).where(
+                MeasurementPickRow.experiment_id == rev.winning_experiment_id)).scalars()}
+        for metric, measurement_id in picks.items():
+            picked = session.get(MeasurementRow, measurement_id)
+            if (picked is not None and picked.review_status == "reviewed"
+                    and picked.experiment_id == rev.winning_experiment_id):
+                measured[metric] = picked
     else:
         c.notes.append("修订版未指定定型实验（winning_experiment_id）")
     for a in acceptance:
@@ -260,7 +275,8 @@ def _check_objectives(session: Session, c: Check, rev: ProductRevisionRow) -> No
             rng = f"{'' if lo is None else f'≥{lo:g}'}{' ' if lo is not None and hi is not None else ''}" \
                   f"{'' if hi is None else f'≤{hi:g}'}"
             c.fail(item_key(metric), f"{label}：实测 {m.value:g}{m.unit or ''} 未达到 {rng}")
-        c.evidence[metric] = {"value": m.value, "measurement_id": m.id}
+        c.evidence[metric] = {"value": m.value, "measurement_id": m.id,
+                              "basis": "manual" if picks.get(metric) == m.id else "latest"}
 
 
 def _ghs_constraints_for_revision(session: Session, rev: ProductRevisionRow):
