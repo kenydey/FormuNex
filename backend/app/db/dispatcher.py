@@ -23,13 +23,15 @@ toc_summaries, pubchem_enrich, deps, search, topic_sweep, wiki_storm_report)
 — each was checked replay-safe before wiring (same-slot task persistence,
 upsert, or fill-missing; never append-a-new-record), and a test pins that
 any ``enqueue_outbox`` call site in ``api/*`` or ``services/*`` has a handler.
-Recovery parameters: one pass replays at most ``DEFAULT_MAX_ROWS`` (20) rows,
-a row is dropped to DEAD after ``MAX_ATTEMPTS`` (5) failed replays, and rows
-untouched for 24 h expire instead of replaying. Recovery runs ONCE at startup
-in a daemon thread (``schedule_recover_stalled`` from lifespan) — there is no
-periodic sweep, so a broker outage that strands a job mid-run is healed by
-the next restart (or an explicit retry), not by a background timer; under
-``celery_eager`` startup replay is skipped outright (see below).
+Recovery parameters: one pass replays at most ``DEFAULT_MAX_ROWS`` (20) rows
+(or ``FORMUNEX_OUTBOX_RECOVER_MAX_ROWS`` when set), a row is dropped to DEAD
+after ``MAX_ATTEMPTS`` (5) failed replays, and rows untouched for 24 h expire
+instead of replaying. Recovery runs once at startup in a daemon thread
+(``schedule_recover_stalled`` from lifespan) AND periodically
+(``schedule_periodic_recover_stalled``, default every 900 s, disabled by
+``FORMUNEX_OUTBOX_RECOVER_INTERVAL_S=0``), so a broker outage that strands a
+job mid-run is healed without a restart; under ``celery_eager`` replay is
+skipped outright (see below) and only the warning path runs.
 
 Lifespan MUST schedule recovery in a daemon thread (see
 ``schedule_recover_stalled``): with ``FORMUNEX_CELERY_EAGER=true``, a
@@ -314,14 +316,28 @@ def recover_stalled(
 
     _expire_ancient(session, now - timedelta(hours=max_age_hours))
 
+    stalled_where = (
+        TaskOutbox.status.in_(["PENDING", "CLAIMED"]),
+        TaskOutbox.operation.in_(DISPATCHABLE_OPERATIONS),
+        TaskOutbox.updated_at < cutoff,
+    )
+    from sqlalchemy import func as _func
+
+    total_stalled = session.execute(
+        select(_func.count()).select_from(TaskOutbox).where(*stalled_where)
+    ).scalar() or 0
+    if total_stalled > max_rows:
+        logger.warning(
+            "recover_stalled: %d stalled outbox row(s), processing %d this pass, "
+            "%d left for later passes",
+            total_stalled,
+            max_rows,
+            total_stalled - max_rows,
+        )
     stalled = (
         session.execute(
             select(TaskOutbox)
-            .where(
-                TaskOutbox.status.in_(["PENDING", "CLAIMED"]),
-                TaskOutbox.operation.in_(DISPATCHABLE_OPERATIONS),
-                TaskOutbox.updated_at < cutoff,
-            )
+            .where(*stalled_where)
             .order_by(TaskOutbox.created_at.asc())
             .limit(max_rows)
         )
@@ -371,10 +387,29 @@ def recover_stalled(
                     "closed without replay", row.id, state)
                 continue
 
-        row.status = "CLAIMED"
-        row.claimed_by = _worker_id
-        row.claimed_at = _utcnow()
+        # Stage 1 / SR-048: atomic claim. The old code SELECTed then set
+        # CLAIMED + committed per row, so two workers starting a pass at
+        # the same time could both claim and dispatch the same row. The
+        # conditional UPDATE below is the claim: only the worker whose
+        # UPDATE touches exactly one row owns it. The updated_at predicate
+        # matters as much as the status one — a row a live task just
+        # heartbeated is no longer stalled even if another worker already
+        # SELECTed it. Losers skip the row instead of dispatching it.
+        claimed = session.execute(
+            update(TaskOutbox)
+            .where(
+                TaskOutbox.id == row.id,
+                TaskOutbox.status.in_(["PENDING", "CLAIMED"]),
+                TaskOutbox.updated_at < cutoff,
+            )
+            .values(status="CLAIMED", claimed_by=_worker_id, claimed_at=_utcnow())
+        ).rowcount
         session.commit()
+        if claimed != 1:
+            continue
+        # Drop the pre-claim ORM state: the Core UPDATE above bypassed it,
+        # and the dispatch/failure paths below must see post-claim values.
+        session.expire(row)
 
         try:
             if row.task_id:
@@ -619,6 +654,49 @@ def schedule_recover_stalled() -> threading.Thread:
 
     thread = threading.Thread(
         target=_run, name="outbox-recover", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def schedule_periodic_recover_stalled(interval_s: float = 900.0) -> threading.Thread:
+    """Stage 1 / SR-048: periodic stall sweep in a daemon thread.
+
+    Each pass runs ``recover_stalled_for_startup`` (same eager guard as
+    the startup pass) under the SQLite write lock, so a broker outage
+    that strands a job mid-run is healed without a restart and without
+    a manual retry. Failures are logged and never raised; the loop
+    sleeps ``interval_s`` between passes and dies with the process.
+    """
+    import time
+
+    def _run() -> None:
+        while True:
+            time.sleep(interval_s)
+            try:
+                from ..config import get_settings
+                from .database import default_session_factory
+                from .sqlite_lock import sqlite_write_lock
+
+                settings = get_settings()
+                factory = default_session_factory()
+                with sqlite_write_lock(settings.redis_url):
+                    with factory() as session:
+                        recovered = recover_stalled_for_startup(
+                            session,
+                            max_rows=settings.outbox_recover_max_rows,
+                        )
+                        if recovered:
+                            logger.info(
+                                "periodic recover: re-enqueued %d stalled outbox row(s)",
+                                recovered,
+                            )
+                        session.commit()
+            except Exception:
+                logger.exception("periodic outbox recovery failed (non-fatal)")
+
+    thread = threading.Thread(
+        target=_run, name="outbox-recover-periodic", daemon=True
     )
     thread.start()
     return thread

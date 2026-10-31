@@ -141,6 +141,11 @@ class Settings(BaseSettings):
     # "unknown command `HELLO`" against anything older. See app/redis_compat.py.
     redis_protocol: int = 2
     celery_eager: bool = False
+    # Stage 1 / SR-048: periodic outbox stall sweep (seconds between
+    # passes; 0 disables the periodic thread, startup recovery still
+    # runs). One pass replays at most this many stalled rows.
+    outbox_recover_interval_s: float = 900.0
+    outbox_recover_max_rows: int = 20
 
     # CORS origins for the Vite dev server.
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]

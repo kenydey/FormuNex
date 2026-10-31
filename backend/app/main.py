@@ -171,9 +171,14 @@ async def lifespan(_app: FastAPI):
     # leftover PENDING recommend/deep/inverse jobs cannot keep :8000 closed.
     # ------------------------------------------------------------------
     try:
-        from .db.dispatcher import schedule_recover_stalled
+        from .db.dispatcher import schedule_periodic_recover_stalled, schedule_recover_stalled
 
         schedule_recover_stalled()
+        # Stage 1 / SR-048: heal mid-run stalls without a restart. The
+        # thread sleeps its interval before the first pass and is a
+        # daemon, so it cannot delay startup or shutdown.
+        if settings.outbox_recover_interval_s > 0:
+            schedule_periodic_recover_stalled(settings.outbox_recover_interval_s)
     except Exception:
         logger.exception("lifespan: outbox stall recovery failed (non-fatal)")
     if not skip_bootstrap:
