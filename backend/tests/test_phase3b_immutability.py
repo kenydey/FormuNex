@@ -70,9 +70,11 @@ def test_no_content_mutation_routes():
     posts = sorted(r.path for r in router.routes
                    if "POST" in (getattr(r, "methods", set()) or set()) and "documents" in r.path)
     # 生成 / 上传 / 预览 / 签批 / 批量导出：没有一条是“修改已有文档内容”
-    # （批量导出只新建导出记录，文档内容只读）。
+    # （批量导出只新建导出记录，文档内容只读；approve-exempt 是豁免签批，
+    # 只改审批状态与豁免戳，不碰 content）。
     assert posts == ["/plm/documents/batch-export",
                      "/plm/documents/{document_id}/approve",
+                     "/plm/documents/{document_id}/approve-exempt",
                      "/plm/revisions/{revision_id}/documents"], posts
 
 
