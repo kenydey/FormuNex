@@ -1815,9 +1815,14 @@ def _campaign_rounds_data(campaign_id: int) -> tuple[list[dict], int]:
 
 
 def _parse_iso(s: str) -> datetime | None:
-    """解析 ISO 时间戳为 datetime（兼容 'Z' 与 '+00:00' 后缀，统一到可比较对象）。"""
+    """解析 ISO 时间戳为 naive UTC（兼容 'Z' 与 '+00:00' 后缀）。
+
+    W1-12：原来直接返回 fromisoformat 的结果，带时区输入与库里 naive
+    时间比较会 TypeError；统一到 naive UTC 后比较安全，且与存储口径一致。
+    """
+    from ..clock import parse_iso_to_naive_utc
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return parse_iso_to_naive_utc(s)
     except ValueError:
         return None
 

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ._principal import CurrentUser, current_user
 
@@ -105,6 +105,14 @@ class MethodIn(BaseModel):
     active: bool = True
 
 
+def _to_naive_utc(value: datetime | None) -> datetime | None:
+    """W1-12: every API datetime input normalizes to naive UTC before storage
+    (SQLite drops offsets, so an aware input must convert first, not just
+    lose its offset — see ``app.clock.to_naive_utc``)."""
+    from ..clock import to_naive_utc
+    return to_naive_utc(value)
+
+
 class InstrumentIn(BaseModel):
     asset_no: str = Field(min_length=1, max_length=64)
     name: str = ""
@@ -114,6 +122,7 @@ class InstrumentIn(BaseModel):
     calibration_due: datetime | None = None
     parser: str = ""
     active: bool = True
+    _naive_utc = field_validator("calibrated_at", "calibration_due", mode="after")(_to_naive_utc)
 
 
 @router.get("/methods")
@@ -209,6 +218,7 @@ class DispatchIn(BaseModel):
     assignee_id: str | None = None
     include_infeasible: bool = False
     due_at: datetime | None = None
+    _naive_utc = field_validator("due_at", mode="after")(_to_naive_utc)
 
 
 class TaskIn(BaseModel):
@@ -221,6 +231,7 @@ class TaskIn(BaseModel):
     due_at: datetime | None = None
     notes: str = ""
     substrate: str = ""
+    _naive_utc = field_validator("due_at", mode="after")(_to_naive_utc)
 
 
 class ReasonIn(BaseModel):
@@ -455,6 +466,7 @@ class MeasurementIn(BaseModel):
     instrument_id: str | None = None
     measured_at: datetime | None = None
     note: str = Field(default="", max_length=1000)
+    _naive_utc = field_validator("measured_at", mode="after")(_to_naive_utc)
 
 
 class MeasurementsIn(BaseModel):

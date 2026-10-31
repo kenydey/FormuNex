@@ -968,14 +968,13 @@ def create_revision(product_id: str, body: RevisionIn) -> dict[str, Any]:
 
 @router.post("/products/{product_id}/batches", status_code=201)
 def create_batch(product_id: str, body: BatchIn) -> dict[str, Any]:
-    from datetime import datetime
-
+    from ..clock import parse_iso_to_naive_utc
     from ..services.plm.documents import service as docs
 
     with _session() as session:
         try:
             row = docs.create_batch(session, product_id, batch_no=body.batch_no, revision_id=body.revision_id,
-                                    produced_at=datetime.fromisoformat(body.produced_at) if body.produced_at else None,
+                                    produced_at=parse_iso_to_naive_utc(body.produced_at) if body.produced_at else None,
                                     quantity_kg=body.quantity_kg)
         except (docs.DocumentError, ValueError) as exc:
             raise _doc_error(exc) from None

@@ -24,6 +24,29 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def to_naive_utc(dt: datetime | None) -> datetime | None:
+    """Normalize a datetime to the naive-UTC convention of every DB column.
+
+    W1-12: SQLite stores datetimes as naive wall time and silently drops the
+    offset, so the same instant written as ``...+08:00`` and as ``...Z`` used
+    to land as two different stored values (and a COA date a day apart at the
+    boundary). Aware inputs convert to UTC first, then drop tzinfo; naive
+    inputs are already in the naive-UTC convention and pass through
+    unchanged; ``None`` passes through.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def parse_iso_to_naive_utc(s: str) -> datetime:
+    """Parse an ISO string (``Z`` accepted) to naive UTC. Raises ValueError
+    on a bad string, so API endpoints keep their 422 mapping."""
+    return to_naive_utc(datetime.fromisoformat(s.replace("Z", "+00:00")))  # type: ignore[return-value]
+
+
 def utcnow() -> datetime:
     """Naive UTC "now" — what ``datetime.utcnow()`` returned, without the deprecation — and *strictly
     increasing* within a process.
