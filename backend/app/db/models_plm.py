@@ -35,8 +35,11 @@ class ProductRow(Base):
     # G8: manual reference to a legacy (e.g. MYH) code. Never auto-mapped.
     legacy_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    # concept | rd | candidate | under_review | released | superseded | obsolete
+    # concept | rd | candidate | under_review | released | superseded | obsolete | withdrawn
     lifecycle_state: Mapped[str] = mapped_column(String(16), default="concept", index=True)
+    # W1-8/D9: lifecycle state the product had before archiving; restore
+    # returns to it (NULL = archived before this field existed -> rd).
+    archived_from_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)

@@ -843,8 +843,10 @@ def get_product(product_id: str) -> dict[str, Any]:
 
 @router.post("/products/{product_id}/archive")
 def archive_product_route(product_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
-    """G9: archive a product (lifecycle_state -> withdrawn). Withdrawal-grade
-    action: requires release.publish on the product's project."""
+    """W1-8: archive a product (lifecycle_state -> withdrawn, pre-archive
+    state stored for restore). Withdrawal-grade action: requires
+    release.publish on the product's project. Released products are
+    refused — withdraw the release first."""
     from ..db.models_plm import ProductRow
     from ..services.plm import archive
 
@@ -854,7 +856,7 @@ def archive_product_route(product_id: str, user: CurrentUser = Depends(current_u
             raise HTTPException(status_code=404, detail="产品不存在")
         user.require("release.publish", product.project_id)
         try:
-            archive.archive_product(session, product_id)
+            archive.archive_product(session, product_id, user_id=user.id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
         session.commit()
@@ -863,8 +865,8 @@ def archive_product_route(product_id: str, user: CurrentUser = Depends(current_u
 
 @router.post("/products/{product_id}/restore")
 def restore_product_route(product_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
-    """G9: restore an archived product (lifecycle_state -> rd). The
-    pre-archive state is not stored; a restored product re-enters as rd."""
+    """W1-8: restore an archived product to its pre-archive state
+    (legacy rows archived before that state was stored restore to rd)."""
     from ..db.models_plm import ProductRow
     from ..services.plm import archive
 
@@ -874,7 +876,7 @@ def restore_product_route(product_id: str, user: CurrentUser = Depends(current_u
             raise HTTPException(status_code=404, detail="产品不存在")
         user.require("release.publish", product.project_id)
         try:
-            archive.restore_product(session, product_id)
+            archive.restore_product(session, product_id, user_id=user.id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
         session.commit()
@@ -1370,16 +1372,29 @@ def republish_package(package_id: str, user: CurrentUser = Depends(current_user)
 
 @router.get("/packages/{package_id}/delivery")
 def download_delivery(package_id: str):
-    """The delivery ZIP (all PDF / Word files + manifest.json with hashes and signatures)."""
+    """The delivery ZIP (all PDF / Word files + manifest.json with hashes and signatures).
+
+    W1-8/D10: only the CURRENT released version is distributable. A
+    withdrawn package's ZIP stops here (the artifact itself is kept
+    for the audit chain, it just no longer ships from this link), and
+    so does a superseded package's — its revision is no longer the
+    released one. Restoring a previous version (withdraw) re-opens
+    its ZIP through this same gate.
+    """
     from fastapi.responses import Response
 
-    from ..db.models_plm import ReleasePackageRow
+    from ..db.models_plm import ProductRevisionRow, ReleasePackageRow
     from ..services.plm import storage
 
     with _session() as session:
         pkg = session.get(ReleasePackageRow, package_id)
         if pkg is None or not pkg.delivery_key:
             raise HTTPException(status_code=404, detail="交付包尚未生成（发布后生成）")
+        if pkg.status != "released":
+            raise HTTPException(status_code=410, detail="该发布包已撤回，交付包不再分发")
+        rev = session.get(ProductRevisionRow, pkg.revision_id)
+        if rev is None or rev.state != "released":
+            raise HTTPException(status_code=410, detail="该发布包已被取代，交付包不再分发")
         name = pkg.delivery_key.rsplit("/", 1)[-1]
         return Response(storage.get(pkg.delivery_key), media_type="application/zip",
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})

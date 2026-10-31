@@ -368,6 +368,12 @@ def withdraw(session: Session, package_id: str, *, reason: str, user_id: str, pr
     _require(principal, "release.withdraw", product.project_id)
     if pkg.status != "released":
         raise ReleaseError("只能撤回已发布的发布包")
+    if rev.state != "released":
+        # A superseded revision's package still carries status "released"
+        # (release supersedes revisions, not packages); withdrawing it
+        # would corrupt the restore chain below, and its ZIP is already
+        # undistributable through the download gate.
+        raise ReleaseError("只能撤回当前已发布版本，该修订版已被取代")
     if not reason.strip():
         raise ReleaseError("撤回必须说明理由")
     esign.sign(session, user_id=user_id, password=password, meaning="withdraw", subject_type="release_package",
@@ -377,7 +383,21 @@ def withdraw(session: Session, package_id: str, *, reason: str, user_id: str, pr
     for d in session.execute(select(RegulatoryDocumentRow).where(
             RegulatoryDocumentRow.id.in_(pkg.document_ids))).scalars():
         d.status = "withdrawn"
-    if not session.execute(select(ProductRevisionRow.id).where(
+    # D10: withdrawing the current release restores the most recent
+    # superseded revision — the version in force before this one — so
+    # the product never sits in "no released version" limbo.
+    previous = session.execute(select(ProductRevisionRow).where(
+        ProductRevisionRow.product_id == product.id, ProductRevisionRow.state == "superseded"
+    ).order_by(ProductRevisionRow.created_at.desc())).scalars().first()
+    if previous is not None:
+        previous.state = "released"
+        for d in session.execute(select(RegulatoryDocumentRow).where(
+                RegulatoryDocumentRow.revision_id == previous.id,
+                RegulatoryDocumentRow.status == "superseded")).scalars():
+            d.status = "released"
+        product.lifecycle_state = "released"
+        _audit(session, user_id, "revision.restored", "product_revision", previous.id, by=pkg.id)
+    elif not session.execute(select(ProductRevisionRow.id).where(
             ProductRevisionRow.product_id == product.id, ProductRevisionRow.state == "released")).first():
         product.lifecycle_state = "withdrawn"
     _audit(session, user_id, "release.withdraw", "release_package", pkg.id, reason=reason)

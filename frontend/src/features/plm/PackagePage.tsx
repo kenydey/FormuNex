@@ -57,7 +57,7 @@ export default function PackagePage() {
     <PageContainer loading={!p} title={t("plm.package", "发布包")} subTitle={p && <StatusTag status={p.status} />}
       extra={p && <Space>
         <Link to={`/plm/revisions/${p.revision_id}`}><Button>{t("plm.revision", "修订版")}</Button></Link>
-        {p.has_delivery && <Button onClick={() => void download(`/api/plm/packages/${p.id}/delivery`, `release-${p.id.slice(0, 8)}.zip`)}>{t("plm.delivery", "下载交付包 ZIP")}</Button>}
+        {p.has_delivery && p.status === "released" && <Button onClick={() => void download(`/api/plm/packages/${p.id}/delivery`, `release-${p.id.slice(0, 8)}.zip`)}>{t("plm.delivery", "下载交付包 ZIP")}</Button>}
         {p.status === "released" && can("release.publish", pid) && <Button onClick={() => void run(`/api/plm/packages/${p.id}/publish`, {})}>{t("plm.republish", "重新推送连接器")}</Button>}
         {p.status === "released" && can("release.withdraw", pid) && <Button danger onClick={() => void withdraw()}>{t("sign.withdraw", "撤回发布")}</Button>}
       </Space>}>

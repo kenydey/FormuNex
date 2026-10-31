@@ -472,6 +472,49 @@ def test_new_release_supersedes_the_previous_revision(env, signed_off_ruleset):
             if d["id"] in pkg["document_ids"]} == {"superseded"}
 
 
+def test_withdraw_restores_previous_release_and_stops_old_zip(env, signed_off_ruleset):
+    """W1-8/D10: withdrawing the current release restores the previous
+    version; a superseded or withdrawn package's delivery ZIP no longer
+    ships (the artifact itself is kept for the audit chain)."""
+    c, rid, pid, h = env["client"], env["rid"], env["pid"], env["h"]
+    _ready(env)
+    pkg = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"]).json()
+    for who in ("lead", "ehs", "qa", "rm"):
+        assert c.post(f"/api/plm/packages/{pkg['id']}/sign", headers=h[who],
+                      json={"decision": "approve", "password": PASSWORD}).status_code == 200
+    rid2 = c.post(f"/api/plm/products/{pid}/revisions", json={
+        "formulation_version_id": "fv-1", "spec_snapshot": {"release_specs": [
+            {"metric": "solids", "label": "固含量", "unit": "%", "min": 55, "max": 60},
+            {"metric": "density_g_cm3", "label": "密度", "unit": "g/cm³", "min": 1.3, "max": 1.4}]}}).json()["id"]
+    e2 = {**env, "rid": rid2}
+    _ready(e2)
+    pkg2 = c.post(f"/api/plm/revisions/{rid2}/submit", headers=h["lead"]).json()
+    for who in ("lead", "ehs", "qa", "rm"):
+        assert c.post(f"/api/plm/packages/{pkg2['id']}/sign", headers=h[who],
+                      json={"decision": "approve", "password": PASSWORD}).status_code == 200
+    # While B is current, A's (superseded) ZIP does not ship.
+    assert c.get(f"/api/plm/packages/{pkg['id']}/delivery").status_code == 410
+    # Withdrawing the stale superseded package is refused: it would
+    # corrupt the restore chain (and its ZIP already does not ship).
+    r = c.post(f"/api/plm/packages/{pkg['id']}/withdraw", headers=h["rm"],
+               json={"reason": "清理旧包", "password": PASSWORD})
+    assert r.status_code == 409
+    # Withdraw current B -> A restored.
+    r = c.post(f"/api/plm/packages/{pkg2['id']}/withdraw", headers=h["rm"],
+               json={"reason": "召回", "password": PASSWORD})
+    assert r.status_code == 200 and r.json()["status"] == "withdrawn"
+    product = c.get(f"/api/plm/products/{pid}").json()
+    assert product["lifecycle_state"] == "released"
+    assert {x["rev"]: x["state"] for x in product["revisions"]} == {"A": "released", "B": "withdrawn"}
+    assert {d["status"] for d in c.get(f"/api/plm/revisions/{rid}/documents").json()
+            if d["id"] in pkg["document_ids"]} == {"released"}
+    assert {d["status"] for d in c.get(f"/api/plm/revisions/{rid2}/documents").json()
+            if d["id"] in pkg2["document_ids"]} == {"withdrawn"}
+    # Restored A's ZIP ships again; withdrawn B's does not.
+    assert c.get(f"/api/plm/packages/{pkg['id']}/delivery").status_code == 200
+    assert c.get(f"/api/plm/packages/{pkg2['id']}/delivery").status_code == 410
+
+
 # --------------------------------------------------------------------------- connectors
 
 

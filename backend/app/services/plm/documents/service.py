@@ -542,6 +542,11 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     rev = session.get(ProductRevisionRow, revision_id)
     if rev is None:
         raise DocumentError("产品修订版不存在")
+    # W1-8: an archived product's released documents must not be served
+    # as live documents by generating new versions against them.
+    product = session.get(ProductRow, rev.product_id)
+    if product is not None and product.lifecycle_state == "withdrawn":
+        raise DocumentError("产品已归档，不能生成文档")
     if rev.frozen_at is not None and doc_type != "coa":
         raise DocumentError("修订版已冻结（已发布），只能生成新的修订版文档")
     if rev.state == "under_review" and doc_type != "coa":
