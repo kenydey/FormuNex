@@ -1,6 +1,7 @@
 /** English strings of this feature area (merged into locales/en-US.ts). */
 const en: Record<string, string> = {
   "design.doe.activate_failed": "Plan status sync failed (plan was adopted): {{e}}",
+  "design.doe.activate_failed_blocking": "DOE plan activation failed; workbench #{{id}} was created — do not adopt again: {{e}}",
   "design.doe.adopt": "Write to workbench",
   "design.doe.adopted": "Workbench campaign #{{id}} created",
   "design.doe.al_engine": "Active-learning engine",
@@ -55,6 +56,8 @@ const en: Record<string, string> = {
   "design.doe.plan": "Run matrix · {{d}}",
   "design.doe.pydoe": "Enhanced pydoe",
   "design.doe.pydoe_missing": "Enhanced pydoe (not installed)",
+  "design.doe.regenerate_save": "Regenerate and save to history",
+  "design.doe.regenerate_save_tip": "Regenerate once with the current parameters; once saved to history it can be dispatched (the matrix of a random design without a fixed seed may change)",
   "design.doe.seed": "Random seed",
   "design.doe.seed_tip": "Makes random designs such as LHS reproducible",
   "design.doe.setup": "Design settings",
