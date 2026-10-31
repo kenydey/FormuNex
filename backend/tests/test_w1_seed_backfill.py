@@ -349,3 +349,24 @@ def test_backfill_drift_orphan_reported_to_review_queue(engine, resources):
     assert items[0][1]["orphan_count"] == 1
     seed_regulatory_db(engine, resources=resources, backfill=True)
     assert _count(engine, RegulatoryReviewItem, RegulatoryReviewItem.kind == "seed_drift") == 1
+
+
+def test_force_supersedes_prior_approved_row(engine, resources):
+    """Stage 1 / SR-030 correction: a force re-run with the same digest
+    supersedes the old approved row instead of stacking a second one
+    (the 0085 index would otherwise refuse force and rollback runs)."""
+    from app.db.models_regulatory import RegulatoryDataRelease
+
+    first = seed_regulatory_db(engine, resources=resources)
+    forced = seed_regulatory_db(engine, resources=resources, force=True)
+    assert forced["release_id"] != first["release_id"]
+    with engine.connect() as c:
+        rows = c.execute(select(RegulatoryDataRelease.id, RegulatoryDataRelease.status,
+                                RegulatoryDataRelease.input_digest)).all()
+    assert len(rows) == 2
+    by_id = {r[0]: r[1] for r in rows}
+    assert by_id[first["release_id"]] == "superseded"
+    assert by_id[forced["release_id"]] == "approved"
+    assert len({r[2] for r in rows}) == 1  # same digest, one approved row
+    assert _count(engine, RegulatoryDataRelease,
+                  RegulatoryDataRelease.status == "approved") == 1

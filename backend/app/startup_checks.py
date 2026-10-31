@@ -176,11 +176,12 @@ _STAGE1_REQUIRED_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("eln_sync_conflicts", ("remote_units",)),
 )
 
-# (table, index) the 0078/0085/0086 migrations added.
+# (table, index) the 0078/0085 migrations added. The 0086 transport
+# index is deliberately absent: migration 0087 reverted it (the key
+# does not hold on the shipped GB 12268 data).
 _STAGE1_REQUIRED_INDEXES: tuple[tuple[str, str], ...] = (
     ("release_packages", "uq_active_package_per_revision"),
     ("regulatory_data_releases", "uq_approved_release_per_digest"),
-    ("substance_transport", "uq_transport_un_name_substance"),
 )
 
 # (table, column) the 0077 tightening made NOT NULL.

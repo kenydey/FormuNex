@@ -191,6 +191,13 @@ def seed_regulatory_db(
     approved row per backfill, leaving "latest approved" ambiguous). The
     prior row's stats are left as the original import's stats; the
     completion stats live in this run's result (and log line) only.
+    A ``force`` run with the same digest does the D-11 thing instead: it
+    SUPERSEDES every approved row carrying that digest and then records
+    its own approved row. Without this, the 0085 partial unique index
+    would refuse every force re-run and every rollback to a previously
+    seen digest — both established operations (the rollback test proves
+    the second one). A force run with a non-approved target status
+    supersedes nothing: a draft row never conflicts with the index.
     """
     resources = resources or RESOURCES_DIR
     files = [f for f in _FILES if include_common or f != "common_chemicals.json.gz"]
@@ -211,6 +218,14 @@ def seed_regulatory_db(
         if completion:
             release_id = prior.id
         else:
+            if force and status == "approved":
+                # D-11 for seed force: the new approved row replaces every
+                # approved row of this digest (a legacy database may hold
+                # a pre-0085 stack of them); the superseded rows stay as
+                # history, they just stop being "latest approved".
+                conn.execute(update(RegulatoryDataRelease).where(and_(
+                    RegulatoryDataRelease.input_digest == digest,
+                    RegulatoryDataRelease.status == "approved")).values(status="superseded"))
             release_id = _uid()
             conn.execute(insert(RegulatoryDataRelease).values(
                 id=release_id, label=label or f"seed-{_now():%Y%m%d-%H%M%S}", source="seed", stats={},

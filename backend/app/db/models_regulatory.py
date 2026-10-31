@@ -225,17 +225,16 @@ class SubstanceTransportRow(Base):
 
     __tablename__ = "substance_transport"
 
-    # Stage 1 / SR-034: one row per (UN number, shipping name, substance).
-    # A plain index (not a DB-level constraint object): SQLite cannot
-    # ADD CONSTRAINT to an existing table, and the unique index enforces
-    # the same rule on both dialects. NULL substance_id rows (unlinked
-    # entries) stay distinct under both dialects' NULL semantics, so an
-    # unlinked entry can never block a later linked one.
-    __table_args__ = (
-        Index("uq_transport_un_name_substance", "un_number", "proper_shipping_name_zh",
-              "substance_id", unique=True),
-    )
-
+    # Stage 1 / SR-034 originally added a unique index on (un_number,
+    # proper_shipping_name_zh, substance_id) here (migration 0086). It
+    # was reverted by migration 0087: the key does not hold on the
+    # shipped data — packing-group variants of one (UN, name, substance)
+    # are legitimate distinct rows (an existing test asserts both pg II
+    # and pg III rows for UN 1170 ethanol), and 348 (UN, name) groups in
+    # the bundled GB 12268 file repeat, 4 of them projecting to identical
+    # stored rows. No unique key on the stored columns can hold, so the
+    # index is gone; duplicates are the file's own variants, not a
+    # defect the schema should refuse.
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     un_number: Mapped[str] = mapped_column(String(8), index=True)
     substance_id: Mapped[str | None] = mapped_column(

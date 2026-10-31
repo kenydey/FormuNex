@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0086(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0086_stage1_transport_unique``)."""
+def test_revision_chain_head_is_0087(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0087_stage1_revert_transport_unique``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0086(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0086"
+    assert heads[0] == "0087"
 
 
 def test_migrations_partial_columns_branch(
@@ -1120,50 +1120,61 @@ def _create_0085_transport_schema(db_url: str) -> None:
         engine.dispose()
 
 
-def test_0086_adds_transport_unique_index_and_refuses_duplicates(
-    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Stage 1 / SR-034: upgrade adds the transport unique index; duplicates refuse the migration."""
+def _create_0086_transport_schema(db_url: str) -> None:
+    """0086-shaped schema: substance_transport WITH the unique index, stamped at 0086."""
+    _create_0085_transport_schema(db_url)
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX uq_transport_un_name_substance ON substance_transport "
+                "(un_number, proper_shipping_name_zh, substance_id)"))
+            conn.execute(text("UPDATE alembic_version SET version_num = '0086'"))
+    finally:
+        engine.dispose()
+
+
+def test_0087_drops_transport_unique_index(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage 1 / SR-034 correction: 0087 drops the 0086 index, and the
+    packing-group variants the index wrongly blocked insert again."""
     from tests.alembic_helpers import run_downgrade
 
-    _create_0085_transport_schema(tmp_db_url)
+    _create_0086_transport_schema(tmp_db_url)
     run_upgrade(tmp_db_url, monkeypatch)
     engine = create_engine(tmp_db_url)
     try:
+        assert "uq_transport_un_name_substance" not in {
+            ix["name"] for ix in inspect(engine).get_indexes("substance_transport")}
         with engine.begin() as conn:
             conn.execute(text(
                 "INSERT INTO substance_transport VALUES ('t1', '1170', 's1', '乙醇', 'GB 12268-2025')"))
-        with pytest.raises(Exception, match="duplicate|UNIQUE"):
-            with engine.begin() as conn:
-                conn.execute(text(
-                    "INSERT INTO substance_transport VALUES ('t2', '1170', 's1', '乙醇', 'GB 12268-2025')"))
-        # Unlinked rows (NULL substance_id) stay distinct: no false block.
-        with engine.begin() as conn:
             conn.execute(text(
-                "INSERT INTO substance_transport VALUES ('t3', '9999', NULL, '未定物质', 'GB 12268-2025')"))
-            conn.execute(text(
-                "INSERT INTO substance_transport VALUES ('t4', '9999', NULL, '未定物质', 'GB 12268-2025')"))
+                "INSERT INTO substance_transport VALUES ('t2', '1170', 's1', '乙醇', 'GB 12268-2025')"))
     finally:
         engine.dispose()
-    run_downgrade(tmp_db_url, monkeypatch, "0085")
-    run_upgrade(tmp_db_url, monkeypatch)
-
-
-def test_0086_refuses_when_transport_duplicates_exist(
-    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Stage 1 / SR-034 dirty guard: pre-existing duplicate linked transport rows stop the migration."""
-    _create_0085_transport_schema(tmp_db_url)
+    # Downgrade re-adds the index, so one duplicate row must go first;
+    # with duplicates present the re-add itself refuses (that refusal is
+    # the documented downgrade semantics, not a test setup detail).
     engine = create_engine(tmp_db_url)
     try:
         with engine.begin() as conn:
-            for rid in ("t1", "t2"):
-                conn.execute(text(
-                    f"INSERT INTO substance_transport VALUES ('{rid}', '1170', 's1', '乙醇', 'GB 12268-2025')"))
+            conn.execute(text("DELETE FROM substance_transport WHERE id = 't2'"))
     finally:
         engine.dispose()
-    with pytest.raises(RuntimeError, match="duplicate transport"):
-        run_upgrade(tmp_db_url, monkeypatch)
+    run_downgrade(tmp_db_url, monkeypatch, "0086")
+    engine = create_engine(tmp_db_url)
+    try:
+        assert "uq_transport_un_name_substance" in {
+            ix["name"] for ix in inspect(engine).get_indexes("substance_transport")}
+    finally:
+        engine.dispose()
+    run_upgrade(tmp_db_url, monkeypatch)
+    engine = create_engine(tmp_db_url)
+    try:
+        assert "uq_transport_un_name_substance" not in {
+            ix["name"] for ix in inspect(engine).get_indexes("substance_transport")}
+    finally:
+        engine.dispose()
 
 
 def _structural_metadata_diffs(db_url: str, table_names: set[str]) -> list:
