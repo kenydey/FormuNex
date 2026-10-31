@@ -231,13 +231,18 @@ def test_validate_formulations_with_requirement_voc():
 
 
 def _stub_celery_dispatch(monkeypatch):
-    """Make ``.delay()`` deterministic and broker-free.
+    """Make the Celery publish deterministic and broker-free.
 
     These tests are about the durable outbox row, not about Celery. Turning off
-    eager mode alone does not free them from Redis — a non-eager ``.delay()``
+    eager mode alone does not free them from Redis — a non-eager publish
     with no broker spends ~19s retrying the result backend and then raises, so
     the suite quietly depended on a running redis-server. Stubbing dispatch
     tests what the names claim and nothing else.
+
+    P2-1: the non-eager publish goes through ``apply_async`` with the
+    pre-recorded id, so the stub must cover ``apply_async`` (and echo the
+    id it is given); stubbing only ``delay`` leaves the real publish in
+    place and the test times out with 503.
     """
     import uuid
 
@@ -245,11 +250,16 @@ def _stub_celery_dispatch(monkeypatch):
     from app.worker import tasks
 
     class _Dispatched:
-        def __init__(self) -> None:
-            self.id = str(uuid.uuid4())
+        def __init__(self, task_id: str | None = None) -> None:
+            self.id = task_id or str(uuid.uuid4())
 
     monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
     monkeypatch.setattr(tasks.run_recommend_task, "delay", lambda _payload: _Dispatched())
+    monkeypatch.setattr(
+        tasks.run_recommend_task,
+        "apply_async",
+        lambda args=None, task_id=None, **_kwargs: _Dispatched(task_id),
+    )
     # ``submit()`` picks the eager path from *Settings* (FORMUNEX_CELERY_EAGER,
     # set to true by conftest), not from celery_app.conf — flipping only the
     # latter left these tests running the real recommend pipeline in a daemon

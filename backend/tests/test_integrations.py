@@ -302,6 +302,9 @@ def test_active_doe_endpoint():
         "existing_records": [],
         "n_suggest": 3,
         "doe_design": "lhs",
+        # P1-2 tightening: /doe/active promises a retrievable plan_id, so a
+        # missing project is rejected upfront with 422.
+        "project_id": "proj-test",
     }
     resp = client.post("/api/doe/active", json=payload)
     assert resp.status_code == 200

@@ -26,8 +26,32 @@ from app.services import project_backfill
 
 @pytest.fixture()
 def engine(tmp_path):
+    """Pre-0077 schema: ``doe_plans``/``lab_tasks`` ``project_id`` nullable.
+
+    P1-2 tightening (0077) made both columns NOT NULL, but the backfill
+    service under test exists precisely to classify legacy NULL rows, so
+    the fixture rebuilds the pre-tightening shape: every table copied
+    verbatim from the current metadata, except the two tightened tables,
+    which are copied with a nullable ``project_id``. No hand-written DDL,
+    so columns, types, defaults and indexes cannot drift from the models.
+    """
+    from sqlalchemy import MetaData, text
+
     engine = make_engine(f"sqlite:///{tmp_path}/p12.db")
-    Base.metadata.create_all(engine)
+    md = MetaData()
+    for table in Base.metadata.tables.values():
+        if table.name not in ("doe_plans", "lab_tasks"):
+            table.to_metadata(md)
+    for src in (DOEPlanRow.__table__, LabTaskRow.__table__):
+        copied = src.to_metadata(md)
+        copied.c["project_id"].nullable = True
+    # make_engine already created every table from the current metadata
+    # (NOT NULL), and create_all skips existing tables — so drop the two
+    # tightened tables first, then create the nullable copies.
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE doe_plans"))
+        conn.execute(text("DROP TABLE lab_tasks"))
+    md.create_all(engine)
     return engine
 
 

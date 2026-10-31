@@ -218,6 +218,9 @@ def test_active_doe_api_returns_adaptive_fields():
         "n_suggest": 3,
         "doe_design": "lhs",
         "budget_remaining": 12,
+        # P1-2 tightening: /doe/active promises a retrievable plan_id, so a
+        # missing project is rejected upfront with 422.
+        "project_id": "proj-test",
     }
     resp = client.post("/api/doe/active", json=payload)
     assert resp.status_code == 200

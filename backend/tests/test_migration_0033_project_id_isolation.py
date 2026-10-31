@@ -10,6 +10,14 @@ Covers four guarantees:
 3. ``upgrade head`` on an empty DB is a silent no-op for 0033 (idempotent;
    also safe to run twice).
 4. ``downgrade`` to 0032 drops the columns and indexes again.
+
+P1-2 tightening note: the legacy-seed tests pin the upgrade at ``0076``,
+the last revision before 0077 made ``doe_plans.project_id`` NOT NULL.
+The seed deliberately contains an unattributable orphan row, and 0077's
+guard refuses to tighten while such a row remains — that refusal is
+0077's own contract, covered by ``test_p12_tightening.py``, not a 0033
+regression. The empty-DB test still runs ``upgrade head`` (no rows, so
+the 0077 guard passes).
 """
 from __future__ import annotations
 
@@ -176,7 +184,7 @@ def test_0033_adds_columns_indexes_and_backfill(
     _seed_legacy_rows(tmp_db_url)
     _stamp(tmp_db_url, "0032")
 
-    run_upgrade(tmp_db_url, monkeypatch)
+    run_upgrade(tmp_db_url, monkeypatch, "0076")
 
     assert "project_id" in _column_names(tmp_db_url, "doe_plans")
     assert "project_id" in _column_names(tmp_db_url, "wiki_pages")
@@ -203,8 +211,8 @@ def test_0033_idempotent_upgrade_twice(
     _seed_legacy_rows(tmp_db_url)
     _stamp(tmp_db_url, "0032")
 
-    run_upgrade(tmp_db_url, monkeypatch)
-    run_upgrade(tmp_db_url, monkeypatch)  # second run must be a silent no-op
+    run_upgrade(tmp_db_url, monkeypatch, "0076")
+    run_upgrade(tmp_db_url, monkeypatch, "0076")  # second run must be a silent no-op
 
     assert "project_id" in _column_names(tmp_db_url, "doe_plans")
     assert "project_id" in _column_names(tmp_db_url, "wiki_pages")
@@ -230,7 +238,7 @@ def test_0033_downgrade_drops_columns(
     _create_pre_0033_schema(tmp_db_url)
     _seed_legacy_rows(tmp_db_url)
     _stamp(tmp_db_url, "0032")
-    run_upgrade(tmp_db_url, monkeypatch)
+    run_upgrade(tmp_db_url, monkeypatch, "0076")
     assert "project_id" in _column_names(tmp_db_url, "doe_plans")
 
     run_downgrade(tmp_db_url, monkeypatch, "0032")

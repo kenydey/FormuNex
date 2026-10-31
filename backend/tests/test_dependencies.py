@@ -58,9 +58,18 @@ def test_install_endpoint_rejects_unknown_name():
 
 
 def test_install_endpoint_accepts_known_name_non_eager(monkeypatch):
-    """Non-eager path still publishes via ``.delay()`` and returns its task id."""
+    """Non-eager path still publishes and returns its task id.
+
+    P2-1: the id is fixed by ``submit`` before publishing, so the publish
+    stub echoes the id it is given and the test asserts the response id is
+    the id that was published — not a stub-invented constant.
+    """
+    published: dict = {}
+
     class _FakeAsyncResult:
-        id = "fake-task-id"
+        def __init__(self, task_id: str | None = None) -> None:
+            self.id = task_id
+            published["task_id"] = task_id
 
     from app.api import _dispatch
     from app.config import get_settings
@@ -70,14 +79,16 @@ def test_install_endpoint_accepts_known_name_non_eager(monkeypatch):
     monkeypatch.setattr(settings, "celery_eager", False, raising=False)
     monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
     monkeypatch.setattr(
-        worker_tasks.run_deps_install_task, "delay", lambda payload: _FakeAsyncResult()
+        worker_tasks.run_deps_install_task,
+        "apply_async",
+        lambda args=None, task_id=None, **_kwargs: _FakeAsyncResult(task_id),
     )
     r = client.post("/api/dependencies/install", json={"names": ["ddgs"]})
     assert r.status_code == 202
     body = r.json()
-    assert body["task_id"] == "fake-task-id"
-    assert body["stream_url"].endswith("fake-task-id/stream")
-    assert body["status_url"].endswith("fake-task-id")
+    assert body["task_id"] == published["task_id"]
+    assert body["stream_url"].endswith(f"{body['task_id']}/stream")
+    assert body["status_url"].endswith(body["task_id"])
 
 
 def test_install_endpoint_accepts_known_name_eager(monkeypatch):
