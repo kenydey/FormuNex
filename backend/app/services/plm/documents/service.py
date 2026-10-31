@@ -317,7 +317,18 @@ def _listings(session: Session, cas_numbers: list[str]) -> list[str]:
     for s in session.execute(select(SubstanceRow).where(SubstanceRow.cas_no.in_(cas_numbers))).scalars():
         name = s.name_zh or s.name_en or s.cas_no
         if s.hazardous_catalog_no is not None:
-            out.append(f"{name}（{s.cas_no}）：列入《危险化学品目录（2015 版）》，序号 {s.hazardous_catalog_no}")
+            # Stage 0 / SR-004 freeze: the 232 seeded catalogue numbers
+            # have NOT been verified line-by-line against the 2015
+            # catalogue's official text, and W1-9 only fixed new rows
+            # (NULL → no claim). Until that verification lands with a
+            # verified-source marker, every stored number renders with
+            # this caveat instead of a bare claim — the data itself is
+            # untouched, and the marker-driven un-annotation is the
+            # verification task's job, not this stopgap's.
+            out.append(
+                f"{name}（{s.cas_no}）：列入《危险化学品目录（2015 版）》，序号 "
+                f"{s.hazardous_catalog_no}（该序号尚未与官方文本逐条核对，仅供参考）"
+            )
         if s.highly_toxic:
             out.append(f"{name}：剧毒化学品")
         if s.precursor_control:
