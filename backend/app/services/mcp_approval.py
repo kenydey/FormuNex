@@ -37,7 +37,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..db.models import ChatSessionRow, McpApprovalRequestRow, McpToolPolicyRow
@@ -296,33 +296,55 @@ def evaluate_call(
             _audit("policy_block", sid, tool)
             return {"verdict": "deny", "reason": "policy_block"}
         if "ask" in vals or not _applicable_allow(policies, session_id, project_id):
-            # ask 路径：查本 (server, tool, session, project) 的挂起请求
-            pending = _pending_in_session(session, sid, tool, session_id, project_id)
-            if pending is None:
-                request_id = str(uuid.uuid4())
-                session.add(
-                    McpApprovalRequestRow(
-                        id=request_id, server_id=sid, tool_name=tool, session_id=session_id,
-                        project_id=project_id, status="pending", requested_at=wall,
-                        arguments_json=_arguments_json(arguments),
-                    )
-                )
-                _audit("approval_required", sid, tool, request_id=request_id)
-                return {"verdict": "deny", "reason": "approval_required", "request_id": request_id}
-            age = wall - float(pending.requested_at)
-            if age >= ASK_TIMEOUT_S:
-                pending.status = "expired"
-                pending.decided_at = wall
-                _audit("approval_timeout", sid, tool, request_id=pending.id, age_s=round(age, 1))
-                return {"verdict": "deny", "reason": "approval_timeout", "request_id": pending.id}
-            _audit("approval_pending", sid, tool, request_id=pending.id, age_s=round(age, 1))
-            return {"verdict": "deny", "reason": "approval_pending", "request_id": pending.id}
-        # allow 路径：once 策略在此次放行中真消耗，同一事务内删除。
+            return _deny_for_approval(session, sid, tool, session_id, project_id, wall, arguments)
+        # allow 路径：once 策略在此次放行中真消耗。Stage 1 / SR-050: the
+        # old get-then-delete let two concurrent evaluations both see
+        # the row and both allow. The claim is now one conditional
+        # DELETE: only the caller whose DELETE touches exactly one row
+        # owns the grant. The loser falls through to approval instead
+        # of riding a spent once-policy. Same SQL on SQLite and
+        # PostgreSQL, no dialect branch; the PG window itself cannot be
+        # reproduced in this sandbox, only the mechanism (rowcount).
         if policies.get("once") == "allow":
-            once_row = session.get(McpToolPolicyRow, (sid, tool, "once"))
-            if once_row is not None:
-                session.delete(once_row)
+            claimed = session.execute(
+                delete(McpToolPolicyRow).where(
+                    McpToolPolicyRow.server_id == sid,
+                    McpToolPolicyRow.tool_name == tool,
+                    McpToolPolicyRow.scope == "once",
+                    McpToolPolicyRow.decision == "allow",
+                )
+            ).rowcount
+            if claimed != 1:
+                return _deny_for_approval(session, sid, tool, session_id, project_id, wall, arguments)
         return {"verdict": "allow"}
+
+
+def _deny_for_approval(session, sid, tool, session_id, project_id, wall, arguments):
+    """Ask-path outcome shared by the ask branch and the once-race loser.
+
+    A later call never overwrites a still-pending request's arguments:
+    the approver decides the original call, not a replaced one.
+    """
+    pending = _pending_in_session(session, sid, tool, session_id, project_id)
+    if pending is None:
+        request_id = str(uuid.uuid4())
+        session.add(
+            McpApprovalRequestRow(
+                id=request_id, server_id=sid, tool_name=tool, session_id=session_id,
+                project_id=project_id, status="pending", requested_at=wall,
+                arguments_json=_arguments_json(arguments),
+            )
+        )
+        _audit("approval_required", sid, tool, request_id=request_id)
+        return {"verdict": "deny", "reason": "approval_required", "request_id": request_id}
+    age = wall - float(pending.requested_at)
+    if age >= ASK_TIMEOUT_S:
+        pending.status = "expired"
+        pending.decided_at = wall
+        _audit("approval_timeout", sid, tool, request_id=pending.id, age_s=round(age, 1))
+        return {"verdict": "deny", "reason": "approval_timeout", "request_id": pending.id}
+    _audit("approval_pending", sid, tool, request_id=pending.id, age_s=round(age, 1))
+    return {"verdict": "deny", "reason": "approval_pending", "request_id": pending.id}
 
 
 def decide_approval(
