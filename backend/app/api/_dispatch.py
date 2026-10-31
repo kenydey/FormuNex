@@ -75,6 +75,21 @@ def _broker_endpoint() -> tuple[str, int] | None:
     return url.hostname, url.port or 6379
 
 
+# Stage 1 / SR-029-SR-068: process-local broker probe failure count
+# (same convention as the ops counters: resets on process restart).
+# Incremented on every failed probe, read by /api/ops/metrics.
+_broker_probe_failures: int = 0
+
+
+def broker_probe_failure_count() -> int:
+    return _broker_probe_failures
+
+
+def _bump_broker_probe_failure() -> None:
+    global _broker_probe_failures
+    _broker_probe_failures += 1
+
+
 def _redis_ping(url: str) -> bool:
     """Speak one Redis command, not just TCP.
 
@@ -97,6 +112,7 @@ def _redis_ping(url: str) -> bool:
                 return True
         except OSError as exc:
             logger.warning("broker unreachable at {}:{} ({})", *endpoint, exc)
+            _bump_broker_probe_failure()
             return False
     try:
         from ..redis_compat import client_kwargs
@@ -105,11 +121,15 @@ def _redis_ping(url: str) -> bool:
             url, socket_connect_timeout=BROKER_PROBE_TIMEOUT_S,
             socket_timeout=BROKER_PROBE_TIMEOUT_S, **client_kwargs())
         try:
-            return bool(client.ping())
+            ok = bool(client.ping())
         finally:
             client.close()
+        if not ok:
+            _bump_broker_probe_failure()
+        return ok
     except Exception as exc:
         logger.warning("broker ping failed for {} ({})", urlparse(url).hostname, exc)
+        _bump_broker_probe_failure()
         return False
 
 
@@ -138,6 +158,7 @@ def broker_reachable() -> bool:
             return True
     except OSError as exc:
         logger.warning("broker unreachable at {}:{} ({})", *endpoint, exc)
+        _bump_broker_probe_failure()
         return False
 
 

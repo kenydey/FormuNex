@@ -146,6 +146,9 @@ class Settings(BaseSettings):
     # runs). One pass replays at most this many stalled rows.
     outbox_recover_interval_s: float = 900.0
     outbox_recover_max_rows: int = 20
+    # Stage 1 / SR-029: /health reports degraded once the unfinished
+    # outbox backlog passes this many rows.
+    outbox_backlog_warn_count: int = 100
 
     # CORS origins for the Vite dev server.
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]

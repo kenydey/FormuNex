@@ -33,6 +33,47 @@ def outbox_rows(
         return list_outbox_rows(session, status=status, operation=operation, limit=limit)
 
 
+@router.get("/metrics")
+def metrics() -> dict:
+    """Stage 1 / SR-029-SR-068: lightweight ops metrics (JSON, not Prometheus text).
+
+    Guarded by the existing ``/api/ops`` admin.llm rule. Counters marked
+    ``process_local`` reset on process restart (same convention as the
+    other ops counters); outbox counts and the 1 h failure count are
+    durable queries. No payloads are returned.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from ..api._dispatch import broker_probe_failure_count, broker_reachable
+    from ..db.database import default_session_factory
+    from ..db.models import TaskOutbox
+    from ..db.outbox_store import list_outbox_rows
+    from ..services.plm.release.gate import evaluation_error_count
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with default_session_factory()() as session:
+        counts = list_outbox_rows(session, limit=1)["counts"]
+        failed_last_hour = session.execute(
+            select(func.count())
+            .select_from(TaskOutbox)
+            .where(
+                TaskOutbox.status == "FAILED",
+                TaskOutbox.updated_at >= now - timedelta(hours=1),
+            )
+        ).scalar() or 0
+    return {
+        "outbox_counts": counts,
+        "outbox_failed_last_hour": int(failed_last_hour),
+        "gate_evaluation_errors": evaluation_error_count(),
+        "broker_probe_failures": broker_probe_failure_count(),
+        "broker_reachable": broker_reachable(),
+        "process_local": True,
+        "note": "gate_evaluation_errors and broker_probe_failures reset on process restart",
+    }
+
+
 @router.post("/outbox/{row_id}/retry")
 def outbox_retry(row_id: str) -> dict:
     """Stage 1 / SR-002: manually retry a FAILED/DEAD outbox row.

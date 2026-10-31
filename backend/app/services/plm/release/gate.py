@@ -622,8 +622,20 @@ def waivers_for(session: Session, revision_id: str) -> dict[tuple[str, str, str 
         select(ReleaseGateWaiverRow).where(ReleaseGateWaiverRow.revision_id == revision_id)).scalars()}
 
 
+# Stage 1 / SR-029-SR-068: process-local gate evaluation-error count
+# (same convention as the ops counters: resets on process restart).
+# Read by /api/ops/metrics; there is no durable gate-error table.
+_evaluation_error_count: int = 0
+
+
+def evaluation_error_count() -> int:
+    return _evaluation_error_count
+
+
 def _evaluation_error(check: Check, exc: Exception) -> None:
     """W1-3: one failed check must never 500 the whole evaluation."""
+    global _evaluation_error_count
+    _evaluation_error_count += 1
     check.fail("evaluation_error",
                f"门禁评估异常（已按失败处理）：{type(exc).__name__}：{str(exc)[:200]}", waivable=False)
 

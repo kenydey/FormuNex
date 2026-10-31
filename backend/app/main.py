@@ -504,6 +504,72 @@ def _ledger_mode(cfg, datalab_ok: bool, datalab_required: bool) -> str:
     return "local"
 
 
+def _worker_and_outbox_status(cfg) -> tuple[dict, dict, bool]:
+    """Stage 1 / SR-029-SR-068: worker liveness + outbox backlog.
+
+    Shared by /health and /health/detailed so both use the same
+    degraded formula. Worker ping is a short (2 s) Celery inspect and
+    never raises; in eager mode there is no worker to probe. The
+    backlog counts unfinished rows and the age of the oldest PENDING
+    row — counts only, never payloads. Returns (worker, outbox,
+    degraded): degraded when a required worker is dead or the backlog
+    passes ``outbox_backlog_warn_count``.
+    """
+    worker: dict
+    if cfg.celery_eager:
+        worker = {"required": False, "alive": None}
+        worker_degraded = False
+    else:
+        try:
+            from .worker.celery_app import celery_app
+
+            ping = celery_app.control.inspect(timeout=2.0).ping()
+            alive = bool(ping)
+        except Exception:
+            alive = False
+        worker = {"required": True, "alive": alive}
+        worker_degraded = not alive
+    outbox: dict = {"pending": 0, "claimed": 0, "oldest_pending_minutes": None}
+    backlog_degraded = False
+    try:
+        from datetime import datetime, timezone
+
+        from sqlalchemy import func, select
+
+        from .db.database import default_session_factory
+        from .db.models import TaskOutbox
+
+        with default_session_factory()() as session:
+            counts = {
+                str(st): int(n)
+                for st, n in session.execute(
+                    select(TaskOutbox.status, func.count())
+                    .where(TaskOutbox.status.in_(["PENDING", "CLAIMED"]))
+                    .group_by(TaskOutbox.status)
+                ).all()
+            }
+            outbox["pending"] = counts.get("PENDING", 0)
+            outbox["claimed"] = counts.get("CLAIMED", 0)
+            oldest = session.execute(
+                select(func.min(TaskOutbox.updated_at)).where(
+                    TaskOutbox.status == "PENDING"
+                )
+            ).scalar()
+            if oldest is not None:
+                outbox["oldest_pending_minutes"] = round(
+                    (datetime.now(timezone.utc).replace(tzinfo=None) - oldest).total_seconds() / 60.0, 1
+                )
+        unfinished = outbox["pending"] + outbox["claimed"]
+        outbox["backlog_threshold"] = cfg.outbox_backlog_warn_count
+        backlog_degraded = unfinished > cfg.outbox_backlog_warn_count
+    except Exception:
+        # A diagnostic must not become the failure: an unreadable
+        # outbox leaves the counts at zero and does not degrade health
+        # on its own (the database probe above already covers DB-down).
+        pass
+    return worker, outbox, (worker_degraded or backlog_degraded)
+
+
 def _probe_health() -> dict:
     cfg = get_settings()
 
@@ -548,8 +614,9 @@ def _probe_health() -> dict:
         formats = {}
     pdf_ok = bool(formats.get("pdf"))
 
+    worker_status, outbox_status, ops_degraded = _worker_and_outbox_status(cfg)
     overall = "ok"
-    if not db_ok or not broker_ok or not pdf_ok or (datalab_required and not datalab_ok):
+    if not db_ok or not broker_ok or not pdf_ok or (datalab_required and not datalab_ok) or ops_degraded:
         overall = "degraded"
 
     datalab_payload: dict = {
@@ -575,6 +642,8 @@ def _probe_health() -> dict:
         "database": {"ok": db_ok, "scheme": db_scheme},
         # "required" is False in eager mode, where tasks run in-process.
         "task_broker": {"required": not cfg.celery_eager, "reachable": broker_ok},
+        "worker": worker_status,
+        "outbox": outbox_status,
         "parsers": formats,
         "datalab": datalab_payload,
     }
@@ -675,8 +744,9 @@ def health_detailed() -> dict:
         formats = {}
     pdf_ok = bool(formats.get("pdf"))
 
+    worker_status, outbox_status, ops_degraded = _worker_and_outbox_status(cfg)
     overall = "ok"
-    if not db_ok or not broker_ok or not pdf_ok or (datalab_required and not datalab_ok):
+    if not db_ok or not broker_ok or not pdf_ok or (datalab_required and not datalab_ok) or ops_degraded:
         overall = "degraded"
 
     return {
@@ -700,6 +770,8 @@ def health_detailed() -> dict:
             "error": db_error,
         },
         "task_broker": {"required": not cfg.celery_eager, "reachable": broker_ok},
+        "worker": worker_status,
+        "outbox": outbox_status,
         "parsers": formats,
         "datalab": {
             "required": datalab_required,
