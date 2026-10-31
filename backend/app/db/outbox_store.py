@@ -323,6 +323,86 @@ def record_task_id(outbox_id: str | None, task_id: str) -> bool:
         return False
 
 
+def list_outbox_rows(
+    session: Session,
+    *,
+    status: str | None = None,
+    operation: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """Stage 1 / SR-002: ops view of outbox rows (oldest first).
+
+    ``counts`` covers the same filter as ``items`` (minus the limit).
+    Payloads are intentionally NOT returned: they can be large and carry
+    user content; the ops-visible fields are status, attempts, task id
+    and the FAILED error summary. Retry reuses the stored row itself.
+    """
+    from sqlalchemy import func
+
+    where = []
+    if status:
+        where.append(TaskOutbox.status == status)
+    if operation:
+        where.append(TaskOutbox.operation == operation)
+    counts = {
+        str(st): int(n)
+        for st, n in session.execute(
+            select(TaskOutbox.status, func.count())
+            .where(*where)
+            .group_by(TaskOutbox.status)
+        ).all()
+    }
+    rows = (
+        session.execute(
+            select(TaskOutbox)
+            .where(*where)
+            .order_by(TaskOutbox.created_at.asc())
+            .limit(max(1, min(int(limit), 500)))
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "counts": counts,
+        "items": [
+            {
+                "id": r.id,
+                "operation": r.operation,
+                "status": r.status,
+                "attempts": r.attempt_count or 0,
+                "task_id": r.task_id,
+                "error": r.error,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+def rearm_failed_row(session: Session, row: TaskOutbox) -> bool:
+    """Stage 1 / SR-002: manual retry of a FAILED/DEAD row.
+
+    Resets attempts/claim/task/error and flips the row back to PENDING,
+    keeping the original payload and created_at (unlike ``enqueue``'s
+    re-arm, which treats a resubmission as a new unit of work). Returns
+    False (leaving the row untouched) for any other status. The caller
+    publishes the payload afterwards; a publish failure leaves the row
+    PENDING for the next recovery pass, it does not lose the retry.
+    """
+    if row.status not in (STATUS_FAILED, STATUS_DEAD):
+        return False
+    row.status = STATUS_PENDING
+    row.attempt_count = 0
+    row.claimed_by = None
+    row.claimed_at = None
+    row.task_id = None
+    row.error = None
+    row.updated_at = _utcnow()
+    session.flush()
+    return True
+
+
 def select_pending(session: Session, limit: int = 100) -> list[TaskOutbox]:
     """Return the oldest unclaimed outbox rows, up to *limit*.
 

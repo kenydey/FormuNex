@@ -6,9 +6,69 @@ structured logs (``tier2 evidence compression: ...``).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/api/ops", tags=["ops"])
+
+
+@router.get("/outbox")
+def outbox_rows(
+    status: str | None = None,
+    operation: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """Stage 1 / SR-002: outbox rows for operators (oldest first).
+
+    API-only (no screen); guarded by the existing ``/api/ops`` admin.llm
+    rule in ``_rbac_guard``. Payloads are not returned (see
+    ``outbox_store.list_outbox_rows``); FAILED rows carry their error
+    summary here and are retried via the endpoint below.
+    """
+    from ..db.database import default_session_factory
+    from ..db.outbox_store import list_outbox_rows
+
+    with default_session_factory()() as session:
+        return list_outbox_rows(session, status=status, operation=operation, limit=limit)
+
+
+@router.post("/outbox/{row_id}/retry")
+def outbox_retry(row_id: str) -> dict:
+    """Stage 1 / SR-002: manually retry a FAILED/DEAD outbox row.
+
+    Rearms the stored row (same payload, attempts reset) and publishes
+    it under a fresh Celery id. A publish failure leaves the row
+    PENDING for the next recovery pass instead of losing the retry.
+    """
+    from ..db.database import default_session_factory
+    from ..db.dispatcher import _dispatch
+    from ..db.models import TaskOutbox
+    from ..db.outbox_store import rearm_failed_row, record_task_id
+
+    with default_session_factory()() as session:
+        row = session.get(TaskOutbox, row_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="outbox row not found")
+        if row.status not in ("FAILED", "DEAD"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"only FAILED/DEAD rows can be retried (row is {row.status})",
+            )
+        operation, payload = row.operation, dict(row.payload or {})
+        if not rearm_failed_row(session, row):
+            raise HTTPException(status_code=409, detail="row could not be rearmed")
+        session.commit()
+    task_id = str(uuid4())
+    try:
+        _dispatch(operation, payload, task_id=task_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"retry queued but publish failed ({exc}); row stays PENDING for recovery",
+        ) from exc
+    record_task_id(row_id, task_id)
+    return {"outbox_id": row_id, "operation": operation, "task_id": task_id, "status": "PENDING"}
 
 
 @router.get("/datalab-orphans")

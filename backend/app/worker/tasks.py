@@ -662,6 +662,8 @@ def run_recommend_task(self, payload: dict) -> dict:
 
 @celery_app.task(
     bind=True,
+    base=_OutboxTask,
+    outbox_operation="optimize",
     name="formunex.optimize",
     soft_time_limit=2400,
     time_limit=3000,
@@ -880,7 +882,7 @@ def run_kb_ingest_task(self, payload: dict) -> dict:
 # outages; per-node failures land the document in "partial", not a failed job.
 
 
-@celery_app.task(bind=True, name="formunex.toc_summaries", max_retries=3,
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="toc_summaries", name="formunex.toc_summaries", max_retries=3,
                  autoretry_for=(ConnectionError, TimeoutError, OSError),
                  retry_backoff=True)
 def run_toc_summaries_task(self, payload: dict) -> dict:
@@ -896,7 +898,7 @@ def run_toc_summaries_task(self, payload: dict) -> dict:
 # definitive answer, not a transient failure.
 
 
-@celery_app.task(bind=True, name="formunex.pubchem_enrich", max_retries=3,
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="pubchem_enrich", name="formunex.pubchem_enrich", max_retries=3,
                  autoretry_for=(ConnectionError, TimeoutError, OSError),
                  retry_backoff=True, retry_backoff_max=600)
 def run_pubchem_enrich_task(self, payload: dict) -> dict:
@@ -1206,7 +1208,7 @@ def _safe_kb_ingest(task_id: str, payload: dict) -> None:
         log_handled_exception(logger, exc, "kb_ingest background thread")
 
 
-@celery_app.task(bind=True, name="formunex.search")
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="search", name="formunex.search")
 def run_search_task(self, payload: dict) -> dict:
     from ..services import literature
 
@@ -1307,7 +1309,7 @@ def run_search_task(self, payload: dict) -> dict:
         raise
 
 
-@celery_app.task(bind=True, name="formunex.topic_sweep")
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="topic_sweep", name="formunex.topic_sweep")
 def run_topic_sweep(self, payload: dict) -> dict:
     """主题雷达单次触发: 检索 → topic 筛选 → 后台 KB 回填.
 
@@ -1361,7 +1363,7 @@ def run_topic_sweep(self, payload: dict) -> dict:
         return err
 
 
-@celery_app.task(bind=True, name="formunex.loop")
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="loop", name="formunex.loop")
 def run_loop_task(self, payload: dict) -> dict:
     return run_loop_iterate_impl(self.request.id, payload)
 
@@ -1759,7 +1761,7 @@ def run_doe_cycle_task(self, payload: dict) -> dict:
             countdown=min(60, 5 * (2 ** int(self.request.retries or 0))),
         )
 
-@celery_app.task(bind=True, name="formunex.deps_install")
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="deps", name="formunex.deps_install")
 def run_deps_install_task(self, payload: dict) -> dict:
     from ..services import dependencies as deps
 
@@ -1809,6 +1811,8 @@ def run_molscribe_recognize_task(self, payload: dict) -> dict:
 
 @celery_app.task(
     bind=True,
+    base=_OutboxTask,
+    outbox_operation="wiki_storm_report",
     name="formunex.wiki_storm_report",
     soft_time_limit=1500,
     time_limit=1800,
@@ -1908,7 +1912,7 @@ def noop_task(*args: object, **kwargs: object) -> str:
     return "ok"
 
 
-@celery_app.task(bind=True, name="formunex.kg_relations_rebuild", soft_time_limit=5400, time_limit=7200)
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="kg_relations_rebuild", name="formunex.kg_relations_rebuild", soft_time_limit=5400, time_limit=7200)
 def run_kg_relations_rebuild(self, payload: dict) -> dict:
     """补语义关系提取: 实体/提及已在库, 只重跑关系(LLM 慢).
 
@@ -2235,6 +2239,6 @@ def _kb_reparse_impl(task_id: str, payload: dict) -> dict:
     return result
 
 
-@celery_app.task(bind=True, name="formunex.kb_reparse")
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="kb_reparse", name="formunex.kb_reparse")
 def run_kb_reparse_task(self, payload: dict) -> dict:
     return _kb_reparse_impl(self.request.id, payload)
