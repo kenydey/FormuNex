@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api", tags=["loop"])
 @router.post("/loop/iterate", status_code=202)
 def iterate_loop(payload: LoopRequest, request: Request) -> JSONResponse:
     from ..middleware.api_auth import get_current_owner
+    from ._idempotency import enqueue_outbox
 
     req = Requirement(
         **payload.model_dump(
@@ -31,7 +32,7 @@ def iterate_loop(payload: LoopRequest, request: Request) -> JSONResponse:
             }
         )
     )
-    return submit(run_loop_task, {
+    job_payload = {
         "requirement": req.model_dump(),
         "iterations": payload.optimize_iterations,
         "n_suggest": payload.n_suggest,
@@ -46,4 +47,6 @@ def iterate_loop(payload: LoopRequest, request: Request) -> JSONResponse:
         "prior_next_doe": payload.prior_next_doe.model_dump() if payload.prior_next_doe else None,
         "budget_remaining": payload.budget_remaining,
         "seed": payload.seed,
-    }, "loop", owner_id=get_current_owner(request))
+    }
+    outbox_id = enqueue_outbox("loop", job_payload)
+    return submit(run_loop_task, job_payload, "loop", outbox_id=outbox_id, owner_id=get_current_owner(request))

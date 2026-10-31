@@ -54,7 +54,7 @@ def test_install_accepted_when_enabled(monkeypatch):
     monkeypatch.setenv("FORMUNEX_ENVIRONMENT", "production")
     get_settings.cache_clear()
 
-    def fake_submit(task, payload, kind):
+    def fake_submit(task, payload, kind, **kwargs):
         from fastapi.responses import JSONResponse
 
         return JSONResponse(status_code=202, content={"task_id": "deps-test-1", "kind": kind})

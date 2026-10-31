@@ -16,9 +16,11 @@ which reads like a different problem but is not.
 
 Two changes fix that:
 
-* **Preflight the broker.** A TCP connect with a one-second timeout tells us
-  what 19 seconds of Celery retries would, without the wait or the exception
-  that leaves the app's result consumer needing a restart.
+* **Preflight the broker.** A single ``PING`` with a one-second timeout tells
+  us what 19 seconds of Celery retries would, without the wait or the
+  exception that leaves the app's result consumer needing a restart — and
+  unlike a bare TCP connect, it catches a broker that accepts sockets but
+  cannot serve commands (W1-10 ④).
 * **Answer with 503 and a reason.** The durable outbox row is written before
   dispatch, so a failed submission is recorded work, not lost work —
   ``dispatcher.recover_stalled`` re-enqueues it once the broker is back. 503
@@ -73,6 +75,44 @@ def _broker_endpoint() -> tuple[str, int] | None:
     return url.hostname, url.port or 6379
 
 
+def _redis_ping(url: str) -> bool:
+    """Speak one Redis command, not just TCP.
+
+    W1-10 ④: a socket connect cannot tell a working broker from a dead one —
+    a Redis too old for RESP3 ``HELLO`` accepts the TCP connection and then
+    loops on ``unknown command``, while the old probe reported it reachable.
+    ``PING`` answers the real question (can this broker serve a command?) in
+    one round trip, and the protocol comes from ``redis_compat`` (RESP2 by
+    default), so the probe itself never trips the old-server trap.
+    """
+    try:
+        import redis
+    except ImportError:
+        logger.warning("broker probe: redis-py missing, falling back to TCP connect")
+        endpoint = _broker_endpoint()
+        if endpoint is None:
+            return True
+        try:
+            with socket.create_connection(endpoint, timeout=BROKER_PROBE_TIMEOUT_S):
+                return True
+        except OSError as exc:
+            logger.warning("broker unreachable at {}:{} ({})", *endpoint, exc)
+            return False
+    try:
+        from ..redis_compat import client_kwargs
+
+        client = redis.Redis.from_url(
+            url, socket_connect_timeout=BROKER_PROBE_TIMEOUT_S,
+            socket_timeout=BROKER_PROBE_TIMEOUT_S, **client_kwargs())
+        try:
+            return bool(client.ping())
+        finally:
+            client.close()
+    except Exception as exc:
+        logger.warning("broker ping failed for {} ({})", urlparse(url).hostname, exc)
+        return False
+
+
 def broker_reachable() -> bool:
     """Whether a task submitted now would reach a broker.
 
@@ -80,12 +120,16 @@ def broker_reachable() -> bool:
     always reachable. A unix-socket or otherwise unparseable URL is reported
     reachable too: the probe cannot speak for it, and refusing to submit on
     the strength of a check that did not run would be worse than letting
-    Celery try.
+    Celery try. A ``redis://`` / ``rediss://`` URL gets a real ``PING``;
+    any other TCP URL keeps the old connect probe.
     """
     from ..config import get_settings
 
     if get_settings().celery_eager:
         return True
+    scheme = urlparse(get_settings().redis_url).scheme
+    if scheme in ("redis", "rediss"):
+        return _redis_ping(get_settings().redis_url)
     endpoint = _broker_endpoint()
     if endpoint is None:
         return True
@@ -102,6 +146,97 @@ def _record_outbox_task_id(outbox_id: str | None, task_id: str) -> bool:
     from ..db.outbox_store import record_task_id
 
     return record_task_id(outbox_id, task_id)
+
+
+def dispatch_task(
+    task,
+    payload: dict,
+    kind: str,
+    *,
+    outbox_id: str | None = None,
+    task_id: str | None = None,
+) -> str:
+    """Dispatch ``task`` with ``payload``; return the Celery task id.
+
+    The same dispatch ``submit`` performs (broker probe, P2-1 id-first
+    ordering, eager daemon thread, 503 mapping), minus the HTTP response —
+    for service callers such as the workbench loop (W1-10 ②) that need the
+    id itself for SSE tracking instead of a 202 body. A caller that fixes
+    ``task_id`` (the loop does, so it can register with the task manager
+    before the eager thread starts) gets that id published and recorded.
+
+    Raises:
+        HTTPException: 503 when the broker is unreachable or (non-eager)
+            producer publish times out / fails. The outbox row (if one was
+            written) stays PENDING and is recovered by
+            ``dispatcher.recover_stalled``.
+
+    W1-10 ① claim-by-id: a thread running a blocked publish cannot be
+    cancelled in Python, so a publish that lands after the producer timeout
+    is unavoidable in the residual hung-socket case — but it must never be
+    *unclaimable*. The task id is therefore fixed first, recorded on the
+    outbox row before the probe runs, and carried on every 503 in the
+    ``X-FormuNex-Task-Id`` header: a client that gets a 503 polls that id
+    instead of blindly resubmitting (which would duplicate the work if the
+    timed-out publish did land). The row carries the same id, so startup
+    recovery replays under exactly the id the client holds. ``detail``
+    stays a plain string — the frontend parses error bodies as JSON with a
+    string detail, so the id travels in a header, not in the body.
+    """
+    from ..config import get_settings
+
+    # The id is the source of truth, fixed before anything else: it is
+    # recorded on the outbox row first (so even a probe failure leaves a
+    # recoverable row under the id the 503 header will claim), then
+    # published under exactly that id.
+    task_id = task_id or str(uuid.uuid4())
+    if outbox_id and not _record_outbox_task_id(outbox_id, task_id):
+        logger.warning(
+            "outbox {}: task id {} not recorded before dispatch; "
+            "recovery will replay under a new id",
+            outbox_id,
+            task_id,
+        )
+    if not broker_reachable():
+        raise HTTPException(
+            status_code=503, detail=BROKER_DOWN_DETAIL,
+            headers={"X-FormuNex-Task-Id": task_id},
+        )
+
+    settings = get_settings()
+    if settings.celery_eager:
+        # Register PENDING *before* starting the daemon thread so a fast
+        # RUNNING progress write cannot be overwritten by a late register_pending.
+        _submit_eager_background(task, payload, kind, task_id=task_id)
+        return task_id
+
+    try:
+        _delay_with_timeout(task, payload, task_id=task_id)
+    except _DispatchTimeout as exc:
+        # 2026-09-05: uvicorn 进程内 celery producer 首建曾无限卡(所有 submit
+        # 端点挂起→前端 502)。预热(lifespan)已把首建移出请求路径; 此处兜底
+        # 超时, 宁可明确 503 也不让请求无限挂。
+        # 2026-09-06: 文案与 broker-down 拆开，避免把 producer 超时误报成 Redis 不可达。
+        # W1-10 ①: the abandoned thread may still publish under this id —
+        # the header + the row above are what make that outcome claimable
+        # instead of a silent duplicate.
+        logger.error("celery dispatch timed out for {} (task_id={}): {}", kind, task_id, exc)
+        raise HTTPException(
+            status_code=503, detail=f"{DISPATCH_TIMEOUT_DETAIL}（{exc}）",
+            headers={"X-FormuNex-Task-Id": task_id},
+        ) from exc
+    except Exception as exc:
+        # The probe passed a moment ago, so this is a broker that died mid-
+        # submission or a payload Celery could not serialise. Do not always
+        # claim "Redis is down" — that mislabels ELN/serialisation failures.
+        # The row already carries task_id (recorded above), so recovery
+        # replays under the id the client would have held.
+        logger.exception("celery dispatch failed for {} (task_id={})", kind, task_id)
+        raise HTTPException(
+            status_code=503, detail=f"{DISPATCH_FAILURE_DETAIL}（{exc}）",
+            headers={"X-FormuNex-Task-Id": task_id},
+        ) from exc
+    return task_id
 
 
 def submit(
@@ -131,55 +266,19 @@ def submit(
             producer publish times out / fails. The outbox row (if one was
             written) stays PENDING and is recovered by
             ``dispatcher.recover_stalled``.
+
+    The id is fixed and the 202 body built *before* dispatch, as the
+    pre-W1-10 ``submit`` did: starting the eager thread first hands it a
+    head start on the caller, and a caller that reads state right after
+    ``submit`` returns (pageindex scheduling asserts ``pending``) can lose
+    that race to a thread that already ran the job to ``partial``.
     """
-    from ..config import get_settings
     from .tasks import accepted_response
 
-    if not broker_reachable():
-        raise HTTPException(status_code=503, detail=BROKER_DOWN_DETAIL)
-
-    settings = get_settings()
-    if settings.celery_eager:
-        # Register PENDING *before* starting the daemon thread so a fast
-        # RUNNING progress write cannot be overwritten by a late register_pending.
-        task_id = str(uuid.uuid4())
-        response = accepted_response(task_id, kind, outbox_id=outbox_id, owner_id=owner_id)
-        _record_outbox_task_id(outbox_id, task_id)
-        _submit_eager_background(task, payload, kind, task_id=task_id)
-        return response
-
-    # The id is the source of truth: it is recorded first, then published
-    # under exactly that id, and the same id is handed to the client.
     task_id = str(uuid.uuid4())
-    if outbox_id and not _record_outbox_task_id(outbox_id, task_id):
-        logger.warning(
-            "outbox {}: task id {} not recorded before publish; "
-            "recovery will replay under a new id",
-            outbox_id,
-            task_id,
-        )
-    try:
-        _delay_with_timeout(task, payload, task_id=task_id)
-    except _DispatchTimeout as exc:
-        # 2026-09-05: uvicorn 进程内 celery producer 首建曾无限卡(所有 submit
-        # 端点挂起→前端 502)。预热(lifespan)已把首建移出请求路径; 此处兜底
-        # 超时, 宁可明确 503 也不让请求无限挂。
-        # 2026-09-06: 文案与 broker-down 拆开，避免把 producer 超时误报成 Redis 不可达。
-        logger.error("celery dispatch timed out for {}: {}", kind, exc)
-        raise HTTPException(
-            status_code=503, detail=f"{DISPATCH_TIMEOUT_DETAIL}（{exc}）"
-        ) from exc
-    except Exception as exc:
-        # The probe passed a moment ago, so this is a broker that died mid-
-        # submission or a payload Celery could not serialise. Do not always
-        # claim "Redis is down" — that mislabels ELN/serialisation failures.
-        # The row already carries task_id (recorded above), so recovery
-        # replays under the id the client would have held.
-        logger.exception("celery dispatch failed for {}", kind)
-        raise HTTPException(
-            status_code=503, detail=f"{DISPATCH_FAILURE_DETAIL}（{exc}）"
-        ) from exc
-    return accepted_response(task_id, kind, outbox_id=outbox_id, owner_id=owner_id)
+    response = accepted_response(task_id, kind, outbox_id=outbox_id, owner_id=owner_id)
+    dispatch_task(task, payload, kind, outbox_id=outbox_id, task_id=task_id)
+    return response
 
 
 def _submit_eager_background(

@@ -93,6 +93,23 @@ _LLM_RUNTIME_ENV: dict[str, str] = {
 # execute inside the HTTP request, so they can outlast an nginx read timeout.
 _TOPOLOGY_FLAGS = frozenset({"FORMUNEX_CELERY_EAGER"})
 
+# Keys whose current process value came from the UI (written by
+# ``update_env_flags`` or restored from the UI-persisted ``.env`` at startup),
+# as opposed to the deployment's own environment (compose ``environment:``).
+# W1-10 ⑤: the topology guard must tell those apart. At startup
+# ``apply_persisted_ui_settings`` can still tell — the process environment is
+# pristine deployment values then — but a later ``update_env_flags`` call
+# cannot: a UI write from an earlier request already sits in ``os.environ``.
+# So every UI-owned value is recorded here at the moment it is written or
+# restored; a topology key in ``os.environ`` that is NOT recorded here is
+# deployment-owned, and the UI must not override it.
+_UI_MANAGED_KEYS: set[str] = set()
+
+
+def mark_ui_managed(keys) -> None:
+    """Record keys as UI-owned (see ``_UI_MANAGED_KEYS``)."""
+    _UI_MANAGED_KEYS.update(keys)
+
 
 def _mask(value: str | None) -> str:
     """Enough of a secret to recognise it, never enough to help guess it: the last four characters, and nothing at all
@@ -280,6 +297,9 @@ def apply_persisted_ui_settings() -> None:
         os.environ[key] = saved[key]
         applied.append(key)
     if applied:
+        # W1-10 ⑤: restored keys are UI-owned, so a later UI change to them
+        # is not mistaken for an override of a deployment value.
+        mark_ui_managed(applied)
         get_settings.cache_clear()
         logger.info(
             "Restored %d persisted UI settings from %s", len(applied), resolve_env_path()

@@ -26,11 +26,15 @@ class OptimizeRequest(BaseModel):
 
 @router.post("/optimize", status_code=202)
 def start_optimization(payload: OptimizeRequest) -> JSONResponse:
-    return submit(run_optimize_task, {
+    from ._idempotency import enqueue_outbox
+
+    job_payload = {
         "requirement": payload.requirement.model_dump(),
         "iterations": payload.iterations,
         "engine": payload.engine,
         "campaign_state": payload.campaign_state,
         "workbench_campaign_id": payload.workbench_campaign_id,
     "seed": payload.seed,
-    }, "optimize")
+    }
+    outbox_id = enqueue_outbox("optimize", job_payload)
+    return submit(run_optimize_task, job_payload, "optimize", outbox_id=outbox_id)

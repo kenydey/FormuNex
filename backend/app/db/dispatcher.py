@@ -16,6 +16,21 @@ has no Celery handler (audit records such as ``ingest_complete``) are never
 replayed, and rows untouched for ``MAX_RECOVER_AGE_HOURS`` are expired instead.
 ``datalab_orphan_cleanup`` rows are consumed by :func:`drain_orphans`.
 
+W1-10 ③ coverage: EVERY async submission kind now writes an outbox row and
+has a handler in ``_HANDLERS`` (research_recommend, research_deep,
+inverse_design, doe_cycle, loop, optimize, kb_reparse, kg_relations_rebuild,
+toc_summaries, pubchem_enrich, deps, search, topic_sweep, wiki_storm_report)
+— each was checked replay-safe before wiring (same-slot task persistence,
+upsert, or fill-missing; never append-a-new-record), and a test pins that
+any ``enqueue_outbox`` call site in ``api/*`` or ``services/*`` has a handler.
+Recovery parameters: one pass replays at most ``DEFAULT_MAX_ROWS`` (20) rows,
+a row is dropped to DEAD after ``MAX_ATTEMPTS`` (5) failed replays, and rows
+untouched for 24 h expire instead of replaying. Recovery runs ONCE at startup
+in a daemon thread (``schedule_recover_stalled`` from lifespan) — there is no
+periodic sweep, so a broker outage that strands a job mid-run is healed by
+the next restart (or an explicit retry), not by a background timer; under
+``celery_eager`` startup replay is skipped outright (see below).
+
 Lifespan MUST schedule recovery in a daemon thread (see
 ``schedule_recover_stalled``): with ``FORMUNEX_CELERY_EAGER=true``, a
 synchronous ``.delay()`` would run whole research/inverse tasks on the
@@ -102,14 +117,88 @@ def _send_doe_cycle(payload: dict, task_id: str | None = None) -> None:
     _publish(run_doe_cycle_task, payload, task_id)
 
 
+def _send_loop(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_loop_task
+
+    _publish(run_loop_task, payload, task_id)
+
+
+def _send_optimize(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_optimize_task
+
+    _publish(run_optimize_task, payload, task_id)
+
+
+def _send_kb_reparse(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_kb_reparse_task
+
+    _publish(run_kb_reparse_task, payload, task_id)
+
+
+def _send_kg_relations_rebuild(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_kg_relations_rebuild
+
+    _publish(run_kg_relations_rebuild, payload, task_id)
+
+
+def _send_toc_summaries(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_toc_summaries_task
+
+    _publish(run_toc_summaries_task, payload, task_id)
+
+
+def _send_pubchem_enrich(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_pubchem_enrich_task
+
+    _publish(run_pubchem_enrich_task, payload, task_id)
+
+
+def _send_deps(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_deps_install_task
+
+    _publish(run_deps_install_task, payload, task_id)
+
+
+def _send_search(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_search_task
+
+    _publish(run_search_task, payload, task_id)
+
+
+def _send_topic_sweep(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_topic_sweep
+
+    _publish(run_topic_sweep, payload, task_id)
+
+
+def _send_wiki_storm_report(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_wiki_storm_report_task
+
+    _publish(run_wiki_storm_report_task, payload, task_id)
+
+
 # Single source of truth for what recovery may replay. Every operation that
-# ``api/*`` enqueues through ``enqueue_outbox`` MUST have an entry here (a
-# test pins that); audit-only operations deliberately do not.
+# ``api/*`` or ``services/*`` enqueues through ``enqueue_outbox`` MUST have an
+# entry here (a test pins that); audit-only operations deliberately do not.
+# Replay note for "loop" (W1-10 ②): the task re-checks the paused flag from
+# the database at run time, so a replayed loop cannot run into a campaign
+# paused after submit; its payload snapshot (prior_rmse_history) may be stale,
+# the same class of staleness already accepted for doe_cycle replays.
 _HANDLERS: dict[str, Callable[..., None]] = {
     "research_recommend": _send_recommend,
     "research_deep": _send_deep_research,
     "inverse_design": _send_inverse_design,
     "doe_cycle": _send_doe_cycle,
+    "loop": _send_loop,
+    "optimize": _send_optimize,
+    "kb_reparse": _send_kb_reparse,
+    "kg_relations_rebuild": _send_kg_relations_rebuild,
+    "toc_summaries": _send_toc_summaries,
+    "pubchem_enrich": _send_pubchem_enrich,
+    "deps": _send_deps,
+    "search": _send_search,
+    "topic_sweep": _send_topic_sweep,
+    "wiki_storm_report": _send_wiki_storm_report,
 }
 
 DISPATCHABLE_OPERATIONS: tuple[str, ...] = tuple(_HANDLERS)

@@ -12,6 +12,7 @@ from ..middleware.api_auth import get_current_owner
 from ..services import dependencies as deps
 from ..worker.tasks import run_deps_install_task
 from ._dispatch import submit
+from ._idempotency import enqueue_outbox
 
 logger = logging.getLogger(__name__)
 
@@ -60,4 +61,7 @@ def install_dependencies(action: DependencyAction, request: Request) -> JSONResp
     return submit(run_deps_install_task, {
         "names": action.names,
         "upgrade": action.upgrade,
-    }, "deps")
+    }, "deps", outbox_id=enqueue_outbox("deps", {
+        "names": action.names,
+        "upgrade": action.upgrade,
+    }))

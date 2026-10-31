@@ -127,7 +127,7 @@ def modify_recommendation(body: ModifyRequest, request: Request) -> JSONResponse
         "base_formulas": [f.model_dump() for f in base_formulas],
         "n": body.n,
     }
-    return submit(run_recommend_task, payload, "recommend", owner_id=get_current_owner(request))
+    return submit(run_recommend_task, payload, "recommend", outbox_id=_enqueue_outbox("research_recommend", payload), owner_id=get_current_owner(request))
 
 
 # ── RAG backend status ──────────────────────────────────────────────────

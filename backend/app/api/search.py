@@ -14,6 +14,7 @@ from ..domain.schemas import Evidence, Requirement
 from ..services import literature
 from ..worker.tasks import run_search_task, run_topic_sweep
 from ._dispatch import submit
+from ._idempotency import enqueue_outbox
 
 router = APIRouter()
 
@@ -169,13 +170,15 @@ def search_sources(req: SearchRequest):
 @router.post("/search/stream", status_code=202)
 def search_stream(req: SearchRequest) -> JSONResponse:
     _assert_requirement_consistency(req.requirement)
-    return submit(run_search_task, {
+    search_payload = {
         "query": req.query,
         "source_types": _effective_source_types(req.source_types),
         "requirement": req.requirement.model_dump() if req.requirement else None,
         "total_limit": req.total_limit,
         "per_source_cap": req.limit_per_source,
-    }, "search")
+    }
+    return submit(run_search_task, search_payload, "search",
+                  outbox_id=enqueue_outbox("search", search_payload))
 
 
 class TopicSweepRequest(BaseModel):
@@ -195,11 +198,13 @@ def topic_sweep(req: TopicSweepRequest) -> JSONResponse:
     KB ingest task it started (``ingest_task_id`` is null when nothing matched).
     """
     _assert_requirement_consistency(req.requirement)
-    return submit(run_topic_sweep, {
+    sweep_payload = {
         "query": req.query.strip(),
         "project_id": req.project_id,
         "source_types": _effective_source_types(req.source_types),
         "requirement": req.requirement.model_dump() if req.requirement else None,
         "total_limit": req.total_limit,
         "per_source_cap": req.per_source_cap,
-    }, "topic_sweep")
+    }
+    return submit(run_topic_sweep, sweep_payload, "topic_sweep",
+                  outbox_id=enqueue_outbox("topic_sweep", sweep_payload))

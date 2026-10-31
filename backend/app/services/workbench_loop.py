@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 import uuid
 from typing import Any, Dict, Optional
 
@@ -267,6 +266,11 @@ def dispatch_loop_after_sync(
         n_suggest=n_suggest,
         prior_rmse_history=prior_rmse,
     )
+    if task_id is None:
+        # W1-10 ②: dispatch failed (dead broker / publish error). The sync
+        # itself already succeeded, so this is a "loop not started" message,
+        # not a sync failure — and the next sync can trigger the loop again.
+        return None, "闭环未启动：后台任务提交失败（任务队列不可达或入队异常），同步结果已保存，下次同步可重新触发"
     # P4.2: optional dossier S6/S7 patch when loop starts (default OFF).
     try:
         from .wiki.dossier import notify_dossier_event_for_campaign
@@ -287,8 +291,20 @@ def _start_loop_task(
     n_suggest: int = 4,
     prior_rmse_history: list[dict[str, float]] | None = None,
 ) -> str | None:
-    """Fire-and-forget closed-loop task; returns task_id for SSE tracking."""
-    from ..worker.tasks import task_manager
+    """Fire-and-forget closed-loop task; returns task_id for SSE tracking.
+
+    W1-10 ②: routed through ``_dispatch.dispatch_task`` like every other
+    submission instead of calling ``.delay()`` directly, so a dead broker
+    yields an explicit dispatch failure (and the sync response can say the
+    loop did not start) instead of a Celery exception failing the whole
+    sync, and the job gets a durable outbox row that ``recover_stalled``
+    can replay (handler: ``dispatcher._HANDLERS["loop"]``). Returns None
+    on dispatch failure; the caller turns that into a "loop not started"
+    message — the sync itself already succeeded and must not fail for it.
+    """
+    from ..api._dispatch import dispatch_task
+    from ..api._idempotency import enqueue_outbox
+    from ..worker.tasks import run_loop_task, task_manager
 
     settings = get_settings()
     payload = {
@@ -302,38 +318,30 @@ def _start_loop_task(
         "prior_rmse_history": prior_rmse_history or [],
     }
 
+    outbox_id = enqueue_outbox("loop", payload)
+
     if settings.celery_eager:
+        # Register before the eager thread starts (the old order): a fast
+        # RUNNING progress write must not land before registration.
         task_id = f"loop-{uuid.uuid4().hex[:16]}"
         task_manager.register_celery_task(task_id, "loop")
-        threading.Thread(
-            target=lambda: _safe_loop(task_id, payload),
-            name="workbench-loop",
-            daemon=True,
-        ).start()
+        try:
+            dispatch_task(run_loop_task, payload, "loop", outbox_id=outbox_id, task_id=task_id)
+        except Exception:
+            logger.exception("workbench loop eager dispatch failed")
+            return None
         return task_id
 
-    from ..worker.tasks import run_loop_task
-
-    async_result = run_loop_task.delay(payload)
-    task_manager.register_celery_task(async_result.id, "loop")
-    return async_result.id
-
-
-def _safe_loop(task_id: str, payload: dict) -> None:
-    from ..worker.tasks import run_loop_iterate_impl
-    from .errors import log_handled_exception
-
     try:
-        run_loop_iterate_impl(task_id, payload)
+        task_id = dispatch_task(run_loop_task, payload, "loop", outbox_id=outbox_id)
     except Exception as exc:
-        log_handled_exception(logger, exc, "workbench loop background thread")
-        try:
-            from ..worker.tasks import _persist_terminal, persist_result
-            err = {"error": str(exc)}
-            persist_result(task_id, err, failed=True)
-            _persist_terminal(task_id, "loop", err, failed=True, message=str(exc))
-        except Exception:
-            logger.exception("failed to mark task as failed")
+        # dispatch_task already maps probe/publish failures to 503; the loop
+        # is fire-and-forget, so log and report "not started", never raise
+        # into the sync endpoint that already saved its results.
+        logger.warning("workbench loop dispatch failed: %s", exc)
+        return None
+    task_manager.register_celery_task(task_id, "loop")
+    return task_id
 
 
 # ── Loop history reset ──────────────────────────────────────────────────

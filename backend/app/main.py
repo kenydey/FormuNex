@@ -643,8 +643,23 @@ def health_detailed() -> dict:
         db_ok = False
         db_error = str(exc)
 
+    # W1-10 ④: same degraded formula as /health. Detailed used to ignore the
+    # broker and the parsers entirely, so a broker outage or a missing PDF
+    # parser still reported ok here while /health said degraded.
+    from .api._dispatch import broker_reachable
+
+    broker_ok = broker_reachable()
+
+    from .services.parsing import format_availability
+
+    try:
+        formats = format_availability()
+    except Exception:
+        formats = {}
+    pdf_ok = bool(formats.get("pdf"))
+
     overall = "ok"
-    if not db_ok or (datalab_required and not datalab_ok):
+    if not db_ok or not broker_ok or not pdf_ok or (datalab_required and not datalab_ok):
         overall = "degraded"
 
     return {
@@ -667,6 +682,8 @@ def health_detailed() -> dict:
             "url": _mask_db_url(cfg.db_url),
             "error": db_error,
         },
+        "task_broker": {"required": not cfg.celery_eager, "reachable": broker_ok},
+        "parsers": formats,
         "datalab": {
             "required": datalab_required,
             "reachable": datalab_ok,

@@ -768,12 +768,14 @@ def enrich_substance_pubchem(
     from ..db.models_regulatory import SubstanceRow
     from ..worker.tasks import run_pubchem_enrich_task
     from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     with _session() as session:
         exists = session.query(SubstanceRow.id).filter(SubstanceRow.id == substance_id).first()
     if not exists:
         raise HTTPException(status_code=404, detail=f"物质不存在：{substance_id}")
-    return submit(run_pubchem_enrich_task, {"substance_id": substance_id}, kind="pubchem_enrich")
+    return submit(run_pubchem_enrich_task, {"substance_id": substance_id}, kind="pubchem_enrich",
+                  outbox_id=enqueue_outbox("pubchem_enrich", {"substance_id": substance_id}))
 
 
 class RegulatoryAskIn(BaseModel):

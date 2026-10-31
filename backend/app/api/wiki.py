@@ -564,6 +564,7 @@ def start_storm_report_endpoint(body: StormReportRequest, request: Request):
     from ..middleware.api_auth import get_current_owner
     from ..worker.tasks import run_wiki_storm_report_task
     from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     _require_wiki()
     settings = get_settings()
@@ -591,6 +592,7 @@ def start_storm_report_endpoint(body: StormReportRequest, request: Request):
         run_wiki_storm_report_task,
         payload,
         "wiki_storm_report",
+        outbox_id=enqueue_outbox("wiki_storm_report", payload),
         owner_id=get_current_owner(request),
     )
     content = _json.loads(resp.body)

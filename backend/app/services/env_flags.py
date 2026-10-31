@@ -585,8 +585,18 @@ def update_env_flags(updates: dict[str, bool]) -> tuple[list[str], list[str]]:
     Writes the live process env, persists to ``.env`` and clears the settings
     cache so the change is effective for every subsequent request. The LLM
     runtime overlay is preserved.
+
+    W1-10 ⑤: topology flags (``_TOPOLOGY_FLAGS``, currently only
+    ``FORMUNEX_CELERY_EAGER``) are refused when the deployment owns the value:
+    a key present in the process environment that was never written or
+    restored by the UI is deployment-owned, and one UI misclick must not
+    silently demote a multi-container deployment to eager single-process
+    mode. A topology key the UI itself owns (written here, or restored from
+    the UI-persisted ``.env`` at startup) stays changeable, including back.
+    Refused attrs land in ``rejected_attrs`` so the settings endpoint can
+    show them instead of silently dropping the request.
     """
-    from .secrets_store import write_env_updates
+    from .secrets_store import _TOPOLOGY_FLAGS, _UI_MANAGED_KEYS, mark_ui_managed, write_env_updates
 
     updated: list[str] = []
     rejected: list[str] = []
@@ -595,6 +605,15 @@ def update_env_flags(updates: dict[str, bool]) -> tuple[list[str], list[str]]:
     for attr, raw in updates.items():
         flag = _FLAG_BY_ATTR.get(attr)
         if flag is None or not isinstance(raw, bool):
+            rejected.append(attr)
+            continue
+        if (flag.env_key in _TOPOLOGY_FLAGS and flag.env_key in os.environ
+                and flag.env_key not in _UI_MANAGED_KEYS):
+            logger.warning(
+                "env flag %s refused: %s is set by the deployment (%s); "
+                "the UI cannot override a topology decision",
+                attr, flag.env_key, os.environ[flag.env_key],
+            )
             rejected.append(attr)
             continue
         value = "true" if raw else "false"
@@ -608,6 +627,7 @@ def update_env_flags(updates: dict[str, bool]) -> tuple[list[str], list[str]]:
         except OSError as exc:
             # Read-only FS etc. — the live process env still applied.
             logger.warning("env flags: .env persistence failed (%s)", exc)
+        mark_ui_managed(env_writes)
         get_settings.cache_clear()
         if "neo4j_enabled" in updated:
             try:

@@ -488,6 +488,7 @@ def reparse_source(source_id: str):
     from ..services.kb_reparse import SourceFileMissing, SourceNotFound, original_file
     from ..worker.tasks import run_kb_reparse_task
     from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     try:
         original_file(source_id)
@@ -495,7 +496,8 @@ def reparse_source(source_id: str):
         raise HTTPException(status_code=404, detail="source not found") from None
     except SourceFileMissing as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
-    return submit(run_kb_reparse_task, {"source_id": source_id}, "kb_reparse")
+    return submit(run_kb_reparse_task, {"source_id": source_id}, "kb_reparse",
+                  outbox_id=enqueue_outbox("kb_reparse", {"source_id": source_id}))
 
 
 class KBSourceDeleteResponse(BaseModel):

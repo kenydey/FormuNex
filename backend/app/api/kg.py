@@ -283,13 +283,15 @@ def rebuild_relations_api(body: KgRelationsRebuildBody | None = None):
         raise HTTPException(status_code=409, detail="知识图谱未启用（FORMUNEX_KG_ENABLED）")
     from ..worker.tasks import run_kg_relations_rebuild
     from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     b = body or KgRelationsRebuildBody()
     lim = b.limit
     if lim is not None:
         lim = max(1, min(int(lim), 500))
     payload = {"source_id": b.source_id, "limit": lim, "force": True}
-    return submit(run_kg_relations_rebuild, payload, "kg_relations_rebuild")
+    return submit(run_kg_relations_rebuild, payload, "kg_relations_rebuild",
+                  outbox_id=enqueue_outbox("kg_relations_rebuild", payload))
 
 
 @router.post("/link-source/{source_id}", response_model=KGLinkReport)

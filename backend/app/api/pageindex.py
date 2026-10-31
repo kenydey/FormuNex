@@ -78,11 +78,13 @@ def summarize_toc_tree(source_id: str):
     store.set_summaries_status(source_id, "pending")
     from ..worker.tasks import run_toc_summaries_task
     from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     try:
-        return submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries")
+        return submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries",
+                      outbox_id=enqueue_outbox("toc_summaries", {"source_id": source_id}))
     except HTTPException:
-        store.set_summaries_status(source_id, previous)  # not queued: leave it to the next trigger
+        store.set_summaries_status(source_id, previous)  # not running now; the outbox row still replays at startup
         raise
 
 

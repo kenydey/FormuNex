@@ -146,15 +146,17 @@ def test_enqueue_can_record_a_born_done_audit_row(db) -> None:
 
 
 def test_every_operation_the_api_enqueues_has_a_dispatch_handler() -> None:
-    """Pins the wiring: an api/* enqueue_outbox('<op>') with no handler would
-    be silently skipped on recovery (the doe_cycle regression)."""
+    """Pins the wiring: an api/* or services/* enqueue_outbox('<op>') with no
+    handler would be silently skipped on recovery (the doe_cycle regression)."""
     import re
 
-    api_dir = Path(__file__).resolve().parents[1] / "app" / "api"
+    base = Path(__file__).resolve().parents[1] / "app"
     ops: set[str] = set()
-    for py in api_dir.glob("*.py"):
+    for py in (base / "api").glob("*.py"):
         ops.update(re.findall(r"enqueue_outbox\(\s*[\"']([a-z_]+)[\"']", py.read_text(encoding="utf-8")))
-    assert ops, "expected api modules to enqueue outbox operations"
+    for py in (base / "services").rglob("*.py"):
+        ops.update(re.findall(r"enqueue_outbox\(\s*[\"']([a-z_]+)[\"']", py.read_text(encoding="utf-8")))
+    assert ops, "expected api/service modules to enqueue outbox operations"
     assert ops <= set(DISPATCHABLE_OPERATIONS), ops - set(DISPATCHABLE_OPERATIONS)
 
 
