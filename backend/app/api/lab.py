@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
 from ._principal import CurrentUser, current_user
@@ -400,12 +400,25 @@ async def upload_task_attachment(task_id: str, file: UploadFile = File(...),
 
 
 @router.get("/tasks/{task_id}/attachments/{attachment_id}/download")
-def download_task_attachment(task_id: str, attachment_id: str):
+def download_task_attachment(task_id: str, attachment_id: str, request: Request):
     from fastapi.responses import FileResponse
 
     from ..db.models_lab import LabTaskAttachmentRow
+    from ..services.identity import tokens
+    from ._principal import _bearer
 
     with _session() as session:
+        # Stage 0 / SR-005: guard-style check, mirroring rbac_guard. A
+        # personal JWT must hold task-scoped lab.execute or lab.review; the
+        # operator service key stays exempt and auth-disabled dev keeps
+        # working. (Personal actions use current_user; a download is a read.)
+        token = _bearer(request)
+        if token and tokens.looks_like_access_token(token):
+            project_id = _task_project_id(session, task_id)
+            user = current_user(request)
+            if not (user.principal.can("lab.execute", project_id)
+                    or user.principal.can("lab.review", project_id)):
+                raise HTTPException(status_code=403, detail="缺少权限 lab.execute/lab.review")
         row = session.get(LabTaskAttachmentRow, attachment_id)
         if row is None or row.task_id != task_id:
             raise HTTPException(status_code=404, detail="附件不存在")

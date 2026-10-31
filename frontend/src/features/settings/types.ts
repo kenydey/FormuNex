@@ -350,7 +350,7 @@ export interface OrgDashboardStats {
     formulation_preview: string;
     measured_at: string;
   }[];
-  ingredient_frequency: { ingredient_name: string; experiment_count: number; avg_weight_pct: number; best_result_metric: string | null }[];
+  ingredient_frequency: { ingredient_name: string; experiment_count: number; avg_weight_pct: number | null; best_result_metric: string | null }[];
   convergence_rate: number;
   avg_rounds_to_converge: number;
   recent_activity: { experiments_added: number; campaigns_created: number };

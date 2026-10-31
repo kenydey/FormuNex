@@ -94,7 +94,7 @@ const EXPECTED: Group[] = [
       { path: "/admin/companies", zh: "公司配置", permission: "admin.companies" },
       { path: "/admin/settings", zh: "设置中心", permissions: ["admin.llm", "admin.connectors"] },
       { path: "/admin/audit", zh: "审计日志", permission: "audit.read" },
-      { path: "/admin/org-dashboard", zh: "组织看板" },
+      { path: "/admin/org-dashboard", zh: "组织看板", permissions: ["formulation.read"] },
       { path: "/admin/desktop", zh: "桌面端与本机服务", hasWhen: true },
     ],
   },
@@ -253,6 +253,10 @@ describe("nav (8-group IA, scheme §2)", () => {
         // W1-6/D2: settings gate widened from admin.llm to admin.llm OR admin.connectors (nothing dropped, one added).
         expect(item.permission).toBeUndefined();
         expect(item.permissions).toEqual(["admin.llm", "admin.connectors"]);
+      } else if (old.path === "/admin/org-dashboard") {
+        // Stage 0 / SR-005: dashboard gate added (formulation.read; nothing dropped, paths unchanged).
+        expect(item.permission).toBeUndefined();
+        expect(item.permissions).toEqual(["formulation.read"]);
       } else {
         expect(item.permission).toBe(old.permission);
         expect(item.permissions).toBeUndefined();
@@ -308,7 +312,6 @@ describe("visibleNav (permission/when filtering)", () => {
     expect(vis.map((g) => g.path)).toEqual(NAV.map((g) => g.path));
     expect(vis.find((g) => g.path === "/admin")?.children?.map((l) => l.path)).toEqual([
       "/admin/mcp-approvals",
-      "/admin/org-dashboard",
     ]);
   });
 

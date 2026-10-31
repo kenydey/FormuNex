@@ -135,6 +135,15 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
 _SENSITIVE_READS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/identity/users$"), "admin.users"),
     (re.compile(r"^/api/identity/roles$"), "admin.users"),
+    # Stage 0 / SR-005: document text, document files, delivery ZIPs and
+    # batch-export ZIPs are business data. The W1-8 state gate (410) on
+    # delivery ZIPs is not a permission check; without these rows any
+    # login could enumerate products/revisions/documents and download
+    # released packages and attachments.
+    (re.compile(r"^/api/plm/documents/[^/]+$"), "plm.document.read"),
+    (re.compile(r"^/api/plm/documents/[^/]+/file/[^/]+$"), "plm.document.read"),
+    (re.compile(r"^/api/plm/packages/[^/]+/delivery$"), "plm.document.read"),
+    (re.compile(r"^/api/plm/documents/batch-export/[^/]+/download$"), "plm.document.read"),
 ]
 
 # (path pattern, permission-or-note). The endpoint itself enforces these —

@@ -1,17 +1,19 @@
 """Organization-level dashboard API for cross-project knowledge reuse."""
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import time
 from datetime import timedelta
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
 from ..clock import utcnow
 from ..db.models import Campaign, ExperimentRow, ProjectRow
 from ..db.session import get_db_session
+from ._principal import CurrentUser, optional_user
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +51,42 @@ def _dashboard_cache_put(payload: dict) -> None:
 
 
 @router.get("/dashboard")
-def org_dashboard() -> dict:
+def org_dashboard(user: CurrentUser | None = Depends(optional_user)) -> dict:
+    # Direct calls (e.g. the TTL test) get the Depends sentinel instead of a
+    # resolved user; treat that as the anonymous/service-key path, which
+    # keeps the pre-stage-0 full payload. FastAPI always resolves a real
+    # CurrentUser (which always carries .principal) or None here, so HTTP
+    # behavior is unchanged. (This FastAPI's Depends is a factory function,
+    # not a class, so isinstance against it is a TypeError.)
+    if user is not None and not hasattr(user, "principal"):
+        user = None
+    # Stage 0 / SR-005: the cached payload is shared, so band per caller
+    # (never mutate the cache). Mirrors formulations._can_read_exact:
+    # service keys / dev mode (user None) keep exact values; a signed-in
+    # account without formulation.read_exact sees no exact compositions —
+    # formulation_preview blanked, avg_weight_pct nulled. Deviation from
+    # the stage-0 plan's "current_user" wording, kept deliberately: the
+    # formulations endpoints use this same optional_user doctrine, and
+    # current_user would 401 operator service keys that read the dashboard.
     cached = _dashboard_cache_get()
     if cached is not None:
-        return cached
-    payload = _compute_org_dashboard()
-    _dashboard_cache_put(payload)
+        payload = cached
+    else:
+        payload = _compute_org_dashboard()
+        _dashboard_cache_put(payload)
+    if user is not None and not user.principal.can("formulation.read_exact"):
+        payload = _band_dashboard(payload)
     return payload
+
+
+def _band_dashboard(payload: dict) -> dict:
+    """Blank exact-composition fields for callers without read_exact."""
+    banded = copy.deepcopy(payload)
+    for performer in banded.get("top_performers") or []:
+        performer["formulation_preview"] = ""
+    for ingredient in banded.get("ingredient_frequency") or []:
+        ingredient["avg_weight_pct"] = None
+    return banded
 
 
 def _compute_org_dashboard() -> dict:

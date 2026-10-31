@@ -3,14 +3,22 @@ import { Empty, Skeleton, Table } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { Chart } from "@/shared/Chart";
-import { ErrorAlert } from "@/shared/feedback";
+import { ErrorAlert, Forbidden } from "@/shared/feedback";
 import type { OrgDashboardStats } from "./types";
 
 /** 组织级 R&D 仪表盘 (GET /api/org/dashboard). */
 export default function OrgDashboardPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const q = useQuery({ queryKey: ["settings", "org-dashboard"], queryFn: () => call<OrgDashboardStats>("GET", "/api/org/dashboard") });
+  // Stage 0 / SR-005: the dashboard aggregates cross-project business data;
+  // without formulation.read the page is Forbidden (nav is gated the same
+  // way). Exact compositions are additionally banded server-side for
+  // callers without formulation.read_exact. (Gate after hooks: hooks must
+  // run unconditionally.)
+  if (!can("formulation.read")) return <Forbidden permission="formulation.read" />;
   const d = q.data;
   const domains = Object.entries(d?.by_domain ?? {});
   return (
