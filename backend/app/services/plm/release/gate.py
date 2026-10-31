@@ -591,24 +591,68 @@ def waivers_for(session: Session, revision_id: str) -> dict[tuple[str, str, str 
         select(ReleaseGateWaiverRow).where(ReleaseGateWaiverRow.revision_id == revision_id)).scalars()}
 
 
+def _evaluation_error(check: Check, exc: Exception) -> None:
+    """W1-3: one failed check must never 500 the whole evaluation."""
+    check.fail("evaluation_error",
+               f"门禁评估异常（已按失败处理）：{type(exc).__name__}：{str(exc)[:200]}", waivable=False)
+
+
+def _run_check(checks: dict[str, Check], key: str, fn, *args) -> Any:
+    """Run one check; an exception becomes a fail-closed item on that check."""
+    try:
+        return fn(*args)
+    except Exception as exc:  # noqa: BLE001 - every check failure mode must surface as a gate item
+        _evaluation_error(checks[key], exc)
+        return None
+
+
 def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
     rev = session.get(ProductRevisionRow, revision_id)
     if rev is None:
         raise GateError("产品修订版不存在")
     product = session.get(ProductRow, rev.product_id)
     checks = {key: Check(key, code, title) for key, code, title in CHECKS}
-    fv, items = _items(session, rev)
-    _check_total(checks["formula_total"], fv)
-    components = _check_substances(session, checks["substance_data"], items)
-    _check_objectives(session, checks["objectives"], rev)
-    docs, problems = select_package_documents(session, rev)
-    _check_red_lines(session, checks["red_lines"], rev, fv, components, items, _classification_properties(docs))
-    results = _check_classification(session, checks["classification_current"], docs, items)
-    _check_documents(checks["documents"], problems)
-    _check_consistency(checks["consistency"], docs)
-    _check_sds_label(checks["sds_label"], docs)
-    _check_fields(checks["required_fields"], docs)
-    _check_gaps(checks["data_gaps"], results)
+    # Upstream failures must fail every downstream check that depends on
+    # them — a skipped check with no items would vacuously "pass".
+    try:
+        fv, items = _items(session, rev)
+    except Exception as exc:  # noqa: BLE001 - see _run_check
+        fv, items = None, []
+        _evaluation_error(checks["formula_total"], exc)
+        _evaluation_error(checks["substance_data"], exc)
+        components = []
+    else:
+        _run_check(checks, "formula_total", _check_total, checks["formula_total"], fv)
+        components = _run_check(checks, "substance_data", _check_substances, session,
+                                checks["substance_data"], items) or []
+    _run_check(checks, "objectives", _check_objectives, session, checks["objectives"], rev)
+    try:
+        docs, problems = select_package_documents(session, rev)
+    except Exception as exc:  # noqa: BLE001 - see _run_check
+        docs, problems = [], []
+        for key in ("documents", "consistency", "sds_label", "required_fields"):
+            _evaluation_error(checks[key], exc)
+    else:
+        _run_check(checks, "documents", _check_documents, checks["documents"], problems)
+        _run_check(checks, "consistency", _check_consistency, checks["consistency"], docs)
+        _run_check(checks, "sds_label", _check_sds_label, checks["sds_label"], docs)
+        _run_check(checks, "required_fields", _check_fields, checks["required_fields"], docs)
+    try:
+        props = _classification_properties(docs)
+    except Exception as exc:  # noqa: BLE001 - see _run_check
+        props = None
+        _evaluation_error(checks["red_lines"], exc)
+    else:
+        _run_check(checks, "red_lines", _check_red_lines, session, checks["red_lines"], rev, fv,
+                   components, items, props)
+    results = _run_check(checks, "classification_current", _check_classification, session,
+                         checks["classification_current"], docs, items)
+    if results is None:
+        # Classification failed: data gaps cannot be judged either.
+        checks["data_gaps"].fail("evaluation_error", "分类评估异常，数据缺口无法判定（已按失败处理）",
+                                 waivable=False)
+    else:
+        _run_check(checks, "data_gaps", _check_gaps, checks["data_gaps"], results)
 
     waivers = waivers_for(session, rev.id)
     out = [checks[key].to_dict(waivers) for key, _c, _t in CHECKS]
