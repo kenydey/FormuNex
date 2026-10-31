@@ -596,3 +596,24 @@ def test_production_without_signing_key_refuses_sign_in(env, monkeypatch):
         assert r.status_code == 503
     finally:
         get_settings.cache_clear()
+
+
+def test_gate_un_number_same_lang_across_regulations_does_not_fail(env):
+    """W1-13: a CN SDS and an EU SDS in the same language legitimately carry
+    different UN numbers; only a mismatch within one regulation fails G7."""
+    from app.db.database import default_session_factory
+    from app.db.models_plm import RegulatoryDocumentRow
+    c, rid = env["client"], env["rid"]
+    docs = _generate_all(env)
+    with default_session_factory()() as s:
+        sds = s.get(RegulatoryDocumentRow, docs["sds"]["id"])
+        content = json.loads(json.dumps(sds.content))
+        (content.setdefault("meta", {}).setdefault("facts", {}))["un_number"] = "1993"
+        sds.content = content
+        eu_content = json.loads(json.dumps(content))
+        eu_content["meta"]["facts"]["un_number"] = "1263"
+        s.add(RegulatoryDocumentRow(id=str(uuid.uuid4()), revision_id=rid, doc_type="sds", lang="zh-CN",
+                                    regulation="EU", version_no=1, status="draft", content=eu_content))
+        s.commit()
+    failed = _failed(c.get(f"/api/plm/revisions/{rid}/gate").json())
+    assert not any("UN 号不一致" in m for m in failed.get("consistency", []))

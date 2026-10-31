@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Iterable
 
@@ -59,6 +60,10 @@ def compute_pareto_mask(
     import numpy as np
 
     y = np.array(values, dtype=float)
+    # W1-13: a row with a missing metric (NaN) used to compare as neither
+    # dominated nor dominating, so it occupied front 0 forever. NaN rows are
+    # now excluded from the mask and can never dominate another row.
+    nan_rows = np.isnan(y).any(axis=1) if y.size else np.zeros(n, dtype=bool)
     for j, obj in enumerate(objectives):
         if j >= y.shape[1]:
             break
@@ -69,7 +74,7 @@ def compute_pareto_mask(
             # same "bigger is better" orientation minimize/maximize use below.
             y[:, j] = -np.abs(y[:, j] - obj.target_value)
 
-    is_pareto = np.ones(n, dtype=bool)
+    is_pareto = ~nan_rows
     for i in range(n):
         if not is_pareto[i]:
             continue
@@ -95,9 +100,10 @@ def compute_pareto_ranks(
     evolutionary search, where ranking the *whole* population matters — a
     boolean frontier mask cannot order the individuals it excludes.
 
-    Rows carrying NaN (a metric the predictor did not produce) never compare
-    as dominated *or* dominating, so they occupy front 0 forever; the
-    empty-front guard stops that from looping.
+    W1-13: rows carrying NaN (a metric the predictor did not produce) are
+    excluded from every frontier (rank ``None``) instead of occupying front 0
+    forever; the empty-front guard stops the peel loop once only NaN rows
+    remain.
     """
     n = len(values)
     if n == 0:
@@ -255,7 +261,7 @@ def analyze_tradeoffs(
     else:
         ranks = [0] * len(candidates)
     frontier_ids: list[str] = []
-    for cand, rank in zip(candidates, ranks):
+    for cand, rank, row_vals in zip(candidates, ranks, values):
         # `pareto` and `pareto_frontier_ids` keep their old meaning (front 0
         # only); `pareto_rank` now also tiers the runners-up instead of being
         # None for everything that missed the frontier.
@@ -263,6 +269,11 @@ def analyze_tradeoffs(
         cand.pareto_rank = rank
         if cand.pareto:
             frontier_ids.append(cand.id)
+        elif rank is None and obj_for_pareto:
+            # W1-13: filtered out of the frontier for missing metrics — say
+            # so on the candidate instead of silently dropping it.
+            missing = [o.metric for o, v in zip(obj_for_pareto, row_vals) if math.isnan(v)]
+            cand.warnings.append(f"缺少指标预测值（{', '.join(missing)}），未参与帕累托前沿评级")
 
     comparison_table: list[dict[str, object]] = []
     for cand in candidates:

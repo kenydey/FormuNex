@@ -206,31 +206,50 @@ def _check_total(c: Check, fv: FormulationVersion | None) -> None:
         c.fail("total", f"配方合计 {total:.4f}%，与 100% 相差超过 {TOTAL_TOLERANCE_PCT}%")
 
 
-def _check_substances(session: Session, c: Check, items: list[dict]) -> list:
+def _check_substances(session: Session, c: Check, items: list[dict], regs: list[str]) -> list:
+    """W1-13: substance data is judged per regulation with that regulation's
+    rule set (``ruleset_for(reg)``), the same aperture ``_check_classification``
+    uses — a CN-only assessment used to disagree with the EU/US classification
+    result. Failures carry a ``:REG`` key suffix (none for CN) so one
+    regulation's failure never overwrites another's; the lock check is
+    regulation-independent and runs once. Returns the first regulation's
+    build (CN when present, since regs sort CN first) for the red-lines
+    check, which only reads CAS / pct — identical across rule sets."""
     if not items:
         c.fail("formulation_version", "没有可评估的配方组分")
         return []
-    built = build_components(session, items, load_ruleset())
-    sub_ids = [x.substance_id for x in built.components if x.substance_id]
+    regs = regs or [DEFAULT_REGULATION]
+    first: list = []
+    for reg in regs:
+        suffix = "" if reg == "CN" else f":{reg}"
+        label_suffix = "" if reg == "CN" else f" [{reg}]"
+        built = build_components(session, items, load_ruleset(ruleset_for(reg)))
+        if not first:
+            first = built.components
+        for comp in built.components:
+            label = f"{comp.name}（{comp.cas or '无 CAS'}，{comp.pct:g}%）{label_suffix}"
+            k = item_key(comp.substance_id or comp.cas or comp.name) + suffix
+            if not comp.assessed:
+                c.fail(k, f"{label}：危害未评估")
+                continue
+            weak = sorted({h.source for h in comp.hazards if rank(h.source) > rank(MIN_SOURCE)})
+            if weak:
+                c.fail(k, f"{label}：分类来源置信度不足（{', '.join(weak)}），需供应商 SDS 或法规专员确认")
+    sub_ids = [x.substance_id for x in first if x.substance_id]
     locked = set(session.execute(
         select(SubstanceClassificationRow.substance_id).where(
             SubstanceClassificationRow.substance_id.in_(sub_ids), SubstanceClassificationRow.source == "manual",
             SubstanceClassificationRow.locked_at.is_not(None))
     ).scalars()) if sub_ids else set()
-    for comp in built.components:
+    for comp in first:
         label = f"{comp.name}（{comp.cas or '无 CAS'}，{comp.pct:g}%）"
         k = item_key(comp.substance_id or comp.cas or comp.name)
-        if not comp.assessed:
-            c.fail(k, f"{label}：危害未评估")
-            continue
-        weak = sorted({h.source for h in comp.hazards if rank(h.source) > rank(MIN_SOURCE)})
-        if weak:
-            c.fail(k, f"{label}：分类来源置信度不足（{', '.join(weak)}），需供应商 SDS 或法规专员确认")
         is_key = comp.pct >= KEY_PCT or (comp.hazards and comp.pct >= HAZARDOUS_KEY_PCT)
         if is_key and comp.substance_id and comp.substance_id not in locked:
             c.fail(k + ":lock", f"{label}：关键组分的分类尚未由法规专员锁定")
-    c.evidence["components"] = len(built.components)
-    return built.components
+    c.evidence["components"] = len(first)
+    c.evidence["regulations"] = regs
+    return first
 
 
 def _check_objectives(session: Session, c: Check, rev: ProductRevisionRow) -> None:
@@ -512,9 +531,21 @@ def _check_consistency(c: Check, docs: list[RegulatoryDocumentRow]) -> None:
         lo, hi = min(vals, key=lambda x: x[1]), max(vals, key=lambda x: x[1])
         if hi[1] - lo[1] > CONSISTENCY_TOLERANCE[k] + 1e-9:  # binary floats: 1.36 - 1.34 > 0.02
             c.fail(item_key("value", k), f"{k}：{lo[0]} = {lo[1]:g}，{hi[0]} = {hi[1]:g}，超出容差 ±{CONSISTENCY_TOLERANCE[k]:g}")
-    uns = {(f"SDS {d.lang}", (_facts(d) or {}).get("un_number")) for d in docs if d.doc_type == "sds" and _facts(d)}
-    if len({u for _n, u in uns}) > 1:
-        c.fail("un_number", "各语言 SDS 的 UN 号不一致：" + "，".join(f"{n} {u or '不受管制'}" for n, u in sorted(uns)))
+    # W1-13: UN numbers agree within one regulation across languages — the
+    # same language under different regulations legitimately differs (mirror
+    # _check_sds_label's (lang, regulation) grouping, never lang alone).
+    uns_by_reg: dict[str, dict[str, str | None]] = {}
+    for d in docs:
+        if d.doc_type == "sds" and _facts(d):
+            reg = getattr(d, "regulation", None) or DEFAULT_REGULATION
+            uns_by_reg.setdefault(reg, {})[d.lang] = (_facts(d) or {}).get("un_number")
+    for reg in sorted(uns_by_reg):
+        uns = uns_by_reg[reg]
+        if len(set(uns.values())) > 1:
+            suffix = "" if reg == "CN" else f" [{reg}]"
+            c.fail(item_key("un_number", reg),
+                   f"各语言 SDS 的 UN 号不一致{suffix}：" + "，".join(
+                       f"SDS {lang} {u or '不受管制'}" for lang, u in sorted(uns.items())))
     c.evidence["compared"] = {k: v for k, v in values.items()}
 
 
@@ -612,6 +643,18 @@ def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
         raise GateError("产品修订版不存在")
     product = session.get(ProductRow, rev.product_id)
     checks = {key: Check(key, code, title) for key, code, title in CHECKS}
+    # W1-13: documents are selected before the substance check — G2 evaluates
+    # per regulation, and the regulations come from the package's SDS / label
+    # documents. A selection failure still fails the four document checks
+    # (as before) and G2 falls back to the CN rule set (its old behavior).
+    try:
+        docs, problems = select_package_documents(session, rev)
+        docs_failed = False
+    except Exception as exc:  # noqa: BLE001 - see _run_check
+        docs, problems = [], []
+        docs_failed = True
+        for key in ("documents", "consistency", "sds_label", "required_fields"):
+            _evaluation_error(checks[key], exc)
     # Upstream failures must fail every downstream check that depends on
     # them — a skipped check with no items would vacuously "pass".
     try:
@@ -623,16 +666,12 @@ def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
         components = []
     else:
         _run_check(checks, "formula_total", _check_total, checks["formula_total"], fv)
+        regs = sorted({getattr(d, "regulation", None) or DEFAULT_REGULATION
+                       for d in docs if d.doc_type in ("sds", "label")}) or [DEFAULT_REGULATION]
         components = _run_check(checks, "substance_data", _check_substances, session,
-                                checks["substance_data"], items) or []
+                                checks["substance_data"], items, regs) or []
     _run_check(checks, "objectives", _check_objectives, session, checks["objectives"], rev)
-    try:
-        docs, problems = select_package_documents(session, rev)
-    except Exception as exc:  # noqa: BLE001 - see _run_check
-        docs, problems = [], []
-        for key in ("documents", "consistency", "sds_label", "required_fields"):
-            _evaluation_error(checks[key], exc)
-    else:
+    if not docs_failed:
         _run_check(checks, "documents", _check_documents, checks["documents"], problems)
         _run_check(checks, "consistency", _check_consistency, checks["consistency"], docs)
         _run_check(checks, "sds_label", _check_sds_label, checks["sds_label"], docs)

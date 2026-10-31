@@ -174,7 +174,10 @@ def dispatch_plan(session: Session, plan_id: str, *, metrics: list[Any], user_id
             doe_plan_store.set_status(session, plan_id, "active")
     except (LookupError, ValueError):
         pass
-    return {"created": created, "skipped": skipped, "process_window_warnings": warnings}
+    # W1-13 (D14): the KG chemical gate stays fail-open, but its note must
+    # reach the scheduler — plan.notes carries the "gate skipped" trace.
+    return {"created": created, "skipped": skipped, "process_window_warnings": warnings,
+            "plan_notes": plan.notes or None}
 
 
 def task_sample(session: Session, task: LabTaskRow) -> SampleRow:

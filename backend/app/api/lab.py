@@ -251,7 +251,9 @@ def dispatch_plan(body: DispatchIn, user: CurrentUser = Depends(current_user)) -
         session.commit()
         return {"created": [tasks.task_dict(session, t) for t in out["created"]], "skipped": out["skipped"],
                 # 补齐计划 2-10: 下发任务因子 vs 契约工艺窗口的偏离警告（只警告，不拦截）。
-                "process_window_warnings": out.get("process_window_warnings", [])}
+                "process_window_warnings": out.get("process_window_warnings", []),
+                # W1-13 (D14): KG 门 fail-open 的 note 透传给调度方。
+                "plan_notes": out.get("plan_notes")}
 
 
 @router.post("/tasks", status_code=201)

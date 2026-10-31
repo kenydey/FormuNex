@@ -144,9 +144,19 @@ def _assign_ranks(population: list[_Individual], objectives: list[ObjectiveSpec]
     worst = 0
     if feasible:
         ranks = compute_pareto_ranks(_objective_matrix(feasible, objectives), objectives)
+        unranked = []
         for ind, rank in zip(feasible, ranks):
-            ind.rank = rank if rank is not None else 0
-            worst = max(worst, ind.rank)
+            if rank is None:
+                # W1-13: a NaN row is not frontier material — it ranks after
+                # every ranked individual (the old `else 0` put it on front 0).
+                unranked.append(ind)
+            else:
+                ind.rank = rank
+                worst = max(worst, rank)
+        for offset, ind in enumerate(unranked):
+            ind.rank = worst + 1 + offset
+        if unranked:
+            worst = unranked[-1].rank
     for offset, ind in enumerate(sorted(infeasible, key=lambda i: i.violation)):
         ind.rank = worst + 1 + offset
 
