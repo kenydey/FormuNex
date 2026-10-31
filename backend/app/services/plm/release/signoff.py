@@ -396,10 +396,24 @@ def _release(session: Session, pkg: ReleasePackageRow, rev: ProductRevisionRow, 
 
 def withdraw(session: Session, package_id: str, *, reason: str, user_id: str, principal: Principal,
              password: str) -> ReleasePackageRow:
-    pkg = session.get(ReleasePackageRow, package_id)
+    # Stage 1 / SR-049: lock the package AND its revision up front, then
+    # re-check state inside the lock (the checks below already do this --
+    # they now run after the locks, which is the point). Choice recorded:
+    # lock + in-lock recheck, NOT a package-level unique meaning key for
+    # the withdraw signature: withdraw rows carry step_id NULL, so the
+    # existing (step_id, user, meaning) unique key cannot dedupe them
+    # under either dialect's NULL semantics, and the released->withdrawn
+    # transition itself is the single-withdraw guard once serialised.
+    # On PostgreSQL the second withdraw blocks on the lock and then fails
+    # the status check; on SQLite _lock_row is a no-op and writers are
+    # serialised by the file lock, same as sign_step.
+    pkg = _lock_row(session, ReleasePackageRow, package_id)
     if pkg is None:
         raise ReleaseError("发布包不存在")
     rev, product = _rev(session, pkg.revision_id)
+    rev = _lock_row(session, ProductRevisionRow, rev.id)
+    if rev is None:
+        raise ReleaseError("产品修订版不存在")
     _require(principal, "release.withdraw", product.project_id)
     if pkg.status != "released":
         raise ReleaseError("只能撤回已发布的发布包")
