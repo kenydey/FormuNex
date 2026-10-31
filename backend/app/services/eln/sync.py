@@ -12,8 +12,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+def _like_escape(value: str) -> str:
+    """Escape a value interpolated into a LIKE pattern (``%``, ``_``, ``\\``).
+
+    Stage 1 / SR-052: connector/external ids come from the remote ELN,
+    so an id containing ``%`` or ``_`` must not widen the match to other
+    links' measurements. The pattern below always passes ``escape="\\"``.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _external_ref_prefix(connector: str, external_id: str) -> str:
+    return f"{_like_escape(connector)}:{_like_escape(external_id)}:%"
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -53,8 +70,9 @@ def _digest(state: dict[str, float]) -> str:
 
 def _local_state(session: Session, connector: str, external_id: str) -> dict[str, float]:
     rows = session.execute(select(MeasurementRow).where(
-        MeasurementRow.external_ref.like(f"{connector}:{external_id}:%"),
-        MeasurementRow.review_status != "rejected").order_by(MeasurementRow.created_at)).scalars().all()
+        MeasurementRow.external_ref.like(_external_ref_prefix(connector, external_id), escape="\\"),
+        MeasurementRow.review_status != "rejected").order_by(
+            MeasurementRow.created_at, MeasurementRow.id)).scalars().all()
     return {r.metric: r.value for r in rows}
 
 
@@ -66,8 +84,9 @@ def _local_units(session: Session, connector: str, external_id: str) -> dict[str
     ``content_hash`` — no hash-format migration, no conflict storm on upgrade.
     """
     rows = session.execute(select(MeasurementRow).where(
-        MeasurementRow.external_ref.like(f"{connector}:{external_id}:%"),
-        MeasurementRow.review_status != "rejected").order_by(MeasurementRow.created_at)).scalars().all()
+        MeasurementRow.external_ref.like(_external_ref_prefix(connector, external_id), escape="\\"),
+        MeasurementRow.review_status != "rejected").order_by(
+            MeasurementRow.created_at, MeasurementRow.id)).scalars().all()
     return {r.metric: r.unit or "" for r in rows}
 
 
@@ -173,6 +192,17 @@ def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | Non
             link.sync_state = "error"
             report["errors"].append({"task_no": task.task_no, "error": str(exc)})
             continue
+        # Stage 1 / SR-052: a remote payload that repeats a metric keeps
+        # the last value (dict construction below) — but that must be a
+        # visible warning, not a silent choice, so an ELN double-report
+        # is noticed instead of quietly overwriting.
+        seen_metrics: set[str] = set()
+        for v in values:
+            if v.metric in seen_metrics:
+                logger.warning(
+                    "eln pull: duplicate remote metric %r for external_id %s; keeping the last value",
+                    v.metric, link.external_id)
+            seen_metrics.add(v.metric)
         remote = {v.metric: v.value for v in values}
         remote_units = {v.metric: v.unit or "" for v in values}
         local = _local_state(session, link.connector, link.external_id)
