@@ -97,14 +97,12 @@ def _audit(session: Session, actor: str, action: str, entity_type: str, entity_i
 # --------------------------------------------------------------------------- documents
 
 
-def approve_document(session: Session, document_id: str, *, user_id: str, principal: Principal, password: str,
-                     comment: str = "") -> RegulatoryDocumentRow:
-    """Review sign-off of one document (draft → approved); COA approval is its issue."""
-    doc = _lock_row(session, RegulatoryDocumentRow, document_id)
-    if doc is None:
-        raise ReleaseError("文档不存在")
-    rev, product = _rev(session, doc.revision_id)
-    _require(principal, "coa.sign" if doc.doc_type == "coa" else "plm.document.review", product.project_id)
+def _approve_guards(session: Session, doc: RegulatoryDocumentRow) -> None:
+    """Content guards shared by the normal and exemption approval paths.
+
+    The exemption (W1-5) waives only the authorship-attribution rule;
+    it never waives content validation.
+    """
     if doc.status != "draft":
         raise ReleaseError(f"文档状态为 {doc.status}，只能审核草稿")
     newer = session.execute(select(RegulatoryDocumentRow.id).where(
@@ -118,13 +116,67 @@ def approve_document(session: Session, document_id: str, *, user_id: str, princi
         raise ReleaseError(f"文档有缺项，不能审核通过：{'、'.join(missing)}")
     if doc.doc_type == "coa" and (doc.content.get("meta") or {}).get("overall") != "PASS":
         raise ReleaseError("COA 结论不是“合格”，不能签发")
-    if doc.created_by and doc.created_by == user_id:
+
+
+def approve_document(session: Session, document_id: str, *, user_id: str, principal: Principal, password: str,
+                     comment: str = "") -> RegulatoryDocumentRow:
+    """Review sign-off of one document (draft → approved); COA approval is its issue."""
+    doc = _lock_row(session, RegulatoryDocumentRow, document_id)
+    if doc is None:
+        raise ReleaseError("文档不存在")
+    rev, product = _rev(session, doc.revision_id)
+    _require(principal, "coa.sign" if doc.doc_type == "coa" else "plm.document.review", product.project_id)
+    _approve_guards(session, doc)
+    # W1-5: a document with no author attribution (generated through a
+    # service API key) cannot be told apart from its reviewer, so the
+    # natural-person review path refuses it fail-closed; see
+    # approve_document_exempt for the audited exemption path.
+    if not doc.created_by:
+        raise Forbidden("文档无编制人归属（服务 API key 生成），自然人审核路径拒绝；"
+                        "如需审核请走审批豁免（approve-exempt）并说明理由")
+    if doc.created_by == user_id:
         raise Forbidden("编制人不能审核自己生成的文档")
     esign.sign(session, user_id=user_id, password=password, meaning="review", subject_type="regulatory_document",
                subject_id=doc.id, object_hash=doc.content_hash, detail={"comment": comment})
     doc.status = "approved"
     _audit(session, user_id, "document.approve", "regulatory_document", doc.id, doc_type=doc.doc_type,
            lang=doc.lang, version_no=doc.version_no)
+    return doc
+
+
+def approve_document_exempt(session: Session, document_id: str, *, user_id: str, principal: Principal, password: str,
+                            reason: str) -> RegulatoryDocumentRow:
+    """Audited exemption approval for unattributed documents (W1-5).
+
+    Only for documents whose ``created_by`` is empty (service-key
+    generation). Approval needs the same review permission and content
+    guards as the normal path, plus a password re-authentication, an
+    explicit reason, an audit record, and the exemption stamped on the
+    document itself — so the approval stays traceable from the document,
+    not just from the audit chain. Documents WITH an author must use
+    the normal path (this path refuses them).
+    """
+    doc = _lock_row(session, RegulatoryDocumentRow, document_id)
+    if doc is None:
+        raise ReleaseError("文档不存在")
+    rev, product = _rev(session, doc.revision_id)
+    _require(principal, "coa.sign" if doc.doc_type == "coa" else "plm.document.review", product.project_id)
+    _approve_guards(session, doc)
+    if doc.created_by:
+        raise ReleaseError("文档已有编制人归属，请走正常审核路径")
+    if not reason.strip():
+        raise ReleaseError("豁免审核必须说明理由")
+    esign.sign(session, user_id=user_id, password=password, meaning="review", subject_type="regulatory_document",
+               subject_id=doc.id, object_hash=doc.content_hash,
+               detail={"exemption": True, "reason": reason})
+    content = dict(doc.content or {})
+    meta = dict(content.get("meta") or {})
+    meta["approval_exemption"] = {"by": user_id, "reason": reason, "at": utcnow().isoformat()}
+    content["meta"] = meta
+    doc.content = content
+    doc.status = "approved"
+    _audit(session, user_id, "document.approve_exempt", "regulatory_document", doc.id, doc_type=doc.doc_type,
+           lang=doc.lang, version_no=doc.version_no, reason=reason)
     return doc
 
 

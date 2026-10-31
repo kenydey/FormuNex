@@ -1173,6 +1173,10 @@ class PasswordConfirm(BaseModel):
     comment: str = Field(default="", max_length=2000)
 
 
+class ExemptIn(PasswordConfirm):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class WaiverIn(PasswordConfirm):
     check: Literal["objectives", "data_gaps"]
     item: str = Field(min_length=1, max_length=200)
@@ -1225,6 +1229,25 @@ def approve_document(document_id: str, body: PasswordConfirm, user: CurrentUser 
     with _session() as session:
         row = _release_call(session, signoff.approve_document, document_id, user_id=user.id,
                             principal=user.principal, password=body.password, comment=body.comment)
+        session.commit()
+        return _doc_summary(row)
+
+
+@router.post("/documents/{document_id}/approve-exempt")
+def approve_document_exempt(document_id: str, body: ExemptIn, user: CurrentUser = Depends(current_user)
+                            ) -> dict[str, Any]:
+    """Audited exemption approval for documents without author attribution (W1-5).
+
+    The normal approve path refuses ``created_by``-empty documents
+    fail-closed; this path approves them only with an explicit reason,
+    a password re-authentication and an audit record, and stamps the
+    exemption on the document itself.
+    """
+    from ..services.plm.release import signoff
+
+    with _session() as session:
+        row = _release_call(session, signoff.approve_document_exempt, document_id, user_id=user.id,
+                            principal=user.principal, password=body.password, reason=body.reason)
         session.commit()
         return _doc_summary(row)
 
