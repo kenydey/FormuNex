@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 
 import pytest
-from sqlalchemy import create_engine, delete, func, insert, select, update
+from sqlalchemy import and_, create_engine, delete, func, insert, select, update
 
 import app.db.models  # noqa: F401  (registers every table)
 from app.db.models import Base
@@ -295,3 +295,57 @@ def test_second_approved_row_same_digest_rejected(engine, resources):
         c.execute(insert(RegulatoryDataRelease).values(
             id="draft-same-digest", label="draft", source="seed", stats={},
             input_digest=digest, created_at=datetime(2026, 10, 1), status="draft"))
+
+
+def test_eh40_backfill_completes_variant_notes_only(engine, resources):
+    """Stage 1 / SR-034: backfill appends missing EH40 variant notes to an existing row, values untouched."""
+    from app.db.models_regulatory import SubstanceOELRow, SubstanceRow
+    from app.services.plm.regulatory.seed import EH40_STANDARD
+
+    seed_regulatory_db(engine, resources=resources)
+    with engine.begin() as c:
+        sid = c.execute(select(SubstanceRow.id).where(SubstanceRow.cas_no == "111-11-5")).scalar_one()
+        row = c.execute(select(SubstanceOELRow.id, SubstanceOELRow.pc_twa).where(
+            and_(SubstanceOELRow.substance_id == sid,
+                 SubstanceOELRow.standard == EH40_STANDARD))).one()
+        assert row[1] == 20  # first variant wins numerically
+        c.execute(update(SubstanceOELRow).where(SubstanceOELRow.id == row[0]).values(notes=""))
+    result = seed_regulatory_db(engine, resources=resources, backfill=True)
+    assert result["stats"]["eh40_backfill_notes_appended"] == 5
+    with engine.connect() as c:
+        row = c.execute(select(SubstanceOELRow.pc_twa, SubstanceOELRow.notes).where(
+            and_(SubstanceOELRow.substance_id == sid,
+                 SubstanceOELRow.standard == EH40_STANDARD))).one()
+        assert row[0] == 20
+        for i in range(1, 6):
+            assert f"Multivariant dust form {i}" in row[1]
+        notes_after_first = row[1]
+    seed_regulatory_db(engine, resources=resources, backfill=True)
+    with engine.connect() as c:
+        row = c.execute(select(SubstanceOELRow.notes).where(
+            and_(SubstanceOELRow.substance_id == sid,
+                 SubstanceOELRow.standard == EH40_STANDARD))).scalar_one()
+        assert row == notes_after_first  # no duplicate append on re-runs
+
+
+def test_backfill_drift_orphan_reported_to_review_queue(engine, resources):
+    """Stage 1 / SR-034: a transport row no file entry covers is reported, not silently kept."""
+    from app.db.models_regulatory import RegulatoryReviewItem, SubstanceTransportRow
+    from app.services.plm.regulatory.seed import TRANSPORT_STANDARD
+
+    seed_regulatory_db(engine, resources=resources)
+    with engine.begin() as c:
+        c.execute(insert(SubstanceTransportRow).values(
+            id="orphan-1", un_number="9998", proper_shipping_name_zh="孤儿条目",
+            standard=TRANSPORT_STANDARD, release_id=None))
+    result = seed_regulatory_db(engine, resources=resources, backfill=True)
+    assert result["stats"]["drift"]["transport_orphan"] == 1
+    assert result["stats"]["drift"]["substances_missing"] == 0
+    with engine.connect() as c:
+        items = c.execute(select(RegulatoryReviewItem.name, RegulatoryReviewItem.detail).where(
+            RegulatoryReviewItem.kind == "seed_drift")).all()
+    assert len(items) == 1
+    assert items[0][0] == "transport"
+    assert items[0][1]["orphan_count"] == 1
+    seed_regulatory_db(engine, resources=resources, backfill=True)
+    assert _count(engine, RegulatoryReviewItem, RegulatoryReviewItem.kind == "seed_drift") == 1

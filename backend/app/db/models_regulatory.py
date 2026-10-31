@@ -225,6 +225,17 @@ class SubstanceTransportRow(Base):
 
     __tablename__ = "substance_transport"
 
+    # Stage 1 / SR-034: one row per (UN number, shipping name, substance).
+    # A plain index (not a DB-level constraint object): SQLite cannot
+    # ADD CONSTRAINT to an existing table, and the unique index enforces
+    # the same rule on both dialects. NULL substance_id rows (unlinked
+    # entries) stay distinct under both dialects' NULL semantics, so an
+    # unlinked entry can never block a later linked one.
+    __table_args__ = (
+        Index("uq_transport_un_name_substance", "un_number", "proper_shipping_name_zh",
+              "substance_id", unique=True),
+    )
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     un_number: Mapped[str] = mapped_column(String(8), index=True)
     substance_id: Mapped[str | None] = mapped_column(

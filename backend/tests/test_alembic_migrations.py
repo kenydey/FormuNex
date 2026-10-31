@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0085(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0085_stage1_approved_digest_unique``)."""
+def test_revision_chain_head_is_0086(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0086_stage1_transport_unique``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0085(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0085"
+    assert heads[0] == "0086"
 
 
 def test_migrations_partial_columns_branch(
@@ -1026,4 +1026,64 @@ def test_0085_refuses_when_approved_duplicates_exist(
     finally:
         engine.dispose()
     with pytest.raises(RuntimeError, match="duplicate APPROVED"):
+        run_upgrade(tmp_db_url, monkeypatch)
+
+
+def _create_0085_transport_schema(db_url: str) -> None:
+    """Minimal 0085-shaped schema: substance_transport without the index, stamped at 0085."""
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE TABLE substance_transport (id VARCHAR(36) PRIMARY KEY, un_number VARCHAR(8), "
+                "substance_id VARCHAR(36), proper_shipping_name_zh VARCHAR(500), standard VARCHAR(40))"))
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+            conn.execute(text("INSERT INTO alembic_version VALUES ('0085')"))
+    finally:
+        engine.dispose()
+
+
+def test_0086_adds_transport_unique_index_and_refuses_duplicates(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stage 1 / SR-034: upgrade adds the transport unique index; duplicates refuse the migration."""
+    from tests.alembic_helpers import run_downgrade
+
+    _create_0085_transport_schema(tmp_db_url)
+    run_upgrade(tmp_db_url, monkeypatch)
+    engine = create_engine(tmp_db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO substance_transport VALUES ('t1', '1170', 's1', '乙醇', 'GB 12268-2025')"))
+        with pytest.raises(Exception, match="duplicate|UNIQUE"):
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO substance_transport VALUES ('t2', '1170', 's1', '乙醇', 'GB 12268-2025')"))
+        # Unlinked rows (NULL substance_id) stay distinct: no false block.
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO substance_transport VALUES ('t3', '9999', NULL, '未定物质', 'GB 12268-2025')"))
+            conn.execute(text(
+                "INSERT INTO substance_transport VALUES ('t4', '9999', NULL, '未定物质', 'GB 12268-2025')"))
+    finally:
+        engine.dispose()
+    run_downgrade(tmp_db_url, monkeypatch, "0085")
+    run_upgrade(tmp_db_url, monkeypatch)
+
+
+def test_0086_refuses_when_transport_duplicates_exist(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stage 1 / SR-034 dirty guard: pre-existing duplicate linked transport rows stop the migration."""
+    _create_0085_transport_schema(tmp_db_url)
+    engine = create_engine(tmp_db_url)
+    try:
+        with engine.begin() as conn:
+            for rid in ("t1", "t2"):
+                conn.execute(text(
+                    f"INSERT INTO substance_transport VALUES ('{rid}', '1170', 's1', '乙醇', 'GB 12268-2025')"))
+    finally:
+        engine.dispose()
+    with pytest.raises(RuntimeError, match="duplicate transport"):
         run_upgrade(tmp_db_url, monkeypatch)

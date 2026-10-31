@@ -88,7 +88,7 @@ TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
 SEED_REVIEW_KINDS = (
     "invalid_cas", "repaired_cas", "hazard_text", "duplicate_catalog_entry", "oel_unmatched",
-    "eh40_unmatched", "transport_unlinked", "transport_link_missing",
+    "eh40_unmatched", "transport_unlinked", "transport_link_missing", "seed_drift",
 )
 _FILES = (
     "common_chemicals.json.gz", "hazard_chemical_info.json", "oel_gbz2_2019.json", "oel_eh40.json",
@@ -224,10 +224,15 @@ def seed_regulatory_db(
         _replace_generic_entries(conn, resources, release_id, stats, backfill=backfill)
         _replace_oel(conn, resources, cas_to_id, release_id, review, stats, backfill=backfill)
         _replace_oel_eh40(conn, resources, cas_to_id, release_id, review, stats, backfill=backfill)
-        _replace_transport(conn, resources, release_id, review, stats, backfill=backfill)
+        transport_keys = _replace_transport(conn, resources, release_id, review, stats, backfill=backfill)
         _mark_iecsc(conn, resources, stats, backfill=backfill)
         _upsert_statements(conn, resources, stats, backfill=backfill)
         _replace_review_items(conn, review, stats, backfill=backfill)
+        if backfill:
+            # Stage 1 / SR-034: a completion pass never silently leaves
+            # file-vs-database drift behind — it is reported into the
+            # W1-9 review queue (no second queue) and into stats.
+            _report_seed_drift(conn, subs, transport_keys, release_id, stats)
         # P1-1: update-package merges + per-file source versions.
         _record_source_versions(resources, files, stats)
         if not backfill:
@@ -764,6 +769,14 @@ def _eh40_value_text(rec: dict) -> str:
     return "、".join(bits)
 
 
+def _eh40_variant_note(rec: dict) -> str:
+    """The compact note a later EH40 variant of a substance appends (stage 1 / SR-034)."""
+    text = _eh40_value_text(rec)
+    if not text:
+        return ""
+    return f"另：{rec.get('name_en') or rec.get('name_cn') or ''}：{text}"
+
+
 def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, str], release_id: str,
                       review: _Review, stats: dict, backfill: bool = False) -> None:
     """G4: EH40/2005 limits into SubstanceOELRow (standard EH40/2005).
@@ -775,18 +788,30 @@ def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, st
     numerically and later variants append a compact note to the kept row,
     so no limit value is silently dropped. A missing file (fixture
     resource dirs) seeds nothing.
+
+    Stage 1 / SR-034: the variant rule also applies to a completion
+    pass, which used to ``continue`` past every existing row and drop
+    its variants silently. Now the first file record for an existing
+    row is still skipped (its values are already in the row), but each
+    later variant appends its note to the stored row's notes — values
+    untouched, and an already-present note is never appended twice.
+    Variant rows are NOT split into separate rows; that stays a
+    separate item. A backfill never changes a limit value.
     """
     path = resources / "oel_eh40.json"
     if not path.exists():
         stats.update(eh40_rows=0, eh40_unmatched=0)
         return
-    existing: set[str] = set()
+    existing: dict[str, str] = {}
     if backfill:
-        existing = {r.substance_id for r in conn.execute(select(SubstanceOELRow.substance_id).where(
-            SubstanceOELRow.standard == EH40_STANDARD))}
+        existing = {r.substance_id: (r.notes or "") for r in conn.execute(
+            select(SubstanceOELRow.substance_id, SubstanceOELRow.notes).where(
+                SubstanceOELRow.standard == EH40_STANDARD))}
     else:
         conn.execute(delete(SubstanceOELRow).where(SubstanceOELRow.standard == EH40_STANDARD))
     rows, by_sid, unmatched = [], {}, 0
+    seen_existing: set[str] = set()
+    notes_appended = 0
     for rec in _load_json(path)["records"]:
         cas_list = [c for c, _ in (cas_mod.repair(x) for x in cas_mod.split_many(rec.get("cas_number"))) if c]
         if not cas_list:
@@ -798,14 +823,27 @@ def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, st
             sid = _ensure_substance(conn, cas, rec.get("name_cn") or "", rec.get("name_en") or "",
                                     cas_to_id, release_id)
             if sid in existing:
-                # Completion pass never appends variant notes to an existing
-                # row: the row's values stay exactly as seeded before.
+                # Completion pass: the first file record for an existing
+                # row is its base values (already stored), so it is
+                # skipped; each later variant completes the row's notes
+                # (values untouched, no duplicate append on re-runs).
+                if sid in seen_existing:
+                    note = _eh40_variant_note(rec)
+                    if note and note not in existing[sid]:
+                        new_notes = ((existing[sid] + "\n" + note)[:_OEL_NOTES_MAX]
+                                     if existing[sid] else note[:_OEL_NOTES_MAX])
+                        conn.execute(update(SubstanceOELRow).where(and_(
+                            SubstanceOELRow.substance_id == sid,
+                            SubstanceOELRow.standard == EH40_STANDARD)).values(notes=new_notes))
+                        existing[sid] = new_notes
+                        notes_appended += 1
+                else:
+                    seen_existing.add(sid)
                 continue
             if sid in by_sid:
                 kept = by_sid[sid]
-                text = _eh40_value_text(rec)
-                if text:
-                    note = f"另：{rec.get('name_en') or rec.get('name_cn') or ''}：{text}"
+                note = _eh40_variant_note(rec)
+                if note:
                     # W1-9: one variant per line, no 200-character cut — the
                     # old "；" join truncated here and later variants' limits
                     # were silently lost (worst bundled case: 203 chars).
@@ -828,7 +866,8 @@ def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, st
             by_sid[sid] = row
     for chunk in _chunks(rows):
         conn.execute(insert(SubstanceOELRow), chunk)
-    stats.update(eh40_rows=len(rows), eh40_unmatched=unmatched)
+    stats.update(eh40_rows=len(rows), eh40_unmatched=unmatched,
+                 eh40_backfill_notes_appended=notes_appended)
 
 
 def _name_aliases(name: str) -> list[str]:
@@ -847,7 +886,7 @@ def _name_aliases(name: str) -> list[str]:
 
 
 def _replace_transport(conn: Connection, resources: Path, release_id: str, review: _Review, stats: dict,
-                       backfill: bool = False) -> None:
+                       backfill: bool = False) -> set[tuple[str, str]]:
     existing: set[tuple[str, str]] = set()
     if backfill:
         # Identity is the file entry (UN number + name), NOT the resolved link:
@@ -930,6 +969,7 @@ def _replace_transport(conn: Connection, resources: Path, release_id: str, revie
         conn.execute(insert(SubstanceTransportRow), chunk)
     stats.update(transport_rows=len(rows), transport_linked=linked, transport_ambiguous=len(ambiguous),
                  transport_decided=by_decision, transport_link_missing=len(missing))
+    return {(str(v["un"]), v.get("name_cn") or "") for v in entries}
 
 
 def _mark_iecsc(conn: Connection, resources: Path, stats: dict, backfill: bool = False) -> None:
@@ -1013,6 +1053,60 @@ def _upsert_statements(conn: Connection, resources: Path, stats: dict, backfill:
             filled_en += 1
     stats.update(statements_inserted=len(new), statements_filled=filled,
                  statements_en_filled=filled_en)
+
+
+def _report_seed_drift(conn: Connection, subs: dict, transport_keys: set[tuple[str, str]],
+                       release_id: str, stats: dict) -> None:
+    """Stage 1 / SR-034: file-keys vs database-keys drift report for a backfill run.
+
+    Read-only: it never modifies a substance, transport or catalog row
+    (the 232 catalog-number reconciliation is still pending, so drift
+    reporting must not touch stored rows). One review item per drifted
+    section, deduped on the W1-9 (kind, cas_no, name) key — a second
+    backfill does not re-queue an already open or resolved drift item,
+    because resolving means a person accepted that drift.
+
+    Scope, deliberately asymmetric: substances report file-keys missing
+    from the database only — database-extra substances are usually
+    person-created rows, not drift, and reporting them would be noise.
+    Transport is seed-owned (one standard), so both directions are
+    drift: a file entry that did not land, and a stored row no file
+    entry covers any more (an older file version's row, which a
+    completion pass never deletes by design).
+    """
+    file_cas = set(subs)
+    db_cas = {r for (r,) in conn.execute(select(SubstanceRow.cas_no).where(SubstanceRow.cas_no.is_not(None)))}
+    sub_missing = sorted(file_cas - db_cas)
+    db_transport = {(r.un_number, r.proper_shipping_name_zh) for r in conn.execute(
+        select(SubstanceTransportRow.un_number, SubstanceTransportRow.proper_shipping_name_zh).where(
+            SubstanceTransportRow.standard == TRANSPORT_STANDARD))}
+    t_missing = sorted(set(transport_keys) - db_transport)
+    t_orphan = sorted(db_transport - set(transport_keys))
+    stats["drift"] = {
+        "substances_missing": len(sub_missing),
+        "transport_missing": len(t_missing),
+        "transport_orphan": len(t_orphan),
+    }
+    existing = {
+        (r.kind, r.cas_no or "", r.name)
+        for r in conn.execute(select(RegulatoryReviewItem.kind, RegulatoryReviewItem.cas_no,
+                                     RegulatoryReviewItem.name).where(
+                                         RegulatoryReviewItem.kind == "seed_drift"))
+    }
+    rows = []
+    if sub_missing:
+        rows.append({"kind": "seed_drift", "name": "substances",
+                     "detail": {"missing_count": len(sub_missing), "missing_sample": sub_missing[:20]}})
+    if t_missing or t_orphan:
+        rows.append({"kind": "seed_drift", "name": "transport",
+                     "detail": {"missing_count": len(t_missing), "missing_sample": [f"{u} {n}" for u, n in t_missing[:20]],
+                                "orphan_count": len(t_orphan), "orphan_sample": [f"{u} {n}" for u, n in t_orphan[:20]]}})
+    for row in rows:
+        if (row["kind"], "", row["name"]) in existing:
+            continue
+        conn.execute(insert(RegulatoryReviewItem).values(
+            id=_uid(), kind=row["kind"], status="open", substance_id=None, cas_no=None,
+            name=row["name"], detail=row["detail"], release_id=release_id, created_at=_now()))
 
 
 def _replace_review_items(conn: Connection, review: _Review, stats: dict, backfill: bool = False) -> None:
