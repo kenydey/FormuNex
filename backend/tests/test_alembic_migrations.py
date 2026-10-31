@@ -855,23 +855,65 @@ def test_create_all_builds_the_indexes_the_migrations_add(tmp_path):
 
 
 def _create_0080_batch_schema(db_url: str, *, dirty: bool = False) -> None:
-    """Minimal 0080-shaped schema: batches without an FK, stamped at 0080."""
+    """Full-form 0080-shaped schema: every model column, the product_id FK
+    (table-level, ON DELETE CASCADE, as SQLAlchemy emits it), uq_batch and
+    both indexes — everything except the 0081 revision FK. Stage 1 / SR-039:
+    a minimal fixture cannot prove a batch rebuild preserves anything, so
+    the fixture mirrors the models and the upgrade tests assert the whole
+    FK/unique/index/row set, not just the added FK."""
     engine = create_engine(db_url)
     try:
         with engine.begin() as conn:
-            conn.execute(text("CREATE TABLE products (id VARCHAR(36) PRIMARY KEY, code VARCHAR(64))"))
-            conn.execute(text("CREATE TABLE product_revisions (id VARCHAR(36) PRIMARY KEY, product_id VARCHAR(36))"))
             conn.execute(text(
-                "CREATE TABLE batches (id VARCHAR(36) PRIMARY KEY, product_id VARCHAR(36), "
-                "revision_id VARCHAR(36), batch_no VARCHAR(64))"))
+                "CREATE TABLE products (id VARCHAR(36) NOT NULL PRIMARY KEY, code VARCHAR(64) NOT NULL, "
+                "name_zh VARCHAR(200) NOT NULL, name_en VARCHAR(200) NOT NULL, "
+                "category_identifier VARCHAR(8), legacy_code VARCHAR(64), project_id VARCHAR(64), "
+                "lifecycle_state VARCHAR(16) NOT NULL, archived_from_state VARCHAR(16), "
+                "created_by VARCHAR(36), created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"))
+            # The model declares code unique=True AND index=True; SQLAlchemy
+            # merges that into a single UNIQUE index (not a plain index plus
+            # a separate constraint), so the fixture does the same.
+            conn.execute(text("CREATE UNIQUE INDEX ix_products_code ON products (code)"))
+            conn.execute(text("CREATE INDEX ix_products_project_id ON products (project_id)"))
+            conn.execute(text("CREATE INDEX ix_products_lifecycle_state ON products (lifecycle_state)"))
+            conn.execute(text(
+                "CREATE TABLE product_revisions (id VARCHAR(36) NOT NULL PRIMARY KEY, "
+                "product_id VARCHAR(36) NOT NULL, rev VARCHAR(8) NOT NULL, "
+                "formulation_version_id VARCHAR(36), winning_experiment_id INTEGER, "
+                "spec_snapshot JSON NOT NULL, state VARCHAR(16) NOT NULL, frozen_at DATETIME, "
+                "created_by VARCHAR(36), created_at DATETIME NOT NULL, "
+                "CONSTRAINT uq_product_revision UNIQUE (product_id, rev), "
+                "FOREIGN KEY(product_id) REFERENCES products (id) ON DELETE CASCADE, "
+                "FOREIGN KEY(formulation_version_id) REFERENCES formulation_versions (id) ON DELETE SET NULL)"))
+            conn.execute(text("CREATE INDEX ix_product_revisions_product_id ON product_revisions (product_id)"))
+            conn.execute(text("CREATE INDEX ix_product_revisions_formulation_version_id "
+                              "ON product_revisions (formulation_version_id)"))
+            conn.execute(text("CREATE INDEX ix_product_revisions_state ON product_revisions (state)"))
+            conn.execute(text(
+                "CREATE TABLE batches (id VARCHAR(36) NOT NULL PRIMARY KEY, product_id VARCHAR(36) NOT NULL, "
+                "revision_id VARCHAR(36), batch_no VARCHAR(64) NOT NULL, produced_at DATETIME, "
+                "quantity_kg FLOAT, status VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL, "
+                "CONSTRAINT uq_batch UNIQUE (product_id, batch_no), "
+                "FOREIGN KEY(product_id) REFERENCES products (id) ON DELETE CASCADE)"))
+            conn.execute(text("CREATE INDEX ix_batches_product_id ON batches (product_id)"))
+            conn.execute(text("CREATE INDEX ix_batches_revision_id ON batches (revision_id)"))
             conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
             conn.execute(text("INSERT INTO alembic_version VALUES ('0080')"))
-            conn.execute(text("INSERT INTO products VALUES ('p1', 'FX-100'), ('p2', 'FX-200')"))
-            conn.execute(text("INSERT INTO product_revisions VALUES ('r1', 'p1')"))
-            conn.execute(text("INSERT INTO batches VALUES ('b1', 'p1', 'r1', 'B-1'), ('b2', 'p1', NULL, 'B-2')"))
+            conn.execute(text(
+                "INSERT INTO products VALUES ('p1', 'FX-100', '', '', NULL, NULL, NULL, 'rd', NULL, NULL, "
+                "'2026-10-01', '2026-10-01'), ('p2', 'FX-200', '', '', NULL, NULL, NULL, 'rd', NULL, NULL, "
+                "'2026-10-01', '2026-10-01')"))
+            conn.execute(text("INSERT INTO product_revisions VALUES ('r1', 'p1', 'A', NULL, NULL, '{}', "
+                              "'draft', NULL, NULL, '2026-10-01')"))
+            conn.execute(text(
+                "INSERT INTO batches VALUES ('b1', 'p1', 'r1', 'B-1', NULL, NULL, 'open', '2026-10-01'), "
+                "('b2', 'p1', NULL, 'B-2', NULL, NULL, 'open', '2026-10-01')"))
             if dirty:
-                conn.execute(text("INSERT INTO batches VALUES ('b3', 'p1', 'missing-rev', 'B-3')"))
-                conn.execute(text("INSERT INTO batches VALUES ('b4', 'p2', 'r1', 'B-4')"))
+                conn.execute(text(
+                    "INSERT INTO batches VALUES ('b3', 'p1', 'missing-rev', 'B-3', NULL, NULL, 'open', "
+                    "'2026-10-01')"))
+                conn.execute(text(
+                    "INSERT INTO batches VALUES ('b4', 'p2', 'r1', 'B-4', NULL, NULL, 'open', '2026-10-01')"))
     finally:
         engine.dispose()
 
@@ -884,17 +926,52 @@ def _batch_fks(db_url: str) -> list[dict]:
         engine.dispose()
 
 
+def _batch_fk_set(db_url: str) -> set[tuple[str, str, str]]:
+    """(constrained column, referred table, ondelete) for batches, from the inspector."""
+    engine = create_engine(db_url)
+    try:
+        return {(fk["constrained_columns"][0], fk["referred_table"],
+                 (fk.get("options") or {}).get("ondelete"))
+                for fk in inspect(engine).get_foreign_keys("batches")}
+    finally:
+        engine.dispose()
+
+
+def _batch_rows(db_url: str) -> list[tuple]:
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            return conn.execute(text(
+                "SELECT id, product_id, revision_id, batch_no FROM batches ORDER BY id")).all()
+    finally:
+        engine.dispose()
+
+
 def test_0081_adds_batch_revision_fk(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """W1-11: upgrading a clean 0080 database adds the FK; downgrade drops it."""
+    """W1-11 + stage 1 / SR-039: the 0081 batch rebuild adds the revision FK
+    and preserves the whole pre-existing set — product FK (with CASCADE),
+    uq_batch, both indexes, and every row — in both directions."""
     from tests.alembic_helpers import run_downgrade
+
     _create_0080_batch_schema(tmp_db_url)
+    assert _batch_fk_set(tmp_db_url) == {("product_id", "products", "CASCADE")}
     run_upgrade(tmp_db_url, monkeypatch)
-    fks = _batch_fks(tmp_db_url)
-    assert any(fk["referred_table"] == "product_revisions" and fk["constrained_columns"] == ["revision_id"]
-               for fk in fks)
+    assert _batch_fk_set(tmp_db_url) == {("product_id", "products", "CASCADE"),
+                                          ("revision_id", "product_revisions", "SET NULL")}
+    assert _batch_rows(tmp_db_url) == [("b1", "p1", "r1", "B-1"), ("b2", "p1", None, "B-2")]
+    engine = create_engine(tmp_db_url)
+    try:
+        assert "uq_batch" in {u["name"] for u in inspect(engine).get_unique_constraints("batches")}
+        assert {"ix_batches_product_id", "ix_batches_revision_id"} <= {
+            i["name"] for i in inspect(engine).get_indexes("batches")}
+    finally:
+        engine.dispose()
     run_downgrade(tmp_db_url, monkeypatch, "0080")
-    assert not _batch_fks(tmp_db_url)
+    assert _batch_fk_set(tmp_db_url) == {("product_id", "products", "CASCADE")}
+    assert _batch_rows(tmp_db_url) == [("b1", "p1", "r1", "B-1"), ("b2", "p1", None, "B-2")]
     run_upgrade(tmp_db_url, monkeypatch)
+    assert _batch_fk_set(tmp_db_url) == {("product_id", "products", "CASCADE"),
+                                          ("revision_id", "product_revisions", "SET NULL")}
 
 
 def test_0081_refuses_dirty_revision_ids(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1087,3 +1164,198 @@ def test_0086_refuses_when_transport_duplicates_exist(
         engine.dispose()
     with pytest.raises(RuntimeError, match="duplicate transport"):
         run_upgrade(tmp_db_url, monkeypatch)
+
+
+def _structural_metadata_diffs(db_url: str, table_names: set[str]) -> list:
+    """alembic compare_metadata diffs for a subset of the model metadata.
+
+    The fixture database holds only the fixture tables, so the metadata
+    is subset to them first (otherwise every other model table reports
+    add_table). Index/unique naming diffs are excluded from the
+    structural set: SQLite reports column-unique constraints under
+    autoindex names, which compare_metadata flags even when the
+    constraint itself matches — those are asserted directly via the
+    inspector in the FK tests instead. alembic_version is not in the
+    metadata by design and is ignored.
+    """
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+    from sqlalchemy import MetaData
+
+    import app.db.models  # noqa: F401  (registers every table)
+    from app.db.database import Base
+
+    subset = MetaData()
+    # formulation_versions is copied first only so product_revisions'
+    # FK to it resolves inside the subset; its own diffs are filtered
+    # out below (the fixture database does not hold that table).
+    if "product_revisions" in table_names:
+        Base.metadata.tables["formulation_versions"].to_metadata(subset)
+    for name in table_names:
+        Base.metadata.tables[name].to_metadata(subset)
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            diffs = compare_metadata(MigrationContext.configure(conn), subset)
+    finally:
+        engine.dispose()
+    structural = {"add_table", "remove_table", "add_column", "remove_column",
+                  "add_fk", "remove_fk", "modify_type", "modify_nullable",
+                  "modify_server_default", "modify_default"}
+
+    def _unwrap(d):
+        # Alembic wraps modify diffs in a one-element list around the
+        # tuple; the tuple itself contains a dict (existing_type info)
+        # and is therefore unhashable, so unwrap before kind checks.
+        while isinstance(d, list) and len(d) == 1:
+            d = d[0]
+        return d
+
+    diffs = [_unwrap(d) for d in diffs]
+
+    def _diff_table(d):
+        for el in d[1:]:
+            if isinstance(el, str):
+                return el
+            table = getattr(el, "table", None)
+            if table is not None:
+                return table.name
+            if hasattr(el, "name") and not isinstance(el, str):
+                try:
+                    return el.name
+                except Exception:
+                    pass
+        return None
+
+    return [d for d in diffs if d[0] in structural and _diff_table(d) in table_names]
+
+
+def test_0081_upgrade_matches_model_metadata(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage 1 / SR-039: legacy 0080 fixture -> upgrade head -> the three
+    tables match the current models on tables, columns, FKs, types and
+    nullability (the compare_metadata path, not just a hand-rolled FK list)."""
+    _create_0080_batch_schema(tmp_db_url)
+    run_upgrade(tmp_db_url, monkeypatch)
+    assert _structural_metadata_diffs(
+        tmp_db_url, {"products", "product_revisions", "batches"}) == []
+
+
+def _create_0079_oel_schema(db_url: str, note: str) -> None:
+    """Full-form 0079-shaped schema: substance_oel with 200-char notes,
+    its FK to substances, uq_substance_oel and its index, stamped at 0079."""
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE substances (id VARCHAR(36) PRIMARY KEY)"))
+            conn.execute(text(
+                "CREATE TABLE substance_oel (id VARCHAR(36) PRIMARY KEY, substance_id VARCHAR(36) NOT NULL, "
+                "standard VARCHAR(40) NOT NULL, mac FLOAT, pc_twa FLOAT, pc_stel FLOAT, "
+                "critical_effect VARCHAR(300) NOT NULL, notes VARCHAR(200) NOT NULL, release_id VARCHAR(36), "
+                "CONSTRAINT uq_substance_oel UNIQUE (substance_id, standard), "
+                "FOREIGN KEY(substance_id) REFERENCES substances (id) ON DELETE CASCADE)"))
+            conn.execute(text("CREATE INDEX ix_substance_oel_substance_id ON substance_oel (substance_id)"))
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+            conn.execute(text("INSERT INTO alembic_version VALUES ('0079')"))
+            conn.execute(text("INSERT INTO substances VALUES ('s1')"))
+            conn.execute(text("INSERT INTO substance_oel VALUES ('o1', 's1', 'GBZ 2.1-2019', NULL, NULL, "
+                              f"NULL, '', '{note}', NULL)"))
+    finally:
+        engine.dispose()
+
+
+def test_0080_widens_oel_notes_preserving_fk(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage 1 / SR-039 (0080 twin of the 0081 test): the 0080 batch
+    rebuild widens notes to 2000 and preserves the FK, the unique key,
+    the index and the stored row — upgrade and downgrade."""
+    from tests.alembic_helpers import run_downgrade
+
+    note = "n" * 150
+    _create_0079_oel_schema(tmp_db_url, note)
+    run_upgrade(tmp_db_url, monkeypatch, "0080")
+    engine = create_engine(tmp_db_url)
+    try:
+        cols = {c["name"]: c for c in inspect(engine).get_columns("substance_oel")}
+        assert cols["notes"]["type"].length == 2000
+        fks = inspect(engine).get_foreign_keys("substance_oel")
+        assert len(fks) == 1 and fks[0]["constrained_columns"] == ["substance_id"] \
+            and fks[0]["referred_table"] == "substances" \
+            and (fks[0].get("options") or {}).get("ondelete") == "CASCADE"
+        assert "uq_substance_oel" in {u["name"] for u in inspect(engine).get_unique_constraints("substance_oel")}
+        assert "ix_substance_oel_substance_id" in {i["name"] for i in inspect(engine).get_indexes("substance_oel")}
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT notes FROM substance_oel WHERE id = 'o1'")).scalar() == note
+    finally:
+        engine.dispose()
+    run_downgrade(tmp_db_url, monkeypatch, "0079")
+    engine = create_engine(tmp_db_url)
+    try:
+        cols = {c["name"]: c for c in inspect(engine).get_columns("substance_oel")}
+        assert cols["notes"]["type"].length == 200
+        assert len(inspect(engine).get_foreign_keys("substance_oel")) == 1
+    finally:
+        engine.dispose()
+
+
+def test_0080_downgrade_refuses_overlong_notes(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0080's own guard: downgrade refuses while a note longer than 200 chars is stored."""
+    from tests.alembic_helpers import run_downgrade
+
+    url = f"sqlite:///{tmp_path}/oel.db"
+    monkeypatch.setenv("FORMUNEX_DB_URL", url)
+    _create_0079_oel_schema(url, "n" * 250)
+    run_upgrade(url, monkeypatch, "0080")
+    with pytest.raises(RuntimeError, match="0080 downgrade refused"):
+        run_downgrade(url, monkeypatch, "0079")
+
+
+def test_batch_rebuild_with_unresolved_fks_preserves_constraints(tmp_path):
+    """Stage 1 / SR-039, empirical result for resolve_fks=False.
+
+    Verdict: a SQLite batch rebuild with reflect_kwargs resolve_fks=False
+    does NOT drop pre-existing FKs, unique keys, indexes or rows — the
+    rebuild re-emits them from the reflected table. The same holds for
+    the real 0081 migration (verified separately through alembic on an
+    isolated 0080 database: product FK kept ON DELETE CASCADE).
+
+    One artifact to know about, NOT a resolve_fks effect: when the
+    original DDL declares the FK inline as a column REFERENCES clause
+    (which SQLAlchemy never emits — it always uses table-level FK
+    constraints), the reflected rebuild drops the ON DELETE action.
+    With table-level FK clauses, as this codebase emits, CASCADE/SET NULL
+    survive even with resolve_fks=False. No migration change follows
+    from this: 0067–0081 stay as shipped. On PostgreSQL the question is
+    moot — batch mode there renders a plain ALTER TABLE ADD CONSTRAINT
+    with no table rebuild at all.
+    """
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    url = f"sqlite:///{tmp_path}/batch.db"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE substances (id VARCHAR(36) PRIMARY KEY)"))
+        conn.execute(text(
+            "CREATE TABLE substance_oel (id VARCHAR(36) PRIMARY KEY, substance_id VARCHAR(36) NOT NULL, "
+            "standard VARCHAR(40) NOT NULL, notes VARCHAR(200) NOT NULL, "
+            "CONSTRAINT uq_substance_oel UNIQUE (substance_id, standard), "
+            "FOREIGN KEY(substance_id) REFERENCES substances (id) ON DELETE CASCADE)"))
+        conn.execute(text("CREATE INDEX ix_substance_oel_substance_id ON substance_oel (substance_id)"))
+        conn.execute(text("INSERT INTO substances VALUES ('s1')"))
+        conn.execute(text("INSERT INTO substance_oel VALUES ('o1', 's1', 'GBZ 2.1-2019', 'n')"))
+    with engine.begin() as conn:
+        op = Operations(MigrationContext.configure(conn))
+        with op.batch_alter_table("substance_oel", reflect_kwargs={"resolve_fks": False}) as batch:
+            batch.alter_column("notes", type_=sa.String(2000), existing_type=sa.String(200),
+                               existing_nullable=False)
+    try:
+        cols = {c["name"]: c for c in inspect(engine).get_columns("substance_oel")}
+        assert cols["notes"]["type"].length == 2000
+        fks = inspect(engine).get_foreign_keys("substance_oel")
+        assert len(fks) == 1 and (fks[0].get("options") or {}).get("ondelete") == "CASCADE"
+        assert "uq_substance_oel" in {u["name"] for u in inspect(engine).get_unique_constraints("substance_oel")}
+        assert "ix_substance_oel_substance_id" in {i["name"] for i in inspect(engine).get_indexes("substance_oel")}
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT COUNT(*) FROM substance_oel")).scalar() == 1
+    finally:
+        engine.dispose()
