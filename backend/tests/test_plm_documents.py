@@ -468,3 +468,18 @@ def test_doc_payload_debug_log_flag_gated(api, monkeypatch, caplog):
         r = client.post(f"/api/plm/revisions/{rid}/documents", json=body)
         assert r.status_code == 201, r.text
     assert not any("plm doc payload" in rec.message for rec in caplog.records)
+
+
+def test_batch_revision_validation(api):
+    """W1-11: create_batch rejects a nonexistent or wrong-product revision_id."""
+    client, pid, rid = api
+    r = client.post(f"/api/plm/products/{pid}/batches", json={"batch_no": "B-1", "revision_id": "no-such-rev"})
+    assert r.status_code == 422 and "不存在" in r.json()["detail"]
+    pid2 = client.post("/api/plm/products", json={"code": "FX-200", "name_zh": "FX-200"}).json()["id"]
+    rid2 = client.post(f"/api/plm/products/{pid2}/revisions", json={
+        "formulation_version_id": "fv-1", "spec_snapshot": {}}).json()["id"]
+    r = client.post(f"/api/plm/products/{pid}/batches", json={"batch_no": "B-2", "revision_id": rid2})
+    assert r.status_code == 422 and "不属于" in r.json()["detail"]
+    assert client.post(f"/api/plm/products/{pid}/batches",
+                       json={"batch_no": "B-3", "revision_id": rid}).status_code == 201
+    assert client.post(f"/api/plm/products/{pid}/batches", json={"batch_no": "B-4"}).status_code == 201

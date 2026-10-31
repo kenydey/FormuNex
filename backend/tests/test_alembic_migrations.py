@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0080(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0080_w1_oel_notes``)."""
+def test_revision_chain_head_is_0081(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0081_w1_batch_revision_fk``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0080(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0080"
+    assert heads[0] == "0081"
 
 
 def test_migrations_partial_columns_branch(
@@ -852,3 +852,53 @@ def test_create_all_builds_the_indexes_the_migrations_add(tmp_path):
         assert "ix_structure_fingerprints_fp_hex" in {i["name"] for i in insp.get_indexes("structure_fingerprints")}
     finally:
         engine.dispose()
+
+
+def _create_0080_batch_schema(db_url: str, *, dirty: bool = False) -> None:
+    """Minimal 0080-shaped schema: batches without an FK, stamped at 0080."""
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE products (id VARCHAR(36) PRIMARY KEY, code VARCHAR(64))"))
+            conn.execute(text("CREATE TABLE product_revisions (id VARCHAR(36) PRIMARY KEY, product_id VARCHAR(36))"))
+            conn.execute(text(
+                "CREATE TABLE batches (id VARCHAR(36) PRIMARY KEY, product_id VARCHAR(36), "
+                "revision_id VARCHAR(36), batch_no VARCHAR(64))"))
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+            conn.execute(text("INSERT INTO alembic_version VALUES ('0080')"))
+            conn.execute(text("INSERT INTO products VALUES ('p1', 'FX-100'), ('p2', 'FX-200')"))
+            conn.execute(text("INSERT INTO product_revisions VALUES ('r1', 'p1')"))
+            conn.execute(text("INSERT INTO batches VALUES ('b1', 'p1', 'r1', 'B-1'), ('b2', 'p1', NULL, 'B-2')"))
+            if dirty:
+                conn.execute(text("INSERT INTO batches VALUES ('b3', 'p1', 'missing-rev', 'B-3')"))
+                conn.execute(text("INSERT INTO batches VALUES ('b4', 'p2', 'r1', 'B-4')"))
+    finally:
+        engine.dispose()
+
+
+def _batch_fks(db_url: str) -> list[dict]:
+    engine = create_engine(db_url)
+    try:
+        return inspect(engine).get_foreign_keys("batches")
+    finally:
+        engine.dispose()
+
+
+def test_0081_adds_batch_revision_fk(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """W1-11: upgrading a clean 0080 database adds the FK; downgrade drops it."""
+    from tests.alembic_helpers import run_downgrade
+    _create_0080_batch_schema(tmp_db_url)
+    run_upgrade(tmp_db_url, monkeypatch)
+    fks = _batch_fks(tmp_db_url)
+    assert any(fk["referred_table"] == "product_revisions" and fk["constrained_columns"] == ["revision_id"]
+               for fk in fks)
+    run_downgrade(tmp_db_url, monkeypatch, "0080")
+    assert not _batch_fks(tmp_db_url)
+    run_upgrade(tmp_db_url, monkeypatch)
+
+
+def test_0081_refuses_dirty_revision_ids(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """W1-11 gate 2: dangling or wrong-product revision_ids refuse the upgrade."""
+    _create_0080_batch_schema(tmp_db_url, dirty=True)
+    with pytest.raises(RuntimeError, match="0081 upgrade refused"):
+        run_upgrade(tmp_db_url, monkeypatch)

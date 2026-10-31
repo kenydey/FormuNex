@@ -67,10 +67,24 @@ class ElabftwConnector(ElnConnector):
         for pos, r in enumerate(plan.get("requested_metrics") or []):
             extra[r["metric"]] = {"type": "number", "value": "", "unit": r.get("unit", ""),
                                   "description": r.get("method_code", ""), "position": pos}
-        self._call("PATCH", f"/experiments/{ext_id}", json={
-            "body": f"<p>FormuNex 任务单 {plan['task_no']}，样品 {plan.get('sample_no')}</p>"
-                    f"<table><tr><th>因子</th><th>设定</th></tr>{factors}</table>",
-            "metadata": json.dumps({"extra_fields": extra}, ensure_ascii=False)})
+        try:
+            self._call("PATCH", f"/experiments/{ext_id}", json={
+                "body": f"<p>FormuNex 任务单 {plan['task_no']}，样品 {plan.get('sample_no')}</p>"
+                        f"<table><tr><th>因子</th><th>设定</th></tr>{factors}</table>",
+                "metadata": json.dumps({"extra_fields": extra}, ensure_ascii=False)})
+        except ConnectorError as exc:
+            # W1-11: the POST above already created the remote experiment, so
+            # a PATCH failure used to leave an orphan in eLabFTW with no local
+            # link row — invisible to FormuNex and never retried (a later push
+            # would create a second experiment). Best-effort delete it; if the
+            # delete fails too, the error names the orphan id so it can be
+            # cleaned up by hand instead of silently lingering.
+            try:
+                self._call("DELETE", f"/experiments/{ext_id}")
+            except ConnectorError:
+                raise ConnectorError(
+                    f"eLabFTW 实验 {ext_id} 的 PATCH 失败且清理失败，远端残留孤儿实验：{exc}") from exc
+            raise ConnectorError(f"eLabFTW 实验 {ext_id} 的 PATCH 失败，已清理远端实验：{exc}") from exc
         return RemoteRecord(ext_id, self.link(ext_id))
 
     def pull_measurements(self, external_id: str, *, since: str | None = None) -> list[RemoteValue]:

@@ -58,6 +58,19 @@ def _local_state(session: Session, connector: str, external_id: str) -> dict[str
     return {r.metric: r.value for r in rows}
 
 
+def _local_units(session: Session, connector: str, external_id: str) -> dict[str, str]:
+    """Units of the latest non-rejected external measurement per metric.
+
+    W1-11: the value digest below cannot see a unit change (same number, new
+    unit), so units are compared live on every pull instead of hashed into
+    ``content_hash`` — no hash-format migration, no conflict storm on upgrade.
+    """
+    rows = session.execute(select(MeasurementRow).where(
+        MeasurementRow.external_ref.like(f"{connector}:{external_id}:%"),
+        MeasurementRow.review_status != "rejected").order_by(MeasurementRow.created_at)).scalars().all()
+    return {r.metric: r.unit or "" for r in rows}
+
+
 def push_tasks(session: Session, connector: ElnConnector, task_ids: list[str], *, user_id: str) -> dict[str, Any]:
     if not connector.can_push:
         raise ConnectorError(f"{connector.name} 连接器不支持推送任务单")
@@ -100,8 +113,22 @@ def push_tasks(session: Session, connector: ElnConnector, task_ids: list[str], *
 
 
 def _apply(session: Session, link: ElnLinkRow, task: LabTaskRow, remote: dict[str, float],
-           local: dict[str, float]) -> tuple[int, list[str]]:
-    changed = [{"metric": k, "value": v} for k, v in remote.items() if local.get(k) != v]
+           local: dict[str, float], remote_units: dict[str, str] | None = None,
+           local_units: dict[str, str] | None = None) -> tuple[int, list[str]]:
+    remote_units = remote_units or {}
+    local_units = local_units or {}
+    changed = []
+    for k, v in remote.items():
+        # A unit-only change (same value, new unit) is a real change: it must
+        # be recorded, not swallowed by the value digest. Value-only changes
+        # keep the old unit-less entry so _check_value still falls back to the
+        # method unit exactly as before.
+        unit_changed = k in local_units and remote_units.get(k, "") != local_units[k]
+        if local.get(k) != v or unit_changed:
+            entry: dict[str, object] = {"metric": k, "value": v}
+            if unit_changed:
+                entry["unit"] = remote_units.get(k, "")
+            changed.append(entry)
     rows, errors = meas.record_external(session, task, changed, connector=link.connector,
                                         external_id=link.external_id)
     new_local = _local_state(session, link.connector, link.external_id)
@@ -125,14 +152,20 @@ def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | Non
         if task is None or task.status == "cancelled":
             continue
         try:
-            remote = {v.metric: v.value for v in connector.pull_measurements(link.external_id, since=since)}
+            values = connector.pull_measurements(link.external_id, since=since)
         except ConnectorError as exc:
             link.sync_state = "error"
             report["errors"].append({"task_no": task.task_no, "error": str(exc)})
             continue
+        remote = {v.metric: v.value for v in values}
+        remote_units = {v.metric: v.unit or "" for v in values}
         local = _local_state(session, link.connector, link.external_id)
+        local_units = _local_units(session, link.connector, link.external_id)
         last_remote, last_local = (link.content_hash or "")[:32], (link.content_hash or "")[32:]
-        if _digest(remote) == last_remote:
+        # W1-11: units are not in the value digest, so a unit-only change
+        # must not take the "unchanged" fast path below.
+        unit_diff = any(k in local_units and remote_units[k] != local_units[k] for k in remote_units)
+        if _digest(remote) == last_remote and not unit_diff:
             report["unchanged"] += 1
             continue
         if _digest(local) != last_local:
@@ -144,7 +177,7 @@ def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | Non
             link.sync_state = "conflict"
             report["conflicts"] += 1
             continue
-        n, errors = _apply(session, link, task, remote, local)
+        n, errors = _apply(session, link, task, remote, local, remote_units, local_units)
         report["recorded"] += n
         report["errors"] += [{"task_no": task.task_no, "error": e} for e in errors]
     session.flush()

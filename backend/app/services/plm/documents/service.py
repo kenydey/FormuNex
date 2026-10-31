@@ -212,6 +212,15 @@ def create_batch(session: Session, product_id: str, *, batch_no: str, revision_i
                  produced_at=None, quantity_kg: float | None = None) -> BatchRow:
     if session.get(ProductRow, product_id) is None:
         raise DocumentError("产品不存在")
+    if revision_id is not None:
+        # W1-11: revision_id is a plain string column, so a typo or a
+        # revision of another product used to land silently and only
+        # surface at COA/document time. Fail here instead.
+        rev = session.get(ProductRevisionRow, revision_id)
+        if rev is None:
+            raise DocumentError(f"产品修订版 {revision_id} 不存在")
+        if rev.product_id != product_id:
+            raise DocumentError(f"产品修订版 {revision_id} 不属于该产品")
     if session.execute(select(BatchRow.id).where(BatchRow.product_id == product_id, BatchRow.batch_no == batch_no)).first():
         raise DocumentError(f"批号 {batch_no} 已存在")
     row = BatchRow(id=str(uuid.uuid4()), product_id=product_id, revision_id=revision_id, batch_no=batch_no,

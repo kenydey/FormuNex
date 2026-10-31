@@ -311,6 +311,8 @@ def test_sds_candidates_and_conformal_from_lab(lab):
 class FakeElab:
     def __init__(self):
         self.experiments: dict[int, dict] = {}
+        self.fail_patch = False
+        self.fail_delete = False
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "elab-key"
@@ -323,8 +325,15 @@ class FakeElab:
         if m:
             exp = self.experiments[int(m.group(1))]
             if request.method == "PATCH":
+                if self.fail_patch:
+                    return httpx.Response(500)
                 exp.update(json.loads(request.content))
                 return httpx.Response(200, json=exp)
+            if request.method == "DELETE":
+                if self.fail_delete:
+                    return httpx.Response(500)
+                del self.experiments[int(m.group(1))]
+                return httpx.Response(204)
             return httpx.Response(200, json=exp)
         if path == "/api/v2/info":
             return httpx.Response(200, json={"elabftw_version": "5.1"})
@@ -333,6 +342,11 @@ class FakeElab:
     def fill(self, eid: int, metric: str, value: str) -> None:
         meta = json.loads(self.experiments[eid]["metadata"])
         meta["extra_fields"][metric]["value"] = value
+        self.experiments[eid]["metadata"] = json.dumps(meta)
+
+    def set_unit(self, eid: int, metric: str, unit: str) -> None:
+        meta = json.loads(self.experiments[eid]["metadata"])
+        meta["extra_fields"][metric]["unit"] = unit
         self.experiments[eid]["metadata"] = json.dumps(meta)
 
 
@@ -627,3 +641,69 @@ def test_2_14_record_with_instrument_asset_no(lab):
     task2 = _dispatch(lab, _plan(c))[0]
     r2 = _record(lab, "tech", task2["id"], {**DENSITY, "instrument_id": "NO-SUCH-ASSET"})
     assert r2.status_code == 422 and "仪器" in r2.json()["detail"]
+
+
+def _elab_conn(lab, monkeypatch, fake):
+    from app.services.eln import sync
+    from app.services.eln.connectors.elabftw import ElabftwConnector
+    conn = ElabftwConnector("https://elab.local", "elab-key",
+                            client_factory=lambda: httpx.Client(transport=httpx.MockTransport(fake.handler)))
+    monkeypatch.setattr(sync, "get_connector", lambda name: conn)
+    return conn
+
+
+def test_elabftw_patch_failure_deletes_orphan(lab, monkeypatch):
+    """W1-11: a PATCH failure after POST must not leave an orphan experiment."""
+    from sqlalchemy import select
+
+    from app.db.database import default_session_factory
+    from app.db.models_lab import ElnLinkRow
+    c, h = lab["c"], lab["h"]
+    fake = FakeElab()
+    fake.fail_patch = True
+    _elab_conn(lab, monkeypatch, fake)
+    tasks = _dispatch(lab, _plan(c), metrics=["density_g_cm3"])
+    r = c.post("/api/lab/eln/elabftw/push", headers=h["lead"], json={"task_ids": [tasks[0]["id"]]}).json()
+    assert r["pushed"] == [] and len(r["errors"]) == 1
+    assert fake.experiments == {}
+    with default_session_factory()() as s:
+        assert s.execute(select(ElnLinkRow)).first() is None
+    fake.fail_patch = False
+    r = c.post("/api/lab/eln/elabftw/push", headers=h["lead"], json={"task_ids": [tasks[0]["id"]]}).json()
+    assert len(r["pushed"]) == 1
+
+
+def test_elabftw_patch_and_delete_failure_names_orphan(lab, monkeypatch):
+    """W1-11: when cleanup also fails, the error names the orphan id."""
+    c, h = lab["c"], lab["h"]
+    fake = FakeElab()
+    fake.fail_patch = True
+    fake.fail_delete = True
+    _elab_conn(lab, monkeypatch, fake)
+    tasks = _dispatch(lab, _plan(c), metrics=["density_g_cm3"])
+    r = c.post("/api/lab/eln/elabftw/push", headers=h["lead"], json={"task_ids": [tasks[0]["id"]]}).json()
+    assert len(r["errors"]) == 1 and "孤儿" in r["errors"][0]["error"] and "1" in r["errors"][0]["error"]
+    assert 1 in fake.experiments
+
+
+def test_elabftw_unit_only_change_is_recorded(lab, monkeypatch):
+    """W1-11: same value, new unit must not take the 'unchanged' fast path."""
+    from app.db.database import default_session_factory
+    from app.db.models import MeasurementRow
+    c, h = lab["c"], lab["h"]
+    fake = FakeElab()
+    _elab_conn(lab, monkeypatch, fake)
+    tasks = _dispatch(lab, _plan(c), metrics=["pencil_hardness_idx"])
+    r = c.post("/api/lab/eln/elabftw/push", headers=h["lead"], json={"task_ids": [tasks[0]["id"]]}).json()
+    assert len(r["pushed"]) == 1
+    fake.fill(1, "pencil_hardness_idx", "5")
+    pull = lambda: c.post("/api/lab/eln/elabftw/pull", headers=h["qa"], json={}).json()  # noqa: E731
+    assert pull()["recorded"] == 1
+    fake.set_unit(1, "pencil_hardness_idx", "H")
+    out = pull()
+    assert out["recorded"] == 1 and out["unchanged"] == 0
+    with default_session_factory()() as s:
+        from sqlalchemy import select
+        rows = s.execute(select(MeasurementRow).where(
+            MeasurementRow.external_ref.like("elabftw:1:%")).order_by(MeasurementRow.created_at)).scalars().all()
+        assert rows[-1].unit == "H"

@@ -168,7 +168,11 @@ class BatchRow(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True)
-    revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # W1-11: FK to the revision (SET NULL on revision delete: batch records
+    # are QC history and must survive a revision row going away). The
+    # migration carries a dirty-data guard; create_batch validates first.
+    revision_id: Mapped[str | None] = mapped_column(ForeignKey("product_revisions.id", ondelete="SET NULL"),
+                                                    nullable=True, index=True)
     batch_no: Mapped[str] = mapped_column(String(64))
     produced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     quantity_kg: Mapped[float | None] = mapped_column(nullable=True)
