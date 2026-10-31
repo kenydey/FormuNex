@@ -12,11 +12,13 @@ import uuid
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 from app.db.database import make_engine, make_session_factory
-from app.db.models import ExperimentRow
-from app.db.models_lab import ElnLinkRow, LabTaskRow, SampleRow, TestMethodRow
+from app.db.models import ExperimentRow, MeasurementRow
+from app.db.models_lab import ElnLinkRow, ElnSyncConflictRow, LabTaskRow, SampleRow, TestMethodRow
 from app.services.eln import sync as eln_sync
+from app.services.eln.unit_conversions import convert_unit
 from tests.alembic_helpers import run_upgrade
 
 
@@ -47,6 +49,79 @@ def _setup(session):
     session.add(link)
     session.commit()
     return task, link
+
+
+def test_conversion_table():
+    assert convert_unit(212.0, "°F", "°C") == pytest.approx(100.0)
+    assert convert_unit(500.0, "mg/L", "g/L") == pytest.approx(0.5)
+    assert convert_unit(1500.0, "µm", "mm") == pytest.approx(1.5)
+    assert convert_unit(5.0, "g/L", "g/L") == 5.0
+    assert convert_unit(1.0, "mol", "g/L") is None
+    assert convert_unit(7.0, "pH", "g/L") is None
+
+
+def _setup_with_unit(session, *, method_unit):
+    task = LabTaskRow(id=str(uuid.uuid4()), task_no="T-2", project_id="p1")
+    session.add(task)
+    session.flush()
+    exp = ExperimentRow(domain="coating", project_id="p1", measured={})
+    session.add(exp)
+    session.flush()
+    session.add(SampleRow(id=str(uuid.uuid4()), sample_no="S-2", lab_task_id=task.id,
+                          experiment_id=exp.id))
+    session.add(TestMethodRow(id=str(uuid.uuid4()), code="M-CONC", metric="conc", unit=method_unit))
+    session.flush()
+    link = ElnLinkRow(id=str(uuid.uuid4()), connector="elabftw", external_id="ext-2",
+                      local_type="lab_task", local_id=task.id, content_hash="")
+    session.add(link)
+    session.commit()
+    return task, link
+
+
+def test_pull_converts_to_method_unit(db):
+    with db() as s:
+        task, link = _setup_with_unit(s, method_unit="g/L")
+        n, errors = eln_sync._apply(s, link, task, {"conc": 500.0}, {},
+                                    remote_units={"conc": "mg/L"}, local_units={})
+        assert n == 1 and not errors
+        row = s.execute(select(MeasurementRow)).scalars().first()
+        assert row.value == pytest.approx(0.5) and row.unit == "g/L"
+        assert "单位换算" in (row.note or "")
+
+
+def test_unconvertible_unit_fails_with_guidance(db):
+    with db() as s:
+        task, link = _setup_with_unit(s, method_unit="g/L")
+        n, errors = eln_sync._apply(s, link, task, {"conc": 1.0}, {},
+                                    remote_units={"conc": "mol"}, local_units={})
+        assert n == 0 and errors and "人工裁决" in errors[0]
+        assert link.sync_state == "error"
+
+
+def test_take_remote_converts_with_snapshot_units(db):
+    with db() as s:
+        task, link = _setup_with_unit(s, method_unit="g/L")
+        conflict = ElnSyncConflictRow(id=str(uuid.uuid4()), link_id=link.id,
+                                      local_snapshot={}, remote_snapshot={"conc": 500.0},
+                                      remote_units={"conc": "mg/L"})
+        s.add(conflict)
+        s.commit()
+        eln_sync.resolve_conflict(s, conflict.id, resolution="take_remote", user_id="u1")
+        row = s.execute(select(MeasurementRow)).scalars().first()
+        assert row.value == pytest.approx(0.5) and row.unit == "g/L"
+
+
+def test_take_remote_old_snapshot_falls_back_to_method_unit(db):
+    with db() as s:
+        task, link = _setup_with_unit(s, method_unit="g/L")
+        conflict = ElnSyncConflictRow(id=str(uuid.uuid4()), link_id=link.id,
+                                      local_snapshot={}, remote_snapshot={"conc": 500.0},
+                                      remote_units=None)
+        s.add(conflict)
+        s.commit()
+        eln_sync.resolve_conflict(s, conflict.id, resolution="take_remote", user_id="u1")
+        row = s.execute(select(MeasurementRow)).scalars().first()
+        assert row.value == pytest.approx(500.0) and row.unit == "g/L"
 
 
 def test_partial_failure_watermark_excludes_failed_metric(db):

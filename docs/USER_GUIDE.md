@@ -948,6 +948,29 @@ Still **off** unless explicitly enabled:
   closed except P281, now filled with the historical GHS text matching the
   Chinese wording.
 
+### 5.27 ELN pull units (stage 1)
+
+- **Values are stored in the method unit.** When an ELN pull brings a
+  value in a different but convertible unit (mg/L into a g/L method,
+  °F into a °C method, µm into a mm method — full table in
+  `app/services/eln/unit_conversions.py`), the value is converted
+  before storing and the measurement note records the conversion
+  (e.g. `单位换算 mg/L→g/L`). Previously the remote unit was dropped
+  on a first pull and the raw number was stored as if it were already
+  in the method unit.
+- **Unconvertible pairs fail visibly, not silently.** A unit with no
+  conversion to the method unit (different dimension, or a
+  dimensionless value in an unexpected unit) is not stored; the pull
+  reports it with remedial guidance (confirm the method unit, or
+  adjudicate the metric by hand), the link stays in `error` state
+  (listable via `GET /api/eln/links?sync_state=error`), and only the
+  failed metrics are held back — the next pull retries exactly those.
+- **Conflict take_remote converts too.** A conflict snapshot now
+  stores the remote units alongside the values, so resolving with
+  take_remote converts before storing. Snapshots taken before this
+  change have no units and resolve exactly as before (value stored
+  in the method unit as-is).
+
 ---
 
 ## 6. DOE feedback & model training

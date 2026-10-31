@@ -163,7 +163,25 @@ def record_external(session: Session, task: LabTaskRow, values: list[dict[str, A
         try:
             method = resolve_method(session, code=v.get("method_code")) if v.get("method_code") else _method_for(
                 session, v["metric"])
-            value, unit = _check_value(method, v["metric"], float(v["value"]), v.get("unit") or None)
+            raw_value, raw_unit = float(v["value"]), v.get("unit") or None
+            converted_from = None
+            if raw_unit and method.unit and raw_unit != method.unit:
+                # Stage 1 / SR-018 (D-5): store in the method unit. A
+                # convertible remote unit is converted first; only an
+                # unconvertible pair fails, with remedial guidance in
+                # the error (confirm the method unit, or adjudicate
+                # the metric by hand) instead of a bare mismatch.
+                from ..eln.unit_conversions import convert_unit, normalize_unit
+
+                converted = convert_unit(raw_value, raw_unit, method.unit)
+                if converted is None:
+                    raise LabError(
+                        f"{v['metric']}：单位 {normalize_unit(raw_unit)} 与方法 {method.code} "
+                        f"规定的 {method.unit} 不一致，且两者之间没有换算关系；"
+                        f"请确认方法单位，或人工裁决该指标（冲突队列）")
+                raw_value, converted_from = converted, normalize_unit(raw_unit)
+                raw_unit = method.unit
+            value, unit = _check_value(method, v["metric"], raw_value, raw_unit)
         except LabError as exc:
             errors.append(f"{v.get('metric')}: {exc}")
             continue
@@ -172,7 +190,7 @@ def record_external(session: Session, task: LabTaskRow, values: list[dict[str, A
             unit=unit[:32], test_method=method.code[:80], method_id=method.id, operator=connector[:80],
             operator_id=None, measured_at=utcnow(), sample_id=sample.id, lab_task_id=task.id,
             review_status="unreviewed", external_ref=f"{connector}:{external_id}:{v['metric']}"[:200],
-            note=f"来自 {connector}")
+            note=f"来自 {connector}" + (f"；单位换算 {converted_from}→{method.unit}" if converted_from else ""))
         session.add(row)
         rows.append(row)
     session.flush()

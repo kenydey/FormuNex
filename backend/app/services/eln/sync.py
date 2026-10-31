@@ -120,14 +120,18 @@ def _apply(session: Session, link: ElnLinkRow, task: LabTaskRow, remote: dict[st
     changed = []
     for k, v in remote.items():
         # A unit-only change (same value, new unit) is a real change: it must
-        # be recorded, not swallowed by the value digest. Value-only changes
-        # keep the old unit-less entry so _check_value still falls back to the
-        # method unit exactly as before.
+        # be recorded, not swallowed by the value digest.
         unit_changed = k in local_units and remote_units.get(k, "") != local_units[k]
         if local.get(k) != v or unit_changed:
             entry: dict[str, object] = {"metric": k, "value": v}
-            if unit_changed:
-                entry["unit"] = remote_units.get(k, "")
+            # Stage 1 / SR-018: always carry the remote unit when known.
+            # The old code attached it only on a unit *change* vs local,
+            # so a first pull (no local row yet) silently dropped the
+            # remote unit and record_external stored the raw number in
+            # the method unit — a 500 mg/L pull into a g/L method stored
+            # 500 g/L. Now record_external converts (or fails visibly).
+            if remote_units.get(k, ""):
+                entry["unit"] = remote_units[k]
             changed.append(entry)
     rows, errors = meas.record_external(session, task, changed, connector=link.connector,
                                         external_id=link.external_id)
@@ -184,8 +188,10 @@ def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | Non
             open_conflict = session.execute(select(ElnSyncConflictRow).where(
                 ElnSyncConflictRow.link_id == link.id, ElnSyncConflictRow.status == "open")).first()
             if not open_conflict:
+                # Stage 1 / SR-051: snapshot the remote units alongside
+                # the values, so take_remote can convert before storing.
                 session.add(ElnSyncConflictRow(id=str(uuid.uuid4()), link_id=link.id, local_snapshot=local,
-                                               remote_snapshot=remote))
+                                               remote_snapshot=remote, remote_units=remote_units))
             link.sync_state = "conflict"
             report["conflicts"] += 1
             continue
@@ -207,7 +213,13 @@ def resolve_conflict(session: Session, conflict_id: str, *, resolution: str, use
     local = _local_state(session, link.connector, link.external_id)
     remote = {k: float(v) for k, v in (c.remote_snapshot or {}).items()}
     if resolution == "take_remote":
-        _apply(session, link, task, remote, local)
+        # Stage 1 / SR-051: pass the snapshotted remote units through so
+        # values convert to the method unit before storing (1-10). A
+        # pre-stage-1 snapshot has remote_units NULL: _apply then gets
+        # no units and falls back to the method unit, exactly as before.
+        _apply(session, link, task, remote, local,
+               remote_units=dict(c.remote_units or {}),
+               local_units=_local_units(session, link.connector, link.external_id))
     else:  # FormuNex values stand; this remote state is acknowledged and will not conflict again
         link.content_hash = _digest(remote) + _digest(local)
         link.sync_state = "ok"

@@ -137,6 +137,7 @@ def make_engine(db_url: str) -> Engine:
     _ensure_owner_id_column(engine, "chat_sessions")
     _ensure_outbox_task_id_column(engine)
     _ensure_outbox_error_column(engine)
+    _ensure_conflict_remote_units_column(engine)
     _ensure_source_document_columns(engine)
     _ensure_kb_entity_link_columns(engine)
     _ensure_material_columns(engine)
@@ -513,6 +514,25 @@ def _ensure_outbox_error_column(engine: Engine) -> None:
     try:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "task_outbox" ADD COLUMN error TEXT'))
+    except Exception as exc:  # a concurrent starter may have added it first
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _ensure_conflict_remote_units_column(engine: Engine) -> None:
+    """``eln_sync_conflicts.remote_units`` (alembic 0084, stage 1 / SR-051):
+    nullable JSON, no backfill. take_remote reads the column on every
+    conflict resolution, so an unmigrated database would turn each
+    take_remote into a 500 until migrated."""
+    from sqlalchemy import inspect, text
+
+    if "eln_sync_conflicts" not in inspect(engine).get_table_names():
+        return
+    if "remote_units" in {c["name"] for c in inspect(engine).get_columns("eln_sync_conflicts")}:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text('ALTER TABLE "eln_sync_conflicts" ADD COLUMN remote_units JSON'))
     except Exception as exc:  # a concurrent starter may have added it first
         if "duplicate column" not in str(exc).lower():
             raise

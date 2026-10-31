@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0083(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0083_stage0_outbox_failed``)."""
+def test_revision_chain_head_is_0084(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0084_stage1_conflict_units``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0083(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0083"
+    assert heads[0] == "0084"
 
 
 def test_migrations_partial_columns_branch(
@@ -935,4 +935,33 @@ def test_0083_adds_outbox_error_column(tmp_db_url: str, monkeypatch: pytest.Monk
     assert "error" in _column_names(tmp_db_url, "task_outbox")
     run_downgrade(tmp_db_url, monkeypatch, "0082")
     assert "error" not in _column_names(tmp_db_url, "task_outbox")
+    run_upgrade(tmp_db_url, monkeypatch)
+
+
+def _create_0083_conflict_schema(db_url: str) -> None:
+    """Minimal 0083-shaped schema: eln_sync_conflicts without remote_units, stamped at 0083."""
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE TABLE eln_sync_conflicts (id VARCHAR(36) PRIMARY KEY, link_id VARCHAR(36) NOT NULL, "
+                "local_snapshot JSON NOT NULL, remote_snapshot JSON NOT NULL, status VARCHAR(16) NOT NULL, "
+                "resolution VARCHAR(16) NOT NULL, resolved_by VARCHAR(36), resolved_at DATETIME, "
+                "created_at DATETIME)"))
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+            conn.execute(text("INSERT INTO alembic_version VALUES ('0083')"))
+    finally:
+        engine.dispose()
+
+
+def test_0084_adds_conflict_remote_units_column(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage 1 / SR-051: upgrading an 0083 database adds eln_sync_conflicts.remote_units; downgrade drops it."""
+    from tests.alembic_helpers import run_downgrade
+
+    _create_0083_conflict_schema(tmp_db_url)
+    assert "remote_units" not in _column_names(tmp_db_url, "eln_sync_conflicts")
+    run_upgrade(tmp_db_url, monkeypatch)
+    assert "remote_units" in _column_names(tmp_db_url, "eln_sync_conflicts")
+    run_downgrade(tmp_db_url, monkeypatch, "0083")
+    assert "remote_units" not in _column_names(tmp_db_url, "eln_sync_conflicts")
     run_upgrade(tmp_db_url, monkeypatch)

@@ -184,6 +184,10 @@ class ElnSyncConflictRow(Base):
     link_id: Mapped[str] = mapped_column(ForeignKey("eln_links.id", ondelete="CASCADE"), index=True)
     local_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
     remote_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Stage 1 / SR-051: remote units at conflict time, so take_remote can
+    # convert before storing (1-10). NULL = pre-stage-1 snapshot: resolve
+    # falls back to the method unit, exactly as before.
+    remote_units: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)  # open | resolved
     resolution: Mapped[str] = mapped_column(String(16), default="")  # keep_local | take_remote
     resolved_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
