@@ -70,12 +70,31 @@ def _import_error(payload: dict) -> HTTPException:
     return HTTPException(status_code=400, detail={"message": msg, **payload})
 
 
+def _mask_mcp_env(servers: list[dict]) -> list[dict]:
+    """Mask MCP env values in HTTP responses (SR-001).
+
+    Internal callers use ``mcp_client.list_mcp_servers()`` directly and keep
+    real env; only the HTTP presentation layer masks. The settings UI only
+    ever renders env keys (see ``McpServerConfig.env``: "only the keys are
+    ever shown"), so masking values changes no UI. Write responses
+    (PUT/PATCH/DELETE) stay admin-gated by ``admin_guard`` and are untouched.
+    """
+    masked: list[dict] = []
+    for server in servers:
+        server = dict(server)
+        env = server.get("env")
+        if isinstance(env, dict):
+            server["env"] = {str(k): "••••" for k in env}
+        masked.append(server)
+    return masked
+
+
 @router.get("")
 def list_all() -> dict:
     settings = get_settings()
     return {
         "builtin": connectors_builtin.list_connectors(settings=settings),
-        "mcp": mcp_client.list_mcp_servers(),
+        "mcp": _mask_mcp_env(mcp_client.list_mcp_servers()),
         "mcp_client_enabled": settings.mcp_client_enabled,
         "connectors_builtin_enabled": settings.connectors_builtin_enabled,
     }

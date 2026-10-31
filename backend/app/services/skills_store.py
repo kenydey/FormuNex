@@ -1,11 +1,15 @@
 """Persist skill enable/pin preferences under ``data/skills_prefs.json``."""
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
+
+from ._fsutil import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +62,13 @@ def save_prefs(patch: dict[str, Any]) -> dict[str, Any]:
             cur["mcp_servers"] = list(patch["mcp_servers"])
         path = _prefs_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+        # SR-044: this file holds third-party MCP credentials. Same treatment
+        # as .env (0600 + atomic write); chmod-after-replace mirrors
+        # secrets_store, so a pre-existing wider-mode file is tightened on
+        # its next save (deployments tighten once, see the stage-0 report).
+        atomic_write_text(path, json.dumps(cur, ensure_ascii=False, indent=2))
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o600)
         return cur
 
 
