@@ -741,6 +741,34 @@ def eln_conflicts(status: str = "open") -> list[dict[str, Any]]:
         return out
 
 
+@router.get("/eln/links")
+def eln_links(sync_state: str | None = None) -> list[dict[str, Any]]:
+    """Stage 1 / SR-017: ELN link sync states for operators (same shape as /eln/conflicts).
+
+    Filter ``sync_state=error`` to find links whose last pull partially
+    failed; the per-metric error text itself lives in that pull's
+    report (there is no error column on the link row — adding one is
+    a migration, deliberately not done here). Error rows are retried
+    by the next pull, not stuck behind the unchanged fast path.
+    """
+    from sqlalchemy import select
+
+    from ..db.models_lab import ElnLinkRow, LabTaskRow
+
+    with _session() as session:
+        q = select(ElnLinkRow)
+        if sync_state:
+            q = q.where(ElnLinkRow.sync_state == sync_state)
+        out = []
+        for link in session.execute(q.order_by(ElnLinkRow.last_synced_at)).scalars().all():
+            task = session.get(LabTaskRow, link.local_id) if link.local_type == "lab_task" else None
+            out.append({"id": link.id, "connector": link.connector, "external_id": link.external_id,
+                        "external_url": link.external_url, "task_no": task.task_no if task else None,
+                        "sync_state": link.sync_state,
+                        "last_synced_at": link.last_synced_at.isoformat() if link.last_synced_at else None})
+        return out
+
+
 @router.post("/eln/conflicts/{conflict_id}/resolve")
 def eln_resolve(conflict_id: str, body: ResolveIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     from ..services.eln import sync

@@ -131,8 +131,20 @@ def _apply(session: Session, link: ElnLinkRow, task: LabTaskRow, remote: dict[st
             changed.append(entry)
     rows, errors = meas.record_external(session, task, changed, connector=link.connector,
                                         external_id=link.external_id)
+    # Stage 1 / SR-017: advance the remote watermark only past metrics
+    # that actually landed. The old code hashed the full remote dict
+    # even when record_external failed some metrics, so the next pull
+    # took the "unchanged" fast path and the failed metrics were never
+    # retried. A failed metric stays out of the watermark digest, so
+    # the next pull sees a digest mismatch and retries exactly that
+    # metric (succeeded ones already match local and are skipped by the
+    # changed computation). No hash-format change: the watermark is
+    # still digest(remote-successful) + digest(local).
+    recorded_metrics = {r.metric for r in rows}
+    failed_metrics = {e["metric"] for e in changed} - recorded_metrics
+    successful_remote = {k: v for k, v in remote.items() if k not in failed_metrics}
     new_local = _local_state(session, link.connector, link.external_id)
-    link.content_hash = _digest(remote) + _digest(new_local)
+    link.content_hash = _digest(successful_remote) + _digest(new_local)
     link.last_synced_at = utcnow()
     link.sync_state = "ok" if not errors else "error"
     return len(rows), errors
