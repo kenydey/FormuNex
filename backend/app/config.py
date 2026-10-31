@@ -149,6 +149,10 @@ class Settings(BaseSettings):
     # Stage 1 / SR-029: /health reports degraded once the unfinished
     # outbox backlog passes this many rows.
     outbox_backlog_warn_count: int = 100
+    # Stage 1 / SR-036: refuse startup when the database alembic version
+    # is not at head (default). Only an explicit opt-out downgrades the
+    # refusal to a warning — a stale schema must never boot silently.
+    startup_alembic_head_check: bool = True
 
     # CORS origins for the Vite dev server.
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]

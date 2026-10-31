@@ -139,6 +139,16 @@ async def lifespan(_app: FastAPI):
 
     for warning in run_startup_checks(settings):
         logger.warning("startup check: %s", warning)
+    # Stage 1 / SR-036: database head + schema gate. Runs only on real
+    # starts, never on the test fast-path (conftest sets
+    # FORMUNEX_SKIP_LIFESPAN_BOOTSTRAP=1, and unit tests call
+    # run_startup_checks directly instead). A refusal propagates out of
+    # lifespan, so uvicorn exits instead of serving a stale schema.
+    if not skip_bootstrap:
+        from .startup_checks import run_startup_db_checks
+
+        for warning in run_startup_db_checks(settings):
+            logger.warning("startup check: %s", warning)
     # P1 #25: production + SQLite is a foot-gun under multi-worker write load.
     try:
         env = (settings.environment or "").strip().lower()
