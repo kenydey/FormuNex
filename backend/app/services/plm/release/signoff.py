@@ -20,6 +20,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ....clock import utcnow
@@ -228,10 +229,24 @@ def add_waiver(session: Session, revision_id: str, *, check_key: str, item: str,
 
 
 def submit(session: Session, revision_id: str, *, user_id: str, principal: Principal) -> ReleasePackageRow:
-    """Run the gate; when it passes freeze the package and open the 4-step sign-off."""
+    """Run the gate; when it passes freeze the package and open the 4-step sign-off.
+
+    Stage 1 / SR-031: idempotent resubmit. A concurrent double submit
+    (or a retry after a 409) must return the winner's package, not a
+    second package or a confusing "not a candidate" error: after the
+    revision lock, an existing under_review package for this revision
+    is returned as-is. On PostgreSQL the lock already serialises the
+    two submitters; this recheck is what makes the retry path return
+    the package instead of failing on the state check.
+    """
     rev, product = _rev(session, revision_id)
     _lock_row(session, ProductRevisionRow, rev.id)
     _require(principal, "release.submit", product.project_id)
+    existing = session.execute(select(ReleasePackageRow).where(
+        ReleasePackageRow.revision_id == rev.id, ReleasePackageRow.status == "under_review")
+        .order_by(ReleasePackageRow.created_at.desc()).limit(1)).scalar_one_or_none()
+    if existing is not None:
+        return existing
     if rev.state != "candidate":
         raise ReleaseError(f"修订版状态为 {rev.state}，只有候选版可以提交发布")
     result = gate.evaluate(session, rev.id)
@@ -309,9 +324,29 @@ def sign_step(session: Session, package_id: str, *, decision: str, user_id: str,
     if tampered:
         raise ReleaseError("发布包内容与冻结时不一致：" + "；".join(tampered))
     meaning = "reject" if decision == "reject" else ("release" if last else "approve")
-    esign.sign(session, user_id=user_id, password=password, meaning=meaning, subject_type="release_package",
-               subject_id=pkg.id, object_hash=pkg.package_hash, step_id=step.id,
-               detail={"step": step.seq, "role": step.role_code, "comment": comment})
+    try:
+        esign.sign(session, user_id=user_id, password=password, meaning=meaning, subject_type="release_package",
+                   subject_id=pkg.id, object_hash=pkg.package_hash, step_id=step.id,
+                   detail={"step": step.seq, "role": step.role_code, "comment": comment})
+    except IntegrityError:
+        # Stage 1 / SR-031: double-sign race on uq_esignature_step_user_meaning.
+        # At this point the transaction holds only the failed insert (the
+        # step update happens after signing), so rolling back loses nothing
+        # but the loser row. If the winner already decided this step (or
+        # recorded this user's signature), return the winner's package
+        # instead of a 409; otherwise re-raise for _release_call's 409.
+        session.rollback()
+        fresh_pkg = session.get(ReleasePackageRow, package_id)
+        if fresh_pkg is None:
+            raise ReleaseError("发布包不存在")
+        _fresh_flow, fresh_steps = _flow(session, package_id)
+        fresh_step = next((s for s in fresh_steps if s.id == step.id), None)
+        winner_signed = session.execute(select(ESignatureRow).where(
+            ESignatureRow.step_id == step.id, ESignatureRow.user_id == user_id,
+            ESignatureRow.meaning == meaning)).first() is not None
+        if (fresh_step is not None and fresh_step.status != "pending") or winner_signed:
+            return fresh_pkg
+        raise
     now = utcnow()
     step.status = "approved" if decision == "approve" else "rejected"
     step.decided_by = user_id

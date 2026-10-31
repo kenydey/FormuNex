@@ -971,14 +971,22 @@ def create_batch(product_id: str, body: BatchIn) -> dict[str, Any]:
     from ..clock import parse_iso_to_naive_utc
     from ..services.plm.documents import service as docs
 
+    from sqlalchemy.exc import IntegrityError
+
     with _session() as session:
         try:
             row = docs.create_batch(session, product_id, batch_no=body.batch_no, revision_id=body.revision_id,
                                     produced_at=parse_iso_to_naive_utc(body.produced_at) if body.produced_at else None,
                                     quantity_kg=body.quantity_kg)
+            session.commit()
         except (docs.DocumentError, ValueError) as exc:
             raise _doc_error(exc) from None
-        session.commit()
+        except IntegrityError:
+            # Stage 1 / SR-031: same retryable-conflict wording as
+            # _release_call — a concurrent duplicate batch_no lands here
+            # instead of a 500; the retry then sees the winner's row.
+            session.rollback()
+            raise HTTPException(status_code=409, detail="并发冲突，请重试") from None
         return {"id": row.id, "batch_no": row.batch_no}
 
 
@@ -1006,6 +1014,8 @@ def generate_document(revision_id: str, body: DocumentIn,
     A single version keeps the historical single-document response shape;
     multiple versions return {"documents": [...]}.
     """
+    from sqlalchemy.exc import IntegrityError
+
     from ..services.plm.documents import service as docs
     from ..services.plm.render import MissingRenderDependency, PdfaError
 
@@ -1042,7 +1052,16 @@ def generate_document(revision_id: str, body: DocumentIn,
             raise HTTPException(status_code=503, detail=str(exc)) from None
         except (docs.DocumentError, KeyError) as exc:
             raise _doc_error(exc) from None
-        session.commit()
+        except IntegrityError:
+            # Stage 1 / SR-031: concurrent duplicate document version
+            # lands here instead of a 500 (same wording as _release_call).
+            session.rollback()
+            raise HTTPException(status_code=409, detail="并发冲突，请重试") from None
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(status_code=409, detail="并发冲突，请重试") from None
         if len(rows) == 1:
             return {**_doc_summary(rows[0]), "content": rows[0].content}
         return {"documents": [{**_doc_summary(r), "content": r.content} for r in rows]}
