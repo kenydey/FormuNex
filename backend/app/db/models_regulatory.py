@@ -28,6 +28,18 @@ class RegulatoryDataRelease(Base):
 
     __tablename__ = "regulatory_data_releases"
 
+    # Stage 1 / SR-030: at most one APPROVED release per input digest.
+    # PARTIAL on purpose (same shape as W1-4's package index): draft /
+    # import / superseded rows with the same digest must stay possible,
+    # and a plain unique on input_digest would also block re-imports.
+    # Both dialect wheres are declared: postgresql_where alone renders
+    # as a FULL unique index on SQLite.
+    __table_args__ = (
+        Index("uq_approved_release_per_digest", "input_digest", unique=True,
+              sqlite_where=text("status = 'approved'"),
+              postgresql_where=text("status = 'approved'")),
+    )
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     label: Mapped[str] = mapped_column(String(80), index=True)
     source: Mapped[str] = mapped_column(String(40), default="seed")

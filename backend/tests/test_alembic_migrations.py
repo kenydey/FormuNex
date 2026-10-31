@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0084(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0084_stage1_conflict_units``)."""
+def test_revision_chain_head_is_0085(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0085_stage1_approved_digest_unique``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0084(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0084"
+    assert heads[0] == "0085"
 
 
 def test_migrations_partial_columns_branch(
@@ -965,3 +965,65 @@ def test_0084_adds_conflict_remote_units_column(tmp_db_url: str, monkeypatch: py
     run_downgrade(tmp_db_url, monkeypatch, "0083")
     assert "remote_units" not in _column_names(tmp_db_url, "eln_sync_conflicts")
     run_upgrade(tmp_db_url, monkeypatch)
+
+
+def _create_0084_release_schema(db_url: str) -> None:
+    """Minimal 0084-shaped schema: regulatory_data_releases without the index, stamped at 0084."""
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE TABLE regulatory_data_releases (id VARCHAR(36) PRIMARY KEY, label VARCHAR(80), "
+                "source VARCHAR(40), stats JSON, input_digest VARCHAR(64), created_at DATETIME, "
+                "status VARCHAR(16), approved_by VARCHAR(36), approved_at DATETIME)"))
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+            conn.execute(text("INSERT INTO alembic_version VALUES ('0084')"))
+    finally:
+        engine.dispose()
+
+
+def test_0085_adds_approved_digest_index_and_refuses_duplicates(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stage 1 / SR-030: upgrade adds the partial unique index; duplicates refuse the migration."""
+    from tests.alembic_helpers import run_downgrade
+
+    _create_0084_release_schema(tmp_db_url)
+    run_upgrade(tmp_db_url, monkeypatch)
+    engine = create_engine(tmp_db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO regulatory_data_releases VALUES ('r1', 'a', 'seed', '{}', 'd1', "
+                "'2026-10-01', 'approved', NULL, NULL)"))
+        with pytest.raises(Exception, match="duplicate|UNIQUE"):
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO regulatory_data_releases VALUES ('r2', 'b', 'seed', '{}', 'd1', "
+                    "'2026-10-02', 'approved', NULL, NULL)"))
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO regulatory_data_releases VALUES ('r3', 'c', 'seed', '{}', 'd1', "
+                "'2026-10-02', 'draft', NULL, NULL)"))
+    finally:
+        engine.dispose()
+    run_downgrade(tmp_db_url, monkeypatch, "0084")
+    run_upgrade(tmp_db_url, monkeypatch)
+
+
+def test_0085_refuses_when_approved_duplicates_exist(
+    tmp_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stage 1 / SR-030 dirty guard: pre-existing duplicate approved digests stop the migration."""
+    _create_0084_release_schema(tmp_db_url)
+    engine = create_engine(tmp_db_url)
+    try:
+        with engine.begin() as conn:
+            for rid in ("r1", "r2"):
+                conn.execute(text(
+                    f"INSERT INTO regulatory_data_releases VALUES ('{rid}', 'x', 'seed', '{{}}', 'd1', "
+                    f"'2026-10-01', 'approved', NULL, NULL)"))
+    finally:
+        engine.dispose()
+    with pytest.raises(RuntimeError, match="duplicate APPROVED"):
+        run_upgrade(tmp_db_url, monkeypatch)

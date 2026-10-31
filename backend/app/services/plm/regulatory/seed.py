@@ -185,8 +185,12 @@ def seed_regulatory_db(
     items all survive). It exists for rows lost after seeding — deleted rows,
     or rows an older importer version never wrote — which a plain re-run would
     never restore because the digest is unchanged. Update-package merges do not
-    run in backfill mode: on a digest match they already applied. A backfill run
-    records a new release row (same digest) so the next plain re-run skips again.
+    run in backfill mode: on a digest match they already applied. Stage 1 /
+    SR-030: a backfill run REUSES the prior release id instead of recording
+    a new approved row with the same digest (the old behaviour stacked one
+    approved row per backfill, leaving "latest approved" ambiguous). The
+    prior row's stats are left as the original import's stats; the
+    completion stats live in this run's result (and log line) only.
     """
     resources = resources or RESOURCES_DIR
     files = [f for f in _FILES if include_common or f != "common_chemicals.json.gz"]
@@ -204,11 +208,14 @@ def seed_regulatory_db(
         # deletes/patches are no-ops on empty tables); only a digest match
         # makes it a completion pass.
         completion = backfill and not force and prior is not None
-        release_id = _uid()
-        conn.execute(insert(RegulatoryDataRelease).values(
-            id=release_id, label=label or f"seed-{_now():%Y%m%d-%H%M%S}", source="seed", stats={},
-            input_digest=digest, created_at=_now(), status=status,
-        ))
+        if completion:
+            release_id = prior.id
+        else:
+            release_id = _uid()
+            conn.execute(insert(RegulatoryDataRelease).values(
+                id=release_id, label=label or f"seed-{_now():%Y%m%d-%H%M%S}", source="seed", stats={},
+                input_digest=digest, created_at=_now(), status=status,
+            ))
         review = _Review(release_id)
         stats: dict[str, Any] = {}
         subs = _collect_substances(resources, include_common, review, stats)
@@ -226,7 +233,8 @@ def seed_regulatory_db(
         if not backfill:
             _merge_ctx_enrichment(conn, resources, release_id, stats)
             _merge_clp_atp(conn, resources, release_id, stats)
-        conn.execute(update(RegulatoryDataRelease).where(RegulatoryDataRelease.id == release_id).values(stats=stats))
+        if not completion:
+            conn.execute(update(RegulatoryDataRelease).where(RegulatoryDataRelease.id == release_id).values(stats=stats))
     log.info("regulatory seed %s: %s", release_id, stats)
     result = {"skipped": False, "release_id": release_id, "stats": stats}
     if completion:

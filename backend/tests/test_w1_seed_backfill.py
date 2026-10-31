@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 
 import pytest
-from sqlalchemy import create_engine, delete, func, select, update
+from sqlalchemy import create_engine, delete, func, insert, select, update
 
 import app.db.models  # noqa: F401  (registers every table)
 from app.db.models import Base
@@ -262,3 +262,36 @@ def test_review_items_resolve_records_actor_and_note(api_env):
     assert item["resolved_at"] is not None
     assert item["detail"]["resolution_note"] == "接受未匹配"
 
+
+
+def test_backfill_reuses_prior_release_id(engine, resources):
+    """Stage 1 / SR-030: backfill on a digest match reuses the prior release id."""
+    from app.db.models_regulatory import RegulatoryDataRelease
+
+    first = seed_regulatory_db(engine, resources=resources)
+    result = seed_regulatory_db(engine, resources=resources, backfill=True)
+    assert result.get("backfilled") is True
+    assert result["release_id"] == first["release_id"]
+    assert _count(engine, RegulatoryDataRelease) == 1
+
+
+def test_second_approved_row_same_digest_rejected(engine, resources):
+    """Stage 1 / SR-030: the partial unique index blocks a second APPROVED row per digest."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db.models_regulatory import RegulatoryDataRelease
+
+    first = seed_regulatory_db(engine, resources=resources)
+    with engine.begin() as c:
+        digest = c.execute(select(RegulatoryDataRelease.input_digest)).scalar_one()
+    assert digest
+    with pytest.raises(IntegrityError):
+        with engine.begin() as c:
+            c.execute(insert(RegulatoryDataRelease).values(
+                id="dup-approved", label="dup", source="seed", stats={},
+                input_digest=digest, created_at=datetime(2026, 10, 1), status="approved"))
+    # A draft row with the same digest must still be possible (partial index).
+    with engine.begin() as c:
+        c.execute(insert(RegulatoryDataRelease).values(
+            id="draft-same-digest", label="draft", source="seed", stats={},
+            input_digest=digest, created_at=datetime(2026, 10, 1), status="draft"))
