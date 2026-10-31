@@ -1,8 +1,12 @@
 """Content-addressed idempotency keys for async job submission.
 
 Async endpoints record a durable outbox row before dispatching to Celery so a
-retried submission is recognised as the same job rather than queued twice. The
-key is a hash of the operation plus the canonicalised payload.
+retried submission maps to the same *row* (the key is a hash of the operation
+plus the canonicalised payload). That is row identity, not execution
+deduplication: under the at-least-once outbox semantics (D-4 decision,
+stage 1 / SR-015-SR-016), a retry can still execute twice — e.g. a timed-out
+publish that lands late plus a recovery replay — so handlers must stay
+replay-safe and no caller may read this module as an exactly-once promise.
 
 Extracted from ``api/research.py`` when the third endpoint needed it. The key
 function itself lives in ``db.outbox_store`` (the worker recomputes it to mark

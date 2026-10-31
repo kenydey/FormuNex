@@ -179,7 +179,10 @@ def dispatch_task(
     ``X-FormuNex-Task-Id`` header: a client that gets a 503 polls that id
     instead of blindly resubmitting (which would duplicate the work if the
     timed-out publish did land). The row carries the same id, so startup
-    recovery replays under exactly the id the client holds. ``detail``
+    recovery replays under exactly the id the client holds. Claim-by-id is
+    about traceability, not deduplication: execution stays at-least-once
+    (D-4, stage 1 / SR-015-SR-016), and a late publish plus a replay can
+    still run the payload twice. ``detail``
     stays a plain string — the frontend parses error bodies as JSON with a
     string detail, so the id travels in a header, not in the body.
     """
