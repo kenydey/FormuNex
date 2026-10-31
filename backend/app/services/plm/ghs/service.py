@@ -128,7 +128,9 @@ def latest_data_release(session: Session) -> str | None:
 
     Draft (staged, not yet EHS-approved) releases are invisible here, so a
     fetched update cannot take effect — or fail the release gate for
-    existing documents — before approval. Pre-0076 rows are approved.
+    existing documents — before approval. Stage 0 / SR-003: "import"
+    rows (unreviewed supplier-SDS imports) are likewise invisible, for
+    the same reason. Pre-0076 rows are approved.
     """
     return session.execute(
         select(RegulatoryDataRelease.id)

@@ -35,7 +35,10 @@ class RegulatoryDataRelease(Base):
     input_digest: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # P1-1: draft (staged, invisible to the gate) / approved (effective) /
-    # rejected / superseded. Pre-0076 rows are the shipped baseline: approved.
+    # rejected / superseded. Stage 0 / SR-003 adds "import": an unreviewed
+    # supplier-SDS import row, visible in the releases list but invisible
+    # to latest_data_release (it must never move the approved pointer).
+    # Pre-0076 rows are the shipped baseline: approved.
     status: Mapped[str] = mapped_column(String(16), default="approved")
     approved_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

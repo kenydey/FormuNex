@@ -373,10 +373,20 @@ def import_sds(session, parsed: ParsedSds, *, filename: str, digest: str) -> dic
         elif not _CJK_RE.search(parsed.product_name) and not substance.name_en:
             substance.name_en = parsed.product_name
 
+    # Stage 0 / SR-003: supplier imports are UNREVIEWED data. They must
+    # not move the global "latest approved release" pointer: previously
+    # this row fell into the model's default status ("approved"), so one
+    # single-substance import failed the release gate for every existing
+    # SDS/label (their data_release_id no longer equalled the latest).
+    # "import" rows stay visible in the releases list and keep
+    # classification provenance (release_id), but latest_data_release
+    # ignores them. There is no API path that flips "import" to
+    # "approved"; promotion, if ever wanted, is a reviewed update (stage 1+).
     release = RegulatoryDataRelease(
         id=str(uuid.uuid4()),
         label=f"sds-import:{filename}",
         source="supplier_sds_import",
+        status="import",
         stats={
             "filename": filename,
             "cas_no": cas,
