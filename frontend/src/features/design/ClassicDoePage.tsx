@@ -254,8 +254,14 @@ export default function ClassicDoePage() {
             <Button onClick={() => exportPlan("xlsx")}>XLSX</Button>
             <Button loading={adopt.isPending} disabled={!can("lab.execute", projectId)} onClick={() => adopt.mutate(plan)}>{t("design.doe.adopt", "写入实验台账")}</Button>
             {dispatchId ? <DispatchButton planId={dispatchId} />
-              : <Tooltip title={t("design.doe.not_persisted", "该计划未能保存到 DOE 历史，无法下发为实验任务")}>
-                <Button type="primary" disabled>{t("doe.dispatch", "下发为实验任务")}</Button></Tooltip>}
+              : <Space wrap>
+                <Tooltip title={t("design.doe.not_persisted", "该计划未能保存到 DOE 历史，无法下发为实验任务")}>
+                  <Button type="primary" disabled>{t("doe.dispatch", "下发为实验任务")}</Button>
+                </Tooltip>
+                <Tooltip title={t("design.doe.regenerate_save_tip", "用当前参数重新生成一次；成功保存到历史后即可下发（无固定种子时随机设计的矩阵可能变化）")}>
+                  <Button loading={generate.isPending} onClick={() => generate.mutate()}>{t("design.doe.regenerate_save", "重新生成并保存到历史")}</Button>
+                </Tooltip>
+              </Space>}
           </Space>}>
           {plan.notes && <Typography.Paragraph type="secondary" style={{ whiteSpace: "pre-wrap" }}>{plan.notes}</Typography.Paragraph>}
           {active && (

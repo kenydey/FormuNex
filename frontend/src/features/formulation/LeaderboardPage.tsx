@@ -146,7 +146,7 @@ export default function LeaderboardPage() {
           {actions.hasCompliance && <Typography.Paragraph type="secondary" style={{ margin: "6px 0 0" }}>{t("formulation.board.compliance", "合规项（REACH / SVHC / RoHS）需人工确认，不会自动改配方。")}</Typography.Paragraph>}
           <Space style={{ marginTop: 8 }} wrap>
             {actions.proposeMissing && <Button size="small" disabled={!can("knowledge.write")} loading={proposeMissing.isPending} onClick={() => proposeMissing.mutate()}>{t("formulation.board.propose", "入库缺失组分")}</Button>}
-            {actions.openMaterials && <Link to="/materials">{t("formulation.board.materials", "打开材料库")}</Link>}
+            {actions.openMaterials && <Link to="/materials/substances">{t("formulation.board.materials", "打开材料库")}</Link>}
             {syncMsg && <Typography.Text type="secondary">{syncMsg}</Typography.Text>}
           </Space>
         </>} />}

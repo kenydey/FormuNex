@@ -17,13 +17,13 @@ export const PATHS: PathDef[] = [
     { id: "requirement", routes: ["/spec/projects/:projectId", "/spec/projects"] },
     { id: "recommend", routes: ["/formulation/recommend", "/lab/recommend", "/lab/formulations"] },
     { id: "doe", routes: ["/lab/doe"] },
-    { id: "ledger", routes: ["/cockpit/workbench", "/lab/tasks"] },
+    { id: "ledger", routes: ["/lab/work-records?tab=ledger", "/cockpit/workbench", "/lab/tasks"] },
     { id: "loop", routes: ["/cockpit/optimization?tab=loop", "/cockpit/optimization?tab=pareto"] },
   ] },
   { id: "substitute", maturity: "stable", steps: [
     { id: "materials", routes: ["/materials/raw"] },
     { id: "substitute", routes: ["/lab/substitution", "/materials/raw?tab=structure"] },
-    { id: "ledger", routes: ["/cockpit/workbench", "/lab/tasks"] },
+    { id: "ledger", routes: ["/lab/work-records?tab=ledger", "/cockpit/workbench", "/lab/tasks"] },
   ] },
   { id: "knowledge", maturity: "beta", needsProject: true, steps: [
     { id: "sources", routes: ["/spec/projects/:projectId/sources"], needsProject: true },

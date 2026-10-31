@@ -66,7 +66,7 @@ export default function RecommendPage() {
       <ProCard gutter={16} ghost wrap>
         <ProCard colSpan={{ xs: 24, lg: 15 }} bordered title={t("formulation.rec.req", "研发需求")}>
           {!requirement ? <Alert type="warning" showIcon message={t("formulation.rec.no_req", "该项目尚未定义研发需求")}
-            action={<Link to="/spec">{t("formulation.rec.go_spec", "去定义")}</Link>} /> : <>
+            action={<Link to={`/spec/projects/${projectId}`}>{t("formulation.rec.go_spec", "去定义")}</Link>} /> : <>
             <Descriptions size="small" column={{ xs: 1, md: 2 }} items={[
               { key: "d", label: t("formulation.exp.domain", "产品领域"), children: requirement.domain },
               { key: "s", label: t("formulation.rec.substrate", "基材"), children: String(requirement.substrate ?? "—") },

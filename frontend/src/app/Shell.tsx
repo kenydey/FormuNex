@@ -98,9 +98,9 @@ export function Shell() {
         </Space.Compact>
         <TaskCenter />
         <Tooltip title={t("shell.review_queue", "待复核测量值")}>
-          <Badge count={reviewQueue.data?.length ?? 0} size="small">
+          {can("lab.review") && <Badge count={reviewQueue.data?.length ?? 0} size="small">
             <Button type="text" onClick={() => navigate("/lab/measurements?tab=review")}>{t("shell.todo", "待办")}</Button>
-          </Badge>
+          </Badge>}
         </Tooltip>
         <Tooltip title={t("shell.theme", "明暗主题")}>
           <Button type="text" icon={<BulbOutlined />} onClick={() => ui.setTheme(ui.theme === "dark" ? "light" : "dark")} />

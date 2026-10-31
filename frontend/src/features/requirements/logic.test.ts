@@ -7,7 +7,7 @@ import type { ConstraintRequirement, CustomConstraintRequirement } from "./const
 import { previewEffectTrace, traceCounts } from "./effectTrace";
 import { applyLookup, draftFromView, lookupQuery, lookupSource, nextAvailability, payloadFromDraft, structureMode, EMPTY_DRAFT } from "./materials/materialForm";
 import { causeParts } from "./ProjectHistory";
-import { flattenPaths, resolveStep } from "./paths";
+import { flattenPaths, PATHS, resolveStep } from "./paths";
 import { idsMatch, mergeSourceRows, normalizePatentPub, parseEvidence, removeEvidenceBody, resolveOpenUrl, toggleSelected, type KbSource } from "./sourceRows";
 
 describe("constraints", () => {
@@ -168,6 +168,12 @@ describe("history & paths", () => {
     expect(resolveStep({ id: "r", routes: ["/spec/projects/:projectId"] }, known, "p 1")).toBe("/spec/projects/p%201");
     expect(resolveStep({ id: "m", routes: ["/materials/raw?tab=structure"] }, known, null)).toBe("/materials/raw?tab=structure");
     expect(resolveStep({ id: "w", routes: ["/knowledge/wiki"] }, known, null)).toBeNull();
+  });
+  it("wizard ledger step resolves to the work-records ledger tab (W1-7/P1-F4)", () => {
+    const known = flattenPaths([{ path: "/lab", children: [{ path: "/lab/work-records" }] }]);
+    const ledgers = PATHS.flatMap((p) => p.steps).filter((s) => s.id === "ledger");
+    expect(ledgers).toHaveLength(2);
+    for (const ledger of ledgers) expect(resolveStep(ledger, known, null)).toBe("/lab/work-records?tab=ledger");
   });
 });
 
