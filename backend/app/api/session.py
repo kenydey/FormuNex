@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
@@ -14,10 +14,51 @@ from ..services.session.memory_service import (
     close_session_memory,
     SessionMemoryService
 )
+from ._principal import CurrentUser, _bearer, current_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/session", tags=["session"])
+
+
+def _caller(request: Request | None) -> CurrentUser | None:
+    """Guard-style caller resolution (Stage 0 / SR-006).
+
+    Only a personal JWT yields a user; service keys and auth-disabled dev
+    keep legacy behavior (no owner recorded, no owner check). In
+    production the auth middleware already rejects anonymous requests.
+    """
+    if request is None:
+        return None
+    from ..services.identity import tokens
+
+    token = _bearer(request)
+    if not token or not tokens.looks_like_access_token(token):
+        return None
+    return current_user(request)
+
+
+def _is_session_admin(user: CurrentUser) -> bool:
+    return user.principal.can("admin.users")
+
+
+def _check_session_owner(meta: dict, user: CurrentUser | None) -> None:
+    """Owner gate for one session row. ``meta`` comes from session_meta.
+
+    - No JWT caller (service key / dev): legacy behavior, no check.
+    - Platform admin: full access, including legacy rows.
+    - NULL owner (pre-upgrade row): admin-only. Session ids are guessable
+      (``chat-<timestamp>-<seq>``), so grandfathering would leave the
+      enumeration hole open under a thinner disguise.
+    - Owned row: owner only.
+    """
+    if user is None or _is_session_admin(user):
+        return
+    owner = meta.get("owner_id")
+    if owner is None:
+        raise HTTPException(status_code=403, detail="该会话为升级前存量会话，仅管理员可访问")
+    if owner != user.id:
+        raise HTTPException(status_code=403, detail="无权访问他人会话")
 
 
 class SessionSaveRequest(BaseModel):
@@ -59,6 +100,7 @@ class SessionDeleteResponse(BaseModel):
 @router.post("/save", response_model=Dict[str, str])
 async def save_session(
     payload: SessionSaveRequest,
+    request: Request,
     service: SessionMemoryService = Depends(get_session_memory_service)
 ):
     """
@@ -68,7 +110,12 @@ async def save_session(
         # Initialize service if needed
         if not await service.is_available():
             await service.initialize()
-        
+
+        user = _caller(request)
+        meta = await service.session_meta(payload.session_id)
+        if meta is not None:
+            _check_session_owner(meta, user)
+
         success = await service.save_chat_session(
             session_id=payload.session_id,
             history=payload.history,
@@ -76,6 +123,7 @@ async def save_session(
             ttl_seconds=payload.ttl_seconds,
             project_id=payload.project_id,
             title=payload.title,
+            owner_user_id=user.id if user is not None else None,
         )
         
         if success:
@@ -100,6 +148,7 @@ async def save_session(
 @router.get("/load/{session_id}", response_model=SessionLoadResponse)
 async def load_session(
     session_id: str,
+    request: Request,
     service: SessionMemoryService = Depends(get_session_memory_service)
 ):
     """
@@ -109,7 +158,11 @@ async def load_session(
         # Initialize service if needed
         if not await service.is_available():
             await service.initialize()
-        
+
+        meta = await service.session_meta(session_id)
+        if meta is not None:
+            _check_session_owner(meta, _caller(request))
+
         session_data = await service.load_chat_session(session_id)
         
         if session_data is None:
@@ -138,6 +191,7 @@ async def load_session(
 @router.get("/info/{session_id}", response_model=SessionInfoResponse)
 async def get_session_info(
     session_id: str,
+    request: Request,
     service: SessionMemoryService = Depends(get_session_memory_service)
 ):
     """
@@ -147,18 +201,20 @@ async def get_session_info(
         # Initialize service if needed
         if not await service.is_available():
             await service.initialize()
-        
+
         history_count = await service.get_session_history_count(session_id)
-        
+
         if history_count == 0:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Session {session_id} not found or expired"
             )
-        
+
         # Get additional info
         meta = await service.session_meta(session_id) or {}
-        
+        if meta:
+            _check_session_owner(meta, _caller(request))
+
         return SessionInfoResponse(
             session_id=session_id,
             history_count=meta.get("history_count", history_count),
@@ -180,6 +236,7 @@ async def get_session_info(
 @router.delete("/delete/{session_id}", response_model=SessionDeleteResponse)
 async def delete_session(
     session_id: str,
+    request: Request,
     service: SessionMemoryService = Depends(get_session_memory_service)
 ):
     """
@@ -189,7 +246,11 @@ async def delete_session(
         # Initialize service if needed
         if not await service.is_available():
             await service.initialize()
-        
+
+        meta = await service.session_meta(session_id)
+        if meta is not None:
+            _check_session_owner(meta, _caller(request))
+
         success = await service.delete_chat_session(session_id)
         
         if success:
@@ -216,21 +277,30 @@ async def delete_session(
 async def list_sessions(
     limit: int = 100,
     project_id: Optional[str] = Query(None, description="Filter sessions by owning project"),
+    request: Request = None,
     service: SessionMemoryService = Depends(get_session_memory_service)
 ):
     """
     List chat sessions, optionally scoped to a project (2026-09-05: 项目内会话).
+
+    Stage 0 / SR-006: a JWT caller only ever sees their own sessions
+    (platform admins see all, including legacy NULL-owner rows). No-JWT
+    callers (service key / dev) keep the legacy full list.
     """
     try:
         # Initialize service if needed
         if not await service.is_available():
             await service.initialize()
-        
+
+        user = _caller(request) if request is not None else None
         session_ids = await service.list_active_sessions(limit=limit, project_id=project_id)
         sessions_info = []
-        
+
         for session_id in session_ids:
             meta = await service.session_meta(session_id) or {}
+            if user is not None and not _is_session_admin(user):
+                if meta.get("owner_id") != user.id:
+                    continue
             sessions_info.append(SessionInfoResponse(
                 session_id=session_id,
                 history_count=meta.get("history_count", 0),

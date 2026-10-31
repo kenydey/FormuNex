@@ -678,6 +678,10 @@ class ChatSessionRow(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str | None] = mapped_column(String(36), index=True, default=None)
+    # Stage 0 / SR-006: owning login id. NULL = pre-upgrade legacy row:
+    # session ids are guessable (chat-<timestamp>-<seq>), so for JWT
+    # callers a NULL-owner row is admin-only, never grandfathered.
+    owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     title: Mapped[str] = mapped_column(String(255), default="")
     context: Mapped[dict] = mapped_column(JSON, default=dict)
     has_context: Mapped[bool] = mapped_column(default=False)

@@ -25,8 +25,17 @@ def maybe_run_selected_mcp(
     *,
     session_id: str | None = None,
     settings: Any = None,
+    owner_user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return {results, mcp_permission_required}."""
+    """Return {results, mcp_permission_required}.
+
+    Stage 0 / SR-006: ``owner_user_id`` is the chat caller's login id. A
+    session grant is bound to its granting user (approve-session), and
+    ``is_granted`` only enforces that binding when the caller supplies an
+    owner — passing None here used to let anyone holding a session id
+    spend the victim's grant. None keeps legacy behavior for callers
+    without identity (service key / dev).
+    """
     from .mcp_client import call_tool_with_session, is_writeish_tool, list_mcp_servers, probe_server
 
     if not server_ids:
@@ -75,7 +84,7 @@ def maybe_run_selected_mcp(
             None)):
         from .mcp_session_grants import is_granted
 
-        if not session_id or not is_granted(session_id, sid, tool):
+        if not session_id or not is_granted(session_id, sid, tool, owner_user_id=owner_user_id):
             return {
                 "results": [],
                 "mcp_permission_required": {
@@ -87,7 +96,8 @@ def maybe_run_selected_mcp(
             }
 
     result = call_tool_with_session(
-        sid, tool, args, session_id=session_id, settings=settings, descriptors=descriptors
+        sid, tool, args, session_id=session_id, settings=settings, descriptors=descriptors,
+        owner_user_id=owner_user_id,
     )
     if result.get("mcp_permission_required"):
         return {"results": [], "mcp_permission_required": result["mcp_permission_required"]}

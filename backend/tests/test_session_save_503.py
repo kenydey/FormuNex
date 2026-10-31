@@ -24,6 +24,11 @@ class _Service:
     async def initialize(self):
         return True
 
+    async def session_meta(self, session_id):
+        # Stage 0 save path looks up the existing row for the owner check;
+        # a not-yet-saved session has no row, so no check applies.
+        return None
+
     async def save_chat_session(self, **kwargs):
         if self._save_exc is not None:
             raise self._save_exc

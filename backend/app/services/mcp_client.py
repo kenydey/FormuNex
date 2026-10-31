@@ -833,11 +833,14 @@ def call_tool_with_session(
     session_id: str | None = None,
     settings: Any = None,
     descriptors: list[dict] | None = None,
+    owner_user_id: str | None = None,
 ) -> dict[str, Any]:
     """Call tool; write-class requires a prior session grant via approve-session.
 
     Write-class = declared write OR undeclared (default-deny). Read tools skip
     the grant check but still pass the approval gate inside ``_call_tool``.
+    ``owner_user_id`` (Stage 0 / SR-006) enforces the grant's owner binding;
+    None preserves the legacy unchecked behavior for identity-less callers.
     """
     if settings is not None and not settings.mcp_client_enabled:
         return {"ok": False, "error": "mcp_client_enabled is off"}
@@ -853,7 +856,8 @@ def call_tool_with_session(
     if is_write:
         from .mcp_session_grants import is_granted
 
-        if not session_id or not is_granted(session_id, server_id, tool_name):
+        if not session_id or not is_granted(session_id, server_id, tool_name,
+                                            owner_user_id=owner_user_id):
             return {
                 "ok": False,
                 "error": "mcp_permission_required",

@@ -624,6 +624,26 @@ def _bind_owner(req: ChatRequestValidated, request: Request | None) -> None:
         req._owner_id = get_current_owner(request)
 
 
+def _chat_caller_id(request) -> str | None:
+    """Real login id of a JWT chat caller, else None (Stage 0 / SR-006).
+
+    Deliberately NOT ``get_current_owner``: that falls back to ``"default"``
+    for JWT users (SR-014, fixed in stage 2 by D-3), and a ``"default"``
+    caller would fail every owner check and break legitimate JWT chat MCP
+    use. Fail-soft: an invalid/revoked token or identity-less caller yields
+    None, i.e. the legacy unchecked behavior, never a 401 for the chat.
+    """
+    if request is None:
+        return None
+    try:
+        from ._principal import optional_user
+
+        user = optional_user(request)
+        return user.id if user is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequestValidated, request: Request = None):  # type: ignore[assignment]
     _bind_owner(req, request)
@@ -894,6 +914,7 @@ def chat(req: ChatRequestValidated, request: Request = None):  # type: ignore[as
                     list(req.selected_mcp_servers or []),
                     session_id=req.chat_session_id,
                     settings=settings,
+                    owner_user_id=_chat_caller_id(request),
                 )
                 mcp_tool_results = mcp_out.get("results")
                 mcp_permission_required = mcp_out.get("mcp_permission_required")

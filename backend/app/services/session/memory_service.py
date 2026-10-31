@@ -118,8 +118,14 @@ class SessionMemoryService:
         ttl_seconds: int = HOT_CACHE_TTL,  # noqa: ARG002 — kept for API compat (Redis era)
         project_id: Optional[str] = None,
         title: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
     ) -> bool:
-        """SQLite authority: upsert session row + full rewrite of its messages."""
+        """SQLite authority: upsert session row + full rewrite of its messages.
+
+        Stage 0 / SR-006: ``owner_user_id`` is stamped only on create.
+        An existing row never changes owner here (no adoption: the API
+        layer rejects a non-owner, non-admin caller before reaching this).
+        """
         from ...db.models import ChatMessageRow, ChatSessionRow
         from ...db.session_utils import commit_session
 
@@ -134,6 +140,7 @@ class SessionMemoryService:
                         id=session_id,
                         project_id=project_id,
                         title=title or "",
+                        owner_id=owner_user_id,
                         created_at=now,
                     )
                     session.add(existing)
@@ -279,6 +286,7 @@ class SessionMemoryService:
                     "session_id": sess.id,
                     "project_id": sess.project_id,
                     "title": sess.title,
+                    "owner_id": sess.owner_id,
                     "history_count": sess.message_count,
                     "has_context": sess.has_context,
                     "updated_at": sess.updated_at.isoformat() if sess.updated_at else None,
