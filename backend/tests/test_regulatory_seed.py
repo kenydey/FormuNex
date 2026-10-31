@@ -123,9 +123,9 @@ def test_seed_loads_every_table(engine, resources):
     assert stats["catalog_generic"] == 1
     with engine.connect() as c:
         acrylic = c.execute(select(SubstanceRow).where(SubstanceRow.cas_no == "79-10-7")).one()
-        assert acrylic.explosive_precursor is True and acrylic.hazardous_catalog_no == 3
-        # P1-23：未标注非目录的缺号条目仍回退行号（既有行为，见 acrylic==3）；
-        # 明确标注非目录的条目即使有行号也不写序号。
+        # W1-9：未核实的条目不再回退文件行号——丙烯酸 fixture 只有 index 3、无
+        # catalog_no，种子后序号为空（§15 不宣称），待 232 条逐条核对后再填实。
+        assert acrylic.explosive_precursor is True and acrylic.hazardous_catalog_no is None
         safrole = c.execute(select(SubstanceRow).where(SubstanceRow.cas_no == "94-59-7")).one()
         assert safrole.hazardous_catalog_no is None and safrole.precursor_control is True
         ethanol = c.execute(select(SubstanceRow).where(SubstanceRow.cas_no == "64-17-5")).one()
@@ -161,7 +161,8 @@ def test_seed_loads_every_table(engine, resources):
         ).all()
         assert eh40[0][0] == "EH40/2005" and eh40[0][1] == 10.0
         assert "respirable dust" in eh40[0][3] and "4 mg/m³" in eh40[0][3]
-        assert eh40[1] == ("EH40/2005", 37.0, 92.0, "8h TWA 20 ppm；15min STEL 50 ppm")
+        # W1-9：多变体 notes 分行存（不再用"；"拼后截断）。
+        assert eh40[1] == ("EH40/2005", 37.0, 92.0, "8h TWA 20 ppm\n15min STEL 50 ppm")
         assert stats["eh40_rows"] == 2 and stats["eh40_unmatched"] == 1
         codes = set(c.execute(select(GhsStatementRow.code)).scalars())
         assert {"H225", "H300+H310+H330", "P210", "P301+P330+P331"} <= codes
@@ -183,11 +184,13 @@ def test_seed_loads_every_table(engine, resources):
 
 
 def test_bundled_non_catalog_entries_never_get_a_catalog_no():
-    """P1-23：真实捆绑文件中的 29 条非目录条目，种子逻辑一律不给序号。
+    """P1-23 + W1-9：真实捆绑文件中的 29 条非目录条目，种子逻辑一律不给序号；
+    其余 232 条无 catalog_no 条目同样为空——W1-9 起行号回退已删除，未核实
+    的序号不再宣称（空 ≠ 宣称未列入，只是未核实；232 条逐条核对完成前
+    不得据此断言它们列入与否，核对后逐条填实）。
 
     只读断言（不跑全量种子、不改数据）：逐条核对 source 标记与
-    _catalog_no 回退，29 条全为空；其余 232 条无 catalog_no 条目仍
-    保留行号回退（缺号 ≠ 明确非目录，两情形必须分开）。
+    _catalog_no 回退，29 条与 232 条全为空。
     """
     from pathlib import Path
 
@@ -201,7 +204,7 @@ def test_bundled_non_catalog_entries_never_get_a_catalog_no():
     assert {c.get("cas_number") for c in non_catalog} >= {"94-59-7"}
     unnumbered_unmarked = [c for c in chemicals if not c.get("catalog_no") and not c.get("source")]
     assert len(unnumbered_unmarked) == 232
-    assert all(_catalog_no(c) == c.get("index") for c in unnumbered_unmarked)
+    assert all(_catalog_no(c) is None for c in unnumbered_unmarked)
 
 
 def test_unchanged_data_is_skipped_and_force_is_idempotent(engine, resources):

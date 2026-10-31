@@ -132,6 +132,10 @@ class CtxFetchIn(BaseModel):
     cas_list: list[str] = Field(default_factory=list)
 
 
+class ReviewResolveIn(BaseModel):
+    note: str = ""
+
+
 def _updates_error(exc: Exception) -> HTTPException:
     from ..services.plm.regulatory import updates as reg_updates
 
@@ -169,6 +173,69 @@ def list_regulatory_releases(user: CurrentUser = Depends(current_user)) -> list[
              "stats": r.stats or {}}
             for r in rows
         ]
+
+
+@router.get("/regulatory/review-items")
+def list_regulatory_review_items(kind: str | None = None, status: str | None = None,
+                                 user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """The seed review queue (W1-9 handling flow): items the import pipeline
+    could not decide on its own — unmatched OEL records, unparseable hazard
+    texts, ambiguous transport links. EHS works this queue: fix the source
+    file and re-seed (open items regenerate), or resolve an item that needs
+    no further action (resolved items survive re-seeds)."""
+    user.require("regulatory.read")
+    from sqlalchemy import func, select
+
+    from ..db.models_regulatory import RegulatoryReviewItem
+
+    with _session() as session:
+        q = select(RegulatoryReviewItem)
+        if kind:
+            q = q.where(RegulatoryReviewItem.kind == kind)
+        if status:
+            q = q.where(RegulatoryReviewItem.status == status)
+        rows = session.execute(q.order_by(RegulatoryReviewItem.kind,
+                                          RegulatoryReviewItem.name)).scalars().all()
+        by_kind = dict(session.execute(
+            select(RegulatoryReviewItem.kind, func.count()).where(
+                RegulatoryReviewItem.status == "open").group_by(RegulatoryReviewItem.kind)).all())
+        return {
+            "open_by_kind": by_kind,
+            "items": [
+                {"id": r.id, "kind": r.kind, "status": r.status, "cas_no": r.cas_no, "name": r.name,
+                 "detail": r.detail or {}, "release_id": r.release_id,
+                 "resolved_by": r.resolved_by,
+                 "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None}
+                for r in rows
+            ],
+        }
+
+
+@router.post("/regulatory/review-items/{item_id}/resolve")
+def resolve_regulatory_review_item(item_id: str, body: ReviewResolveIn,
+                                   user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Mark a queue item resolved (no further action needed). The item keeps
+    its detail for audit; a later re-seed will not regenerate it."""
+    user.require("regulatory.review")
+    from datetime import datetime
+
+    from ..db.models_regulatory import RegulatoryReviewItem
+
+    with _session() as session:
+        row = session.get(RegulatoryReviewItem, item_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="复核项不存在")
+        if row.status != "open":
+            raise HTTPException(status_code=409, detail=f"复核项已处理（{row.status}）")
+        row.status = "resolved"
+        row.resolved_by = user.id
+        row.resolved_at = datetime.now()
+        if body.note:
+            detail = dict(row.detail or {})
+            detail["resolution_note"] = body.note
+            row.detail = detail
+        session.commit()
+        return {"id": row.id, "kind": row.kind, "status": row.status}
 
 
 @router.post("/regulatory/updates/clp-stage")

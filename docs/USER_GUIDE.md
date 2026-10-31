@@ -917,9 +917,16 @@ Still **off** unless explicitly enabled:
   `check_process_window` accept custom items.
 - **Substance tox/eco records** (Materials & regulations → Substance tox/eco
   records, renamed from "test records" to disambiguate from work records):
-  toxicology and ecotoxicology records render SDS §11/12; 445 EH40 occupational
-  exposure limits are seeded (SDS §8 still uses GBZ only; the OEL query API
-  covers the rest).
+  toxicology and ecotoxicology records render SDS §11/12; EH40 seeds 348
+  occupational exposure limit rows from 445 file records (64 records without
+  a usable CAS go to the review queue, not into the table); GBZ 2.1 seeds
+  373 rows with 19 unmatched records (SDS §8 still uses GBZ only; the OEL
+  query API covers the rest). Unmatched OEL records are handled through the
+  seed review queue: `GET /api/plm/regulatory/review-items` (filter by kind
+  `eh40_unmatched` / `oel_unmatched`) lists them, EHS either fixes the source
+  file and re-seeds (open items regenerate) or resolves an item that needs no
+  further action via `POST /api/plm/regulatory/review-items/{id}/resolve`
+  (resolved items survive re-seeds).
 - **Revision empty-state guidance**: the product-revision dialog guides when
   the formulation-version dropdown's lineage is empty; the version field is
   optional; with no default company, document generation checks China by

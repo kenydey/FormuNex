@@ -106,7 +106,7 @@ export default function TestRecordsPage() {
                 { title: "PC-TWA (mg/m³)", dataIndex: "pc_twa", render: (_, r) => r.pc_twa ?? "—" },
                 { title: "PC-STEL (mg/m³)", dataIndex: "pc_stel", render: (_, r) => r.pc_stel ?? "—" },
                 { title: "关键效应", dataIndex: "critical_effect" },
-                { title: "备注", dataIndex: "notes" },
+                { title: "备注", dataIndex: "notes", render: (v) => <span style={{ whiteSpace: "pre-line" }}>{String(v ?? "")}</span> },
               ]} />
             <div style={{ marginTop: 8 }}>GBZ 与 EH40 共表，标准列区分；EH40 的 ppm 值在备注中。</div>
           </> },

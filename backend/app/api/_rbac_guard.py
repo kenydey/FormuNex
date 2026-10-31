@@ -161,6 +161,8 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/lab/tasks/[^/]+/attachments(/[^/]+)?$"), "doe.write"),
     # Signoff — per-endpoint / OR-logic permissions.
     (re.compile(r"^/api/plm/documents/[^/]+/approve$"), "coa.sign OR plm.document.review"),
+    # W1-5 approve-exempt — same permission as approve, enforced in signoff.
+    (re.compile(r"^/api/plm/documents/[^/]+/approve-exempt$"), "coa.sign OR plm.document.review"),
     (re.compile(r"^/api/plm/packages/[^/]+/publish$"), "release.publish"),
     (re.compile(r"^/api/plm/packages/[^/]+/sign$"), "release.sign OR release.publish"),
     (re.compile(r"^/api/plm/packages/[^/]+/withdraw$"), "release.withdraw"),
@@ -184,6 +186,8 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
     # G7 Excel imports — already endpoint-enforced (user.require in plm.py),
     # only never registered here; the audit flagged them as uncovered.
     (re.compile(r"^/api/plm/import/(formulas|companies)$"), "plm.document.write"),
+    # W1-9 review queue — resolve is endpoint-enforced (user.require in plm.py).
+    (re.compile(r"^/api/plm/regulatory/review-items/[^/]+/resolve$"), "regulatory.review"),
     # MCP approval decision — the endpoint itself enforces current_user plus
     # session/project attribution (admin.connectors for global scope).
     (re.compile(r"^/api/mcp/approvals/[^/]+/decide$"), "mcp approval (current_user + attribution)"),

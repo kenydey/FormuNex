@@ -131,7 +131,8 @@ class SubstanceOELRow(Base):
     pc_twa: Mapped[float | None] = mapped_column(Float, nullable=True)
     pc_stel: Mapped[float | None] = mapped_column(Float, nullable=True)
     critical_effect: Mapped[str] = mapped_column(String(300), default="")
-    notes: Mapped[str] = mapped_column(String(200), default="")
+    # W1-9: one EH40 variant per line; 2000 so a multi-variant merge is never cut.
+    notes: Mapped[str] = mapped_column(String(2000), default="")
     release_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 

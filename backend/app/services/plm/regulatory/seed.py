@@ -80,6 +80,10 @@ RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources" / "regulatory"
 IMPORTER_VERSION = "8"  # 8: EH40/2005 OEL seeding alongside GBZ
 OEL_STANDARD = "GBZ 2.1-2019"
 EH40_STANDARD = "EH40/2005"
+# W1-9: OEL notes hold every variant's limits, one per line; the column is
+# widened to 2000 (migration 0080) so a multi-variant merge is never cut short
+# the way the old 200-character cap cut later variants' values.
+_OEL_NOTES_MAX = 2000
 TRANSPORT_STANDARD = "GB 12268-2025"
 CATALOG_SOURCE_REF = "危险化学品目录（2015 版）序号 {no}"
 SEED_REVIEW_KINDS = (
@@ -161,6 +165,7 @@ def seed_regulatory_db(
     label: str | None = None,
     include_common: bool = True,
     force: bool = False,
+    backfill: bool = False,
     status: str = "approved",
     extra_files: Iterable[str] = (),
 ) -> dict[str, Any]:
@@ -171,6 +176,17 @@ def seed_regulatory_db(
     are update-package files present in ``resources`` (e.g. ``ctx_enrichment.json``,
     ``clp_atp.json``): they join the digest (so a changed package is not
     mistaken for an unchanged seed) and are merged by the steps below.
+
+    ``backfill`` (W1-9 行级补齐) is the non-destructive middle mode between the
+    digest skip and ``force``: when the digest already matches a prior release,
+    instead of returning "skipped" it runs a completion pass that INSERTS ONLY
+    rows the files contain but the database lacks, and never deletes, replaces
+    or patches an existing row (human edits, locked rows and resolved review
+    items all survive). It exists for rows lost after seeding — deleted rows,
+    or rows an older importer version never wrote — which a plain re-run would
+    never restore because the digest is unchanged. Update-package merges do not
+    run in backfill mode: on a digest match they already applied. A backfill run
+    records a new release row (same digest) so the next plain re-run skips again.
     """
     resources = resources or RESOURCES_DIR
     files = [f for f in _FILES if include_common or f != "common_chemicals.json.gz"]
@@ -182,8 +198,12 @@ def seed_regulatory_db(
                 RegulatoryDataRelease.input_digest == digest
             )
         ).first()
-        if prior and not force:
+        if prior and not force and not backfill:
             return {"skipped": True, "release_id": prior.id, "stats": prior.stats}
+        # A backfill on a fresh database is just a full import (the section
+        # deletes/patches are no-ops on empty tables); only a digest match
+        # makes it a completion pass.
+        completion = backfill and not force and prior is not None
         release_id = _uid()
         conn.execute(insert(RegulatoryDataRelease).values(
             id=release_id, label=label or f"seed-{_now():%Y%m%d-%H%M%S}", source="seed", stats={},
@@ -192,22 +212,26 @@ def seed_regulatory_db(
         review = _Review(release_id)
         stats: dict[str, Any] = {}
         subs = _collect_substances(resources, include_common, review, stats)
-        cas_to_id = _upsert_substances(conn, subs, release_id, stats)
-        _replace_catalog_classifications(conn, subs, cas_to_id, release_id, stats)
-        _replace_generic_entries(conn, resources, release_id, stats)
-        _replace_oel(conn, resources, cas_to_id, release_id, review, stats)
-        _replace_oel_eh40(conn, resources, cas_to_id, release_id, review, stats)
-        _replace_transport(conn, resources, release_id, review, stats)
-        _mark_iecsc(conn, resources, stats)
-        _upsert_statements(conn, resources, stats)
-        _replace_review_items(conn, review, stats)
+        cas_to_id = _upsert_substances(conn, subs, release_id, stats, backfill=backfill)
+        _replace_catalog_classifications(conn, subs, cas_to_id, release_id, stats, backfill=backfill)
+        _replace_generic_entries(conn, resources, release_id, stats, backfill=backfill)
+        _replace_oel(conn, resources, cas_to_id, release_id, review, stats, backfill=backfill)
+        _replace_oel_eh40(conn, resources, cas_to_id, release_id, review, stats, backfill=backfill)
+        _replace_transport(conn, resources, release_id, review, stats, backfill=backfill)
+        _mark_iecsc(conn, resources, stats, backfill=backfill)
+        _upsert_statements(conn, resources, stats, backfill=backfill)
+        _replace_review_items(conn, review, stats, backfill=backfill)
         # P1-1: update-package merges + per-file source versions.
         _record_source_versions(resources, files, stats)
-        _merge_ctx_enrichment(conn, resources, release_id, stats)
-        _merge_clp_atp(conn, resources, release_id, stats)
+        if not backfill:
+            _merge_ctx_enrichment(conn, resources, release_id, stats)
+            _merge_clp_atp(conn, resources, release_id, stats)
         conn.execute(update(RegulatoryDataRelease).where(RegulatoryDataRelease.id == release_id).values(stats=stats))
     log.info("regulatory seed %s: %s", release_id, stats)
-    return {"skipped": False, "release_id": release_id, "stats": stats}
+    result = {"skipped": False, "release_id": release_id, "stats": stats}
+    if completion:
+        result["backfilled"] = True
+    return result
 
 
 def _record_source_versions(resources: Path, files: list[str], stats: dict[str, Any]) -> None:
@@ -373,22 +397,26 @@ def _merge_clp_atp(conn: Connection, resources: Path, release_id: str, stats: di
 
 
 def _catalog_no(item: dict) -> int | None:
-    """Official catalogue 序号 for an entry: ``catalog_no`` when present, else ``index``.
+    """Official catalogue 序号 for an entry: ``catalog_no`` when present, else None.
 
     ``index`` is the bundled file's own row number (MSDS-Generator ordering, NOT the
-    official 序号); ``catalog_no`` is the official 序号 verified against the 2015 版
-    catalogue text. Newer entries carry ``catalog_no``; older ones fall back to ``index``.
+    official 序号) and must never stand in for it: writing the file row number made
+    SDS §15 claim "列入目录，序号 N" for substances whose official number was never
+    verified. W1-9 therefore drops the ``index`` fallback entirely — an entry without
+    a verified ``catalog_no`` seeds ``hazardous_catalog_no=None`` and §15 claims
+    nothing for it, until the 232 unnumbered entries are verified one by one against
+    the 2015 版 catalogue text (that verification, and any data correction it yields,
+    is a separate gated step, not this code change).
 
-    P1-23 exception: an entry explicitly marked ``source`` as 非目录条目
-    (not in the 2015 版 catalogue) NEVER gets a number — not even the
-    ``index`` fallback. Writing the file row number there made SDS §15 claim
-    "列入目录，序号 N" for substances that are not listed at all. Such
-    entries seed ``hazardous_catalog_no=None``; fixing rows already seeded
-    under the old logic is a data migration, decided separately.
+    P1-23 exception, unchanged: an entry explicitly marked ``source`` as 非目录条目
+    (not in the 2015 版 catalogue) NEVER gets a number. Existing rows are untouched
+    by this change even on a force re-seed: ``_upsert_substances`` only patches
+    catalog fields when the new value is non-None, so previously seeded row numbers
+    stay until the verification step corrects them deliberately.
     """
     if str(item.get("source") or "").startswith("非目录条目"):
         return None
-    return item.get("catalog_no", item.get("index"))
+    return item.get("catalog_no")
 
 
 def _collect_substances(
@@ -535,7 +563,8 @@ def _apply_catalog_entry(e: dict, item: dict, name: str, parsed: ParseResult) ->
             prev["qualifier"] = (prev["qualifier"] + qualifier)[:200]
 
 
-def _upsert_substances(conn: Connection, subs: dict[str, dict], release_id: str, stats: dict) -> dict[str, str]:
+def _upsert_substances(conn: Connection, subs: dict[str, dict], release_id: str, stats: dict,
+                       backfill: bool = False) -> dict[str, str]:
     existing = {
         r.cas_no: r
         for r in conn.execute(select(SubstanceRow.id, SubstanceRow.cas_no, SubstanceRow.name_zh,
@@ -564,6 +593,10 @@ def _upsert_substances(conn: Connection, subs: dict[str, dict], release_id: str,
             cas_to_id[cas] = sid
             continue
         cas_to_id[cas] = row.id
+        if backfill:
+            # Completion pass: never patch an existing row (a human edit or a
+            # previously seeded value stays, even when the file disagrees).
+            continue
         patch: dict[str, Any] = {}
         if e["name_zh"] and (not row.name_zh or row.name_zh == e.get("name_zh_replaced")):
             patch["name_zh"] = e["name_zh"][:300]
@@ -587,19 +620,24 @@ def _upsert_substances(conn: Connection, subs: dict[str, dict], release_id: str,
 
 
 def _replace_catalog_classifications(
-    conn: Connection, subs: dict[str, dict], cas_to_id: dict[str, str], release_id: str, stats: dict
+    conn: Connection, subs: dict[str, dict], cas_to_id: dict[str, str], release_id: str, stats: dict,
+    backfill: bool = False,
 ) -> None:
-    conn.execute(delete(SubstanceClassificationRow).where(and_(
-        SubstanceClassificationRow.source == "cn_catalog",
-        SubstanceClassificationRow.locked_at.is_(None),
-    )))
-    kept = {
-        (r.substance_id, r.hazard_class, r.category)
-        for r in conn.execute(select(
-            SubstanceClassificationRow.substance_id, SubstanceClassificationRow.hazard_class,
-            SubstanceClassificationRow.category,
-        ).where(SubstanceClassificationRow.source == "cn_catalog"))
-    }
+    if not backfill:
+        conn.execute(delete(SubstanceClassificationRow).where(and_(
+            SubstanceClassificationRow.source == "cn_catalog",
+            SubstanceClassificationRow.locked_at.is_(None),
+        )))
+    # Full run: only locked rows survive the delete, so kept = locked keys.
+    # Completion pass: no delete runs, so kept = every existing cn_catalog
+    # key and only genuinely missing rows are inserted.
+    kept_q = select(
+        SubstanceClassificationRow.substance_id, SubstanceClassificationRow.hazard_class,
+        SubstanceClassificationRow.category,
+    ).where(SubstanceClassificationRow.source == "cn_catalog")
+    if not backfill:
+        kept_q = kept_q.where(SubstanceClassificationRow.locked_at.isnot(None))
+    kept = {(r.substance_id, r.hazard_class, r.category) for r in conn.execute(kept_q)}
     now = _now()
     rows: list[dict] = []
     for cas, e in subs.items():
@@ -622,8 +660,15 @@ def _replace_catalog_classifications(
     stats["classifications_inserted"] = len(rows)
 
 
-def _replace_generic_entries(conn: Connection, resources: Path, release_id: str, stats: dict) -> None:
-    conn.execute(delete(SubstanceGenericEntryRow))
+def _replace_generic_entries(conn: Connection, resources: Path, release_id: str, stats: dict,
+                             backfill: bool = False) -> None:
+    existing: set[tuple[str, str]] = set()
+    if backfill:
+        # Generic entries have no CAS: identity is (name, hazard text).
+        existing = {(r.name_zh, r.hazard_text) for r in conn.execute(
+            select(SubstanceGenericEntryRow.name_zh, SubstanceGenericEntryRow.hazard_text))}
+    else:
+        conn.execute(delete(SubstanceGenericEntryRow))
     rows = []
     for item in _load_json(resources / "hazard_chemical_info.json")["chemicals"]:
         if catalog_cas_numbers(item.get("cas_number"))[0]:
@@ -640,6 +685,8 @@ def _replace_generic_entries(conn: Connection, resources: Path, release_id: str,
             "match_rule": {"by": "name", "requires_review": True},
             "release_id": release_id,
         })
+    if backfill:
+        rows = [r for r in rows if (r["name_zh"], r["hazard_text"]) not in existing]
     for chunk in _chunks(rows):
         conn.execute(insert(SubstanceGenericEntryRow), chunk)
     stats["generic_entries"] = len(rows)
@@ -661,8 +708,15 @@ def _ensure_substance(conn: Connection, cas: str, name_zh: str, name_en: str,
 
 
 def _replace_oel(conn: Connection, resources: Path, cas_to_id: dict[str, str], release_id: str,
-                 review: _Review, stats: dict) -> None:
-    conn.execute(delete(SubstanceOELRow).where(SubstanceOELRow.standard == OEL_STANDARD))
+                 review: _Review, stats: dict, backfill: bool = False) -> None:
+    existing: set[str] = set()
+    if backfill:
+        # One row per substance per standard (uq_substance_oel): a present row
+        # means this substance is covered, whatever its values.
+        existing = {r.substance_id for r in conn.execute(select(SubstanceOELRow.substance_id).where(
+            SubstanceOELRow.standard == OEL_STANDARD))}
+    else:
+        conn.execute(delete(SubstanceOELRow).where(SubstanceOELRow.standard == OEL_STANDARD))
     seen: set[str] = set()
     rows, unmatched = [], 0
     for rec in _load_json(resources / "oel_gbz2_2019.json")["records"]:
@@ -676,7 +730,7 @@ def _replace_oel(conn: Connection, resources: Path, cas_to_id: dict[str, str], r
         for cas in cas_list:
             sid = _ensure_substance(conn, cas, rec.get("name_cn") or "", rec.get("name_en") or "",
                                     cas_to_id, release_id)
-            if sid in seen:
+            if sid in seen or sid in existing:
                 continue
             seen.add(sid)
             rows.append({
@@ -684,7 +738,7 @@ def _replace_oel(conn: Connection, resources: Path, cas_to_id: dict[str, str], r
                 "mac": _float(rec.get("mac_mg_m3")), "pc_twa": _float(rec.get("pc_twa_mg_m3")),
                 "pc_stel": _float(rec.get("pc_stel_mg_m3")),
                 "critical_effect": (rec.get("critical_effect") or "")[:300],
-                "notes": "" if remark in ("―", "-", "—") else remark[:200], "release_id": release_id,
+                "notes": "" if remark in ("―", "-", "—") else remark[:_OEL_NOTES_MAX], "release_id": release_id,
             })
     for chunk in _chunks(rows):
         conn.execute(insert(SubstanceOELRow), chunk)
@@ -703,7 +757,7 @@ def _eh40_value_text(rec: dict) -> str:
 
 
 def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, str], release_id: str,
-                      review: _Review, stats: dict) -> None:
+                      review: _Review, stats: dict, backfill: bool = False) -> None:
     """G4: EH40/2005 limits into SubstanceOELRow (standard EH40/2005).
 
     Same row shape as GBZ (mg/m³ in pc_twa/pc_stel; EH40 has no MAC
@@ -718,7 +772,12 @@ def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, st
     if not path.exists():
         stats.update(eh40_rows=0, eh40_unmatched=0)
         return
-    conn.execute(delete(SubstanceOELRow).where(SubstanceOELRow.standard == EH40_STANDARD))
+    existing: set[str] = set()
+    if backfill:
+        existing = {r.substance_id for r in conn.execute(select(SubstanceOELRow.substance_id).where(
+            SubstanceOELRow.standard == EH40_STANDARD))}
+    else:
+        conn.execute(delete(SubstanceOELRow).where(SubstanceOELRow.standard == EH40_STANDARD))
     rows, by_sid, unmatched = [], {}, 0
     for rec in _load_json(path)["records"]:
         cas_list = [c for c, _ in (cas_mod.repair(x) for x in cas_mod.split_many(rec.get("cas_number"))) if c]
@@ -730,12 +789,19 @@ def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, st
         for cas in cas_list:
             sid = _ensure_substance(conn, cas, rec.get("name_cn") or "", rec.get("name_en") or "",
                                     cas_to_id, release_id)
+            if sid in existing:
+                # Completion pass never appends variant notes to an existing
+                # row: the row's values stay exactly as seeded before.
+                continue
             if sid in by_sid:
                 kept = by_sid[sid]
                 text = _eh40_value_text(rec)
                 if text:
                     note = f"另：{rec.get('name_en') or rec.get('name_cn') or ''}：{text}"
-                    kept["notes"] = (kept["notes"] + "；" + note)[:200] if kept["notes"] else note[:200]
+                    # W1-9: one variant per line, no 200-character cut — the
+                    # old "；" join truncated here and later variants' limits
+                    # were silently lost (worst bundled case: 203 chars).
+                    kept["notes"] = (kept["notes"] + "\n" + note)[:_OEL_NOTES_MAX] if kept["notes"] else note[:_OEL_NOTES_MAX]
                 continue
             notes = []
             for key, label, unit in (("oel_8h_ppm", "8h TWA", "ppm"), ("oel_15m_ppm", "15min STEL", "ppm")):
@@ -749,7 +815,7 @@ def _replace_oel_eh40(conn: Connection, resources: Path, cas_to_id: dict[str, st
             row = {"id": _uid(), "substance_id": sid, "standard": EH40_STANDARD,
                    "mac": None, "pc_twa": _float(rec.get("oel_8h_mg_m3")),
                    "pc_stel": _float(rec.get("oel_15m_mg_m3")),
-                   "critical_effect": "", "notes": "；".join(notes)[:200], "release_id": release_id}
+                   "critical_effect": "", "notes": "\n".join(notes)[:_OEL_NOTES_MAX], "release_id": release_id}
             rows.append(row)
             by_sid[sid] = row
     for chunk in _chunks(rows):
@@ -772,8 +838,18 @@ def _name_aliases(name: str) -> list[str]:
     return out
 
 
-def _replace_transport(conn: Connection, resources: Path, release_id: str, review: _Review, stats: dict) -> None:
-    conn.execute(delete(SubstanceTransportRow).where(SubstanceTransportRow.standard == TRANSPORT_STANDARD))
+def _replace_transport(conn: Connection, resources: Path, release_id: str, review: _Review, stats: dict,
+                       backfill: bool = False) -> None:
+    existing: set[tuple[str, str]] = set()
+    if backfill:
+        # Identity is the file entry (UN number + name), NOT the resolved link:
+        # a human rename can change which substance a name resolves to, and a
+        # completion pass must not add an unlinked shadow next to the linked row.
+        existing = {(r.un_number, r.proper_shipping_name_zh) for r in conn.execute(
+            select(SubstanceTransportRow.un_number, SubstanceTransportRow.proper_shipping_name_zh).where(
+                SubstanceTransportRow.standard == TRANSPORT_STANDARD))}
+    else:
+        conn.execute(delete(SubstanceTransportRow).where(SubstanceTransportRow.standard == TRANSPORT_STANDARD))
     data = _load_json(resources / "gb12268_2025.json")
     entries = data.get("entries") or []
     if isinstance(entries, dict):  # legacy {UN: entry} subset
@@ -839,21 +915,28 @@ def _replace_transport(conn: Connection, resources: Path, release_id: str, revie
             ambiguous.add((v["un"], name))
             review.add("transport_unlinked", name=name, un_number=str(v["un"]), candidates=len(ids))
         rows.append(row(v, name, sid))
+    if backfill:
+        rows = [r for r in rows
+                if (r["un_number"], r["proper_shipping_name_zh"]) not in existing]
     for chunk in _chunks(rows):
         conn.execute(insert(SubstanceTransportRow), chunk)
     stats.update(transport_rows=len(rows), transport_linked=linked, transport_ambiguous=len(ambiguous),
                  transport_decided=by_decision, transport_link_missing=len(missing))
 
 
-def _mark_iecsc(conn: Connection, resources: Path, stats: dict) -> None:
+def _mark_iecsc(conn: Connection, resources: Path, stats: dict, backfill: bool = False) -> None:
     """Set ``iecsc_listed`` from the public IECSC CAS list. Only ``True`` is ever written:
     a CAS missing from the public list may still be a confidential entry, so it stays unknown.
-    ``True`` flags this importer set earlier are cleared first, so a re-run tracks the list."""
+    ``True`` flags this importer set earlier are cleared first, so a re-run tracks the list.
+    In a completion pass the clearing is skipped (an existing flag is never removed)
+    and only unmarked listed rows gain the flag — marking is additive, like an insert.
+    """
     path = resources / "iecsc.json.gz"
     if not path.exists():  # fixture resource sets omit it
         return
     listed = set(_load_json(path).get("cas") or {})
-    conn.execute(update(SubstanceRow).where(SubstanceRow.iecsc_listed.is_(True)).values(iecsc_listed=None))
+    if not backfill:
+        conn.execute(update(SubstanceRow).where(SubstanceRow.iecsc_listed.is_(True)).values(iecsc_listed=None))
     marked = 0
     ordered = sorted(listed)
     for i in range(0, len(ordered), 900):  # SQLite bound-parameter limit
@@ -862,7 +945,7 @@ def _mark_iecsc(conn: Connection, resources: Path, stats: dict) -> None:
     stats.update(iecsc_cas=len(listed), iecsc_marked=marked)
 
 
-def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:
+def _upsert_statements(conn: Connection, resources: Path, stats: dict, backfill: bool = False) -> None:
     existing = {r.code: r for r in conn.execute(select(
         GhsStatementRow.code, GhsStatementRow.text_zh, GhsStatementRow.text_en))}
     fresh: dict[str, dict] = {}
@@ -903,6 +986,11 @@ def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:
     if new:
         conn.execute(insert(GhsStatementRow), new)
     filled = filled_en = 0
+    if backfill:
+        # Completion pass: new codes only. Filling a blank or correcting a
+        # misnumbered text would modify an existing row.
+        stats.update(statements_inserted=len(new), statements_filled=0, statements_en_filled=0)
+        return
     for code, v in fresh.items():
         row = existing.get(code)
         if row is None:
@@ -919,16 +1007,28 @@ def _upsert_statements(conn: Connection, resources: Path, stats: dict) -> None:
                  statements_en_filled=filled_en)
 
 
-def _replace_review_items(conn: Connection, review: _Review, stats: dict) -> None:
-    conn.execute(delete(RegulatoryReviewItem).where(and_(
-        RegulatoryReviewItem.status == "open", RegulatoryReviewItem.kind.in_(SEED_REVIEW_KINDS),
-    )))
-    settled = {
-        (r.kind, r.cas_no or "", r.name)
-        for r in conn.execute(select(RegulatoryReviewItem.kind, RegulatoryReviewItem.cas_no,
-                                     RegulatoryReviewItem.name).where(RegulatoryReviewItem.status != "open"))
-    }
-    rows = [i for i in review.items if (i["kind"], i["cas_no"] or "", i["name"]) not in settled]
+def _replace_review_items(conn: Connection, review: _Review, stats: dict, backfill: bool = False) -> None:
+    if backfill:
+        # No delete, and an already-queued key (open OR settled) is never
+        # re-inserted: the completion pass only adds queue items that are
+        # entirely absent.
+        existing = {
+            (r.kind, r.cas_no or "", r.name)
+            for r in conn.execute(select(RegulatoryReviewItem.kind, RegulatoryReviewItem.cas_no,
+                                         RegulatoryReviewItem.name).where(
+                                             RegulatoryReviewItem.kind.in_(SEED_REVIEW_KINDS)))
+        }
+        rows = [i for i in review.items if (i["kind"], i["cas_no"] or "", i["name"]) not in existing]
+    else:
+        conn.execute(delete(RegulatoryReviewItem).where(and_(
+            RegulatoryReviewItem.status == "open", RegulatoryReviewItem.kind.in_(SEED_REVIEW_KINDS),
+        )))
+        settled = {
+            (r.kind, r.cas_no or "", r.name)
+            for r in conn.execute(select(RegulatoryReviewItem.kind, RegulatoryReviewItem.cas_no,
+                                         RegulatoryReviewItem.name).where(RegulatoryReviewItem.status != "open"))
+        }
+        rows = [i for i in review.items if (i["kind"], i["cas_no"] or "", i["name"]) not in settled]
     for chunk in _chunks(rows):
         conn.execute(insert(RegulatoryReviewItem), chunk)
     by_kind: dict[str, int] = {}

@@ -27,6 +27,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--label", help="Release label recorded in regulatory_data_releases")
     parser.add_argument("--no-common", action="store_true", help="Skip the 131k common_chemicals list")
     parser.add_argument("--force", action="store_true", help="Re-import even if the data set is unchanged")
+    parser.add_argument("--backfill", action="store_true",
+                        help="W1-9: when the data set is unchanged, insert only rows missing from the "
+                             "database instead of skipping; never deletes or patches existing rows")
     parser.add_argument("--resources", type=Path, help="Alternative resources directory")
     args = parser.parse_args(argv)
 
@@ -47,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
             label=args.label,
             include_common=not args.no_common,
             force=args.force,
+            backfill=args.backfill,
         )
     finally:
         engine.dispose()
