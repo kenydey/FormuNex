@@ -1784,8 +1784,8 @@ class CompanyIn(BaseModel):
     emergency_phone: str = Field(min_length=1, max_length=64)
     unified_credit_code: str = ""
     is_default: bool = False
-    # G2: default applicable regulations for new documents ([] = no default).
-    applicable_regulations: list[str] = Field(default_factory=list)
+    # G2: default applicable regulations for new documents (SR-078: ["CN"]).
+    applicable_regulations: list[str] = Field(default_factory=lambda: ["CN"])
     # G8: generic product coding rules ({} = not configured).
     coding_rules: dict = Field(default_factory=dict)
 

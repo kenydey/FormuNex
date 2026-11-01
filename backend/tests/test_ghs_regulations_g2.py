@@ -154,7 +154,9 @@ def test_company_regulations_round_trip_and_validation(sf):
         with pytest.raises(ValueError, match="未知适用法规"):
             company_svc.update_company(s, row.id, {"applicable_regulations": ["XX"]})
         plain = company_svc.create_company(s, {"name": "默认公司", "emergency_phone": "010-123"})
-        assert company_svc.company_dict(plain)["applicable_regulations"] == []
+        # Stage 2 / SR-078 changed the company default from [] to ["CN"];
+        # the round-trip + validation contract above is unchanged.
+        assert company_svc.company_dict(plain)["applicable_regulations"] == ["CN"]
 
 
 # --------------------------------------------------------------------------- multi-regulation documents + gate

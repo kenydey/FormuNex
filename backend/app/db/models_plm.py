@@ -376,9 +376,10 @@ class CompanyRow(Base):
     logo_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
     is_default: Mapped[bool] = mapped_column(default=False, index=True)
     # G2: applicable regulations (["CN", "EU", ...]) — the default selection
-    # for new documents. [] means "no default: generation must select
-    # explicitly". Existing rows are backfilled ["CN"] by alembic 0071.
-    applicable_regulations: Mapped[list] = mapped_column(_json, default=list)
+    # for new documents. Stage 2 / SR-078 (D-6): new companies default to
+    # ["CN"], matching the 0071 backfill of existing rows. Legacy [] rows
+    # still read as ["CN"] at generation time (plm.py fallback).
+    applicable_regulations: Mapped[list] = mapped_column(_json, default=lambda: ["CN"])
     # G8: generic product coding rules ({"categories": [{"name_zh", "name_en",
     # "identifier"}], "code_digits": int | None}). {} = not configured:
     # auto-coding disabled, manual codes only. Backfilled {} by alembic 0072.

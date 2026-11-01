@@ -98,7 +98,9 @@ def create_company(session: Session, data: dict[str, Any], *, created_by: str | 
     if not emergency:
         raise ValueError("24h 应急电话不能为空（SDS 强制非空）")
     try:
-        regulations = validate_regulations(data.get("applicable_regulations") or [])
+        # Stage 2 / SR-078: omitted/empty means the company default, ["CN"]
+        # (reads already fell back to ["CN"] for []; stored state now matches).
+        regulations = validate_regulations(data.get("applicable_regulations") or ["CN"])
     except ValueError as exc:
         raise ValueError(str(exc)) from None
     try:
