@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0090(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0090_stage2_allow_ttl``)."""
+def test_revision_chain_head_is_0091(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0091_stage3_indexes``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0090(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0090"
+    assert heads[0] == "0091"
 
 
 def test_0090_allow_ttl_column_up_down(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,6 +286,27 @@ def test_0090_allow_ttl_column_up_down(tmp_db_url: str, monkeypatch: pytest.Monk
     assert "expires_at" in _column_names(tmp_db_url, "mcp_tool_policies")
     run_downgrade(tmp_db_url, monkeypatch, "0089")
     assert "expires_at" not in _column_names(tmp_db_url, "mcp_tool_policies")
+
+
+def test_0091_indexes_up_down(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0091 adds the stage-3 list/dashboard indexes and drops them on downgrade."""
+    from tests.alembic_helpers import run_downgrade, run_upgrade
+
+    def _index_names(table: str) -> set[str]:
+        engine = create_engine(tmp_db_url)
+        try:
+            return {i["name"] for i in inspect(engine).get_indexes(table)}
+        finally:
+            engine.dispose()
+
+    run_upgrade(tmp_db_url, monkeypatch)
+    assert "ix_experiments_created_at" in _index_names("experiments")
+    assert "ix_experiments_project_created" in _index_names("experiments")
+    assert "ix_projects_archived_updated" in _index_names("projects")
+    run_downgrade(tmp_db_url, monkeypatch, "0090")
+    assert "ix_experiments_created_at" not in _index_names("experiments")
+    assert "ix_experiments_project_created" not in _index_names("experiments")
+    assert "ix_projects_archived_updated" not in _index_names("projects")
 
 
 def test_migrations_partial_columns_branch(

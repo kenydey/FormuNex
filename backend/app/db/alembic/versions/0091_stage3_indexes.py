@@ -44,9 +44,26 @@ def _existing(table: str) -> set[str]:
     return {i["name"] for i in sa.inspect(bind).get_indexes(table)}
 
 
+def _columns(table: str) -> set[str] | None:
+    bind = op.get_bind()
+    if table not in sa.inspect(bind).get_table_names():
+        return None
+    return {c["name"] for c in sa.inspect(bind).get_columns(table)}
+
+
 def upgrade() -> None:
+    # A missing table — or a table missing an indexed column — means
+    # "nothing to index", not "index missing": hand-built legacy schemas
+    # (the 0080 batches-only fixture; the 0077 fixture whose experiments
+    # table predates created_at) have no such column, and CREATE INDEX on
+    # it fails. The first version of this migration read the empty index
+    # set as "create it" and broke every legacy-schema upgrade-to-head
+    # test; the column check is the second half of that fix. On any real
+    # DB at head 0090 all three columns exist, so nothing is skipped
+    # there.
     for table, name, cols in _INDEXES:
-        if name not in _existing(table):
+        existing_cols = _columns(table)
+        if existing_cols is not None and set(cols) <= existing_cols and name not in _existing(table):
             op.create_index(name, table, cols)
 
 
