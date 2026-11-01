@@ -206,6 +206,13 @@ def add_waiver(session: Session, revision_id: str, *, check_key: str, item: str,
     _require(principal, gate.WAIVABLE[check_key], product.project_id)
     if rev.state not in ("draft", "candidate"):
         raise ReleaseError("修订版已提交或发布，不能再添加豁免")
+    # Stage 2 / SR-012 (D-2): the waiver granter must be separate from
+    # the revision submitter and from the project lead. Checked before
+    # gate evaluation so a refused waiver costs no gate run.
+    if rev.created_by and user_id == rev.created_by:
+        raise Forbidden("豁免人与修订版提交人须分离")
+    if _holds_role(session, user_id, "project_lead", product.project_id):
+        raise Forbidden("豁免人与项目负责人须分离")
     if not reason.strip():
         raise ReleaseError("豁免必须说明理由")
     result = gate.evaluate(session, rev.id)
@@ -318,6 +325,9 @@ def sign_step(session: Session, package_id: str, *, decision: str, user_id: str,
     _require(principal, "release.publish" if last and decision == "approve" else "release.sign", product.project_id)
     if any(s.decided_by == user_id for s in steps if s.id != step.id):
         raise Forbidden("同一人不能在一个发布流程中签批两个步骤")
+    # Stage 2 / SR-012 (D-2): the package submitter recuses from step 1.
+    if step.seq == 1 and user_id == pkg.created_by:
+        raise Forbidden("提交人回避第 1 步签批")
     if decision == "reject" and not comment.strip():
         raise ReleaseError("驳回必须填写意见")
     tampered = package.verify_files(session, pkg.gate_result["manifest"])
