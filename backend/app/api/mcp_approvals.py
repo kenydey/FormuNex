@@ -42,6 +42,41 @@ def list_pending(user: CurrentUser = Depends(current_user)) -> dict:
     return mcp_approval.list_pending(actor=_actor(user))
 
 
+def _require_admin(user: CurrentUser) -> None:
+    # Policy rows are platform-wide config: only admin.connectors may
+    # list, revoke, or backfill them (mirrors the global-scope rule in
+    # decide_approval).
+    if not _actor(user).is_admin:
+        raise HTTPException(status_code=403, detail="not_authorized")
+
+
+@router.get("/policies", response_model=dict)
+def list_policies(user: CurrentUser = Depends(current_user)) -> dict:
+    """Management view of all MCP tool policies, with expiry state."""
+    _require_admin(user)
+    return {"policies": mcp_approval.list_policies()}
+
+
+@router.delete("/policies/{server_id}/{tool_name}/{scope}", response_model=dict)
+def revoke_policy(server_id: str, tool_name: str, scope: str,
+                  user: CurrentUser = Depends(current_user)) -> dict:
+    """Revoke one policy row (allow/ask/block, any scope)."""
+    _require_admin(user)
+    if scope not in mcp_approval.SCOPES:
+        raise HTTPException(status_code=400, detail="scope 非法")
+    if not mcp_approval.revoke_policy(server_id, tool_name, scope):
+        raise HTTPException(status_code=404, detail="policy_not_found")
+    return {"ok": True}
+
+
+@router.post("/policies/backfill-expiry", response_model=dict)
+def backfill_expiry(user: CurrentUser = Depends(current_user)) -> dict:
+    """One-time cleanup for pre-0090 allow rows: materialize expires_at
+    from created_at + scope TTL, delete already-expired rows."""
+    _require_admin(user)
+    return mcp_approval.backfill_allow_expiry()
+
+
 @router.post("/{request_id}/decide", response_model=dict)
 def decide(request_id: str, req: DecideRequest, user: CurrentUser = Depends(current_user)) -> dict:
     """Submit an allow/deny decision for a pending approval request."""

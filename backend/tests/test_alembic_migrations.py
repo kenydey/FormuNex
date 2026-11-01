@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0089(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0089_stage2_strong_fks``)."""
+def test_revision_chain_head_is_0090(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0090_stage2_allow_ttl``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,17 @@ def test_revision_chain_head_is_0089(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0089"
+    assert heads[0] == "0090"
+
+
+def test_0090_allow_ttl_column_up_down(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0090 adds mcp_tool_policies.expires_at and drops it on downgrade."""
+    from tests.alembic_helpers import run_downgrade, run_upgrade
+
+    run_upgrade(tmp_db_url, monkeypatch)
+    assert "expires_at" in _column_names(tmp_db_url, "mcp_tool_policies")
+    run_downgrade(tmp_db_url, monkeypatch, "0089")
+    assert "expires_at" not in _column_names(tmp_db_url, "mcp_tool_policies")
 
 
 def test_migrations_partial_columns_branch(

@@ -145,6 +145,7 @@ def make_engine(db_url: str) -> Engine:
     _ensure_audit_log_guard(engine)
     _ensure_doe_cycle_pause_table(engine)
     _ensure_parse_shards_columns(engine)
+    _ensure_mcp_policy_expiry_column(engine)
     return engine
 
 
@@ -559,6 +560,25 @@ def _ensure_parse_shards_columns(engine: Engine) -> None:
         with engine.begin() as conn:
             conn.execute(text('CREATE INDEX IF NOT EXISTS ix_parse_shards_updated_at '
                               'ON "parse_shards" (updated_at)'))
+
+
+def _ensure_mcp_policy_expiry_column(engine: Engine) -> None:
+    """``mcp_tool_policies.expires_at`` (alembic 0090, stage 2 / SR-041):
+    nullable, no backfill — evaluation computes legacy expiry from
+    created_at + TTL, so a missing column only matters for new writes."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "mcp_tool_policies" not in inspector.get_table_names():
+        return
+    if "expires_at" in {c["name"] for c in inspector.get_columns("mcp_tool_policies")}:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text('ALTER TABLE "mcp_tool_policies" ADD COLUMN expires_at FLOAT'))
+    except Exception as exc:  # a concurrent starter may have added it first
+        if "duplicate column" not in str(exc).lower():
+            raise
 
 
 def _ensure_outbox_task_id_column(engine: Engine) -> None:

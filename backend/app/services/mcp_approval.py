@@ -47,6 +47,32 @@ from .audit import hash_chain
 logger = logging.getLogger(__name__)
 
 DECISIONS = ("allow", "ask", "block")
+
+# Stage 2 / SR-041 (approved D-8 TTLs): allow policies are time-boxed.
+# "once" needs no TTL (it is consumed on first use); block/ask are
+# fail-closed and stay until revoked. Times in seconds.
+ALLOW_TTL_S: dict[str, float] = {
+    "session": 24 * 3600,
+    "project": 30 * 86400,
+    "global": 90 * 86400,
+}
+
+
+def _effective_expiry(row: McpToolPolicyRow) -> float | None:
+    """When an allow row stops applying. Explicit expires_at wins; a
+    legacy row (NULL) expires created_at + scope TTL, so pre-0090
+    allows self-expire by age with no backfill run required."""
+    if row.decision != "allow":
+        return None
+    if row.expires_at is not None:
+        return float(row.expires_at)
+    ttl = ALLOW_TTL_S.get(row.scope)
+    return float(row.created_at) + ttl if ttl is not None else None
+
+
+def _is_live(row: McpToolPolicyRow, now: float) -> bool:
+    expiry = _effective_expiry(row)
+    return expiry is None or now < expiry
 SCOPES = ("once", "session", "project", "global")
 
 # ask 挂起超时：5 分钟无决策自动 deny。用墙钟（见模块 docstring），不起常驻线程。
@@ -112,17 +138,22 @@ def _norm(server_id: str, tool_name: str) -> tuple[str, str]:
 def _set_policy_in_session(
     session: Session, server_id: str, tool_name: str, decision: str, scope: str, *, now: float
 ) -> None:
+    expires_at = None
+    if decision == "allow" and scope in ALLOW_TTL_S:
+        expires_at = now + ALLOW_TTL_S[scope]
     row = session.get(McpToolPolicyRow, (server_id, tool_name, scope))
     if row is None:
         session.add(
             McpToolPolicyRow(
                 server_id=server_id, tool_name=tool_name, scope=scope,
                 decision=decision, created_at=now, updated_at=now,
+                expires_at=expires_at,
             )
         )
     else:
         row.decision = decision
         row.updated_at = now
+        row.expires_at = expires_at
 
 
 def set_policy(
@@ -154,13 +185,16 @@ def get_policies(
 ) -> dict[str, str]:
     """返回 {scope: decision}；无策略时返回 {}（调用方按默认 ask 处理）。"""
     sid, tool = _norm(server_id, tool_name)
+    now = time.time()
     with _session_factory(session_factory)() as session:
         rows = session.execute(
             select(McpToolPolicyRow).where(
                 McpToolPolicyRow.server_id == sid, McpToolPolicyRow.tool_name == tool
             )
         ).scalars()
-        return {row.scope: row.decision for row in rows}
+        # Live policies only: an expired allow reads as "no policy"
+        # (default ask), never as a stale grant.
+        return {row.scope: row.decision for row in rows if _is_live(row, now)}
 
 
 def effective_decision(policies: dict[str, str]) -> str:
@@ -183,13 +217,86 @@ def _audit(event: str, sid: str, tool: str, **fields: Any) -> None:
     logger.warning("MCP 审批审计 event=%s server=%s tool=%s %s", event, sid, tool, detail)
 
 
-def _policies_in_session(session: Session, sid: str, tool: str) -> dict[str, str]:
+def _policies_in_session(
+    session: Session, sid: str, tool: str, *, now: float | None = None
+) -> dict[str, str]:
     rows = session.execute(
         select(McpToolPolicyRow).where(
             McpToolPolicyRow.server_id == sid, McpToolPolicyRow.tool_name == tool
         )
     ).scalars()
-    return {row.scope: row.decision for row in rows}
+    wall = time.time() if now is None else now
+    return {row.scope: row.decision for row in rows if _is_live(row, wall)}
+
+
+def list_policies(
+    *, session_factory: sessionmaker[Session] | None = None,
+) -> list[dict[str, Any]]:
+    """Management view of every policy row, including expiry state.
+    Expired rows are listed (flagged) rather than hidden, so an admin
+    can see what stopped applying and revoke or re-grant it."""
+    now = time.time()
+    with _session_factory(session_factory)() as session:
+        rows = session.execute(select(McpToolPolicyRow)).scalars()
+        out = []
+        for row in rows:
+            expiry = _effective_expiry(row)
+            out.append({
+                "server_id": row.server_id,
+                "tool_name": row.tool_name,
+                "scope": row.scope,
+                "decision": row.decision,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "expires_at": expiry,
+                "expired": expiry is not None and now >= expiry,
+            })
+        return out
+
+
+def revoke_policy(
+    server_id: str, tool_name: str, scope: str,
+    *, session_factory: sessionmaker[Session] | None = None,
+) -> bool:
+    """Delete one policy row. Returns False when there was nothing."""
+    sid, tool = _norm(server_id, tool_name)
+    with commit_session(_session_factory(session_factory)) as session:
+        row = session.get(McpToolPolicyRow, (sid, tool, scope))
+        if row is None:
+            return False
+        session.delete(row)
+        return True
+
+
+def backfill_allow_expiry(
+    *, session_factory: sessionmaker[Session] | None = None,
+    now: float | None = None,
+) -> dict[str, int]:
+    """One-time cleanup for pre-0090 allow rows (stage 2 / SR-041).
+
+    Materializes expires_at = created_at + scope TTL where missing, and
+    deletes rows already past expiry. Safe to repeat (second run is a
+    no-op). Evaluation never depended on this run — legacy expiry is
+    computed on the fly — so this only makes the stored state match
+    what evaluation already enforces.
+    """
+    wall = time.time() if now is None else now
+    materialized = expired = 0
+    with commit_session(_session_factory(session_factory)) as session:
+        rows = session.execute(
+            select(McpToolPolicyRow).where(McpToolPolicyRow.decision == "allow")
+        ).scalars()
+        for row in rows:
+            expiry = _effective_expiry(row)
+            if expiry is None:
+                continue
+            if wall >= expiry:
+                session.delete(row)
+                expired += 1
+            elif row.expires_at is None:
+                row.expires_at = expiry
+                materialized += 1
+    return {"materialized": materialized, "expired_deleted": expired}
 
 
 def _pending_in_session(
@@ -290,7 +397,7 @@ def evaluate_call(
         return {"verdict": "deny", "reason": "invalid_tool_identity"}
     wall = time.time() if now is None else now
     with commit_session(_session_factory(session_factory)) as session:
-        policies = _policies_in_session(session, sid, tool)
+        policies = _policies_in_session(session, sid, tool, now=wall)
         vals = set(policies.values())
         if "block" in vals:
             _audit("policy_block", sid, tool)

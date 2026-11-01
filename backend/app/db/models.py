@@ -1075,6 +1075,10 @@ class McpToolPolicyRow(Base):
     decision: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[float] = mapped_column(Float, default=0.0)
+    # Stage 2 / SR-041: wall-clock expiry for allow policies (NULL =
+    # legacy row, expiry computed from created_at + scope TTL at
+    # evaluation time). Block/ask/once rows keep NULL.
+    expires_at: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
 
 
 class McpApprovalRequestRow(Base):
