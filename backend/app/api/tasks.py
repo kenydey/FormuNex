@@ -82,15 +82,18 @@ def list_tasks(
     ``FORMUNEX_MULTI_USER`` the caller's own tasks plus those without an owner (written before ownership was
     recorded), which ``GET /tasks/{id}`` already serves to anyone.
     """
-    from ..middleware.api_auth import get_current_owner
+    from ..middleware.api_auth import request_owner
 
-    current = get_current_owner(request)
+    current = request_owner(request)
     items: list[TaskSummary] = []
     for task_id, mtime in list_persisted_task_ids(_LIST_SCAN_MAX):
         status = load_persisted_task(task_id)
         if status is None:
             continue
-        if current != "default" and status.owner_id and status.owner_id != current:
+        # Stage 2 / SR-014: "default"-owned rows are legacy owner-less
+        # rows (see assert_owner) and stay visible to signed-in users.
+        if (current != "default" and status.owner_id and status.owner_id != "default"
+                and status.owner_id != current):
             continue
         if status.state not in _TERMINAL_STATES:
             # A pending/running snapshot may be stale: refresh it from the live progress meta.
@@ -122,23 +125,23 @@ def list_tasks(
 
 @router.get("/tasks/{task_id}", response_model=TaskStatus)
 def get_task(task_id: str, request: Request) -> TaskStatus:
-    from ..middleware.api_auth import assert_owner, get_current_owner
+    from ..middleware.api_auth import assert_owner, request_owner
 
     status = task_manager.get(task_id)
     if status is None:
         raise HTTPException(status_code=404, detail="Unknown task id")
-    assert_owner(status.owner_id, get_current_owner(request))
+    assert_owner(status.owner_id, request_owner(request))
     return status
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=TaskStatus)
 def cancel_task_endpoint(task_id: str, request: Request) -> TaskStatus:
-    from ..middleware.api_auth import assert_owner, get_current_owner
+    from ..middleware.api_auth import assert_owner, request_owner
 
     status = task_manager.get(task_id)
     if status is None:
         raise HTTPException(status_code=404, detail="Unknown task id")
-    assert_owner(status.owner_id, get_current_owner(request))
+    assert_owner(status.owner_id, request_owner(request))
     if status.state in (TaskState.completed, TaskState.failed, TaskState.cancelled):
         return status
     from ..worker.tasks import cancel_task
@@ -147,7 +150,7 @@ def cancel_task_endpoint(task_id: str, request: Request) -> TaskStatus:
     # 返回 cancelled 快照（可能仍在 revoke 竞态中，强制返回 cancelled）
     updated = task_manager.get(task_id)
     if updated and updated.state == TaskState.cancelled:
-        assert_owner(updated.owner_id, get_current_owner(request))
+        assert_owner(updated.owner_id, request_owner(request))
         return updated
     return TaskStatus(task_id=task_id, kind=status.kind, state=TaskState.cancelled, message="已取消", stream_url=f"/api/tasks/{task_id}/stream", stage="cancelled", owner_id=status.owner_id)
 
@@ -233,11 +236,11 @@ async def _poll_until_terminal(
 
 @router.get("/tasks/{task_id}/stream")
 async def stream_task_progress(task_id: str, request: Request) -> StreamingResponse:
-    from ..middleware.api_auth import assert_owner, get_current_owner
+    from ..middleware.api_auth import assert_owner, request_owner
 
     persisted = task_manager.get(task_id)
     owner_to_check = persisted.owner_id if persisted else None
-    assert_owner(owner_to_check, get_current_owner(request))
+    assert_owner(owner_to_check, request_owner(request))
     if not task_exists(task_id):
         raise HTTPException(status_code=404, detail="Unknown task id")
 

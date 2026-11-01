@@ -65,7 +65,7 @@ def start_research(body: ResearchRequest) -> ResearchResult:
 @router.post("/research/recommend", status_code=202)
 def start_recommend_research(body: ResearchRequest, request: Request) -> JSONResponse:
     """Enqueue lightweight CRAG recommend; subscribe via GET /api/tasks/{id}/stream."""
-    from ..middleware.api_auth import get_current_owner
+    from ..middleware.api_auth import request_owner
 
     req = Requirement(**{
         k: v for k, v in body.model_dump().items()
@@ -80,13 +80,13 @@ def start_recommend_research(body: ResearchRequest, request: Request) -> JSONRes
         "relation_insight": bool(body.relation_insight),
     }
     outbox_id = _enqueue_outbox("research_recommend", payload)
-    return submit(run_recommend_task, payload, "recommend", outbox_id=outbox_id, owner_id=get_current_owner(request))
+    return submit(run_recommend_task, payload, "recommend", outbox_id=outbox_id, owner_id=request_owner(request))
 
 
 @router.post("/research/deep", status_code=202)
 def start_deep_research(body: DeepResearchRequest, request: Request) -> JSONResponse:
     """Enqueue CRAG deep research; subscribe via GET /api/tasks/{id}/stream."""
-    from ..middleware.api_auth import get_current_owner
+    from ..middleware.api_auth import request_owner
 
     payload = {
         "topic": body.topic,
@@ -95,14 +95,14 @@ def start_deep_research(body: DeepResearchRequest, request: Request) -> JSONResp
         "query": body.query or body.topic,
     }
     outbox_id = _enqueue_outbox("research_deep", payload)
-    return submit(run_deep_research_task, payload, "deep_research", outbox_id=outbox_id, owner_id=get_current_owner(request))
+    return submit(run_deep_research_task, payload, "deep_research", outbox_id=outbox_id, owner_id=request_owner(request))
 
 
 @router.post("/research/modify", status_code=202)
 def modify_recommendation(body: ModifyRequest, request: Request) -> JSONResponse:
     """AI-modify formulas: async CRAG + recommend (subscribe via GET /api/tasks/{id}/stream)."""
     from ..domain.research_query import build_research_query
-    from ..middleware.api_auth import get_current_owner
+    from ..middleware.api_auth import request_owner
 
     req = body.requirement.model_copy(deep=True)
     note = f"[AI modify] {body.modify_prompt}"
@@ -127,7 +127,7 @@ def modify_recommendation(body: ModifyRequest, request: Request) -> JSONResponse
         "base_formulas": [f.model_dump() for f in base_formulas],
         "n": body.n,
     }
-    return submit(run_recommend_task, payload, "recommend", outbox_id=_enqueue_outbox("research_recommend", payload), owner_id=get_current_owner(request))
+    return submit(run_recommend_task, payload, "recommend", outbox_id=_enqueue_outbox("research_recommend", payload), owner_id=request_owner(request))
 
 
 # ── RAG backend status ──────────────────────────────────────────────────

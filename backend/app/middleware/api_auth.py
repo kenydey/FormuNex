@@ -267,13 +267,47 @@ def get_current_owner(request: Request) -> str:
     return "u-" + hashlib.sha256(provided.encode("utf-8")).hexdigest()[:12]
 
 
+def request_owner(request: Request) -> str:
+    """Stage 2 / SR-014 (D-3): task-result ownership prefers the JWT login id.
+
+    ``get_current_owner`` falls back to ``"default"`` in single-user
+    mode, so every task snapshot was owned by ``"default"`` and
+    ``assert_owner`` was a no-op even for signed-in users. When the
+    request carries a valid JWT access token, the owner is that token's
+    user id (revocation is enforced: a revoked/expired token falls back
+    to the mapping below instead of attributing to its user). Service
+    keys and multi-user token mappings keep the ``get_current_owner``
+    behaviour, and legacy ``"default"`` / owner-less rows keep passing
+    ``assert_owner`` unchanged.
+    """
+    from ..services.identity import tokens
+
+    provided = _extract_token(request)
+    if provided and tokens.looks_like_access_token(provided):
+        try:
+            from ..db.database import default_session_factory
+            from ..services.identity import accounts
+
+            with default_session_factory()() as session:
+                user, _sid = accounts.active_user_for_token(session, provided)
+            return user.id
+        except Exception:  # noqa: BLE001 — fall back to the token mapping
+            pass
+    return get_current_owner(request)
+
+
 def assert_owner(resource_owner: str | None, current_owner: str) -> None:
     """Phase 1 软校验：单 token (current=default) 或资源无 owner 时恒过。
 
     Phase 2 强校验：当 ``FORMUNEX_MULTI_USER=true`` 且资源有 owner 时，
     owner 不一致则 403。当前 Phase 1 仅 debug 日志，不阻断。
+
+    Stage 2 / SR-014: a resource owned by ``"default"`` counts as
+    owner-less — those rows were written before JWT ownership existed
+    (single-user mode), and signed-in users must keep reaching them
+    exactly as the pre-stage-2 list/get endpoints served them to anyone.
     """
-    if current_owner == "default" or not resource_owner:
+    if current_owner == "default" or not resource_owner or resource_owner == "default":
         logger.debug("owner check pass (soft): resource=%s current=%s", resource_owner, current_owner)
         return
     if resource_owner != current_owner:
