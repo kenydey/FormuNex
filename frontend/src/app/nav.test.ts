@@ -74,6 +74,7 @@ const EXPECTED: Group[] = [
       { path: "/plm/formula-mappings", zh: "配方数据库映射" },
       { path: "/plm/label-designer", zh: "标签设计器" },
       { path: "/plm/regulatory", zh: "法规助手" },
+      { path: "/plm/regulatory/review-items", zh: "法规复核队列" },
     ],
   },
   {
@@ -232,10 +233,10 @@ describe("nav (8-group IA, scheme §2)", () => {
     }
   });
 
-  it("42 group leaves + dashboard = 43 entries, no duplicate paths or keys", () => {
+  it("43 group leaves + dashboard = 44 entries, no duplicate paths or keys", () => {
     const leaves = flatLeaves(NAV);
-    expect(leaves).toHaveLength(43);
-    expect(new Set(leaves.map((l) => l.path)).size).toBe(43);
+    expect(leaves).toHaveLength(44);
+    expect(new Set(leaves.map((l) => l.path)).size).toBe(44);
     const keys = NAV.flatMap((g) => [g.key, ...(g.children ?? []).map((l) => l.key)]);
     expect(keys.every((k) => k.length > 0)).toBe(true);
     expect(new Set(keys).size).toBe(keys.length);
@@ -245,7 +246,12 @@ describe("nav (8-group IA, scheme §2)", () => {
     const oldLeaves = OLD.flatMap((g) => g.leaves);
     // Group leaves only (dashboard is a standalone leaf, asserted by the structure test above).
     const newByPath = new Map(NAV.flatMap((g) => g.children ?? []).map((l) => [l.path, l]));
-    expect([...newByPath.keys()].sort()).toEqual(oldLeaves.map((l) => l.path).sort());
+    // Stage 2 / SR-071: the regulatory review queue is an approved
+    // addition (a new leaf, not a pre-restructure item). Zero-deletion
+    // still holds for every pre-restructure leaf; any other addition
+    // or removal still fails this assertion.
+    const ADDED = ["/plm/regulatory/review-items"];
+    expect([...newByPath.keys()].sort()).toEqual([...oldLeaves.map((l) => l.path), ...ADDED].sort());
     for (const old of oldLeaves) {
       const item = newByPath.get(old.path)!;
       expect(item.zh).toBe(old.zh);
