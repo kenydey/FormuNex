@@ -48,8 +48,9 @@ def _snapshot(row: Any) -> SimpleNamespace | None:
 class RegulatoryDataCache:
     """Thread-safe ``(kind, key) → value`` map with one expiry clock for the whole cache."""
 
-    def __init__(self, ttl_s: float = TTL_S) -> None:
+    def __init__(self, ttl_s: float = TTL_S, max_entries: int = 10_000) -> None:
         self.ttl_s = ttl_s
+        self.max_entries = max(1, max_entries)
         self._data: dict[tuple[str, str], Any] = {}
         self._lock = threading.Lock()
         self._born = time.monotonic()
@@ -75,6 +76,14 @@ class RegulatoryDataCache:
 
     def put(self, kind: str, key: str, value: Any) -> Any:
         with self._lock:
+            # Stage 3 / SR-061: bound the map. Without a cap a long-lived
+            # process accumulates one snapshot per substance/classification
+            # row it ever read. FIFO eviction (dict insertion order);
+            # re-putting an existing key refreshes the value, not its age.
+            # TTL expiry still clears the whole map, so no entry outlives
+            # ttl_s either way.
+            if (kind, key) not in self._data and len(self._data) >= self.max_entries:
+                self._data.pop(next(iter(self._data)))
             self._data[(kind, key)] = value
         return value
 
