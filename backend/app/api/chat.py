@@ -640,6 +640,13 @@ def _chat_caller_id(request) -> str | None:
 
         user = optional_user(request)
         return user.id if user is not None else None
+    except HTTPException:
+        # Stage 2 / SR-011: a JWT-shaped token that fails validation
+        # (revoked/expired) must not degrade to the unchecked legacy
+        # path — revocation takes effect immediately. Absent tokens and
+        # service keys still yield None: optional_user returns None for
+        # those before any validation runs.
+        raise
     except Exception:  # noqa: BLE001
         return None
 

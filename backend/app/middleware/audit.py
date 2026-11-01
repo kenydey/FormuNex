@@ -45,8 +45,29 @@ def _should_audit(request: Request) -> bool:
 
 
 def _actor(request: Request) -> str:
-    """Owner of the request's token, or ``anonymous`` when no token was presented."""
-    if not request.headers.get("authorization"):
+    """Owner of the request's token, or ``anonymous`` when no token was presented.
+
+    Stage 2 / SR-042: a JWT access token resolves to its login id
+    (revocation-aware, via the session table) instead of the
+    ``"default"`` fallback ``get_current_owner`` gives in single-user
+    mode. Anything else keeps the token mapping; any resolution failure
+    falls back the same way, never failing the audited request itself.
+    """
+    auth = request.headers.get("authorization") or ""
+    parts = auth.split(None, 1)
+    bearer = parts[1].strip() if len(parts) == 2 and parts[0].lower() == "bearer" else None
+    if bearer:
+        try:
+            from ..db.database import default_session_factory
+            from ..services.identity import accounts, tokens
+
+            if tokens.looks_like_access_token(bearer):
+                with default_session_factory()() as session:
+                    user, _sid = accounts.active_user_for_token(session, bearer)
+                return user.id
+        except Exception:  # noqa: BLE001 — fall back to the token mapping
+            pass
+    if not auth:
         return "anonymous"
     try:
         from .api_auth import get_current_owner

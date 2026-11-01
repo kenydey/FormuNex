@@ -246,9 +246,8 @@ def call_mcp(body: McpCallRequest, user: CurrentUser = Depends(current_user)) ->
     attribution and no approval. Now: a signed-in account with
     ``knowledge.read``; the approval gate inside ``_call_tool`` still
     applies when ``mcp_approval_enabled``. Each call is logged with the
-    caller's user id (the audit middleware's actor stays ``default`` for
-    JWTs until stage 2's SR-042; the per-call log is the stage-0
-    attribution).
+    caller's user id, and the audit middleware attributes JWT callers
+    by login id (stage 2 / SR-042).
     """
     settings = get_settings()
     user.require("knowledge.read")

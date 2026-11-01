@@ -5,10 +5,11 @@ same as the other routers; no per-endpoint auth code here.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..services import session_plan as plan_svc
+from ._principal import CurrentUser, current_user
 
 router = APIRouter(prefix="/api/session-plans", tags=["session-plans"])
 
@@ -68,9 +69,12 @@ def get_plan(plan_id: str) -> dict:
 
 
 @router.post("/{plan_id}/decide", response_model=dict)
-def decide_plan(plan_id: str, body: DecideBody) -> dict:
+def decide_plan(plan_id: str, body: DecideBody, user: CurrentUser = Depends(current_user)) -> dict:
+    # Stage 2 / SR-040: the decider is the signed-in account, never a
+    # client-supplied actor string. DecideBody.actor stays accepted for
+    # backward compatibility but is ignored.
     try:
-        plan = plan_svc.decide_plan(plan_id, body.approved, actor=body.actor)
+        plan = plan_svc.decide_plan(plan_id, body.approved, actor=user.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
