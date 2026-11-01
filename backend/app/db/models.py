@@ -48,6 +48,13 @@ class ExperimentRow(Base):
     """
 
     __tablename__ = "experiments"
+    # Stage 3 / SR-065 + SR-077 (alembic 0091): created_at serves the
+    # dashboard latest-50 window; the composite serves project-scoped
+    # recent-50 lists. No label index: EXPLAIN shows SQLite ignores it
+    # for case-insensitive LIKE prefix scans.
+    __table_args__ = (
+        Index("ix_experiments_project_created", "project_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     item_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
@@ -59,7 +66,7 @@ class ExperimentRow(Base):
     measured: Mapped[dict] = mapped_column(JSON)
     source: Mapped[str] = mapped_column(String(64), default="lab")
     label: Mapped[str] = mapped_column(String(255), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
 class MeasurementRow(Base):
@@ -665,6 +672,11 @@ class ProjectRow(Base):
     """Project workspace (JSON payload)."""
 
     __tablename__ = "projects"
+    # Stage 3 / SR-077 (alembic 0091): list_summaries filters is_archived
+    # and orders by updated_at.
+    __table_args__ = (
+        Index("ix_projects_archived_updated", "is_archived", "updated_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     title: Mapped[str] = mapped_column(String(255), default="")
