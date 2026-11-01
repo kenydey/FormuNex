@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.clock import parse_iso_to_naive_utc, to_naive_utc
 from app.config import get_settings
+from tests.plm_doc_helpers import gen_doc_ok
 
 
 def test_clock_to_naive_utc():
@@ -111,7 +112,7 @@ def test_batch_same_instant_two_notations_one_stored_moment(plm):
     assert p1 is not None and p1.tzinfo is None
     for bid in (b1, b2):
         client.post(f"/api/plm/batches/{bid}/qc-results", json={"results": [{"metric": "solids", "value": 57.1}]})
-        coa = client.post(f"/api/plm/revisions/{rid}/documents", json={"doc_type": "coa", "coa": {"batch_id": bid}}).json()
+        coa = gen_doc_ok(client, rid, {"doc_type": "coa", "coa": {"batch_id": bid}})
         assert _find_produced_at(coa["content"]) == "2026-10-14"
 
 

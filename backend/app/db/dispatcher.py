@@ -179,6 +179,42 @@ def _send_wiki_storm_report(payload: dict, task_id: str | None = None) -> None:
     _publish(run_wiki_storm_report_task, payload, task_id)
 
 
+def _send_url_ingest(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_url_ingest_task
+
+    _publish(run_url_ingest_task, payload, task_id)
+
+
+def _send_task_ingest(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_task_ingest_task
+
+    _publish(run_task_ingest_task, payload, task_id)
+
+
+def _send_evidence_ingest(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_evidence_ingest_task
+
+    _publish(run_evidence_ingest_task, payload, task_id)
+
+
+def _send_document_generate(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_document_generate_task
+
+    _publish(run_document_generate_task, payload, task_id)
+
+
+def _send_wiki_lint_run(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_wiki_lint_task
+
+    _publish(run_wiki_lint_task, payload, task_id)
+
+
+def _send_wiki_lint_sweep(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_wiki_lint_sweep_task
+
+    _publish(run_wiki_lint_sweep_task, payload, task_id)
+
+
 # Single source of truth for what recovery may replay. Every operation that
 # ``api/*`` or ``services/*`` enqueues through ``enqueue_outbox`` MUST have an
 # entry here (a test pins that); audit-only operations deliberately do not.
@@ -201,6 +237,16 @@ _HANDLERS: dict[str, Callable[..., None]] = {
     "search": _send_search,
     "topic_sweep": _send_topic_sweep,
     "wiki_storm_report": _send_wiki_storm_report,
+    # Stage 3 batch 2 (SR-026/063): replay-safe — ingests dedup by source,
+    # lint recomputes read-only findings, document generation appends a
+    # new version (never edits an existing one), so a replay after a
+    # crash re-creates the work the client is still polling for.
+    "url_ingest": _send_url_ingest,
+    "task_ingest": _send_task_ingest,
+    "evidence_ingest": _send_evidence_ingest,
+    "document_generate": _send_document_generate,
+    "wiki_lint_run": _send_wiki_lint_run,
+    "wiki_lint_sweep": _send_wiki_lint_sweep,
 }
 
 DISPATCHABLE_OPERATIONS: tuple[str, ...] = tuple(_HANDLERS)

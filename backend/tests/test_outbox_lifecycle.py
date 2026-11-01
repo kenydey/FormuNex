@@ -174,6 +174,21 @@ def test_recovery_dispatches_doe_cycle_to_its_celery_task(db, monkeypatch) -> No
         assert s.get(TaskOutbox, row.id).attempt_count == 1
 
 
+def test_recovery_dispatches_document_generate_to_its_celery_task(db, monkeypatch) -> None:
+    """Stage 3 batch 2: a stalled document_generate row replays to its task."""
+    from app.worker import tasks as worker_tasks
+
+    sent = MagicMock()
+    monkeypatch.setattr(worker_tasks.run_document_generate_task, "delay", sent)
+    payload = {"revision_id": "r-1", "doc_type": "sds", "properties": {}}
+    with db() as s:
+        row = _add_row(s, "document_generate", payload)
+        assert recover_stalled(s, cutoff_minutes=30) == 1
+        s.commit()
+        sent.assert_called_once_with(payload)
+        assert s.get(TaskOutbox, row.id).attempt_count == 1
+
+
 def test_unknown_operation_raises_instead_of_counting_as_sent() -> None:
     with pytest.raises(ValueError):
         dispatcher._dispatch("no_such_operation", {})

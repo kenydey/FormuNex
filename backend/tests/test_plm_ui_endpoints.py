@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from tests.test_plm_release import PASSWORD, PROPS, _ready, env  # noqa: F401  (fixture)
+from tests.plm_doc_helpers import gen_doc_ok  # noqa: E402
 
 LAYOUT = {"size_mm": [100, 150], "elements": [
     {"id": "name", "type": "product_name", "x": 4, "y": 4, "w": 92, "h": 10, "font_size": 11, "align": "center", "bold": True},
@@ -63,8 +64,8 @@ def test_label_layouts_validate_render_and_drive_generation(env):  # noqa: F811
     assert c.get(f"/api/plm/label-templates/{tid}").json()["layout"]["size_mm"] == [150, 200]
     assert [t["id"] for t in c.get("/api/plm/label-templates").json()] == [tid]
 
-    lab = c.post(f"/api/plm/revisions/{rid}/documents", headers=h["rd"], json={
-        "doc_type": "label", "properties": PROPS, "label": {"container_volume_l": 18, "variables": {"batch_no": "B2610"}}}).json()
+    lab = gen_doc_ok(c, rid, {
+        "doc_type": "label", "properties": PROPS, "label": {"container_volume_l": 18, "variables": {"batch_no": "B2610"}}}, headers=h["rd"])
     assert lab["content"]["meta"]["layout_template_id"] == tid
     assert lab["content"]["meta"]["size"]["width_mm"] == 150 and lab["content"]["meta"]["size"]["ok"] is True
     assert lab["content"]["meta"]["variables"] == {"batch_no": "B2610"}
