@@ -315,7 +315,11 @@ class MaterialCompositionRow(Base):
     material_id: Mapped[str] = mapped_column(
         ForeignKey("materials.id", ondelete="CASCADE"), index=True
     )
-    substance_id: Mapped[str] = mapped_column(ForeignKey("substances.id"), index=True)
+    # Stage 2 / SR-033 (alembic 0089): CASCADE, like the sibling
+    # composition FKs — deleting a substance deletes its composition rows
+    # instead of erroring on PG while other tables cascade.
+    substance_id: Mapped[str] = mapped_column(
+        ForeignKey("substances.id", ondelete="CASCADE"), index=True)
     pct_min: Mapped[float | None] = mapped_column(Float, nullable=True)
     pct_max: Mapped[float | None] = mapped_column(Float, nullable=True)
     pct_typical: Mapped[float | None] = mapped_column(Float, nullable=True)

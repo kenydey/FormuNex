@@ -63,7 +63,10 @@ class LabTaskRow(Base):
     # P1-2 tightening (0077): NOT NULL — create_task refuses project-less
     # tasks, and dispatch falls back to the stored plan's project.
     project_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    doe_plan_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Stage 2 / SR-033 (alembic 0089): real FK, SET NULL — a task outlives
+    # its plan rather than disappearing with it.
+    doe_plan_id: Mapped[str | None] = mapped_column(
+        ForeignKey("doe_plans.id", ondelete="SET NULL"), nullable=True, index=True)
     run_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     formulation_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     factors: Mapped[dict] = mapped_column(JSON, default=dict)

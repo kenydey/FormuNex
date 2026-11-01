@@ -142,7 +142,10 @@ class RegulatoryDocumentRow(Base):
     revision_id: Mapped[str] = mapped_column(
         ForeignKey("product_revisions.id", ondelete="CASCADE"), index=True
     )
-    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)  # COA only
+    # Stage 2 / SR-033 (alembic 0089): real FK, SET NULL — deleting a batch
+    # must not delete the COA document that cites it.
+    batch_id: Mapped[str | None] = mapped_column(
+        ForeignKey("batches.id", ondelete="SET NULL"), nullable=True, index=True)  # COA only
     doc_type: Mapped[str] = mapped_column(String(16), index=True)
     lang: Mapped[str] = mapped_column(String(8), default="zh-CN")
     # G2: regulation this document version was generated for (CN / EU / US).
@@ -193,7 +196,9 @@ class BatchQcResultRow(Base):
     spec_min: Mapped[float | None] = mapped_column(nullable=True)
     spec_max: Mapped[float | None] = mapped_column(nullable=True)
     verdict: Mapped[str | None] = mapped_column(String(8), nullable=True)  # PASS | FAIL
-    measurement_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Stage 2 / SR-033 (alembic 0089): real FK, SET NULL.
+    measurement_id: Mapped[str | None] = mapped_column(
+        ForeignKey("measurements.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 

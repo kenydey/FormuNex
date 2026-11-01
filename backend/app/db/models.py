@@ -70,9 +70,12 @@ class MeasurementRow(Base):
     comparable lives — unit, test method, instrument, operator, and the
     acceptance window it was judged against.
 
-    Carries real foreign keys, unlike the rest of this schema: both parents are
-    local tables (never Datalab-authoritative), so the constraint can be
-    enforced rather than merely documented.
+    Real foreign keys (stage 2 / SR-033, alembic 0089): experiment_id,
+    source_document_id, sample_id and lab_task_id are FKs, all SET NULL or
+    CASCADE as noted. method_id / instrument_id / operator_id stay plain
+    string columns — their parents (test_methods / instruments / user
+    accounts) are referenced by convention and covered by the orphan
+    audit script instead of a constraint.
     """
 
     __tablename__ = "measurements"
@@ -105,8 +108,15 @@ class MeasurementRow(Base):
     # Lab execution (alembic 0059): where the number came from and whether a
     # second person has checked it. Only ``review_status == "reviewed"`` values
     # may feed optimisation, SDS section 9 or a COA.
-    sample_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    lab_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Stage 2 / SR-033 (alembic 0089): real FKs, SET NULL — deleting a
+    # sample or task must not delete the measurement taken from it.
+    # lab_task_id's FK predates stage 2 (migration 0059 created it, but
+    # the model never declared it — that drift is fixed here, not by a
+    # second FK in 0089).
+    sample_id: Mapped[str | None] = mapped_column(
+        ForeignKey("samples.id", ondelete="SET NULL"), nullable=True, index=True)
+    lab_task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("lab_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     method_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     instrument_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     operator_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
