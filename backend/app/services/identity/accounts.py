@@ -184,6 +184,45 @@ def logout(session: Session, session_id: str) -> None:
                           detail={"session_id": session_id})
 
 
+def set_active(session: Session, user_id: str, active: bool, *, actor: str) -> UserRow:
+    """Stage 2 / SR-043: admin deactivation / activation.
+
+    Deactivation revokes every live session at once (access tokens die
+    at next use through ``active_user_for_token``'s ``is_active`` check,
+    and refresh rotation refuses revoked rows). Activation does NOT
+    restore revoked sessions: the user signs in again.
+    """
+    user = session.get(UserRow, user_id)
+    if user is None:
+        raise AccountError("用户不存在")
+    if actor == user_id:
+        raise AccountError("不能停用或启用自身账号")
+    now = utcnow()
+    user.is_active = active
+    if not active:
+        session.execute(update(UserSessionRow).where(UserSessionRow.user_id == user_id,
+                                                       UserSessionRow.revoked_at.is_(None)).values(revoked_at=now))
+    hash_chain.append(session, actor=actor, action="user.activate" if active else "user.deactivate",
+                      entity_type="user", entity_id=user_id)
+    return user
+
+
+def revoke_user_sessions(session: Session, user_id: str, *, actor: str) -> int:
+    """Stage 2 / SR-043: admin revocation of another user's sessions."""
+    user = session.get(UserRow, user_id)
+    if user is None:
+        raise AccountError("用户不存在")
+    if actor == user_id:
+        raise AccountError("不能经管理端点吊销自身全部会话，请用登出")
+    now = utcnow()
+    result = session.execute(update(UserSessionRow).where(UserSessionRow.user_id == user_id,
+                                                            UserSessionRow.revoked_at.is_(None)).values(revoked_at=now))
+    count = result.rowcount or 0
+    hash_chain.append(session, actor=actor, action="user.sessions_revoked",
+                      entity_type="user", entity_id=user_id, detail={"revoked": count})
+    return count
+
+
 def change_password(session: Session, user_id: str, old: str, new: str) -> None:
     now = utcnow()
     user = _check_password(session, session.get(UserRow, user_id), old, action="auth.password", now=now)

@@ -192,3 +192,37 @@ def set_user_roles(user_id: str, body: RolesIn, user: CurrentUser = Depends(curr
             raise HTTPException(status_code=422, detail=str(exc)) from None
         session.commit()
     return {"user_id": user_id, "roles": roles}
+
+
+class ActiveIn(BaseModel):
+    is_active: bool
+
+
+@router.put("/users/{user_id}/active")
+def set_user_active(user_id: str, body: ActiveIn, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Stage 2 / SR-043: admin deactivation / activation (self excluded)."""
+    from ..services.identity import accounts
+
+    user.require("admin.users")
+    with _session() as session:
+        try:
+            row = accounts.set_active(session, user_id, body.is_active, actor=user.id)
+        except accounts.AccountError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+    return {"user_id": user_id, "is_active": row.is_active}
+
+
+@router.post("/users/{user_id}/sessions/revoke")
+def revoke_user_sessions(user_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """Stage 2 / SR-043: admin revocation of another user's sessions (self excluded)."""
+    from ..services.identity import accounts
+
+    user.require("admin.users")
+    with _session() as session:
+        try:
+            count = accounts.revoke_user_sessions(session, user_id, actor=user.id)
+        except accounts.AccountError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        session.commit()
+    return {"user_id": user_id, "revoked": count}
