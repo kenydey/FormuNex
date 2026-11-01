@@ -155,13 +155,29 @@ def test_settings_test_connection_offline():
     assert "ok" in r.json()
 
 
+def _wait_search(task_id, timeout=60):
+    # Stage 3 / SR-026: legacy /api/search is 202 + poll now.
+    import time
+
+    deadline = time.monotonic() + timeout
+    task: dict = {}
+    while time.monotonic() < deadline:
+        task = client.get(f"/api/tasks/{task_id}").json()
+        if task.get("state") in ("completed", "failed"):
+            return task
+        time.sleep(0.1)
+    return task
+
+
 def test_search_patents_offline_seed_corpus():
     r = client.post(
         "/api/search",
         json={"query": "防腐涂料", "source_types": ["patents"], "requirement": _REQUIREMENT, "limit_per_source": 3},
     )
-    assert r.status_code == 200
-    body = r.json()
+    assert r.status_code == 202, r.text
+    task = _wait_search(r.json()["task_id"])
+    assert task.get("state") == "completed", task
+    body = task["result"]
     assert body["total"] >= 1
     assert all("title" in e for e in body["evidence"])
 
@@ -172,8 +188,10 @@ def test_search_literature_offline_returns_empty_gracefully():
         "/api/search",
         json={"query": "epoxy corrosion", "source_types": ["literature"], "limit_per_source": 3},
     )
-    assert r.status_code == 200
-    assert isinstance(r.json()["evidence"], list)
+    assert r.status_code == 202, r.text
+    task = _wait_search(r.json()["task_id"])
+    assert task.get("state") == "completed", task
+    assert isinstance(task["result"]["evidence"], list)
 
 
 def test_search_by_types_dedupes():
@@ -311,8 +329,10 @@ def test_search_response_includes_source_status():
             "source_types": ["patents", "literature", "internet"],
         },
     )
-    assert r.status_code == 200
-    body = r.json()
+    assert r.status_code == 202, r.text
+    task = _wait_search(r.json()["task_id"])
+    assert task.get("state") == "completed", task
+    body = task["result"]
     assert "source_status" in body
 
     # Patents always available (offline seed corpus fallback).

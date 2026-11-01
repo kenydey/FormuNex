@@ -146,25 +146,29 @@ def source_status() -> dict[str, SourceStatus]:
     return _build_status()
 
 
-@router.post("/search", response_model=SearchResponse, deprecated=True)
+@router.post("/search", deprecated=True)
 def search_sources(req: SearchRequest):
-    """同步一次性检索（legacy）。前端请使用 ``POST /api/search/stream`` 增量检索。"""
+    """Legacy 一次性检索，现为 202 + 轮询（与 /search/stream 同款任务）。
+
+    Stage 3 / SR-026: the inline iter_search held the connection for the
+    whole multi-source fan-out. The polled result carries the old
+    SearchResponse shape (the stream task's final data already is it;
+    source_status values are the same get_source_availability dicts).
+    Side effect to note: the shared task also indexes ColBERT and
+    dispatches the background KB build, as /search/stream always did —
+    legacy callers now get the stream behavior, which is what the
+    deprecation points them at. Frontend already uses /search/stream.
+    """
     _assert_requirement_consistency(req.requirement)
-    types = _effective_source_types(req.source_types)
-    evidence, filter_report = literature.iter_search(
-        query=req.query,
-        source_types=types,
-        req=req.requirement,
-        total_limit=req.total_limit,
-        per_source_cap=req.limit_per_source,
-    )
-    return SearchResponse(
-        evidence=evidence,
-        total=len(evidence),
-        source_status=_build_status(),
-        used_seed_fallback=_used_seed_fallback(evidence),
-        filter_report=filter_report,
-    )
+    search_payload = {
+        "query": req.query,
+        "source_types": _effective_source_types(req.source_types),
+        "requirement": req.requirement.model_dump() if req.requirement else None,
+        "total_limit": req.total_limit,
+        "per_source_cap": req.limit_per_source,
+    }
+    return submit(run_search_task, search_payload, "search",
+                  outbox_id=enqueue_outbox("search", search_payload))
 
 
 @router.post("/search/stream", status_code=202)
