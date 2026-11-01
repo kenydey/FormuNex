@@ -140,6 +140,39 @@ def datalab_orphans_cleanup(max_rows: int = 50) -> dict:
         return drain_orphans(session, max_rows=max(1, min(int(max_rows), 200)))
 
 
+@router.get("/rules")
+def rules_status_endpoint() -> dict:
+    """Stage 3 / SR-060 (3-7): what rule tables are live right now.
+
+    Guarded by the existing ``/api/ops`` admin.llm rule. No loads are
+    triggered: tables never loaded since start (or since the last
+    reload) report ``not_loaded``.
+    """
+    from ..services.rule_loader import _rules_dir, rules_status
+
+    return {"rules_dir": str(_rules_dir()), "tables": rules_status()}
+
+
+@router.post("/rules/reload")
+def rules_reload_endpoint() -> dict:
+    """Stage 3 / SR-060 (3-7): reload TOML rule tables at runtime.
+
+    Guarded by the existing ``/api/ops`` admin.llm rule. Clears the
+    cache, then loads every known table, so the response proves the
+    reload took effect (per-table source file + mtime, or fallback +
+    reason) instead of merely reporting that a cache was cleared.
+    Consumers (acid_stability, linker_roles, ambiguous_terms) read
+    through the same cache, so the next call in any of them sees the
+    new tables without a process restart.
+    """
+    from ..services.rule_loader import _FALLBACKS, _rules_dir, load_rules, reload_rules, rules_status
+
+    reload_rules()
+    for kind in sorted(_FALLBACKS):
+        load_rules(kind)
+    return {"reloaded": True, "rules_dir": str(_rules_dir()), "tables": rules_status()}
+
+
 @router.get("/kb-health")
 def kb_health() -> dict:
     """B-9: KB 健康仪表盘 v1。

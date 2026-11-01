@@ -166,3 +166,69 @@ def test_consumers_work_with_default_rules():
     assert infer_role("Epoxy resin E51") == "resin"
     assert infer_role("FoamStar defoamer") == "additive"
     assert infer_role("Something exotic new") == "unknown"
+
+
+# ── Stage 3 / SR-060 (3-7): runtime reload entry ───────────────────────────
+
+
+def test_provenance_records_file_vs_fallback(tmp_path, monkeypatch):
+    """load_rules records where each table actually came from."""
+    from app.services.rule_loader import rules_status
+
+    over = tmp_path / "rules"
+    over.mkdir()
+    (over / "linker_roles.toml").write_text(
+        'role_hints = { resin = ["resin"] }\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("FORMUNEX_RULES_DIR", str(over))
+    reload_rules()
+    load_rules("linker_roles")
+    load_rules("acid_stability")  # no file in the override dir -> fallback
+    status = rules_status()
+    assert status["linker_roles"]["source"] == "file"
+    assert status["linker_roles"]["mtime"] is not None
+    assert status["acid_stability"]["source"] == "fallback"
+    assert status["acid_stability"]["error"] == "missing"
+
+
+def test_reload_clears_provenance_until_reloaded(monkeypatch):
+    load_rules("linker_roles")
+    assert rule_loader.rules_status()["linker_roles"]["source"] != "not_loaded"
+    reload_rules()
+    assert rule_loader.rules_status()["linker_roles"]["source"] == "not_loaded"
+
+
+def test_ops_reload_endpoint_picks_up_edited_toml_without_restart(tmp_path, monkeypatch):
+    """POST /api/ops/rules/reload makes an edited TOML live in-process."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.services.kg.ingredient_roles import infer_role
+
+    over = tmp_path / "rules"
+    over.mkdir()
+    toml = over / "linker_roles.toml"
+    toml.write_text('role_hints = { resin = ["resin"] }\n', encoding="utf-8")
+    monkeypatch.setenv("FORMUNEX_RULES_DIR", str(over))
+    reload_rules()
+    assert infer_role("Resin X") == "resin"
+    assert infer_role("Rheology Modifier 9000") == "unknown"
+
+    toml.write_text(
+        'role_hints = { resin = ["resin"], additive = ["rheology"] }\n',
+        encoding="utf-8",
+    )
+    # Stale cache still answers the old way until the endpoint runs.
+    assert infer_role("Rheology Modifier 9000") == "unknown"
+
+    client = TestClient(app)
+    resp = client.post("/api/ops/rules/reload")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["reloaded"] is True
+    assert body["tables"]["linker_roles"]["source"] == "file"
+    assert infer_role("Rheology Modifier 9000") == "additive"
+
+    status = client.get("/api/ops/rules")
+    assert status.status_code == 200
+    assert status.json()["tables"]["linker_roles"]["source"] == "file"

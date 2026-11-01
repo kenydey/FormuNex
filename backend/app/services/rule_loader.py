@@ -95,6 +95,12 @@ def _rules_dir() -> Path:
     return _PKG_RULES_DIR
 
 
+# Stage 3 / SR-060 (3-7): per-table load provenance, so the runtime reload
+# endpoint can report exactly what is live (file + mtime, or fallback +
+# reason) instead of asking operators to trust a cache clear.
+_LAST_LOAD: dict[str, dict] = {}
+
+
 @functools.lru_cache(maxsize=16)
 def load_rules(kind: str) -> dict:
     """Load one rule table (TOML) with built-in fallback on any failure."""
@@ -105,18 +111,72 @@ def load_rules(kind: str) -> dict:
     try:
         with path.open("rb") as fh:
             data = tomllib.load(fh)
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = None
+        _LAST_LOAD[kind] = {
+            "source": "file",
+            "path": str(path),
+            "mtime": mtime,
+            "error": None,
+        }
         return data
     except FileNotFoundError:
         logger.warning("rules: %s 缺失, 使用内置兜底", path)
+        _LAST_LOAD[kind] = {
+            "source": "fallback",
+            "path": str(path),
+            "mtime": None,
+            "error": "missing",
+        }
         return fallback
     except tomllib.TOMLDecodeError as exc:
         logger.exception("rules: %s 解析失败, 使用内置兜底: %s", path, exc)
+        _LAST_LOAD[kind] = {
+            "source": "fallback",
+            "path": str(path),
+            "mtime": None,
+            "error": f"toml decode: {exc}",
+        }
         return fallback
     except OSError as exc:
         logger.exception("rules: %s 读取失败, 使用内置兜底: %s", path, exc)
+        _LAST_LOAD[kind] = {
+            "source": "fallback",
+            "path": str(path),
+            "mtime": None,
+            "error": f"os error: {exc}",
+        }
         return fallback
 
 
+def rules_status() -> dict[str, dict]:
+    """Current load state per table (no loads triggered).
+
+    Kinds never loaded since process start (or since the last reload)
+    report ``source: "not_loaded"`` — the ops status endpoint, not a
+    guess about what a load would find.
+    """
+    out: dict[str, dict] = {}
+    for kind in sorted(_FALLBACKS):
+        entry = _LAST_LOAD.get(kind)
+        out[kind] = dict(entry) if entry else {
+            "source": "not_loaded",
+            "path": str(_rules_dir() / f"{kind}.toml"),
+            "mtime": None,
+            "error": None,
+        }
+    return out
+
+
 def reload_rules() -> None:
-    """清空缓存(测试/运维用: 规则文件变更后调用使新配置生效)。"""
+    """清空缓存(测试/运维用: 规则文件变更后调用使新配置生效)。
+
+    Stage 3 (SR-060): also clears load provenance, so the next status
+    read cannot report a pre-reload file as live. The runtime reload
+    endpoint (POST /api/ops/rules/reload) clears, then loads every
+    table, so its response carries fresh provenance.
+    """
     load_rules.cache_clear()
+    _LAST_LOAD.clear()
