@@ -2242,3 +2242,82 @@ def _kb_reparse_impl(task_id: str, payload: dict) -> dict:
 @celery_app.task(bind=True, base=_OutboxTask, outbox_operation="kb_reparse", name="formunex.kb_reparse")
 def run_kb_reparse_task(self, payload: dict) -> dict:
     return _kb_reparse_impl(self.request.id, payload)
+
+
+def _url_ingest_impl(task_id: str, payload: dict) -> dict:
+    """Stage 3 / SR-026: ``POST /ingest/url`` worker body (was inline).
+
+    Same semantics as the old sync route: fetch + parse, ColBERT index
+    unless the outcome is skipped. SSRF pre-flight stays in the route
+    (sync 400) — an unsafe URL never enters the worker queue.
+    """
+    # Lazy: app.api.ingest imports worker.tasks at module level.
+    from ..api.ingest import _to_ingest_response
+    from ..services import colbert_store
+    from ..services.ingestion import ingest_url
+
+    url = str(payload.get("url") or "").strip()
+    try:
+        publish_progress(
+            task_id, TaskProgressStatus.RUNNING, stage="ingest",
+            message="抓取中…", progress=0.02,
+        )
+        outcome = ingest_url(url)
+        if outcome.extraction_status != "skipped":
+            colbert_store.index_evidence(outcome.evidence)
+        result = _to_ingest_response(url, outcome).model_dump(mode="json")
+    except Exception as exc:
+        logger.exception("url ingest failed for %s", url)
+        err = {"error": str(exc), "url": url}
+        persist_result(task_id, err, failed=True, message=str(exc))
+        _persist_terminal(task_id, "url_ingest", err, failed=True, message=str(exc))
+        raise
+    _persist_terminal(task_id, "url_ingest", result, message="入库完成")
+    persist_result(task_id, result, failed=False)
+    return result
+
+
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="url_ingest", name="formunex.url_ingest")
+def run_url_ingest_task(self, payload: dict) -> dict:
+    return _url_ingest_impl(self.request.id, payload)
+
+
+def _task_ingest_impl(task_id: str, payload: dict) -> dict:
+    """Stage 3 / SR-026: ``POST /ingest/task`` worker body (was inline).
+
+    A resolve failure (``outcome.error``) is a task failure, not a 502:
+    the client polls the task id and sees the message, and the outbox
+    row records it. Input-shape errors (bad doc_type, non-URL web
+    identifier) stay sync 400s in the route.
+    """
+    from ..api.ingest import _to_ingest_response
+    from ..services import colbert_store
+    from ..services.document_task import resolve_document
+
+    doc_type = str(payload.get("doc_type") or "").strip().lower()
+    identifier = str(payload.get("identifier") or "").strip()
+    try:
+        publish_progress(
+            task_id, TaskProgressStatus.RUNNING, stage="ingest",
+            message="抓取中…", progress=0.02,
+        )
+        outcome = resolve_document(doc_type, identifier)
+        if outcome.error:
+            raise RuntimeError(outcome.error)
+        if outcome.extraction_status != "skipped":
+            colbert_store.index_evidence(outcome.evidence)
+        result = _to_ingest_response(outcome.identifier, outcome).model_dump(mode="json")
+    except Exception as exc:
+        logger.exception("task ingest failed for %s %s", doc_type, identifier)
+        err = {"error": str(exc), "doc_type": doc_type, "identifier": identifier}
+        persist_result(task_id, err, failed=True, message=str(exc))
+        _persist_terminal(task_id, "task_ingest", err, failed=True, message=str(exc))
+        raise
+    _persist_terminal(task_id, "task_ingest", result, message="入库完成")
+    persist_result(task_id, result, failed=False)
+    return result
+
+
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="task_ingest", name="formunex.task_ingest")
+def run_task_ingest_task(self, payload: dict) -> dict:
+    return _task_ingest_impl(self.request.id, payload)

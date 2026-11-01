@@ -161,7 +161,7 @@ def _skipped_outcome():
         evidence=[
             Evidence(
                 source="web",
-                identifier="http://example.com/x",
+                identifier="http://93.184.216.34/x",
                 title="x",
                 snippet="无法从该 URL 提取文本",
                 relevance=0.5,
@@ -172,21 +172,36 @@ def _skipped_outcome():
 
 
 def test_skipped_url_ingest_does_not_index_evidence(monkeypatch):
-    """4 处之一：/ingest/url 的 skipped outcome 不应调用 ColBERT 索引占位文本。"""
-    import app.api.ingest as ingest_api
+    """4 处之一：/ingest/url 的 skipped outcome 不应调用 ColBERT 索引占位文本。
+
+    Stage 3 / SR-026: the route is 202 + poll now; the skipped gate lives
+    in the worker, so the mock moves to the service the worker calls and
+    the assertion waits for the task to complete.
+    """
+    import time
+
+    import app.services.ingestion as ingestion_mod
+    from app.services import colbert_store
 
     calls = []
-    monkeypatch.setattr(ingest_api, "ingest_url", lambda url: _skipped_outcome())
+    monkeypatch.setattr(ingestion_mod, "ingest_url", lambda url: _skipped_outcome())
     monkeypatch.setattr(
-        ingest_api.colbert_store, "index_evidence", lambda ev, **kw: calls.append(ev)
+        colbert_store, "index_evidence", lambda ev, **kw: calls.append(ev)
     )
     from fastapi.testclient import TestClient
 
     from app.main import app
 
     client = TestClient(app)
-    r = client.post("/api/ingest/url", json={"url": "http://example.com/x"})
-    assert r.status_code == 200
+    r = client.post("/api/ingest/url", json={"url": "http://93.184.216.34/x"})
+    assert r.status_code == 202, r.text
+    task_id = r.json()["task_id"]
+    deadline = time.monotonic() + 15
+    task = client.get(f"/api/tasks/{task_id}").json()
+    while task.get("state") not in ("completed", "failed") and time.monotonic() < deadline:
+        time.sleep(0.1)
+        task = client.get(f"/api/tasks/{task_id}").json()
+    assert task.get("state") == "completed", task
     assert calls == [], f"skipped 时不应索引，实际调用 {len(calls)} 次"
 
 

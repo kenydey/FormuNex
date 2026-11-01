@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from ..config import get_settings
 from ..domain.schemas import Evidence, SourceGuideSchema
 from ..services import colbert_store
-from ..services.ingestion import ingest_text, ingest_url
+from ..services.ingestion import ingest_text
 from ..db.source_store import get_source_store
 from ..worker.tasks import dispatch_file_ingest
 from ._uploads import read_upload_capped
@@ -284,22 +284,26 @@ async def ingest_batch(
     return accepted_response(task_id, "file_ingest")
 
 
-@router.post("/ingest/url", response_model=IngestResponse)
+@router.post("/ingest/url")
 def ingest_from_url(req: IngestUrlRequest):
-    try:
-        outcome = ingest_url(req.url.strip())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("ingest_url failed")
-        raise HTTPException(status_code=502, detail="文件处理失败") from exc
-    # P0-1: "skipped" 现仅表示无真实文本/占位（有文本但 guide 未跑为
-    # "no_guide"），故按 status 门禁即可正确索引真实文档。
-    # v18-16: 与 worker/tasks.py:901 对齐（!= "skipped"），否则离线部署
-    #（无 LLM key → no_guide）下 ColBERT 索引恒空。
-    if outcome.extraction_status != "skipped":
-        colbert_store.index_evidence(outcome.evidence)
-    return _to_ingest_response(req.url, outcome)
+    """Queue a URL ingest: 202 + task_id, results via /api/tasks poll.
+
+    Stage 3 / SR-026: fetch + parse used to run inline, holding the HTTP
+    connection until the fetch finished — a slow origin surfaced as a
+    502 while the work still completed behind it. SSRF pre-flight stays
+    sync (400): an unsafe URL never enters the worker queue. The
+    skipped gate before ColBERT indexing lives in the worker now.
+    """
+    from ..services.http_safe import is_safe_url
+    from ..worker.tasks import run_url_ingest_task
+    from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
+
+    url = req.url.strip()
+    if not is_safe_url(url):
+        raise HTTPException(status_code=400, detail="URL must be a public http(s) address")
+    return submit(run_url_ingest_task, {"url": url}, "url_ingest",
+                  outbox_id=enqueue_outbox("url_ingest", {"url": url}))
 
 
 @router.post("/ingest/text", response_model=IngestResponse)
@@ -314,23 +318,25 @@ def ingest_from_text(req: IngestTextRequest):
     return _to_ingest_response(title, outcome)
 
 
-@router.post("/ingest/task", response_model=IngestResponse)
+@router.post("/ingest/task")
 def ingest_from_task(req: IngestTaskRequest):
-    """DOI/arXiv id/专利号/URL → 全文 → 入库(编排见 services.document_task)."""
-    from ..services.document_task import resolve_document
+    """DOI/arXiv id/专利号/URL → 全文 → 入库(编排见 services.document_task).
 
-    try:
-        outcome = resolve_document(req.doc_type, req.identifier.strip())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if outcome.error:
-        raise HTTPException(status_code=502, detail=outcome.error)
-    # P0-1: "skipped" 现仅表示无真实文本/占位（有文本但 guide 未跑为
-    # "no_guide"），故按 status 门禁即可正确索引真实文档。
-    # v19-fix: 与 URL 路径（213行）对齐，用 != "skipped"（v18-16 漏改）。
-    if outcome.extraction_status != "skipped":
-        colbert_store.index_evidence(outcome.evidence)
-    return _to_ingest_response(outcome.identifier, outcome)
+    Stage 3 / SR-026: same 202 + poll shape as /ingest/url. Input-shape
+    errors stay sync 400s (a malformed web identifier never enters the
+    queue); a resolve failure surfaces as a failed task, not a 502.
+    """
+    from ..worker.tasks import run_task_ingest_task
+    from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
+
+    doc_type = req.doc_type.strip().lower()
+    identifier = req.identifier.strip()
+    if doc_type == "web" and not identifier.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="web 类型 identifier 必须是 http(s) URL")
+    payload = {"doc_type": doc_type, "identifier": identifier}
+    return submit(run_task_ingest_task, payload, "task_ingest",
+                  outbox_id=enqueue_outbox("task_ingest", payload))
 
 
 @router.get("/sources/{source_id}", response_model=SourceDocumentResponse, include_in_schema=False)
