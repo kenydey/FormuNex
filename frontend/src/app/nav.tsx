@@ -65,6 +65,7 @@ const BASE_NAV: NavItem[] = [
     { path: "/plm/formula-mappings", key: "nav.plm.formula_mappings", zh: "配方数据库映射", order: 1, desc: "配方与产品数据库的映射关系" },
     { path: "/plm/label-designer", key: "nav.plm.labels", zh: "标签设计器", order: 2, desc: "设计 GHS 安全标签" },
     { path: "/plm/regulatory", key: "nav.plm.regulatory", zh: "法规助手", order: 3, desc: "法规合规问答与检查" },
+    { path: "/plm/regulatory/review-items", key: "nav.plm.regulatory.review", zh: "法规复核队列", order: 4, desc: "种子导入复核项：OEL 未匹配、运输关联与种子漂移" },
   ] },
   { path: "/materials", key: "nav.materials", zh: "材料库", icon: <DatabaseOutlined />, order: 6,
     desc: "原料与物质主数据", children: [
