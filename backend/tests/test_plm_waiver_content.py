@@ -34,8 +34,14 @@ def env(tmp_path, monkeypatch):
     with default_session_factory()() as s:
         sync_builtin_roles(s)
         s.flush()
+        # Stage 2 / SR-012 (D-2): see test_plm_release.py — objectives
+        # waivers need spec.write from a non-lead; custom role grants it.
+        from app.db.models_identity import RoleRow
+
+        s.add(RoleRow(code="spec_writer", name_zh="规格编写", permissions=["spec.write"]))
+        s.flush()
         ids = {name: accounts.create_user(s, username=name, password=PASSWORD, roles=roles).id
-               for name, roles in (("lead", ["project_lead"]), ("ehs", ["ehs_regulatory"]))}
+               for name, roles in (("lead", ["project_lead"]), ("ehs", ["ehs_regulatory"]), ("spec", ["spec_writer"]))}
         xyl = SubstanceRow(id=str(uuid.uuid4()), cas_no="1330-20-7", name_zh="二甲苯", name_en="xylene", aliases=[],
                            hazardous_catalog_no=2289)
         water = SubstanceRow(id=str(uuid.uuid4()), cas_no="7732-18-5", name_zh="水", name_en="water", aliases=[])
@@ -56,7 +62,7 @@ def env(tmp_path, monkeypatch):
 
     client = TestClient(app)
     tokens = {}
-    for name in ("lead", "ehs"):
+    for name in ("lead", "ehs", "spec"):
         r = client.post("/api/identity/login", json={"username": name, "password": PASSWORD})
         assert r.status_code == 200, r.text
         tokens[name] = {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -78,7 +84,7 @@ def test_waiver_stops_matching_after_message_change(env):
     c, rid, h = env["client"], env["rid"], env["h"]
     item = _objectives_item(env)
     assert item["message"] == "固含量：无已复核的实测值" and item["waivable"] and not item["waived"]
-    r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["lead"],
+    r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["spec"],
                json={"check": "objectives", "item": "solids", "reason": "客户同意以当前值交付", "password": PASSWORD})
     assert r.status_code == 201, r.text
     assert _objectives_item(env)["waived"] is True
@@ -96,7 +102,7 @@ def test_waiver_stops_matching_after_message_change(env):
     assert item["message"] == "固含量（修订）：无已复核的实测值"
     assert item["waived"] is False
     # Re-waiving the new message works (new unique constraint allows it).
-    r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["lead"],
+    r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["spec"],
                json={"check": "objectives", "item": "solids", "reason": "修订后再次评估，风险可接受", "password": PASSWORD})
     assert r.status_code == 201, r.text
     assert _objectives_item(env)["waived"] is True

@@ -110,9 +110,8 @@ class MeasurementRow(Base):
     # may feed optimisation, SDS section 9 or a COA.
     # Stage 2 / SR-033 (alembic 0089): real FKs, SET NULL — deleting a
     # sample or task must not delete the measurement taken from it.
-    # lab_task_id's FK predates stage 2 (migration 0059 created it, but
-    # the model never declared it — that drift is fixed here, not by a
-    # second FK in 0089).
+    # lab_task_id's FK is created by 0089 (0059 only added the column; the
+    # lab_task_id FK it carries is on samples, not measurements).
     sample_id: Mapped[str | None] = mapped_column(
         ForeignKey("samples.id", ondelete="SET NULL"), nullable=True, index=True)
     lab_task_id: Mapped[str | None] = mapped_column(

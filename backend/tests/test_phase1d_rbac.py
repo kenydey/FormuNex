@@ -128,4 +128,6 @@ def test_rbac_audit_script_passes():
         [sys.executable, str(root / "scripts" / "audit_rbac.py")],
         cwd=root, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "every write route covered by exactly one layer" in proc.stdout
+    # Stage 2 audit wording: exemptions are not coverage, and endpoint
+    # claims are verified against endpoint source.
+    assert "every non-exempt write route covered by exactly one verified layer" in proc.stdout

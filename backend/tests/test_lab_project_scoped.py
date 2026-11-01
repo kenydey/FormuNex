@@ -44,6 +44,10 @@ def psc(tmp_path, monkeypatch):
     with default_session_factory()() as s:
         sync_builtin_roles(s)
         s.flush()
+        # Stage 2 / SR-032 (2-8a): task creation requires real projects.
+        from app.db.models import ProjectRow
+
+        s.add_all([ProjectRow(id=PROJ_A, title=PROJ_A), ProjectRow(id=PROJ_B, title=PROJ_B)])
         lead = accounts.create_user(s, username="lead", password=PW, roles=["project_lead"])
         # Project-only users: no global roles at all.
         tech_p = accounts.create_user(s, username="tech_p", password=PW, roles=None)

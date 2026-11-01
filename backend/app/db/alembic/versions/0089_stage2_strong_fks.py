@@ -52,6 +52,11 @@ _NEW_FKS = (
     ("batch_qc_results", "measurement_id", "measurements", "fk_batch_qc_results_measurement_id", "SET NULL"),
     ("lab_tasks", "doe_plan_id", "doe_plans", "fk_lab_tasks_doe_plan_id", "SET NULL"),
     ("measurements", "sample_id", "samples", "fk_measurements_sample_id", "SET NULL"),
+    # lab_task_id's FK is NOT from 0059 (that migration only added the
+    # column; the lab_task_id FK it carries is on samples). The model
+    # declares it, so 0089 creates it on upgrade-path databases; on fresh
+    # databases the model FK already matches and this is skipped.
+    ("measurements", "lab_task_id", "lab_tasks", "fk_measurements_lab_task_id", "SET NULL"),
 )
 _MC_TABLE = "material_compositions"
 _MC_FK = "fk_material_compositions_substance_cascade"

@@ -36,6 +36,63 @@ NEW_COLUMNS = {
 }
 
 
+def _rebuild_without_columns(conn, table: str, drop_cols: set[str]) -> None:
+    """Recreate ``table`` without ``drop_cols``, keeping surviving columns, FKs and indexes.
+
+    Stage 2 / 0089: SQLite refuses ``DROP COLUMN`` while the table's own FK
+    references the column (measurements.sample_id / lab_task_id), so a table
+    with such FKs must be rebuilt instead of stripped column by column.
+    """
+    from sqlalchemy.dialects import sqlite as sqlite_dialect
+
+    insp = inspect(conn)
+    dialect = sqlite_dialect.dialect()
+    # Capture indexes BEFORE the table is dropped: re-querying after the
+    # rename would see the fresh table, which has none (stage 2 fix).
+    indexes = [ix for ix in insp.get_indexes(table)
+               if not (set(ix["column_names"]) & drop_cols)]
+    cols = [c for c in insp.get_columns(table) if c["name"] not in drop_cols]
+    col_defs = []
+    for c in cols:
+        ddl = f'"{c["name"]}" {c["type"].compile(dialect=dialect)}'
+        if c.get("primary_key"):
+            ddl += " PRIMARY KEY"
+        if not c["nullable"]:
+            ddl += " NOT NULL"
+        if c.get("default") is not None:
+            ddl += f" DEFAULT {c['default']}"
+        col_defs.append(ddl)
+    for fk in insp.get_foreign_keys(table):
+        if set(fk["constrained_columns"]) & drop_cols:
+            continue
+        local = ", ".join(f'"{c}"' for c in fk["constrained_columns"])
+        ref = ", ".join(f'"{c}"' for c in fk["referred_columns"])
+        ddl = f'FOREIGN KEY ({local}) REFERENCES "{fk["referred_table"]}" ({ref})'
+        # SQLAlchemy 2.0 reports FK actions inside fk["options"], not
+        # top-level keys; reading the top level silently drops ON DELETE.
+        opts = fk.get("options") or {}
+        if opts.get("ondelete"):
+            ddl += f" ON DELETE {opts['ondelete']}"
+        if opts.get("onupdate"):
+            ddl += f" ON UPDATE {opts['onupdate']}"
+        col_defs.append(ddl)
+    for uq in insp.get_unique_constraints(table):
+        if set(uq["column_names"]) & drop_cols:
+            continue
+        cols_sql = ", ".join(f'"{c}"' for c in uq["column_names"])
+        col_defs.append(f"UNIQUE ({cols_sql})")
+    tmp = f"{table}_strip_tmp"
+    conn.execute(text(f'CREATE TABLE "{tmp}" ({", ".join(col_defs)})'))
+    keep = ", ".join(f'"{c["name"]}"' for c in cols)
+    conn.execute(text(f'INSERT INTO "{tmp}" ({keep}) SELECT {keep} FROM "{table}"'))
+    conn.execute(text(f'DROP TABLE "{table}"'))
+    conn.execute(text(f'ALTER TABLE "{tmp}" RENAME TO "{table}"'))
+    for ix in indexes:
+        cols_sql = ", ".join(f'"{c}"' for c in ix["column_names"])
+        unique = "UNIQUE " if ix["unique"] else ""
+        conn.execute(text(f'CREATE {unique}INDEX "{ix["name"]}" ON "{table}" ({cols_sql})'))
+
+
 def _strip_to_0050(url: str) -> None:
     """Remove every object 0051-0061 own, leaving a FormuMind-era schema stamped at 0050."""
     engine = create_engine(url)
@@ -45,8 +102,12 @@ def _strip_to_0050(url: str) -> None:
                 conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
             insp = inspect(conn)
             for table, cols in NEW_COLUMNS.items():
+                drop = set(cols)
+                if any(set(fk["constrained_columns"]) & drop for fk in insp.get_foreign_keys(table)):
+                    _rebuild_without_columns(conn, table, drop)
+                    continue
                 for ix in insp.get_indexes(table):
-                    if set(ix["column_names"]) & set(cols):
+                    if set(ix["column_names"]) & drop:
                         conn.execute(text(f"DROP INDEX {ix['name']}"))
                 for col in cols:
                     conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {col}"))

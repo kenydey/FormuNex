@@ -26,8 +26,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.config import get_settings  # noqa: E402
 
 PW = "Fx-Lifecycle-2026"
-USERS = {"lead": ["project_lead"], "rd": ["rd_engineer"], "tech": ["lab_technician"], "qa": ["quality"],
-         "ehs": ["ehs_regulatory"], "rm": ["release_manager"], "auditor": ["sys_admin"]}
+USERS = {"lead": ["project_lead"], "lead2": ["project_lead"], "rd": ["rd_engineer"], "tech": ["lab_technician"], "qa": ["quality"],
+         "ehs": ["ehs_regulatory"], "rm": ["release_manager"], "auditor": ["sys_admin"],
+         "spec": ["spec_writer"]}
 
 # name, CAS, DOE range (wt%), locked classifications (hazard_class, category, H code)
 COMPONENTS = [
@@ -102,6 +103,12 @@ def stack(tmp_path, monkeypatch):
 
     with default_session_factory()() as s:
         sync_builtin_roles(s)
+        s.flush()
+        # Stage 2 / SR-012 (D-2): see test_plm_release.py — objectives
+        # waivers need spec.write from a non-lead; custom role grants it.
+        from app.db.models_identity import RoleRow
+
+        s.add(RoleRow(code="spec_writer", name_zh="规格编写", permissions=["spec.write"]))
         s.flush()
         ids = {n: accounts.create_user(s, username=n, password=PW, roles=r).id for n, r in USERS.items()}
         locked = datetime(2026, 10, 1)
@@ -266,7 +273,7 @@ def _gate(c, h, rid: str) -> dict:
     for check in gate["checks"]:
         for item in check["items"]:
             if item["waivable"] and not item["waived"]:
-                who = "ehs" if check["key"] == "data_gaps" else "lead"
+                who = "ehs" if check["key"] == "data_gaps" else "spec"  # stage 2 / SR-012: waiver != project lead
                 _ok(c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h[who], json={
                     "check": check["key"], "item": item["key"], "reason": "已评估，风险可接受", "password": PW}), 201)
                 waived.append((check["key"], item["key"]))
@@ -286,7 +293,7 @@ def _sign_off(c, h, rid: str) -> dict:
     steps = [s["role"] for s in pkg["flow"]["steps"]]
     assert steps == ["project_lead", "ehs_regulatory", "quality", "release_manager"]
     url = f"/api/plm/packages/{pkg['id']}/sign"
-    signers = ["lead", "ehs", "qa", "rm"]
+    signers = ["lead2", "ehs", "qa", "rm"]  # stage 2 / SR-012: step-1 signer != submitter (lead)
     for i, who in enumerate(signers):
         assert c.post(url, headers=h[who], json={"decision": "approve", "password": "wrong-password"}).status_code == 401
         if i:

@@ -19,8 +19,18 @@ def data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def api_client(data_dir):
+    from app.api._principal import CurrentUser, current_user
+    from app.services.identity.rbac import Principal
+
     app = FastAPI()
     app.include_router(plans_api.router)
+    # Stage 2 / SR-011 (2-5): decide requires current_user; the bare app
+    # has no auth stack, so override the dependency (same pattern as
+    # test_mcp_approval_arguments.py).
+    app.dependency_overrides[current_user] = lambda: CurrentUser(
+        id="cheng", username="cheng", display_name="cheng", session_id="s",
+        principal=Principal("cheng", frozenset(), {}),
+    )
     return TestClient(app)
 
 

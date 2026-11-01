@@ -20,7 +20,8 @@ from app.config import get_settings  # noqa: E402
 
 PASSWORD = "Fx-Release-2026"
 USERS = {
-    "rd": ["rd_engineer"], "lead": ["project_lead"], "ehs": ["ehs_regulatory"], "qa": ["quality"],
+    "rd": ["rd_engineer"], "lead": ["project_lead"], "lead2": ["project_lead"], "ehs": ["ehs_regulatory"], "qa": ["quality"],
+    "spec": ["spec_writer"],
     "rm": ["release_manager"], "admin": ["sys_admin"],
 }
 
@@ -44,6 +45,14 @@ def env(tmp_path, monkeypatch):
 
     with default_session_factory()() as s:
         sync_builtin_roles(s)
+        s.flush()
+        # Stage 2 / SR-012 (D-2): objectives waivers need spec.write from
+        # someone who is NOT a project lead — no builtin role qualifies
+        # (only project_lead holds spec.write), so the fixture grants it
+        # via a custom role, the way production SoD setup would.
+        from app.db.models_identity import RoleRow
+
+        s.add(RoleRow(code="spec_writer", name_zh="规格编写", permissions=["spec.write"]))
         s.flush()
         ids = {name: accounts.create_user(s, username=name, password=PASSWORD, roles=roles).id
                for name, roles in USERS.items()}
@@ -121,7 +130,7 @@ def _waive_open_items(e):
     for check in gate["checks"]:
         for item in check["items"]:
             if item["waivable"] and not item["waived"]:
-                who = "ehs" if check["key"] == "data_gaps" else "lead"
+                who = "ehs" if check["key"] == "data_gaps" else "spec"  # stage 2 / SR-012: waiver != project lead
                 r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h[who], json={
                     "check": check["key"], "item": item["key"], "reason": "已评估，风险可接受", "password": PASSWORD})
                 assert r.status_code == 201, r.text
@@ -345,12 +354,12 @@ def test_waivers_only_for_waivable_items(env):
     assert obj["status"] == "fail" and obj["items"][0]["key"] == "salt_spray_hours"
     body = {"check": "objectives", "item": "salt_spray_hours", "reason": "客户同意以 480 h 交付", "password": PASSWORD}
     assert c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["qa"], json=body).status_code == 403
-    assert c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["lead"], json={**body, "item": "nope"}).status_code == 409
-    r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["lead"], json=body)
+    assert c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["spec"], json={**body, "item": "nope"}).status_code == 409
+    r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["spec"], json=body)
     assert r.status_code == 201
     obj = next(x for x in c.get(f"/api/plm/revisions/{rid}/gate").json()["checks"] if x["key"] == "objectives")
     assert obj["status"] == "waived" and obj["items"][0]["waiver"]["reason"] == "客户同意以 480 h 交付"
-    r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["lead"], json={**body, "check": "red_lines"})
+    r = c.post(f"/api/plm/revisions/{rid}/gate/waivers", headers=h["spec"], json={**body, "check": "red_lines"})
     assert r.status_code == 422  # not a waivable check
 
 
@@ -374,7 +383,7 @@ def test_full_release_flow(env, signed_off_ruleset):
     sign = lambda who, **kw: c.post(f"/api/plm/packages/{pkg['id']}/sign", headers=h[who],  # noqa: E731
                                     json={"decision": "approve", "password": PASSWORD, **kw})
     assert sign("ehs").status_code == 403  # step 1 belongs to the project lead
-    assert sign("lead").status_code == 200
+    assert sign("lead2").status_code == 200
     assert sign("lead").status_code == 403  # not the EHS role (and already signed)
     assert sign("ehs", password="wrong").status_code == 401
     assert sign("ehs").status_code == 200
@@ -422,7 +431,7 @@ def test_rejection_returns_to_candidate_and_tampering_stops_signing(env, signed_
     _ready(env)
     pkg = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"]).json()
     url = f"/api/plm/packages/{pkg['id']}/sign"
-    assert c.post(url, headers=h["lead"], json={"decision": "approve", "password": PASSWORD}).status_code == 200
+    assert c.post(url, headers=h["lead2"], json={"decision": "approve", "password": PASSWORD}).status_code == 200
     assert c.post(url, headers=h["ehs"], json={"decision": "reject", "password": PASSWORD}).status_code == 409
     r = c.post(url, headers=h["ehs"], json={"decision": "reject", "password": PASSWORD, "comment": "第 8 节防护不足"})
     assert r.status_code == 200 and r.json()["status"] == "rejected"
@@ -437,7 +446,7 @@ def test_rejection_returns_to_candidate_and_tampering_stops_signing(env, signed_
     with default_session_factory()() as s:
         doc = s.get(RegulatoryDocumentRow, pkg2["document_ids"][0])
         storage.put(doc.rendered_pdf_key, b"%PDF-1.4 tampered")
-    r = c.post(f"/api/plm/packages/{pkg2['id']}/sign", headers=h["lead"], json={"decision": "approve", "password": PASSWORD})
+    r = c.post(f"/api/plm/packages/{pkg2['id']}/sign", headers=h["lead2"], json={"decision": "approve", "password": PASSWORD})
     assert r.status_code == 409 and "不一致" in r.json()["detail"]
 
 
@@ -453,7 +462,7 @@ def test_new_release_supersedes_the_previous_revision(env, signed_off_ruleset):
     c, rid, pid, h = env["client"], env["rid"], env["pid"], env["h"]
     _ready(env)
     pkg = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"]).json()
-    for who in ("lead", "ehs", "qa", "rm"):
+    for who in ("lead2", "ehs", "qa", "rm"):
         assert c.post(f"/api/plm/packages/{pkg['id']}/sign", headers=h[who],
                       json={"decision": "approve", "password": PASSWORD}).status_code == 200
     rid2 = c.post(f"/api/plm/products/{pid}/revisions", json={
@@ -463,7 +472,7 @@ def test_new_release_supersedes_the_previous_revision(env, signed_off_ruleset):
     e2 = {**env, "rid": rid2}
     _ready(e2)
     pkg2 = c.post(f"/api/plm/revisions/{rid2}/submit", headers=h["lead"]).json()
-    for who in ("lead", "ehs", "qa", "rm"):
+    for who in ("lead2", "ehs", "qa", "rm"):
         assert c.post(f"/api/plm/packages/{pkg2['id']}/sign", headers=h[who],
                       json={"decision": "approve", "password": PASSWORD}).status_code == 200
     states = {r["rev"]: r["state"] for r in c.get(f"/api/plm/products/{pid}").json()["revisions"]}
@@ -479,7 +488,7 @@ def test_withdraw_restores_previous_release_and_stops_old_zip(env, signed_off_ru
     c, rid, pid, h = env["client"], env["rid"], env["pid"], env["h"]
     _ready(env)
     pkg = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"]).json()
-    for who in ("lead", "ehs", "qa", "rm"):
+    for who in ("lead2", "ehs", "qa", "rm"):
         assert c.post(f"/api/plm/packages/{pkg['id']}/sign", headers=h[who],
                       json={"decision": "approve", "password": PASSWORD}).status_code == 200
     rid2 = c.post(f"/api/plm/products/{pid}/revisions", json={
@@ -489,7 +498,7 @@ def test_withdraw_restores_previous_release_and_stops_old_zip(env, signed_off_ru
     e2 = {**env, "rid": rid2}
     _ready(e2)
     pkg2 = c.post(f"/api/plm/revisions/{rid2}/submit", headers=h["lead"]).json()
-    for who in ("lead", "ehs", "qa", "rm"):
+    for who in ("lead2", "ehs", "qa", "rm"):
         assert c.post(f"/api/plm/packages/{pkg2['id']}/sign", headers=h[who],
                       json={"decision": "approve", "password": PASSWORD}).status_code == 200
     # While B is current, A's (superseded) ZIP does not ship.
@@ -552,7 +561,7 @@ def test_connector_failures_are_recorded_not_raised(env, signed_off_ruleset):
     c, rid, h = env["client"], env["rid"], env["h"]
     _ready(env)
     pkg = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"]).json()
-    for who in ("lead", "ehs", "qa", "rm"):
+    for who in ("lead2", "ehs", "qa", "rm"):
         c.post(f"/api/plm/packages/{pkg['id']}/sign", headers=h[who], json={"decision": "approve", "password": PASSWORD})
 
     class Boom:

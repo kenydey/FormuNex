@@ -59,6 +59,14 @@ def _seed_doc(session, product_code: str, doc_type: str, version_no: int = 1, st
         session.flush()
     else:
         product = session.get(ProductRow, rev.product_id)
+    if batch_id is not None:
+        # Stage 2 / SR-033 (0089): regulatory_documents.batch_id is a real
+        # FK now — seed the parent batch row first (parent flush before
+        # the child insert, per the same-batch flush lesson).
+        from app.db.models_plm import BatchRow
+
+        session.add(BatchRow(id=batch_id, product_id=product.id, batch_no=batch_id))
+        session.flush()
     pdf_key = storage.put(f"documents/{uuid.uuid4()}/{doc_type}.pdf", b"%PDF-FAKE-" + doc_type.encode())
     doc = RegulatoryDocumentRow(id=str(uuid.uuid4()), revision_id=rev.id, doc_type=doc_type, lang="zh-CN",
                                 version_no=version_no, status=status, content={}, field_sources={},

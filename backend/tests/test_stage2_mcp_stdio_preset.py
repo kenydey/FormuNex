@@ -7,6 +7,14 @@ from app.services import mcp_client
 from app.services import skills_store
 
 
+@pytest.fixture(autouse=True)
+def _reset_mcp_state():
+    # test_mcp_client.py 的 fixture 同款隔离：全量套件中先行的
+    # lifespan shutdown 会置位 _MCP_SHUTDOWN 并毒化后续测试；本文件
+    # 的 probe/acquire 断言只测 preset 门，不测 shutdown 门，故先清零。
+    mcp_client._reset_client_cache()
+
+
 def test_probe_refuses_unblessed_server_without_spawning(monkeypatch):
     # A command that would fail loudly if ever spawned — the gate must
     # fire first, so the error names the preset rule, not the spawn.

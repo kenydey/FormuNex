@@ -35,6 +35,11 @@ def lab(tmp_path, monkeypatch):
         sync_builtin_roles(s)
         s.flush()
         ids = {n: accounts.create_user(s, username=n, password=PW, roles=r).id for n, r in USERS.items()}
+        # Stage 2 / SR-032 (2-8a): DOE plan save + task creation require a
+        # real, unarchived project — the _plan helper posts "proj-test".
+        from app.db.models import ProjectRow
+
+        s.add(ProjectRow(id="proj-test", title="proj-test"))
         s.commit()
     from app.main import app
 

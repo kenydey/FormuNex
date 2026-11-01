@@ -23,6 +23,11 @@ def env(tmp_path, monkeypatch):
         sync_builtin_roles(s)
         s.flush()
         accounts.create_user(s, username="lead", password=PW, roles=["project_lead"])
+        # Stage 2 / SR-032 (2-8a): /api/doe/active persists the plan, and
+        # persisting requires a real project ("p-doe" in REQ).
+        from app.db.models import ProjectRow
+
+        s.add(ProjectRow(id="p-doe", title="p-doe"))
         s.commit()
     from app.main import app
 
