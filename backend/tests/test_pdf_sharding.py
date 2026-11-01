@@ -246,3 +246,55 @@ def test_rapidocr_whole_doc_confidence_gate(monkeypatch):
         rapidocr_local, "ocr_png_scored", lambda png: ("some text here", 0.1)
     )
     assert rapidocr_local.ocr_pdf(b"fake") is not None
+
+
+def test_sharded_parallel_windows_merge_in_shard_order(monkeypatch, _tables):
+    """Stage 3 / SR-064 (3-11): shards finishing out of order still merge in order.
+
+    Window [shard0, shard1] with workers=2: shard0 sleeps so shard1
+    finishes first. The merged text must still read shard0, shard1,
+    shard2 in page order, with page markers renumbered globally.
+    """
+    import time
+
+    _shard_settings(monkeypatch, pdf_shard_workers=2)
+
+    def _fake(content, ext):
+        doc = fitz.open(stream=content, filetype="pdf")
+        first = doc[0].get_text()
+        doc.close()
+        start = 1 if "page 1 " in first else (11 if "page 11 " in first else 21)
+        if start == 1:
+            time.sleep(0.3)
+        return f"SHARD-{start} <!-- page:1 --> body"
+
+    monkeypatch.setattr(parsing, "_pdf_tier_order", lambda prefer: [("markitdown", _fake)])
+    result = parsing.parse_document(_make_pdf(25), "pdf")
+    assert result.parser == "sharded"
+    md = result.markdown
+    assert md.index("SHARD-1 ") < md.index("SHARD-11 ") < md.index("SHARD-21 ")
+    assert md.count("<!-- page:1 -->") == 1
+    assert "<!-- page:11 -->" in md and "<!-- page:21 -->" in md
+    assert result.table_stats["failed_shards"] == []
+
+
+def test_sharded_mineru_budget_propagates_to_workers(monkeypatch, _tables):
+    """Stage 3 / SR-064 (3-11): the MinerU budget context reaches pool threads.
+
+    The budget tuple is set on the calling thread; workers run under a
+    copied context, so they must observe the same (limit, used-list)
+    object — otherwise each shard would get a fresh budget.
+    """
+    _shard_settings(monkeypatch, pdf_shard_workers=2, mineru_shard_budget=5)
+    seen: list = []
+
+    def _fake(content, ext):
+        seen.append(parsing._MINERU_BUDGET.get())
+        return "X <!-- page:1 --> body"
+
+    monkeypatch.setattr(parsing, "_pdf_tier_order", lambda prefer: [("markitdown", _fake)])
+    result = parsing.parse_document(_make_pdf(25), "pdf")
+    assert result.parser == "sharded"
+    assert len(seen) == 3
+    assert all(b is not None and b[0] == 5 for b in seen)
+    assert len({id(b[1]) for b in seen}) == 1

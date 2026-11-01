@@ -427,6 +427,8 @@ class Settings(BaseSettings):
     pdf_shard_enabled: bool = True
     # 分片大小（页）：与 MinerU 整篇上限对齐，分片后各档 cap 不再触发。
     pdf_shard_pages: int = 10
+    # 分片并行窗口：每窗口最多同时解析的分片数（3-11 有界并发）。
+    pdf_shard_workers: int = 4
     # 分片断点续跑：按内容哈希缓存已完成片的解析结果；关掉则不读写缓存。
     pdf_shard_resume: bool = True
     # 分片缓存行保留天数：合并成功后删除，崩溃残留由下次分片解析顺带清理。

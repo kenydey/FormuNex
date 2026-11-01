@@ -28,6 +28,7 @@ import contextvars
 import io
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from ..config import get_settings
@@ -1437,6 +1438,11 @@ def _parse_pdf_sharded(
     每片递归走 parse_document（即现有级联 + §8 路由/质量门），片内页码
     经 _SHARD_OFFSET 平移为全局页码；已完成片按内容哈希缓存，崩溃重跑
     时跳过；合并失败片记疑难、整篇标部分完成，不静默丢页。
+
+    Stage 3 / SR-064 (3-11): 每窗口最多 pdf_shard_workers 片并行
+    （ThreadPoolExecutor，窗口内按片序合并）；合并改为流式——各片
+    文本直接写入一个 StringIO 累加器，不再先攒 parts 列表再 join
+    （峰值从 parts + merged 两份降为累加器 + 一个窗口）。
     """
     from . import ingest_timing as timing
     from .parse_notices import note
@@ -1466,52 +1472,95 @@ def _parse_pdf_sharded(
     if budget > 0:
         budget_token = _MINERU_BUDGET.set((budget, [0]))
 
-    parts: list[str] = []
+    # Stage 3 / SR-064 (3-11): windowed inter-shard parallelism + streaming
+    # merge. Shards used to parse strictly serially, and every shard's full
+    # markdown string coexisted in `parts` until a final join doubled peak
+    # memory (parts + merged). Now at most `workers` shards are in flight
+    # per window, results flush to one StringIO accumulator in shard
+    # order, and extras merge on the calling thread in order — peak is
+    # the accumulator plus one window, never the whole parts list plus
+    # its joined copy. The MinerU budget is a soft cap under
+    # parallelism: the shared used-list propagates to workers through
+    # a copied context, but check-then-act across threads can overshoot
+    # by at most workers-1 calls per document.
+    workers = max(1, int(settings.pdf_shard_workers or 4))
+    merged_io = io.StringIO()
+    wrote_any = False
     failed: list[tuple[int, int]] = []
     shard_parsers: list[str] = []
     tables: list = []
     blocks: list = []
     formulas: list = []
     bookmarks: list = []
+
+    def _emit(markdown: str) -> None:
+        nonlocal wrote_any
+        if wrote_any:
+            merged_io.write("\n\n")
+        merged_io.write(markdown)
+        wrote_any = True
+
+    def _parse_one(shard_bytes: bytes, start: int):
+        # Runs under a copied context in a pool thread: the page offset
+        # is per-shard (set here, visible only to this copy), while the
+        # MinerU budget tuple is shared through the copy's reference to
+        # the same used-list.
+        off = _SHARD_OFFSET.set(start - 1)
+        try:
+            return parse_document(shard_bytes, "pdf", prefer=prefer)
+        finally:
+            _SHARD_OFFSET.reset(off)
+
+    def _merge_result(idx: int, start: int, end: int, res) -> None:
+        if res.markdown and res.markdown.strip():
+            _emit(res.markdown)
+            shard_parsers.append(res.parser)
+            _offset_extras(res, start - 1, tables, blocks, formulas)
+            bookmarks.extend(res.bookmarks or [])
+            if resume:
+                put_shard(
+                    sha,
+                    idx,
+                    start,
+                    end,
+                    res.parser,
+                    res.markdown,
+                    _serialize_extras(res),
+                )
+        else:
+            failed.append((start, end))
+
     try:
-        for idx, (start, end) in enumerate(ranges):
-            cached = get_shard(sha, idx) if resume else None
-            if (
-                cached is not None
-                and cached["page_start"] == start
-                and cached["page_end"] == end
-                and (cached["markdown"] or "").strip()
-            ):
-                parts.append(cached["markdown"])
-                shard_parsers.append(cached["parser"])
-                _restore_extras(cached.get("extras_json") or "", tables, blocks, formulas)
-                continue
-            shard_bytes = _split_pdf_pages(content, start, end)
-            if shard_bytes is None:
-                failed.append((start, end))
-                continue
-            token = _SHARD_OFFSET.set(start - 1)
-            try:
-                res = parse_document(shard_bytes, "pdf", prefer=prefer)
-            finally:
-                _SHARD_OFFSET.reset(token)
-            if res.markdown and res.markdown.strip():
-                parts.append(res.markdown)
-                shard_parsers.append(res.parser)
-                _offset_extras(res, start - 1, tables, blocks, formulas)
-                bookmarks.extend(res.bookmarks or [])
-                if resume:
-                    put_shard(
-                        sha,
-                        idx,
-                        start,
-                        end,
-                        res.parser,
-                        res.markdown,
-                        _serialize_extras(res),
-                    )
-            else:
-                failed.append((start, end))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pdf-shard") as pool:
+            for win_start in range(0, len(ranges), workers):
+                window = list(enumerate(ranges[win_start:win_start + workers], start=win_start))
+                pending: dict = {}
+                for idx, (start, end) in window:
+                    cached = get_shard(sha, idx) if resume else None
+                    if (
+                        cached is not None
+                        and cached["page_start"] == start
+                        and cached["page_end"] == end
+                        and (cached["markdown"] or "").strip()
+                    ):
+                        pending[idx] = ("cached", cached)
+                        continue
+                    shard_bytes = _split_pdf_pages(content, start, end)
+                    if shard_bytes is None:
+                        failed.append((start, end))
+                        continue
+                    ctx = contextvars.copy_context()
+                    pending[idx] = ("future", start, end, pool.submit(ctx.run, _parse_one, shard_bytes, start))
+                for idx in sorted(pending):
+                    entry = pending[idx]
+                    if entry[0] == "cached":
+                        cached = entry[1]
+                        _emit(cached["markdown"])
+                        shard_parsers.append(cached["parser"])
+                        _restore_extras(cached.get("extras_json") or "", tables, blocks, formulas)
+                    else:
+                        _, start, end, fut = entry
+                        _merge_result(idx, start, end, fut.result())
     finally:
         if budget_token is not None:
             _MINERU_BUDGET.reset(budget_token)
@@ -1520,7 +1569,7 @@ def _parse_pdf_sharded(
     parsed_pages = sum(end - start + 1 for start, end in ranges) - sum(
         end - start + 1 for start, end in failed
     )
-    if not parts:
+    if not wrote_any:
         note(f"文档共 {n_pages} 页，分片解析全部失败，未入库任何内容")
         r = ParseResult("", "sharded")
         r.table_stats = {
@@ -1531,7 +1580,7 @@ def _parse_pdf_sharded(
         }
         r.failure_category = "sharded_failed"
         return r
-    merged = "\n\n".join(parts)
+    merged = merged_io.getvalue()
     final = ParseResult(merged, "sharded")
     final.tables = tables
     final.formulas = formulas
