@@ -80,8 +80,28 @@ def set_roles(session: Session, user_id: str, roles: list[str], *, actor: str) -
     user = session.get(UserRow, user_id)
     if user is None:
         raise AccountError("用户不存在")
+    # Stage 2 / SR-010 (D-1, forced boundary): the granter cannot touch
+    # their own roles, and cannot grant a permission union they do not
+    # hold themselves. A bootstrap actor with no UserRow (e.g. "system")
+    # keeps the old behaviour: the subset check only applies to a real
+    # signed-in granter, whose roles are resolvable from the database.
+    if actor == user_id:
+        raise AccountError("不能修改自身角色")
     roles = sorted(set(roles))
     _check_roles(session, roles)
+    actor_row = session.get(UserRow, actor)
+    if actor_row is not None:
+        actor_codes = session.execute(
+            select(UserRoleRow.role_code).where(UserRoleRow.user_id == actor)).scalars().all()
+        actor_perms: set[str] = set()
+        for row in session.execute(select(RoleRow).where(RoleRow.code.in_(actor_codes))).scalars():
+            actor_perms.update(row.permissions or [])
+        granted_perms: set[str] = set()
+        for row in session.execute(select(RoleRow).where(RoleRow.code.in_(roles))).scalars():
+            granted_perms.update(row.permissions or [])
+        excess = sorted(granted_perms - actor_perms)
+        if excess:
+            raise AccountError(f"不能授予自身未持有的权限：{', '.join(excess)}")
     before = sorted(session.execute(select(UserRoleRow.role_code).where(UserRoleRow.user_id == user_id)).scalars())
     for row in session.execute(select(UserRoleRow).where(UserRoleRow.user_id == user_id)).scalars():
         session.delete(row)
