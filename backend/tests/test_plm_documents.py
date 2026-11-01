@@ -28,6 +28,7 @@ from app.services.plm.documents.confidential_ranges import band, disclose  # noq
 from app.services.plm.documents.label_builder import LabelContext, build_label, check_label_size  # noqa: E402
 from app.services.plm.documents.sds_builder import SECTION_TITLES, SdsContext, build_sds  # noqa: E402
 from app.services.plm.documents.tds_builder import TdsContext, build_tds, split_list_field  # noqa: E402
+from tests.plm_doc_helpers import gen_doc, gen_doc_ok  # noqa: E402
 from app.services.plm.ghs.engine import classify  # noqa: E402
 from app.services.plm.ghs.model import Component, ComponentHazard, MixtureProperties  # noqa: E402
 
@@ -280,10 +281,8 @@ def api(tmp_path, monkeypatch):
 
 def test_sds_generation_versioning_and_files(api):
     client, pid, rid = api
-    r = client.post(f"/api/plm/revisions/{rid}/documents", json={
+    first = gen_doc_ok(client, rid, {
         "doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}})
-    assert r.status_code == 201, r.text
-    first = r.json()
     assert first["version_no"] == 1 and first["status"] == "draft" and first["has_pdf"] and first["has_docx"]
     oel = first["content"]["sections"][7]["tables"][0]["rows"][0]
     assert oel[:2] == ["二甲苯", "1330-20-7"] and oel[3] == 50
@@ -294,8 +293,8 @@ def test_sds_generation_versioning_and_files(api):
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
     assert client.get(f"/api/plm/documents/{first['id']}/file/docx").content.startswith(b"PK")
 
-    second = client.post(f"/api/plm/revisions/{rid}/documents", json={
-        "doc_type": "sds", "properties": {"flash_point_c": 20, "initial_boiling_point_c": 138}}).json()
+    second = gen_doc_ok(client, rid, {
+        "doc_type": "sds", "properties": {"flash_point_c": 20, "initial_boiling_point_c": 138}})
     assert second["version_no"] == 2 and second["supersedes_id"] == first["id"]
     diff = client.get(f"/api/plm/documents/{second['id']}/diff").json()
     assert diff["major"] and diff["from"] == first["id"]
@@ -304,24 +303,27 @@ def test_sds_generation_versioning_and_files(api):
 
 def test_label_tds_and_coa(api):
     client, pid, rid = api
-    lab = client.post(f"/api/plm/revisions/{rid}/documents", json={
+    lab = gen_doc_ok(client, rid, {
         "doc_type": "label", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138},
-        "label": {"container_volume_l": 18, "size_mm": [100, 150]}}).json()
+        "label": {"container_volume_l": 18, "size_mm": [100, 150]}})
     assert lab["has_pdf"] and not lab["has_docx"]
-    tds = client.post(f"/api/plm/revisions/{rid}/documents", json={
+    tds = gen_doc_ok(client, rid, {
         "doc_type": "tds", "lang": "en-US", "product": {"name_en": "FX-100 Primer"},
         "tds": {"product": {"description": "Two-pack epoxy primer"}, "application": {"method": "spray"},
                 "properties": [{"key": "density_g_cm3", "label": "Density", "value": 1.35,
-                                "unit": "g/cm³", "method": "GB/T 6750"}]}}).json()
+                                "unit": "g/cm³", "method": "GB/T 6750"}]}})
     assert tds["content"]["title"] == "Technical Data Sheet" and tds["missing"] == []
 
     bid = client.post(f"/api/plm/products/{pid}/batches", json={"batch_no": "B2610-01", "produced_at": "2026-10-15"}).json()["id"]
     client.post(f"/api/plm/batches/{bid}/qc-results", json={"results": [{"metric": "solids", "value": 57.1},
                                                                        {"metric": "visc", "value": 95}]})
-    coa = client.post(f"/api/plm/revisions/{rid}/documents", json={"doc_type": "coa", "coa": {"batch_id": bid}}).json()
+    coa = gen_doc_ok(client, rid, {"doc_type": "coa", "coa": {"batch_id": bid}})
     assert coa["content"]["meta"]["overall"] == "FAIL" and coa["content"]["meta"]["verdicts"] == {"solids": "PASS", "visc": "FAIL"}
     assert coa["batch_id"] == bid
-    assert client.post(f"/api/plm/revisions/{rid}/documents", json={"doc_type": "coa", "coa": {}}).status_code == 422
+    # Stage 3 / SR-026: the old sync 422 is a failed task now, same message.
+    failed = gen_doc(client, rid, {"doc_type": "coa", "coa": {}})
+    assert failed.get("state") == "failed", failed
+    assert "批次" in (failed.get("message") or ""), failed
 
 
 def test_tds_features_and_applications_split_string_and_list():
@@ -356,20 +358,20 @@ def test_tds_features_and_applications_split_string_and_list():
 def test_tds_string_features_via_api_are_split_not_characters(api):
     """P1-22 API path: string features from a caller must not reach build_tds raw."""
     client, pid, rid = api
-    r = client.post(f"/api/plm/revisions/{rid}/documents", json={
+    doc = gen_doc_ok(client, rid, {
         "doc_type": "tds", "tds": {"product": {"description": "双组分环氧底漆", "features": "耐腐蚀、耐磨",
                                               "applications": "钢结构，桥梁"},
                                    "properties": [{"key": "density_g_cm3", "label": "密度", "value": 1.35, "unit": "g/cm³"}],
                                    "application": {"method": "喷涂"}}})
-    assert r.status_code == 201, r.text
-    fields = {f["key"]: f["value"] for f in r.json()["content"]["sections"][0]["fields"]}
+    fields = {f["key"]: f["value"] for f in doc["content"]["sections"][0]["fields"]}
     assert fields["features"] == ["耐腐蚀", "耐磨"]
     assert fields["applications"] == ["钢结构", "桥梁"]
-    bad = client.post(f"/api/plm/revisions/{rid}/documents", json={
+    bad = gen_doc(client, rid, {
         "doc_type": "tds", "tds": {"product": {"description": "双组分环氧底漆", "features": 42},
                                    "properties": [{"key": "density_g_cm3", "label": "密度", "value": 1.35, "unit": "g/cm³"}],
                                    "application": {"method": "喷涂"}}})
-    assert bad.status_code == 422, bad.text
+    assert bad.get("state") == "failed", bad
+    assert "字符串列表" in (bad.get("message") or ""), bad
 
 
 def test_coa_two_batches_each_get_version_one(api):
@@ -379,19 +381,15 @@ def test_coa_two_batches_each_get_version_one(api):
     ids = []
     for batch_no in ("B2610-01", "B2610-02"):
         bid = client.post(f"/api/plm/products/{pid}/batches", json={"batch_no": batch_no}).json()["id"]
-        r = client.post(f"/api/plm/revisions/{rid}/documents", json={"doc_type": "coa", "coa": {"batch_id": bid}})
-        assert r.status_code == 201, r.text
-        body = r.json()
+        body = gen_doc_ok(client, rid, {"doc_type": "coa", "coa": {"batch_id": bid}})
         assert body["version_no"] == 1 and body["batch_id"] == bid
         ids.append(body["id"])
     assert ids[0] != ids[1]
     # A second COA for the first batch still increments within that batch.
     docs = client.get(f"/api/plm/revisions/{rid}/documents").json()
     first_batch = next(d for d in docs if d["doc_type"] == "coa" and d["batch_id"] and d["version_no"] == 1)
-    again = client.post(f"/api/plm/revisions/{rid}/documents",
-                        json={"doc_type": "coa", "coa": {"batch_id": first_batch["batch_id"]}})
-    assert again.status_code == 201, again.text
-    assert again.json()["version_no"] == 2 and again.json()["batch_id"] == first_batch["batch_id"]
+    again = gen_doc_ok(client, rid, {"doc_type": "coa", "coa": {"batch_id": first_batch["batch_id"]}})
+    assert again["version_no"] == 2 and again["batch_id"] == first_batch["batch_id"]
 
 
 def test_frozen_revision_and_errors(api):
@@ -403,10 +401,12 @@ def test_frozen_revision_and_errors(api):
     with default_session_factory()() as s:
         s.get(ProductRevisionRow, rid).frozen_at = datetime(2026, 10, 16)
         s.commit()
-    r = client.post(f"/api/plm/revisions/{rid}/documents", json={"doc_type": "sds"})
-    assert r.status_code == 422 and "冻结" in r.json()["detail"]
+    frozen = gen_doc(client, rid, {"doc_type": "sds"})
+    assert frozen.get("state") == "failed", frozen
+    assert "冻结" in (frozen.get("message") or ""), frozen
     nofv = client.post(f"/api/plm/products/{pid}/revisions", json={}).json()["id"]
-    assert client.post(f"/api/plm/revisions/{nofv}/documents", json={"doc_type": "sds"}).status_code == 422
+    missing = gen_doc(client, nofv, {"doc_type": "sds"})
+    assert missing.get("state") == "failed", missing
     assert client.get("/api/plm/documents/nope").status_code == 404
 
 
@@ -423,8 +423,8 @@ def test_template_upload_is_used_for_word(api):
     assert r.status_code == 201, r.text
     assert client.post("/api/plm/templates", data={"doc_type": "sds", "name": "bad"},
                        files={"file": ("x.docx", b"not a docx")}).status_code == 422
-    doc = client.post(f"/api/plm/revisions/{rid}/documents", json={
-        "doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}}).json()
+    doc = gen_doc_ok(client, rid, {
+        "doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}})
     import docx
 
     word = docx.Document(io.BytesIO(client.get(f"/api/plm/documents/{doc['id']}/file/docx").content))
@@ -457,7 +457,7 @@ def test_doc_payload_debug_log_flag_gated(api, monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="app.api.plm"):
         monkeypatch.setenv("FORMUNEX_PLM_DEBUG_DOC_PAYLOAD", "true")
         r = client.post(f"/api/plm/revisions/{rid}/documents", json=body)
-        assert r.status_code == 201, r.text
+        assert r.status_code == 202, r.text
     line = next((rec.message for rec in caplog.records if "plm doc payload" in rec.message), None)
     assert line is not None
     assert "density_g_cm3" in line and "tds.properties=" in line
@@ -466,7 +466,7 @@ def test_doc_payload_debug_log_flag_gated(api, monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="app.api.plm"):
         monkeypatch.delenv("FORMUNEX_PLM_DEBUG_DOC_PAYLOAD", raising=False)
         r = client.post(f"/api/plm/revisions/{rid}/documents", json=body)
-        assert r.status_code == 201, r.text
+        assert r.status_code == 202, r.text
     assert not any("plm doc payload" in rec.message for rec in caplog.records)
 
 

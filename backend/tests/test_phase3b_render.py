@@ -23,6 +23,7 @@ from app.services.plm.documents.service import (  # noqa: E402
     generate_coa_number,
 )
 from app.services.plm.render.pdfa import PdfaError, apply_pdfa_2b, srgb_icc_bytes  # noqa: E402
+from tests.plm_doc_helpers import gen_doc_ok  # noqa: E402
 
 
 # --------------------------------------------------------------------------- PDF/A-2b
@@ -259,8 +260,8 @@ def test_template_preview_and_list(api):
     assert client.get("/api/plm/templates").json()[0]["version"] == 1  # preview did not create a version
 
     # Preview with the stored template + a real document's content.
-    doc = client.post(f"/api/plm/revisions/{_rid}/documents", json={
-        "doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}}).json()
+    doc = gen_doc_ok(client, _rid, {
+        "doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}})
     r = client.post("/api/plm/templates/preview",
                     data={"doc_type": "sds", "lang": "zh-CN", "template_id": tid, "document_id": doc["id"]})
     assert r.status_code == 200, r.text
@@ -297,15 +298,15 @@ def test_coa_number_auto_and_caller_provided(api, monkeypatch):
     client.post(f"/api/plm/batches/{bid}/qc-results",
                 json={"results": [{"metric": "solids", "value": 57.1}, {"metric": "visc", "value": 80}]})
     # Default rule: auto-generated.
-    first = client.post(f"/api/plm/revisions/{rid}/documents",
-                        json={"doc_type": "coa", "coa": {"batch_id": bid}}).json()
+    first = gen_doc_ok(client, rid,
+                       {"doc_type": "coa", "coa": {"batch_id": bid}})
     assert _coa_no_of(first) == "COA-FX-100-B2610-01-1"
     # Caller-provided number is respected, never overwritten.
-    second = client.post(f"/api/plm/revisions/{rid}/documents",
-                         json={"doc_type": "coa", "coa": {"batch_id": bid, "coa_no": "CUSTOM-2026-001"}}).json()
+    second = gen_doc_ok(client, rid,
+                        {"doc_type": "coa", "coa": {"batch_id": bid, "coa_no": "CUSTOM-2026-001"}})
     assert _coa_no_of(second) == "CUSTOM-2026-001"
     # Configurable rule via env.
     monkeypatch.setenv("FORMUNEX_COA_NUMBER_RULE", "COA/{date}/{product_code}-{batch_no}-{n}")
-    third = client.post(f"/api/plm/revisions/{rid}/documents",
-                        json={"doc_type": "coa", "coa": {"batch_id": bid}}).json()
+    third = gen_doc_ok(client, rid,
+                       {"doc_type": "coa", "coa": {"batch_id": bid}})
     assert _coa_no_of(third) == "COA/2026-10-15/FX-100-B2610-01-3"

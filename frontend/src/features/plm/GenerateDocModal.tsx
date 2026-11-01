@@ -51,11 +51,11 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
     onError: (e) => message.error(errorText(e)),
   });
   const gen = useMutation({
-    mutationFn: (v: Record<string, any>) => {
+    mutationFn: async (v: Record<string, any>) => {
       const props = { flash_point_c: v.flash_point_c, initial_boiling_point_c: v.initial_boiling_point_c, ph: v.ph,
         kinematic_viscosity_40c: v.kinematic_viscosity_40c, phys_state: v.phys_state ?? "liquid" };
       const measured = (k: string, x: unknown) => (x == null ? {} : { [k]: { value: x, source: "measured" } });
-      return call<{ id: string; documents?: { id: string }[]; missing: string[]; warnings: string[] }>("POST", `/api/plm/revisions/${revision.id}/documents`, {
+      const accepted = await call<{ task_id: string }>("POST", `/api/plm/revisions/${revision.id}/documents`, {
         doc_type: v.doc_type, lang: v.lang,
         regulations: ["sds", "label"].includes(v.doc_type) ? v.regulations : undefined,
         properties: ["sds", "label"].includes(v.doc_type) ? props : null,
@@ -73,6 +73,16 @@ export function GenerateDocModal({ revision, open, onClose }: { revision: Revisi
           properties: tdsProps.filter((p) => p.key).map((p) => ({ key: p.key, label: p.label, value: p.value, unit: p.unit, method: p.method })),
           inspection: { sampling: v.ts_sampling } },
       });
+      // Stage 3 / SR-026: generation is 202 + poll now. Poll here so
+      // onSuccess keeps receiving the old document shape unchanged.
+      const started = Date.now();
+      while (Date.now() - started < 10 * 60 * 1000) {
+        const task = await call<{ state: string; result?: unknown; message?: string }>("GET", `/api/tasks/${accepted.task_id}`);
+        if (task.state === "completed") return task.result as { id: string; documents?: { id: string }[]; missing: string[]; warnings: string[] };
+        if (task.state === "failed") throw new Error(task.message || "文档生成失败");
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      throw new Error("文档生成超时，请稍后在文档列表中查看");
     },
     onSuccess: (d) => {
       if (d.missing.length) message.warning(t("doc.missing", "缺项：{{m}}", { m: d.missing.join("、") }));

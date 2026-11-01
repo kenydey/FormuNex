@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from tests.plm_doc_helpers import gen_doc, gen_doc_ok
 
 
 @pytest.fixture()
@@ -81,11 +82,11 @@ def test_no_content_mutation_routes():
 def test_regenerate_never_edits_existing_version(api):  # noqa: F811
     client, _pid, rid = api
     payload = {"doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}}
-    first = client.post(f"/api/plm/revisions/{rid}/documents", json=payload).json()
+    first = gen_doc_ok(client, rid, payload)
     assert first["version_no"] == 1
     snapshot = copy.deepcopy(client.get(f"/api/plm/documents/{first['id']}").json())
 
-    second = client.post(f"/api/plm/revisions/{rid}/documents", json=payload).json()
+    second = gen_doc_ok(client, rid, payload)
     assert second["id"] != first["id"] and second["version_no"] == 2
     assert second["supersedes_id"] == first["id"]
 
@@ -102,12 +103,13 @@ def test_frozen_revision_cannot_regenerate(api):  # noqa: F811
     from app.db.models_plm import ProductRevisionRow
 
     client, _pid, rid = api
-    doc = client.post(f"/api/plm/revisions/{rid}/documents",
-                      json={"doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}}).json()
+    doc = gen_doc_ok(client, rid,
+                     {"doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}})
     with default_session_factory()() as s:
         s.get(ProductRevisionRow, rid).frozen_at = datetime(2026, 10, 16)
         s.commit()
-    r = client.post(f"/api/plm/revisions/{rid}/documents",
-                    json={"doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}})
-    assert r.status_code == 422 and "冻结" in r.json()["detail"]
+    frozen = gen_doc(client, rid,
+                     {"doc_type": "sds", "properties": {"flash_point_c": 30, "initial_boiling_point_c": 138}})
+    assert frozen.get("state") == "failed", frozen
+    assert "冻结" in (frozen.get("message") or ""), frozen
     assert client.get(f"/api/plm/documents/{doc['id']}").json()["content_hash"] == doc["content_hash"]

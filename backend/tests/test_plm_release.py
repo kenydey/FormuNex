@@ -17,6 +17,7 @@ pytest.importorskip("svglib")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
+from tests.plm_doc_helpers import gen_doc, gen_doc_ok  # noqa: E402
 
 PASSWORD = "Fx-Release-2026"
 USERS = {
@@ -96,20 +97,19 @@ PROPS = {"flash_point_c": 30, "initial_boiling_point_c": 138}
 def _generate_all(e, *, as_user="rd", tds_density=1.36, coa_density=1.34):
     c, rid, pid, h = e["client"], e["rid"], e["pid"], e["h"][as_user]
     docs = {}
-    docs["sds"] = c.post(f"/api/plm/revisions/{rid}/documents", headers=h, json={
-        "doc_type": "sds", "properties": PROPS, "sds_properties": {"density_g_cm3": 1.35}}).json()
-    docs["label"] = c.post(f"/api/plm/revisions/{rid}/documents", headers=h, json={
-        "doc_type": "label", "properties": PROPS, "label": {"container_volume_l": 18}}).json()
-    docs["tds"] = c.post(f"/api/plm/revisions/{rid}/documents", headers=h, json={
+    docs["sds"] = gen_doc_ok(c, rid, {
+        "doc_type": "sds", "properties": PROPS, "sds_properties": {"density_g_cm3": 1.35}}, headers=h)
+    docs["label"] = gen_doc_ok(c, rid, {
+        "doc_type": "label", "properties": PROPS, "label": {"container_volume_l": 18}}, headers=h)
+    docs["tds"] = gen_doc_ok(c, rid, {
         "doc_type": "tds", "tds": {"product": {"description": "双组分环氧底漆"}, "application": {"method": "喷涂"},
                                    "properties": [{"key": "density_g_cm3", "label": "密度", "value": tds_density,
-                                                   "unit": "g/cm³"}]}}).json()
+                                                   "unit": "g/cm³"}]}}, headers=h)
     bid = c.post(f"/api/plm/products/{pid}/batches", json={"batch_no": f"B-{uuid.uuid4().hex[:6]}",
                                                           "revision_id": rid}).json()["id"]
     c.post(f"/api/plm/batches/{bid}/qc-results", json={"results": [{"metric": "solids", "value": 57.1},
                                                                   {"metric": "density_g_cm3", "value": coa_density}]})
-    docs["coa"] = c.post(f"/api/plm/revisions/{rid}/documents", headers=h,
-                         json={"doc_type": "coa", "coa": {"batch_id": bid}}).json()
+    docs["coa"] = gen_doc_ok(c, rid, {"doc_type": "coa", "coa": {"batch_id": bid}}, headers=h)
     for k, d in docs.items():
         assert "id" in d, (k, d)
     return docs
@@ -243,8 +243,8 @@ def test_document_approval_rules(env):
     r = c.post(f"/api/plm/documents/{docs['coa']['id']}/approve", headers=h["ehs"], json={"password": PASSWORD})
     assert r.status_code == 403  # COA issue needs coa.sign (quality)
     # A newer version makes the older one unapprovable.
-    newer = c.post(f"/api/plm/revisions/{rid}/documents", headers=h["rd"], json={
-        "doc_type": "sds", "properties": PROPS, "sds_properties": {"density_g_cm3": 1.35}}).json()
+    newer = gen_doc_ok(c, rid, {
+        "doc_type": "sds", "properties": PROPS, "sds_properties": {"density_g_cm3": 1.35}}, headers=h["rd"])
     r = c.post(f"/api/plm/documents/{sds['id']}/approve", headers=h["qa"], json={"password": PASSWORD})
     assert r.status_code == 409 and "更新版本" in r.json()["detail"]
     r = c.post(f"/api/plm/documents/{newer['id']}/approve", headers=h["qa"], json={"password": "bad"})
@@ -377,8 +377,10 @@ def test_full_release_flow(env, signed_off_ruleset):
         "project_lead", "ehs_regulatory", "quality", "release_manager"]
     assert len(pkg["package_hash"]) == 64 and len(pkg["document_ids"]) == 4
     # Documents are frozen while under review.
-    r = c.post(f"/api/plm/revisions/{rid}/documents", headers=h["rd"], json={"doc_type": "sds", "properties": PROPS})
-    assert r.status_code == 422 and "签批" in r.json()["detail"]
+    # Stage 3 / SR-026: the old sync 422 is a failed task now, same message.
+    frozen = gen_doc(c, rid, {"doc_type": "sds", "properties": PROPS}, headers=h["rd"])
+    assert frozen.get("state") == "failed", frozen
+    assert "签批" in (frozen.get("message") or ""), frozen
 
     sign = lambda who, **kw: c.post(f"/api/plm/packages/{pkg['id']}/sign", headers=h[who],  # noqa: E731
                                     json={"decision": "approve", "password": PASSWORD, **kw})

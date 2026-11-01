@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
 from app.services.plm.render.label_pdf import render_label_pdf  # noqa: E402
+from tests.plm_doc_helpers import gen_doc_ok  # noqa: E402
 from app.services.plm.render.label_png import LabelPngError, render_label_png  # noqa: E402
 
 SAMPLE = {
@@ -85,8 +86,8 @@ def _label_doc_id(api):
     product = api.post("/api/plm/products", json={"code": "FX-100", "name_zh": "FX-100 底漆"}).json()
     rev = api.post(f"/api/plm/products/{product['id']}/revisions",
                    json={"formulation_version_id": "fv-1"}).json()
-    doc = api.post(f"/api/plm/revisions/{rev['id']}/documents",
-                   json={"doc_type": "label", "properties": {"phys_state": "liquid", "flash_point_c": 27}}).json()
+    doc = gen_doc_ok(api, rev["id"],
+                     {"doc_type": "label", "properties": {"phys_state": "liquid", "flash_point_c": 27}})
     return doc["id"]
 
 
@@ -110,7 +111,7 @@ def test_png_rejected_for_non_label_documents(api):
     product = api.post("/api/plm/products", json={"code": "FX-200", "name_zh": "FX-200"}).json()
     rev = api.post(f"/api/plm/products/{product['id']}/revisions",
                    json={"formulation_version_id": "fv-1"}).json()
-    doc = api.post(f"/api/plm/revisions/{rev['id']}/documents", json={"doc_type": "tds"}).json()
+    doc = gen_doc_ok(api, rev["id"], {"doc_type": "tds"})
     resp = api.get(f"/api/plm/documents/{doc['id']}/file/png")
     assert resp.status_code == 422
     assert "仅适用于标签" in resp.json()["detail"]

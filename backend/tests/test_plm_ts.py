@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
 from app.services.plm.documents.ts_builder import TsContext, TsIndicator, build_ts, clean_indicators  # noqa: E402
+from tests.plm_doc_helpers import gen_doc_ok  # noqa: E402
 
 PASSWORD = "Test-Pass-1!"
 USERS = {"rd": ["rd_engineer"], "ehs": ["ehs_regulatory"], "admin": ["sys_admin"]}
@@ -106,8 +107,8 @@ def test_ts_template_seeds_structure_only(env):
         "indicators": [{"key": "solids", "label": "固含量", "unit": "%", "test_method": "GB/T 1725-2007",
                         "is_factory_inspection": True}]}).json()
     assert t["version"] == 1
-    doc = c.post(f"/api/plm/revisions/{env['rid']}/documents", json={
-        "doc_type": "ts", "ts": {"template_id": t["id"], "inspection": {"sampling": "每批抽检"}}}).json()
+    doc = gen_doc_ok(c, env["rid"], {
+        "doc_type": "ts", "ts": {"template_id": t["id"], "inspection": {"sampling": "每批抽检"}}})
     assert "id" in doc, doc
     # 模板只给结构不给限值 → 指标缺限值，文档报告缺项（质量填写限值后重新生成）。
     assert any("未设定规格限值" in m for m in doc["content"]["validation"]["missing"])
@@ -121,10 +122,10 @@ def test_ts_generate_with_explicit_indicators_and_versioning(env):
     c, rid = env["client"], env["rid"]
     body = {"doc_type": "ts", "ts": {"indicators": INDICATORS, "inspection": {"sampling": "每批抽检 1 件"},
                                    "properties": [{"key": "density_g_cm3", "label": "密度", "value": 1.35, "unit": "g/cm³"}]}}
-    d1 = c.post(f"/api/plm/revisions/{rid}/documents", json=body).json()
+    d1 = gen_doc_ok(c, rid, body)
     assert d1["doc_type"] == "ts" and d1["version_no"] == 1, d1
     assert d1["content"]["validation"]["missing"] == []
-    d2 = c.post(f"/api/plm/revisions/{rid}/documents", json=body).json()
+    d2 = gen_doc_ok(c, rid, body)
     assert d2["version_no"] == 2 and d2["supersedes_id"] == d1["id"]
     diff = c.get(f"/api/plm/documents/{d2['id']}/diff").json()
     assert diff["from"] == d1["id"]
@@ -132,13 +133,12 @@ def test_ts_generate_with_explicit_indicators_and_versioning(env):
 
 def test_coa_falls_back_to_ts_factory_indicators(env):
     c, rid, pid = env["client"], env["rid"], env["pid"]
-    c.post(f"/api/plm/revisions/{rid}/documents", json={
-        "doc_type": "ts", "ts": {"indicators": INDICATORS, "inspection": {"sampling": "每批抽检"}}}).json()
+    gen_doc_ok(c, rid, {
+        "doc_type": "ts", "ts": {"indicators": INDICATORS, "inspection": {"sampling": "每批抽检"}}})
     bid = c.post(f"/api/plm/products/{pid}/batches", json={"batch_no": "B-TS-1", "revision_id": rid}).json()["id"]
     c.post(f"/api/plm/batches/{bid}/qc-results", json={"results": [{"metric": "solids", "value": 57.1},
                                                                      {"metric": "fineness", "value": 35}]})
-    coa = c.post(f"/api/plm/revisions/{rid}/documents",
-                 json={"doc_type": "coa", "coa": {"batch_id": bid}}).json()
+    coa = gen_doc_ok(c, rid, {"doc_type": "coa", "coa": {"batch_id": bid}})
     assert "id" in coa, coa
     rows = coa["content"]["sections"][1]["tables"][0]["rows"]
     assert {r[0] for r in rows} == {"不挥发物含量", "细度"}  # 只取 TS 出厂检验指标，不含附着力

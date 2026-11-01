@@ -24,6 +24,7 @@ pytest.importorskip("svglib")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
+from tests.plm_doc_helpers import gen_doc_ok  # noqa: E402
 
 PW = "Fx-Lifecycle-2026"
 USERS = {"lead": ["project_lead"], "lead2": ["project_lead"], "rd": ["rd_engineer"], "tech": ["lab_technician"], "qa": ["quality"],
@@ -245,20 +246,19 @@ def _documents(c, h, product_id: str, rid: str) -> dict[str, dict]:
     assert cand["density_g_cm3"]["source"] == "measured" and cand["density_g_cm3"]["value"] == 1.36
     props = {"flash_point_c": 30, "initial_boiling_point_c": 138}
     docs = {}
-    docs["sds"] = _ok(c.post(f"/api/plm/revisions/{rid}/documents", headers=h["rd"], json={
-        "doc_type": "sds", "properties": props, "sds_properties": cand}), 201)
-    docs["label"] = _ok(c.post(f"/api/plm/revisions/{rid}/documents", headers=h["rd"], json={
-        "doc_type": "label", "properties": props, "label": {"container_volume_l": 18}}), 201)
-    docs["tds"] = _ok(c.post(f"/api/plm/revisions/{rid}/documents", headers=h["rd"], json={
+    docs["sds"] = gen_doc_ok(c, rid, {
+        "doc_type": "sds", "properties": props, "sds_properties": cand}, headers=h["rd"])
+    docs["label"] = gen_doc_ok(c, rid, {
+        "doc_type": "label", "properties": props, "label": {"container_volume_l": 18}}, headers=h["rd"])
+    docs["tds"] = gen_doc_ok(c, rid, {
         "doc_type": "tds", "tds": {"product": {"description": "双组分环氧防腐底漆"}, "application": {"method": "喷涂"},
                                    "properties": [{"key": "density_g_cm3", "label": "密度", "value": 1.36,
-                                                   "unit": "g/cm³"}]}}), 201)
+                                                   "unit": "g/cm³"}]}}, headers=h["rd"])
     bid = _ok(c.post(f"/api/plm/products/{product_id}/batches", json={"batch_no": "B261017", "revision_id": rid}),
               201)["id"]
     _ok(c.post(f"/api/plm/batches/{bid}/qc-results", json={"results": [
         {"metric": "density_g_cm3", "value": 1.35, "unit": "g/cm³", "test_method": "GB/T 6750"}]}), 201)
-    docs["coa"] = _ok(c.post(f"/api/plm/revisions/{rid}/documents", headers=h["rd"],
-                             json={"doc_type": "coa", "coa": {"batch_id": bid}}), 201)
+    docs["coa"] = gen_doc_ok(c, rid, {"doc_type": "coa", "coa": {"batch_id": bid}}, headers=h["rd"])
     for kind, d in docs.items():
         assert d["has_pdf"], kind
         reviewer = "qa" if kind == "coa" else "ehs"

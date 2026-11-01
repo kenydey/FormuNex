@@ -1003,21 +1003,26 @@ def add_qc_results(batch_id: str, body: QcResultsIn) -> dict[str, Any]:
         return {"count": len(rows)}
 
 
-@router.post("/revisions/{revision_id}/documents", status_code=201)
+@router.post("/revisions/{revision_id}/documents")
 def generate_document(revision_id: str, body: DocumentIn,
-                      user: CurrentUser | None = Depends(optional_user)) -> dict[str, Any]:
+                      user: CurrentUser | None = Depends(optional_user)):
     """Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).
+
+    Stage 3 / SR-026: 202 + task_id, results via /api/tasks poll. The
+    generation (LLM + render, minutes for multi-regulation packs) used
+    to run inline behind the modal's spinner. The task result keeps the
+    historical shapes: a single version returns the single-document
+    shape, multiple versions return {"documents": [...]}.
 
     G2: for SDS / label, ``body.regulations`` selects the versions to
     generate (one per regulation); omitted means the default company's
     applicable_regulations, or ["CN"] when the company has no default.
-    A single version keeps the historical single-document response shape;
-    multiple versions return {"documents": [...]}.
+    That default resolution is a fast DB read and stays sync, as does
+    the regulations-misuse 422 for non-SDS/label types.
     """
-    from sqlalchemy.exc import IntegrityError
-
-    from ..services.plm.documents import service as docs
-    from ..services.plm.render import MissingRenderDependency, PdfaError
+    from ..worker.tasks import run_document_generate_task
+    from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     payload = body.model_dump(exclude={"doc_type", "lang", "pdfa", "regulations"})
     payload["properties"] = body.properties.model_dump() if body.properties else None
@@ -1028,43 +1033,23 @@ def generate_document(revision_id: str, body: DocumentIn,
         logger.info("plm doc payload revision=%s doc_type=%s lang=%s regulations=%s properties=%s tds.properties=%s",
                     revision_id, body.doc_type, body.lang, body.regulations, payload["properties"],
                     (payload.get("tds") or {}).get("properties"))
+    regs: list[str] | None = None
     with _session() as session:
-        try:
-            if body.doc_type in ("sds", "label"):
-                regs = body.regulations
-                if regs is None:
-                    from ..services.plm import company as company_svc
+        if body.doc_type in ("sds", "label"):
+            regs = body.regulations
+            if regs is None:
+                from ..services.plm import company as company_svc
 
-                    default = company_svc.default_company(session)
-                    regs = (default or {}).get("applicable_regulations") or ["CN"]
-                rows = docs.generate_documents(session, revision_id, body.doc_type, lang=body.lang,
-                                               payload=payload, created_by=user.id if user else None,
-                                               pdfa=body.pdfa, regulations=regs)
-            else:
-                if body.regulations is not None:
-                    raise docs.DocumentError("适用法规仅适用于 SDS / 标签")
-                rows = [docs.generate_document(session, revision_id, body.doc_type, lang=body.lang, payload=payload,
-                                               created_by=user.id if user else None, pdfa=body.pdfa)]
-        except PdfaError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from None
-        except MissingRenderDependency as exc:
-            # 缺渲染依赖（reportlab / python-docx 未安装）是 503，不是 500。
-            raise HTTPException(status_code=503, detail=str(exc)) from None
-        except (docs.DocumentError, KeyError) as exc:
-            raise _doc_error(exc) from None
-        except IntegrityError:
-            # Stage 1 / SR-031: concurrent duplicate document version
-            # lands here instead of a 500 (same wording as _release_call).
-            session.rollback()
-            raise HTTPException(status_code=409, detail="并发冲突，请重试") from None
-        try:
-            session.commit()
-        except IntegrityError:
-            session.rollback()
-            raise HTTPException(status_code=409, detail="并发冲突，请重试") from None
-        if len(rows) == 1:
-            return {**_doc_summary(rows[0]), "content": rows[0].content}
-        return {"documents": [{**_doc_summary(r), "content": r.content} for r in rows]}
+                default = company_svc.default_company(session)
+                regs = (default or {}).get("applicable_regulations") or ["CN"]
+        elif body.regulations is not None:
+            raise _doc_error(Exception("适用法规仅适用于 SDS / 标签"))
+    task_payload = {"revision_id": revision_id, "doc_type": body.doc_type, "lang": body.lang,
+                    "payload": payload, "created_by": user.id if user else None,
+                    "pdfa": body.pdfa, "regulations": regs}
+    return submit(run_document_generate_task, task_payload, "document_generate",
+                  outbox_id=enqueue_outbox("document_generate", task_payload),
+                  owner_id=user.id if user else None)
 
 
 @router.get("/revisions/{revision_id}/documents")

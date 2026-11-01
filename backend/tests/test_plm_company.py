@@ -9,6 +9,7 @@ pytest.importorskip("docx")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
+from tests.plm_doc_helpers import gen_doc_ok  # noqa: E402
 from app.services.plm.company import validate_logo  # noqa: E402
 
 PASSWORD = "Test-Pass-1!"
@@ -107,8 +108,8 @@ def test_documents_use_default_company_over_env(env):
     c.post("/api/plm/companies", headers=h["admin"], json=COMPANY)
     pid = c.post("/api/plm/products", json={"code": "CO-1", "name_zh": "CO-1"}).json()["id"]
     rid = c.post(f"/api/plm/products/{pid}/revisions", json={}).json()["id"]
-    doc = c.post(f"/api/plm/revisions/{rid}/documents", json={
-        "doc_type": "tds", "tds": {"product": {"description": "示例"}, "properties": []}}).json()
+    doc = gen_doc_ok(c, rid, {
+        "doc_type": "tds", "tds": {"product": {"description": "示例"}, "properties": []}})
     fields = {f["key"]: f["value"] for s in doc["content"]["sections"] for f in s["fields"]}
     assert fields["supplier"] == "方枢示例化工有限公司"  # 默认公司行优先于环境变量公司
 
@@ -117,7 +118,7 @@ def test_documents_fall_back_to_env_company_when_none_configured(env):
     c = env["client"]
     pid = c.post("/api/plm/products", json={"code": "CO-2", "name_zh": "CO-2"}).json()["id"]
     rid = c.post(f"/api/plm/products/{pid}/revisions", json={}).json()["id"]
-    doc = c.post(f"/api/plm/revisions/{rid}/documents", json={
-        "doc_type": "tds", "tds": {"product": {"description": "示例"}, "properties": []}}).json()
+    doc = gen_doc_ok(c, rid, {
+        "doc_type": "tds", "tds": {"product": {"description": "示例"}, "properties": []}})
     fields = {f["key"]: f["value"] for s in doc["content"]["sections"] for f in s["fields"]}
     assert fields["supplier"] == "环境变量公司"
