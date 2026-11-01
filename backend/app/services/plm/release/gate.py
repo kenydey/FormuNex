@@ -11,6 +11,7 @@ holds the language-neutral values), never by parsing rendered text.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +33,7 @@ from ....db.models_plm import (
 from ....db.models_regulatory import SubstanceClassificationRow
 from ...compliance_rules import rohs_restricted
 from ..ghs import service as ghs_service
+from ..ghs.cache import CachedLookup, RegulatoryDataCache
 from ..ghs.inputs import build_components
 from ..ghs.regulations import DEFAULT_REGULATION, ruleset_for
 from ..ghs.ruleset import load_ruleset, load_signoff
@@ -220,10 +222,19 @@ def _check_substances(session: Session, c: Check, items: list[dict], regs: list[
         return []
     regs = regs or [DEFAULT_REGULATION]
     first: list = []
+    # Stage 3 / SR-024: one raw-row cache shared across regulations within
+    # this evaluation, but one CachedLookup per regulation — the raw
+    # classification rows are fetched once, while each regulation still
+    # applies its own source_priority ordering (EU differs from CN).
+    # A fresh per-evaluation cache (not the process-global CACHE) keeps
+    # the gate's fresh-read semantics: no cross-request staleness and no
+    # leakage between evaluations.
+    shared_cache = RegulatoryDataCache()
     for reg in regs:
         suffix = "" if reg == "CN" else f":{reg}"
         label_suffix = "" if reg == "CN" else f" [{reg}]"
-        built = build_components(session, items, load_ruleset(ruleset_for(reg)))
+        rs = load_ruleset(ruleset_for(reg))
+        built = build_components(session, items, rs, lookup=CachedLookup(session, rs, cache=shared_cache))
         if not first:
             first = built.components
         for comp in built.components:
@@ -469,6 +480,9 @@ def _check_classification(session: Session, c: Check, docs: list[RegulatoryDocum
                               key_suffix="" if reg == "CN" else f":{reg}")
     latest_release = ghs_service.latest_data_release(session)
     results: dict[str, dict] = {}
+    # Stage 3 / SR-024: docs sharing (ruleset, properties) recompute
+    # the same classification once, not once per document.
+    memo: dict = {}
     hashes_by_reg: dict[str, set[str]] = {}
     for d in docs:
         if d.doc_type not in ("sds", "label"):
@@ -488,8 +502,12 @@ def _check_classification(session: Session, c: Check, docs: list[RegulatoryDocum
         if latest_release and row.data_release_id != latest_release:
             c.fail(item_key(d.id, "release"), f"{name}：法规数据已更新（{row.data_release_id} → {latest_release}）")
         if items:
-            fresh = ghs_service.classify_items(session, items, meta.get("classification_properties"),
-                                               ruleset=rs.version)
+            props = meta.get("classification_properties")
+            memo_key = (rs.version, json.dumps(props, sort_keys=True, default=str))
+            fresh = memo.get(memo_key)
+            if fresh is None:
+                fresh = ghs_service.classify_items(session, items, props, ruleset=rs.version)
+                memo[memo_key] = fresh
             if fresh.inputs_hash != row.inputs_hash:
                 c.fail(item_key(d.id, "inputs"), f"{name}：配方或物质数据已变化，分类结果需重新计算")
     for reg, hashes in hashes_by_reg.items():

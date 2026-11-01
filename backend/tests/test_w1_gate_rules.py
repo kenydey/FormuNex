@@ -47,15 +47,19 @@ def test_g2_evaluates_per_regulation(monkeypatch):
     from app.services.plm.release import gate
 
     def fake_build(session, items, rs, **kw):
-        # rs is the ruleset name returned by the mocked load_ruleset: the EU
+        # rs is the ruleset dict returned by the mocked load_ruleset: the EU
         # assessment sees only a weak source, the CN one a trusted source.
-        hazards = [SimpleNamespace(source="pubchem")] if rs == "rs-EU" else [SimpleNamespace(source="cn_catalog")]
+        hazards = [SimpleNamespace(source="pubchem")] if rs["name"] == "rs-EU" else [SimpleNamespace(source="cn_catalog")]
         comp = SimpleNamespace(name="二甲苯", cas="1330-20-7", pct=30.0, assessed=True,
                                hazards=hazards, substance_id=None)
         return SimpleNamespace(components=[comp])
 
     monkeypatch.setattr(gate, "ruleset_for", lambda reg: f"rs-{reg}")
-    monkeypatch.setattr(gate, "load_ruleset", lambda name: name)
+    # Stage 3 / SR-024: _check_substances now builds a CachedLookup from the
+    # ruleset, so the mock must be a minimal RuleSet-shaped dict, not a
+    # bare name string (the old code never unpacked it).
+    monkeypatch.setattr(gate, "load_ruleset",
+                        lambda name: {"name": name, "assessed_not_classified_cas": [], "source_priority": None})
     monkeypatch.setattr(gate, "build_components", fake_build)
     c = gate.Check("substance_data", "G2", "t")
     comps = gate._check_substances(None, c, [{"name": "二甲苯", "pct": 30.0}], ["CN", "EU"])
