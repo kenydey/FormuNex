@@ -114,9 +114,31 @@ def list_mcp_servers() -> list[dict[str, Any]]:
     return _prefs_servers()
 
 
-def save_mcp_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def save_mcp_servers(
+    servers: list[dict[str, Any]], *, bless_ids: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """Save the MCP server list, stamping stdio provenance.
+
+    Stage 2 / SR-009: a stdio server spawns a local process as the API
+    user, so only servers an admin explicitly configured may use stdio
+    (SEC-06: connector-admin power must not silently equal host RCE).
+    ``bless_ids`` names the servers this write explicitly approves —
+    the PUT /mcp full replace blesses every entry it carries, an import
+    confirm blesses only the imported ids; any other re-save (toggle,
+    delete) preserves each entry's existing flag. Entries without the
+    flag — legacy rows, hand-edited prefs, anything else that lands in
+    the file — are refused at spawn time until an admin re-saves them
+    through PUT /mcp. Client-supplied ``admin_preset`` values are never
+    trusted: the flag is decided here, from the caller's bless set and
+    the stored rows.
+    """
     from .skills_store import save_prefs
 
+    existing = {
+        str(s.get("id")): s
+        for s in _prefs_servers()
+        if isinstance(s, dict) and s.get("id")
+    }
     cleaned: list[dict[str, Any]] = []
     for s in servers:
         if not isinstance(s, dict):
@@ -125,6 +147,10 @@ def save_mcp_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
         cmd = s.get("command")
         if not sid or not cmd:
             continue
+        if bless_ids is not None and sid in bless_ids:
+            preset = True
+        else:
+            preset = bool(existing.get(sid, {}).get("admin_preset"))
         cleaned.append(
             {
                 "id": sid,
@@ -133,6 +159,7 @@ def save_mcp_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "enabled": bool(s.get("enabled", True)),
                 "env": dict(s.get("env") or {}),
                 "transport": str(s.get("transport") or "stdio"),
+                "admin_preset": preset,
             }
         )
     save_prefs({"mcp_servers": cleaned})
@@ -581,6 +608,17 @@ def _acquire_session(server: dict[str, Any], *, timeout_s: float = 8.0) -> _Stdi
     if _MCP_SHUTDOWN:
         # B-12：shutdown 后拒绝重建，防止迟到创建者复活 session
         raise _MCPError("protocol", "MCP client shut down")
+    # Stage 2 / SR-009: stdio spawns a local process — the single choke
+    # point for every spawn. Only admin-preset servers may run; anything
+    # else (legacy, hand-edited, or otherwise unblessed prefs rows) is
+    # refused here, before any subprocess exists. probe_server converts
+    # this into {ok: False} via its catch-all; callers see _MCPError.
+    if not server.get("admin_preset"):
+        raise _MCPError(
+            "protocol",
+            f"MCP server '{server_id}' is not admin-preset; stdio refused "
+            "(re-save it through PUT /api/connectors/mcp)",
+        )
     digest = _server_config_digest(server)
     to_close: _StdioSession | None = None
     wait = False

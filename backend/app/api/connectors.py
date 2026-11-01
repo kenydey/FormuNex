@@ -199,7 +199,12 @@ def replace_mcp(body: McpServersReplace) -> dict:
     settings = get_settings()
     if not settings.mcp_client_enabled:
         raise HTTPException(status_code=503, detail="mcp_client_enabled is off")
-    servers = mcp_client.save_mcp_servers([s.model_dump() for s in body.servers])
+    # Stage 2 / SR-009: a full replace is explicit admin configuration —
+    # every entry it carries is blessed for stdio.
+    servers = mcp_client.save_mcp_servers(
+        [s.model_dump() for s in body.servers],
+        bless_ids={s.id for s in body.servers},
+    )
     return {"mcp": servers}
 
 

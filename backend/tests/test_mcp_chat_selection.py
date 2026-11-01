@@ -31,6 +31,7 @@ def test_ensure_mcp_skill_docs(tmp_data, monkeypatch):
                 "enabled": True,
                 "env": {},
                 "transport": "stdio",
+                "admin_preset": True,
             }
         ],
     )
@@ -63,6 +64,7 @@ def test_writeish_denied_without_grant(tmp_data, monkeypatch):
                 "enabled": True,
                 "env": {},
                 "transport": "stdio",
+                "admin_preset": True,
             }
         ],
     )
@@ -91,6 +93,7 @@ def test_approve_then_call(tmp_data, monkeypatch):
                 "enabled": True,
                 "env": {},
                 "transport": "stdio",
+                "admin_preset": True,
             }
         ],
     )
@@ -123,6 +126,7 @@ def test_maybe_run_explicit_mcp_permission(tmp_data, monkeypatch):
                 "enabled": True,
                 "env": {},
                 "transport": "stdio",
+                "admin_preset": True,
             }
         ],
     )
@@ -155,6 +159,7 @@ def test_mcp_prompt_block_injects(tmp_data, monkeypatch):
                 "enabled": True,
                 "env": {},
                 "transport": "stdio",
+                "admin_preset": True,
             }
         ],
     )

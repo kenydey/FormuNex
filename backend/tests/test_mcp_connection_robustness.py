@@ -58,6 +58,7 @@ def mcp_env(monkeypatch: pytest.MonkeyPatch):
                 "enabled": True,
                 "env": {},
                 "transport": "stdio",
+                "admin_preset": True,
             }
         ]
 
@@ -94,6 +95,7 @@ def test_probe_and_call_share_cache(mcp_env):
         "enabled": True,
         "env": {},
         "transport": "stdio",
+        "admin_preset": True,
     }
     probed = mcp_client.probe_server(server, settings=_settings())
     assert probed["ok"] is True
@@ -250,6 +252,7 @@ def test_probe_failure_reports_kind(mcp_env):
         "enabled": True,
         "env": {},
         "transport": "stdio",
+        "admin_preset": True,
     }
     out = mcp_client.probe_server(server, settings=_settings(retries=0))
     assert out["ok"] is False

@@ -357,7 +357,12 @@ def _finalize(
     existing = {s["id"]: s for s in mcp_client.list_mcp_servers()}
     for s in servers:
         existing[s["id"]] = s
-    saved = mcp_client.save_mcp_servers(list(existing.values()))
+    # Stage 2 / SR-009: confirming an import is explicit admin approval
+    # of the imported servers only — the merged legacy rows keep their
+    # existing preset flags.
+    saved = mcp_client.save_mcp_servers(
+        list(existing.values()), bless_ids={s["id"] for s in servers}
+    )
     _append_ledger(
         {
             "ids": [s["id"] for s in servers],
@@ -497,7 +502,10 @@ def confirm_import(import_id: str) -> McpImportResult:
         s = dict(s)
         s["enabled"] = False
         existing[s["id"]] = s
-    saved = mcp_client.save_mcp_servers(list(existing.values()))
+    # Stage 2 / SR-009: see import_from_json_text — bless imported ids only.
+    saved = mcp_client.save_mcp_servers(
+        list(existing.values()), bless_ids={s["id"] for s in servers}
+    )
     _append_ledger(
         {
             "ids": [s["id"] for s in servers],

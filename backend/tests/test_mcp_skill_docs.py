@@ -24,6 +24,7 @@ def _server(sid: str = "chem", **kw) -> dict:
         "enabled": True,
         "env": {},
         "transport": "stdio",
+        "admin_preset": True,
     }
     d.update(kw)
     return d

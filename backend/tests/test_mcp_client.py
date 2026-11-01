@@ -55,6 +55,7 @@ def fake_session(monkeypatch: pytest.MonkeyPatch):
                 "enabled": True,
                 "env": {},
                 "transport": "stdio",
+                "admin_preset": True,
             }
         ],
     )
@@ -184,6 +185,7 @@ def test_probe_server_returns_descriptors_and_retries(fake_session):
         "enabled": True,
         "env": {},
         "transport": "stdio",
+        "admin_preset": True,
     }
     out = mcp_client.probe_server(server, settings=_settings())
     assert out["ok"] is True
@@ -399,7 +401,7 @@ def test_b12_shutdown_all_sessions_reaps_process():
         # shutdown 后拒绝重建（防止迟到创建者复活 session）
         with pytest.raises(mcp_client._MCPError, match="shut down"):
             mcp_client._acquire_session(
-                {"id": "s-shutdown-test", "command": "true", "args": []}
+                {"id": "s-shutdown-test", "command": "true", "args": [], "admin_preset": True}
             )
     finally:
         mcp_client._reset_client_cache()
@@ -430,7 +432,7 @@ def test_a_failed_handshake_reaps_the_server_process(monkeypatch):
     silent = "import time\ntime.sleep(60)\n"  # never answers initialize
     try:
         with pytest.raises(Exception):
-            mcp_client._acquire_session({"id": "s-silent", "command": sys.executable, "args": ["-c", silent]})
+            mcp_client._acquire_session({"id": "s-silent", "command": sys.executable, "args": ["-c", silent], "admin_preset": True})
         assert spawned and spawned[0]._proc is None  # closed
     finally:
         mcp_client._reset_client_cache()
@@ -456,7 +458,7 @@ def test_classify_tool_from_annotations():
 def test_get_tool_annotations_from_stubbed_probe(monkeypatch):
     monkeypatch.setattr(
         mcp_client, "_prefs_servers",
-        lambda: [{"id": "s1", "command": "true", "args": [], "enabled": True, "env": {}, "transport": "stdio"}],
+        lambda: [{"id": "s1", "command": "true", "args": [], "enabled": True, "env": {}, "transport": "stdio", "admin_preset": True}],
     )
     monkeypatch.setattr(
         mcp_client, "probe_server",
