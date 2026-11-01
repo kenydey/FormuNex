@@ -423,19 +423,24 @@ def similar_formulations(req: SimilarFormulationRequest) -> SimilarFormulationRe
 
     factory = default_session_factory()
     with factory() as session:
-        q = session.query(ExperimentRow)
+        # Stage 3 / SR-027: read only the columns the similarity computation
+        # and the match output use (id/project_id/domain/factors/measured).
+        # No row cap: ranking needs the full corpus, and truncating it
+        # would change results.
+        q = session.query(ExperimentRow.id, ExperimentRow.project_id, ExperimentRow.domain,
+                          ExperimentRow.factors, ExperimentRow.measured)
         if req.domain:
             q = q.filter(ExperimentRow.domain == req.domain)
         rows = q.all()
         all_exps = [
             {
-                "id": r.id,
-                "project_id": r.project_id or "",
-                "domain": r.domain or "",
-                "factors": r.factors or {},
-                "measured": r.measured or {},
+                "id": rid,
+                "project_id": pid or "",
+                "domain": dom or "",
+                "factors": fac or {},
+                "measured": mea or {},
             }
-            for r in rows
+            for rid, pid, dom, fac, mea in rows
         ]
 
     matches_raw = find_similar_formulations(

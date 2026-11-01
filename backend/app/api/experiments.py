@@ -452,14 +452,17 @@ class WorkbenchCampaignSummary(BaseModel):
 
 
 @router.get("/experiments/workbench/campaigns", response_model=list[WorkbenchCampaignSummary])
-def list_workbench_campaigns() -> list[WorkbenchCampaignSummary]:
+def list_workbench_campaigns(limit: int = 1000, offset: int = 0) -> list[WorkbenchCampaignSummary]:
     """All workbench campaigns, newest first, with row counts."""
+    # Stage 3 / SR-027: page cap follows the repo's le=1000 precedent.
+    limit = max(0, min(limit, 1000))
+    offset = max(0, offset)
     _ensure_eln_when_required()
     from ..db.database import default_session_factory
     from ..db.models import Campaign
 
     with default_session_factory()() as session:
-        rows = session.query(Campaign).order_by(Campaign.id.desc()).all()
+        rows = session.query(Campaign).order_by(Campaign.id.desc()).limit(limit).offset(offset).all()
         return [
             WorkbenchCampaignSummary(
                 id=c.id,

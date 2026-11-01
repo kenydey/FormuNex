@@ -36,8 +36,8 @@ class ExportTextBody(BaseModel):
 
 
 @router.get("", response_model=list[ProjectSummary])
-def list_projects() -> list[ProjectSummary]:
-    return get_project_store().list_summaries()
+def list_projects(limit: int = 1000, offset: int = 0) -> list[ProjectSummary]:
+    return get_project_store().list_summaries(limit=limit, offset=offset)
 
 
 @router.post("", response_model=ProjectDetail)

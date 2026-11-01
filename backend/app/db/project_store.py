@@ -90,15 +90,18 @@ class ProjectStore:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
-    def list_summaries(self) -> list[ProjectSummary]:
+    def list_summaries(self, *, limit: int = 1000, offset: int = 0) -> list[ProjectSummary]:
         from sqlalchemy import func
 
         from .models import ChatMessageRow, SourceDocument
 
+        # Stage 3 / SR-027: page cap follows the repo's le=1000 precedent.
+        limit = max(0, min(limit, 1000))
+        offset = max(0, offset)
         with self._session_factory() as session:
             rows = session.query(ProjectRow).filter(ProjectRow.is_archived.is_(False)).order_by(
                 ProjectRow.updated_at.desc()
-            ).all()
+            ).limit(limit).offset(offset).all()
             # 全局文档(project_id NULL)对任何项目视图可见 —— 与 kb/sources 语义一致
             global_docs = int(
                 session.query(func.count(SourceDocument.id))
@@ -106,24 +109,23 @@ class ProjectStore:
                 .scalar()
                 or 0
             )
+            # Stage 3 / SR-027: the old code ran 2 count queries per project
+            # (2N+1 total); both counts now come from one GROUP BY each.
+            row_ids = [r.id for r in rows]
+            chat_counts = dict(session.query(
+                ChatMessageRow.project_id, func.count(ChatMessageRow.id)
+            ).filter(ChatMessageRow.project_id.in_(row_ids)).group_by(ChatMessageRow.project_id).all()) if row_ids else {}
+            doc_counts = dict(session.query(
+                SourceDocument.project_id, func.count(SourceDocument.id)
+            ).filter(SourceDocument.project_id.in_(row_ids)).group_by(SourceDocument.project_id).all()) if row_ids else {}
             out: list[ProjectSummary] = []
             for row in rows:
                 ws = ProjectWorkspace.model_validate(row.payload or {})
                 stats = summary_stats(ws)
-                chat_count = int(
-                    session.query(func.count(ChatMessageRow.id))
-                    .filter(ChatMessageRow.project_id == row.id)
-                    .scalar()
-                    or 0
-                )
+                chat_count = int(chat_counts.get(row.id, 0))
                 # source_count(2026-09-05): 语义 = 本项目知识库文档数
                 # (知识库已归属项目; payload.sources 仅为检索证据, 不再是「资料」计数)
-                project_docs = int(
-                    session.query(func.count(SourceDocument.id))
-                    .filter(SourceDocument.project_id == row.id)
-                    .scalar()
-                    or 0
-                )
+                project_docs = int(doc_counts.get(row.id, 0))
                 stats["source_count"] = project_docs + global_docs
                 out.append(
                     ProjectSummary(

@@ -12,18 +12,25 @@ def _session():
     )
 
     class _Q:
+        def __init__(self, ncols=1):
+            self.ncols = ncols
+
         def filter(self, *a, **k):
             return self
 
         def all(self):
+            # Stage 3 / SR-027: the endpoint now queries columns, not the
+            # whole entity; a multi-column query yields row tuples.
+            if self.ncols > 1:
+                return [(row.id, row.project_id, row.domain, row.factors, row.measured)]
             return [row]
 
         def first(self):
             return None
 
     class _S:
-        def query(self, model):
-            return _Q()
+        def query(self, *models):
+            return _Q(len(models))
 
         def __enter__(self):
             return self
