@@ -340,7 +340,11 @@ def test_wiki_lint_orphan_and_run_endpoint(wiki_env):
 
     client = TestClient(app)
     r = client.post("/api/wiki/lint/run", json={"limit": 50, "detect_orphan": True})
-    assert r.status_code == 200
-    body = r.json()
+    assert r.status_code == 202, r.text
+    from tests.task_poll_helpers import wait_task
+
+    task = wait_task(client, r.json()["task_id"])
+    assert task.get("state") == "completed", task
+    body = task["result"]
     assert body.get("ok") is True
     assert body.get("orphan_count", 0) >= 1

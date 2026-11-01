@@ -2445,3 +2445,44 @@ def _document_generate_impl(task_id: str, payload: dict) -> dict:
 @celery_app.task(bind=True, base=_OutboxTask, outbox_operation="document_generate", name="formunex.document_generate")
 def run_document_generate_task(self, payload: dict) -> dict:
     return _document_generate_impl(self.request.id, payload)
+
+
+def _wiki_lint_impl(task_id: str, payload: dict, *, operation: str) -> dict:
+    """Stage 3 / SR-063 (3-10): wiki lint worker body (was inline).
+
+    ``/lint/run`` and ``/lint/sweep`` scanned pages in the request
+    thread (multiple DB reads + file reads per page). The store opens
+    short sessions per call, so the worker needs no session plumbing.
+    """
+    from ..services.wiki.lint import run_lint_pass, sweep_flagged_pages
+
+    limit = int(payload.get("limit") or 200)
+    detect_orphan = bool(payload.get("detect_orphan", True))
+    try:
+        publish_progress(
+            task_id, TaskProgressStatus.RUNNING, stage="lint",
+            message="扫描 Wiki 页面中…", progress=0.02,
+        )
+        if operation == "wiki_lint_sweep":
+            result = sweep_flagged_pages(limit=limit, detect_orphan=detect_orphan)
+        else:
+            result = run_lint_pass(limit=limit, detect_orphan=detect_orphan)
+    except Exception as exc:
+        logger.exception("wiki lint failed (%s)", operation)
+        err = {"error": str(exc), "operation": operation}
+        persist_result(task_id, err, failed=True, message=str(exc))
+        _persist_terminal(task_id, operation, err, failed=True, message=str(exc))
+        raise
+    _persist_terminal(task_id, operation, result, message="Lint 完成")
+    persist_result(task_id, result, failed=False)
+    return result
+
+
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="wiki_lint_run", name="formunex.wiki_lint_run")
+def run_wiki_lint_task(self, payload: dict) -> dict:
+    return _wiki_lint_impl(self.request.id, payload, operation="wiki_lint_run")
+
+
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="wiki_lint_sweep", name="formunex.wiki_lint_sweep")
+def run_wiki_lint_sweep_task(self, payload: dict) -> dict:
+    return _wiki_lint_impl(self.request.id, payload, operation="wiki_lint_sweep")

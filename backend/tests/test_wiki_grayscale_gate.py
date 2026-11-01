@@ -165,8 +165,12 @@ def test_grayscale_dossier_report_and_claims_doe(env):
     assert ".md" in cd.lower()
 
     lint = client.post("/api/wiki/lint/run", json={"limit": 100, "detect_orphan": True})
-    assert lint.status_code == 200
-    assert lint.json().get("ok") is True
+    assert lint.status_code == 202, lint.text
+    from tests.task_poll_helpers import wait_task
+
+    task = wait_task(client, lint.json()["task_id"])
+    assert task.get("state") == "completed", task
+    assert task["result"].get("ok") is True
 
     flags = client.get("/api/wiki/flags?limit=100")
     assert flags.status_code == 200

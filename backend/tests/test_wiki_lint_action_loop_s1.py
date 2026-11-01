@@ -155,7 +155,11 @@ def test_lint_sweep_api(wiki_env):
     _upsert(wiki, path="materials/a.md", kind="material", title="A", body_extra="[[ghost]]", flags=["stale"])
     client = TestClient(app)
     r = client.post("/api/wiki/lint/sweep", json={"limit": 50, "detect_orphan": True})
-    assert r.status_code == 200
-    body = r.json()
+    assert r.status_code == 202, r.text
+    from tests.task_poll_helpers import wait_task
+
+    task = wait_task(client, r.json()["task_id"])
+    assert task.get("state") == "completed", task
+    body = task["result"]
     assert body["ok"] is True
     assert body["scanned"] >= 1

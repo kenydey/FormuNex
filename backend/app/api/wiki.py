@@ -176,22 +176,38 @@ def list_flagged(
 
 @router.post("/lint/run")
 def run_lint_endpoint(body: WikiLintRunRequest | None = None) -> dict:
-    """W4 ops: scan pages for stale/conflict/orphan/broken and persist flags."""
+    """W4 ops: scan pages for stale/conflict/orphan/broken and persist flags.
+
+    Stage 3 / SR-063: 202 + task_id, results via /api/tasks poll. The
+    scan used to run in the request thread (multiple DB reads + file
+    reads per page). The wiki-enabled guard stays sync (409).
+    """
     _require_wiki()
-    from ..services.wiki.lint import run_lint_pass
+    from ..worker.tasks import run_wiki_lint_task
+    from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     req = body or WikiLintRunRequest()
-    return run_lint_pass(limit=req.limit, detect_orphan=req.detect_orphan)
+    payload = {"limit": req.limit, "detect_orphan": req.detect_orphan}
+    return submit(run_wiki_lint_task, payload, "wiki_lint_run",
+                  outbox_id=enqueue_outbox("wiki_lint_run", payload))
 
 
 @router.post("/lint/sweep")
 def sweep_lint_endpoint(body: WikiLintSweepRequest | None = None) -> dict:
-    """S1: re-lint currently flagged pages so obsolete lint flags are cleared."""
+    """S1: re-lint currently flagged pages so obsolete lint flags are cleared.
+
+    Stage 3 / SR-063: same 202 + poll shape as /lint/run.
+    """
     _require_wiki()
-    from ..services.wiki.lint import sweep_flagged_pages
+    from ..worker.tasks import run_wiki_lint_sweep_task
+    from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     req = body or WikiLintSweepRequest()
-    return sweep_flagged_pages(limit=req.limit, detect_orphan=req.detect_orphan)
+    payload = {"limit": req.limit, "detect_orphan": req.detect_orphan}
+    return submit(run_wiki_lint_sweep_task, payload, "wiki_lint_sweep",
+                  outbox_id=enqueue_outbox("wiki_lint_sweep", payload))
 
 
 @router.post("/lint/apply-broken")
