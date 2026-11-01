@@ -458,10 +458,21 @@ def kb_health_snapshot() -> dict:
         logger.debug("kb_health_snapshot unavailable: %s", exc)
         return {"available": False}
     empty_docs = max(0, total_docs - docs_with_chunks)
+    try:
+        # Stage 3 / SR-028 (3-5): last scan vs the search cap, so a
+        # truncated scan is observable from /api/ops/kb-health, not just
+        # a log warning. Fail-open: a missing hybrid_search never breaks
+        # the health snapshot.
+        from .hybrid_search import last_scan_info
+
+        last_scan = last_scan_info()
+    except Exception:  # noqa: BLE001
+        last_scan = {"scanned": 0, "limit": 0, "truncated": False}
     return {
         "available": True,
         "total_documents": total_docs,
         "total_chunks": chunk_total,
+        "last_scan": last_scan,
         "parser_distribution": {str(k): int(v) for k, v in parser_rows},
         "embedding_coverage": {
             "embedded_chunks": chunk_embedded,

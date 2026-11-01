@@ -230,3 +230,25 @@ def test_null_model_second_pass_all_legacy_falls_back_to_default_model(monkeypat
     hybrid_search._null_model_second_pass(chunks, [0, 1], scores, set(), "query")
     assert scores[0] != 0.0
     assert scores[1] != 0.0
+
+
+def test_scan_at_cap_records_truncation(stores, monkeypatch):
+    """Stage 3 / SR-028 (3-5): hitting kb_search_scan_limit is observable,
+    not just a log warning — last_scan_info carries the truncated flag."""
+    from app.services import hybrid_search as hs
+
+    _, chk = stores
+    chk.replace_for_source(
+        "src-1",
+        [{"text": "环氧树脂 防腐 涂料 附着力 耐盐雾 底漆 涂层 " * 4} for _ in range(3)],
+    )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "kb_search_scan_limit", 2)
+    hs.hybrid_search_scored("环氧树脂", top_k=5)
+    info = hs.last_scan_info()
+    assert info["scanned"] == 2 and info["limit"] == 2 and info["truncated"] is True
+
+    monkeypatch.setattr(settings, "kb_search_scan_limit", 5000)
+    hs.hybrid_search_scored("环氧树脂", top_k=5)
+    info = hs.last_scan_info()
+    assert info["scanned"] == 3 and info["truncated"] is False

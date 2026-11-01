@@ -369,6 +369,70 @@ class ChunkStore:
                 for r in q.all()
             ]
 
+    def embedded_ids(self) -> dict[str, set[str]]:
+        """Per-model live chunk ids over the indexed vector population.
+
+        Same archive/embedding filters as :meth:`embedded_vectors`, but
+        loads id + model only (no vectors) — the cheap half of a kb_ann
+        delta: diffing this against a manifest's id lists identifies
+        added/removed chunks without rescanning the corpus.
+        """
+        from sqlalchemy import or_
+
+        from .models import SourceDocument
+
+        with self._session_factory() as session:
+            q = (
+                session.query(DocumentChunk.id, DocumentChunk.embedding_model)
+                .outerjoin(
+                    SourceDocument, DocumentChunk.source_id == SourceDocument.id
+                )
+                .filter(
+                    or_(
+                        SourceDocument.id.is_(None),
+                        SourceDocument.archived.is_(False),
+                        SourceDocument.archived.is_(None),
+                    )
+                )
+                .filter(
+                    or_(
+                        DocumentChunk.embedding_blob.isnot(None),
+                        DocumentChunk.embedding.isnot(None),
+                    )
+                )
+            )
+            out: dict[str, set[str]] = {}
+            for cid, model in q.all():
+                out.setdefault(model or "", set()).add(cid)
+            return out
+
+    def vectors_by_ids(self, ids: list[str]) -> list[dict]:
+        """Vectors for exactly the given chunk ids (kb_ann delta apply).
+
+        Same dict shape as :meth:`embedded_vectors`. No archive filter
+        beyond id membership: callers pass ids already diffed against
+        the live population, and a chunk archived between the id scan
+        and this fetch is caught by the next fingerprint check.
+        """
+        if not ids:
+            return []
+        with self._session_factory() as session:
+            q = session.query(
+                DocumentChunk.id,
+                DocumentChunk.embedding_blob,
+                DocumentChunk.embedding,
+                DocumentChunk.embedding_model,
+            ).filter(DocumentChunk.id.in_(ids))
+            return [
+                {
+                    "id": r[0],
+                    "embedding_blob": r[1],
+                    "embedding": r[2],
+                    "embedding_model": r[3],
+                }
+                for r in q.all()
+            ]
+
     def chunks_by_ids(
         self,
         ids: list[str],

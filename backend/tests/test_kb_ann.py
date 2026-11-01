@@ -204,11 +204,12 @@ def test_persist_and_reload(tmpdb):
 
 # ── DB-fingerprint staleness (C-1d) ─────────────────────────────────────────
 # Any chunk insert/delete/replace/archive must invalidate the faiss index:
-# the next ensure_index() rebuilds from the DB instead of serving stale
-# vectors. These are real write-path scenarios, not synthetic re-adds.
+# the next ensure_index() updates from the DB instead of serving stale
+# vectors. Stage 3 (SR-028): that update is an id-set delta, not a full
+# rescan — these tests pin the observable freshness, not the mechanism.
 
 
-def test_new_ingest_triggers_rebuild(tmpdb):
+def test_new_ingest_updates_index(tmpdb):
     store = cs_mod.get_chunk_store()
     store.replace_for_source("src-1", _seed_chunks(10, 32))
     assert kb_ann.ensure_index()["ready"] is True
@@ -221,7 +222,7 @@ def test_new_ingest_triggers_rebuild(tmpdb):
     assert hits is not None and len(hits) == 15
 
 
-def test_replace_same_count_rebuilds_and_evicts_old_ids(tmpdb):
+def test_replace_same_count_evicts_old_ids(tmpdb):
     store = cs_mod.get_chunk_store()
     store.replace_for_source("src-1", _seed_chunks(10, 32))
     assert kb_ann.ensure_index()["ready"] is True
@@ -239,7 +240,7 @@ def test_replace_same_count_rebuilds_and_evicts_old_ids(tmpdb):
     assert old_ids.isdisjoint(new_ids), "stale chunk ids must not survive replace"
 
 
-def test_delete_for_source_triggers_rebuild(tmpdb):
+def test_delete_for_source_tombstones(tmpdb):
     store = cs_mod.get_chunk_store()
     store.replace_for_source("src-1", _seed_chunks(10, 32))
     store.replace_for_source("src-2", _seed_chunks(5, 32))
@@ -252,7 +253,7 @@ def test_delete_for_source_triggers_rebuild(tmpdb):
     assert res["buckets"]["buckets"]["test-model"]["count"] == 10
 
 
-def test_persisted_index_rebuilds_after_db_change(tmpdb):
+def test_persisted_index_updates_after_db_change(tmpdb):
     store = cs_mod.get_chunk_store()
     store.replace_for_source("src-1", _seed_chunks(10, 32))
     assert kb_ann.ensure_index()["ready"] is True
@@ -261,7 +262,7 @@ def test_persisted_index_rebuilds_after_db_change(tmpdb):
     store.replace_for_source("src-2", _seed_chunks(5, 32))  # DB moves on
     res = kb_ann.ensure_index()
     assert res["ready"] is True
-    # Fingerprint mismatch on the persisted manifest -> rebuild, not stale load.
+    # Fingerprint mismatch on the persisted manifest -> delta, not stale load.
     assert res["buckets"]["buckets"]["test-model"]["count"] == 15
 
 
@@ -431,3 +432,118 @@ def test_migration_0039_backfills_json(tmp_path, monkeypatch):
     back = struct.unpack("<4f", bytes(blob))
     for a, b in zip(back, vec):
         assert abs(a - b) < 1e-6
+
+
+# ── Stage 3 / SR-028 (3-5): incremental delta ──────────────────────────────
+
+
+def _sidecar():
+    import glob
+    import os
+
+    sides = glob.glob(os.path.join(kb_ann._index_dir(), "*.ids.json"))
+    assert len(sides) == 1, sides
+    with open(sides[0], encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_incremental_append_skips_full_scan(tmpdb, monkeypatch):
+    """Append path: second ensure_index must not rescan the corpus."""
+    store = cs_mod.get_chunk_store()
+    store.replace_for_source("src-1", _seed_chunks(10, 32))
+    assert kb_ann.ensure_index()["ready"] is True
+
+    calls: list[int] = []
+    real_scan = kb_ann._scan_vectors
+
+    def _counting_scan():
+        calls.append(1)
+        return real_scan()
+
+    monkeypatch.setattr(kb_ann, "_scan_vectors", _counting_scan)
+    store.replace_for_source("src-2", _seed_chunks(5, 32))
+    res = kb_ann.ensure_index()
+    assert res["ready"] is True
+    assert res["buckets"]["buckets"]["test-model"]["count"] == 15
+    assert calls == [], "delta path must not run the full vector scan"
+    hits = kb_ann.search("test-model", _normed(32, 99), 15)
+    assert hits is not None and len(hits) == 15
+
+
+def test_incremental_delete_tombstones_and_filters(tmpdb, monkeypatch):
+    """Delete path: removed chunks vanish from search via tombstones.
+
+    2 of 15 positions tombstoned (0.13 < 0.25): no compaction, so the
+    sidecar still carries the tombstones and the id list stays long.
+    """
+    store = cs_mod.get_chunk_store()
+    store.replace_for_source("src-1", _seed_chunks(13, 32))
+    store.replace_for_source("src-2", _seed_chunks(2, 32))
+    assert kb_ann.ensure_index()["ready"] is True
+
+    calls: list[int] = []
+    real_scan = kb_ann._scan_vectors
+    monkeypatch.setattr(
+        kb_ann, "_scan_vectors", lambda: (calls.append(1), real_scan())[1]
+    )
+    assert store.delete_for_source("src-2")["total"] == 2
+    res = kb_ann.ensure_index()
+    assert res["ready"] is True
+    assert res["buckets"]["buckets"]["test-model"]["count"] == 13
+    assert calls == []
+    hits = kb_ann.search("test-model", _normed(32, 99), 15)
+    assert hits is not None and len(hits) == 13
+    sidecar = _sidecar()
+    assert len(sidecar["removed"]) == 2
+    assert len(sidecar["ids"]) == 15
+
+
+def test_tombstone_compaction_rebuilds_bucket(tmpdb):
+    """Past the tombstone ratio the bucket compacts from live vectors only."""
+    store = cs_mod.get_chunk_store()
+    store.replace_for_source("src-1", _seed_chunks(8, 32))
+    store.replace_for_source("src-2", _seed_chunks(2, 32))
+    assert kb_ann.ensure_index()["ready"] is True
+
+    assert store.delete_for_source("src-2")["total"] == 2
+    assert store.delete_for_source("src-1")["total"] == 8
+    store.replace_for_source("src-1", _seed_chunks(2, 32))
+    # 8 of 10 positions tombstoned (0.8 > 0.25) -> compaction on next ensure.
+    res = kb_ann.ensure_index()
+    assert res["ready"] is True
+    assert res["buckets"]["buckets"]["test-model"]["count"] == 2
+    sidecar = _sidecar()
+    assert sidecar["removed"] == []
+    assert len(sidecar["ids"]) == 2
+    hits = kb_ann.search("test-model", _normed(32, 99), 5)
+    assert hits is not None and len(hits) == 2
+
+
+def test_archive_unarchive_roundtrip(tmpdb):
+    """Archive tombstones a source's chunks; un-archive restores them."""
+    from app.db.models import SourceDocument
+
+    store = cs_mod.get_chunk_store()
+    with tmpdb() as session:
+        session.add(SourceDocument(id="src-arch", content_hash="arch-1"))
+        session.commit()
+    store.replace_for_source("src-arch", _seed_chunks(4, 32))
+    store.replace_for_source("src-live", _seed_chunks(4, 32))
+    assert kb_ann.ensure_index()["ready"] is True
+    assert kb_ann.index_stats()["buckets"]["test-model"]["count"] == 8
+
+    with tmpdb() as session:
+        session.get(SourceDocument, "src-arch").archived = True
+        session.commit()
+    res = kb_ann.ensure_index()
+    assert res["ready"] is True
+    assert res["buckets"]["buckets"]["test-model"]["count"] == 4
+
+    with tmpdb() as session:
+        session.get(SourceDocument, "src-arch").archived = False
+        session.commit()
+    res = kb_ann.ensure_index()
+    assert res["ready"] is True
+    assert res["buckets"]["buckets"]["test-model"]["count"] == 8
+    hits = kb_ann.search("test-model", _normed(32, 99), 8)
+    assert hits is not None and len(hits) == 8

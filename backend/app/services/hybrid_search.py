@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 # Ring buffer of recent hybrid_search wall times (ms). Process-local only.
 _LATENCY_MS: deque[float] = deque(maxlen=128)
 _LATENCY_LOCK = threading.Lock()
+# Stage 3 / SR-028 (3-5): last completed scan vs the kb_search_scan_limit
+# cap. ``truncated`` means the scan hit the cap (len == limit): more rows
+# may exist beyond it, so recall may silently drop older chunks. Recorded
+# on every scan that gets past the initial load (both branches), so the
+# flag always reflects the most recent search, not a stale warning.
+# Early returns before the scan (no chunks at all) leave it untouched.
+_LAST_SCAN: dict[str, Any] = {"scanned": 0, "limit": 0, "truncated": False}
 _LAST_ANN_ACTIVE = False
 _LAST_ANN_MATRIX = False
 _LAST_ANN_FAISS = False
@@ -80,6 +87,12 @@ def record_hybrid_latency_ms(ms: float) -> None:
         return
     with _LATENCY_LOCK:
         _LATENCY_MS.append(v)
+
+
+def last_scan_info() -> dict[str, Any]:
+    """Copy of the last completed scan's cap diagnostics (see _LAST_SCAN)."""
+    with _LATENCY_LOCK:
+        return dict(_LAST_SCAN)
 
 
 def hybrid_latency_stats() -> dict[str, Any]:
@@ -418,7 +431,12 @@ def hybrid_search_scored(
         )
         if not chunks:
             return []
-        if len(chunks) >= scan_limit:
+        truncated = len(chunks) >= scan_limit
+        with _LATENCY_LOCK:
+            _LAST_SCAN.update(
+                {"scanned": len(chunks), "limit": scan_limit, "truncated": truncated}
+            )
+        if truncated:
             logger.warning(
                 "hybrid_search scan at cap: n=%d limit=%d project_id=%s "
                 "include_global=%s — recall may truncate older chunks",
