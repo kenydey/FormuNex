@@ -350,6 +350,17 @@ def test_inputs_hash_tracks_inputs_and_rule_set():
     assert inputs_hash(comps, MixtureProperties(), rs) != h1
 
 
+def test_inputs_hash_tracks_rule_set_content_not_just_version():
+    # Stage 3 / SR-059: same version string, different threshold content
+    # must still invalidate — the old scheme keyed on the name alone.
+    from app.services.plm.ghs.ruleset import RuleSet
+    comps = [Component("A", 10, hazards=[H("skin_corrosion", "2")]), Component("水", 90, WATER)]
+    rs_a = RuleSet({"version": "gb30000-2013.v1", "skin_corrosion": {"cat1_limit_pct": 5}})
+    rs_b = RuleSet({"version": "gb30000-2013.v1", "skin_corrosion": {"cat1_limit_pct": 3}})
+    assert rs_a.content_hash != rs_b.content_hash
+    assert inputs_hash(comps, MixtureProperties(), rs_a) != inputs_hash(comps, MixtureProperties(), rs_b)
+
+
 def test_composition_total_is_checked():
     r = classify([Component("A", 80, hazards=[])])
     gap = next(g for g in r.data_gaps if g.code == "composition_not_100")

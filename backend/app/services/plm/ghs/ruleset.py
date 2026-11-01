@@ -9,6 +9,8 @@ to ``released`` *and* files the matching sign-off record. The release gate
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -26,10 +28,28 @@ class RuleSet:
 
     def __init__(self, data: dict[str, Any]) -> None:
         self._data = data
+        self._content_hash: str | None = None
 
     @property
     def version(self) -> str:
         return str(self._data["version"])
+
+    @property
+    def content_hash(self) -> str:
+        """Stage 3 / SR-059: sha256 of the rule-set content itself.
+
+        ``version`` stays the declared name (filenames, sign-off records
+        and the stored rule_set_version column all key on it), so it
+        cannot detect a content edit that keeps the same version string.
+        This hash is what inputs_hash now binds to: editing a threshold
+        without bumping the version still invalidates stored
+        classifications (the gate's fresh-hash check fails closed).
+        """
+        if self._content_hash is None:
+            self._content_hash = hashlib.sha256(
+                json.dumps(self._data, sort_keys=True, ensure_ascii=False, default=str).encode()
+            ).hexdigest()
+        return self._content_hash
 
     @property
     def status(self) -> str:

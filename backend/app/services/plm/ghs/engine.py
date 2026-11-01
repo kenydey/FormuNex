@@ -26,6 +26,13 @@ def inputs_hash(components: list[Component], props: MixtureProperties, rs: RuleS
                 bridging: BridgingInput | None = None) -> str:
     payload = {
         "rule_set": rs.version,
+        # Stage 3 / SR-059: bind the content, not just the version name —
+        # a threshold edit that keeps the same version string must still
+        # invalidate stored results. One-time consequence: hashes computed
+        # under the old scheme never match a fresh hash, so the gate flags
+        # stored classifications for recompute once after upgrade (fail
+        # closed, intended).
+        "rule_set_content": rs.content_hash,
         "components": sorted((asdict(c) for c in components), key=lambda d: (d["cas"] or "", d["name"])),
         "properties": asdict(props),
     }
