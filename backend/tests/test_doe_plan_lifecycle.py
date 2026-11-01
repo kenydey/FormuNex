@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db import doe_plan_store
 from app.db.database import make_engine, make_session_factory
-from app.db.models import DOEPlanRow
+from app.db.models import DOEPlanRow, ProjectRow
 from app.domain.schemas import DOEFactor, DOEPlan, DOERun
 from tests.alembic_helpers import run_upgrade
 
@@ -28,6 +28,10 @@ def session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     engine = make_engine(db_url)
     factory = make_session_factory(engine)
     with factory() as s:
+        # Stage 2 / SR-032: plans must name a live project.
+        s.add(ProjectRow(id="proj-a"))
+        s.add(ProjectRow(id="proj-b"))
+        s.commit()
         yield s
     engine.dispose()
 
@@ -132,12 +136,14 @@ def test_api_transition_endpoints() -> None:
     from app.main import app
 
     client = TestClient(app)
+    # Stage 2 / SR-032: the plan's project must exist first.
+    pid = client.post("/api/projects", json={"title": "lifecycle api test"}).json()["id"]
     # Create a plan through the public endpoint so the row exists in the dev DB.
     req_body = {
         "title": "lifecycle api test",
         "description": "d",
         "domain": "surface_treatment",
-        "project_id": "proj-lifecycle-api",
+        "project_id": pid,
     }
     r = client.post("/api/doe?design=full_factorial&engine=native", json=req_body)
     assert r.status_code == 200, r.text
@@ -167,7 +173,7 @@ def test_api_transition_endpoints() -> None:
     # history exposes status
     r = client.get(
         "/api/doe/history",
-        params={"project_id": "proj-lifecycle-api", "page_size": 5},
+        params={"project_id": pid, "page_size": 5},
     )
     assert r.status_code == 200, r.text
     items = r.json()["items"]

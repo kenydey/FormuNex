@@ -6,7 +6,7 @@ import pytest
 from app.config import get_settings
 from app.db import doe_plan_store
 from app.db.database import Base, make_engine, make_session_factory
-from app.db.models import Campaign
+from app.db.models import Campaign, ProjectRow
 from app.domain.schemas import DOEPlan, DOEFactor, DOERun, ProductDomain
 
 
@@ -14,7 +14,12 @@ from app.domain.schemas import DOEPlan, DOEFactor, DOERun, ProductDomain
 def session_factory(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/doe.db")
     Base.metadata.create_all(engine)
-    return make_session_factory(engine)
+    factory = make_session_factory(engine)
+    # Stage 2 / SR-032: plans must name a live project.
+    with factory() as s:
+        s.add(ProjectRow(id="proj-test"))
+        s.commit()
+    return factory
 
 
 @pytest.fixture()

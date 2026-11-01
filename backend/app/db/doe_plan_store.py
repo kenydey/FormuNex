@@ -122,6 +122,11 @@ def save(
     """
     if not project_id or not str(project_id).strip():
         raise ValueError("doe_plan_store.save requires a non-empty project_id")
+    # Stage 2 / SR-032: non-empty is not enough — the project must exist
+    # and be live, or the plan would be invisible to every project read.
+    from .project_guard import require_project_active
+
+    require_project_active(session, project_id)
     row = _plan_to_row(
         plan,
         campaign_id=campaign_id,

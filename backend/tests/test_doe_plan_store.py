@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import make_engine, make_session_factory
 from app.db.doe_plan_store import load_for_campaign, save
-from app.db.models import Campaign, DOEPlanRow
+from app.db.models import Campaign, DOEPlanRow, ProjectRow
 from app.domain.schemas import DOEFactor, DOEPlan, DOERun
 from tests.alembic_helpers import run_upgrade
 
@@ -27,6 +27,9 @@ def session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     engine = make_engine(db_url)
     factory = make_session_factory(engine)
     with factory() as s:
+        # Stage 2 / SR-032: plans must name a live project.
+        s.add(ProjectRow(id="proj-test"))
+        s.commit()
         yield s
     engine.dispose()
 

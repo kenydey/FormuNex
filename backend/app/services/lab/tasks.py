@@ -96,6 +96,14 @@ def create_task(session: Session, *, factors: dict[str, Any], metrics: list[Any]
     # (the API maps LabError to 422) instead of writing a NULL row.
     if not project_id or not str(project_id).strip():
         raise LabError("创建 lab 任务必须提供 project_id")
+    # Stage 2 / SR-032: the project must exist and be live (dispatch_plan
+    # routes through here, so its tasks are covered too).
+    from ...db.project_guard import require_project_active
+
+    try:
+        require_project_active(session, project_id)
+    except ValueError as exc:
+        raise LabError(str(exc)) from None
     try:
         domain = ProductDomain(domain).value
     except ValueError:

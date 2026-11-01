@@ -19,9 +19,16 @@ from tests.alembic_helpers import run_downgrade, run_upgrade
 
 @pytest.fixture()
 def factory(tmp_path):
+    from app.db.models import ProjectRow
+
     engine = make_engine(f"sqlite:///{tmp_path}/tight.db")
     Base.metadata.create_all(engine)
-    return make_session_factory(engine)
+    factory = make_session_factory(engine)
+    # Stage 2 / SR-032: plans and tasks must name a live project.
+    with factory() as s:
+        s.add(ProjectRow(id="proj-A"))
+        s.commit()
+    return factory
 
 
 def _plan(plan_id: str) -> DOEPlan:

@@ -21,9 +21,17 @@ from app.domain.schemas import DOEPlan, DOEFactor, DOERun, ProductDomain
 
 @pytest.fixture()
 def session_factory(tmp_path):
+    from app.db.models import ProjectRow
+
     engine = make_engine(f"sqlite:///{tmp_path}/doe_iso.db")
     Base.metadata.create_all(engine)
-    return make_session_factory(engine)
+    factory = make_session_factory(engine)
+    # Stage 2 / SR-032: plans must name a live project.
+    with factory() as s:
+        s.add(ProjectRow(id="proj-A"))
+        s.add(ProjectRow(id="proj-B"))
+        s.commit()
+    return factory
 
 
 @pytest.fixture(autouse=True)

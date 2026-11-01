@@ -69,9 +69,16 @@ def test_g2_evaluates_per_regulation(monkeypatch):
 @pytest.fixture()
 def factory(tmp_path):
     from app.db.database import Base, make_engine, make_session_factory
+    from app.db.models import ProjectRow
+
     engine = make_engine(f"sqlite:///{tmp_path}/w113.db")
     Base.metadata.create_all(engine)
-    return make_session_factory(engine)
+    factory = make_session_factory(engine)
+    # Stage 2 / SR-032: plans and tasks must name a live project.
+    with factory() as s:
+        s.add(ProjectRow(id="proj-A"))
+        s.commit()
+    return factory
 
 
 def test_kg_gate_note_reaches_dispatch_response(factory):
