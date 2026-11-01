@@ -426,19 +426,62 @@ class ProjectStore:
 
         ``knowledge="global"`` keeps the project's source_documents by clearing
         their project_id (they become global KB, visible to all projects);
-        ``knowledge="delete"`` removes them (plus chunks/mentions). Business
-        data (campaigns / experiments / measurements / attachments) is always
-        removed. Returns counts, or None if the project is missing.
+        ``knowledge="delete"`` removes them (plus chunks/mentions).
+
+        Stage 2 / SR-035 (D-10): this is a TRUE delete, not an archive.
+        Every project-owned row goes: campaigns (plus cycle pauses),
+        experiments (plus measurements, picks, samples, attachments),
+        DOE plans (plus cycle runs and their lab tasks), lab tasks (plus
+        samples, task attachments, ELN links and their conflicts), chat
+        sessions and messages, payload history, project-scoped wiki
+        pages, ingest audits, recommendation outcomes, acquisition
+        snapshots, MCP approval requests, and project memberships. The
+        project row itself is deleted.
+
+        Deliberately NOT deleted: company-level assets that merely point
+        at the project — products and formulation versions. Their
+        ``project_id`` pointer is cleared instead (counted as
+        ``*_unlinked``), so no dangling reference survives. Attachment
+        files on disk are left, as before — this removes database rows.
+        Returns counts, or None if the project is missing.
         """
         from .models import (
+            AcquisitionSnapshot,
             Campaign,
+            ChatMessageRow,
+            ChatSessionRow,
+            DOECyclePauseRow,
+            DOECycleRunRow,
+            DOEPlanRow,
             DocumentChunk,
             ExperimentAttachment,
             ExperimentRow,
+            FormulationVersion,
             KGMention,
+            KbIngestAudit,
+            McpApprovalRequestRow,
             MeasurementRow,
+            ProjectPayloadHistoryRow,
+            RecommendOutcomeRow,
             SourceDocument,
+            WikiPage,
         )
+        from .models_identity import ProjectMemberRow
+        from .models_lab import (
+            ElnLinkRow,
+            ElnSyncConflictRow,
+            LabTaskAttachmentRow,
+            LabTaskRow,
+            MeasurementPickRow,
+            SampleRow,
+        )
+        from .models_plm import ProductRow
+
+        def _ids(query):
+            return [r[0] for r in query.all()]
+
+        def _del(query):
+            return query.delete(synchronize_session=False)
 
         with commit_session(self._session_factory) as session:
             row = session.get(ProjectRow, project_id)
@@ -446,64 +489,115 @@ class ProjectStore:
                 return None
 
             # 1. knowledge base
-            doc_ids = [
-                r[0]
-                for r in session.query(SourceDocument.id)
-                .filter(SourceDocument.project_id == project_id)
-                .all()
-            ]
+            doc_ids = _ids(session.query(SourceDocument.id).filter(
+                SourceDocument.project_id == project_id))
             if knowledge == "global":
                 session.query(SourceDocument).filter(
                     SourceDocument.project_id == project_id
                 ).update({"project_id": None}, synchronize_session=False)
             else:
                 if doc_ids:
-                    session.query(KGMention).filter(
-                        KGMention.source_id.in_(doc_ids)
-                    ).delete(synchronize_session=False)
-                    session.query(DocumentChunk).filter(
-                        DocumentChunk.source_id.in_(doc_ids)
-                    ).delete(synchronize_session=False)
-                    session.query(SourceDocument).filter(
-                        SourceDocument.id.in_(doc_ids)
-                    ).delete(synchronize_session=False)
+                    _del(session.query(KGMention).filter(KGMention.source_id.in_(doc_ids)))
+                    _del(session.query(DocumentChunk).filter(DocumentChunk.source_id.in_(doc_ids)))
+                    _del(session.query(SourceDocument).filter(SourceDocument.id.in_(doc_ids)))
 
-            # 2. business data
-            campaign_ids = [
-                r[0]
-                for r in session.query(Campaign.id)
-                .filter(Campaign.project_id == project_id)
-                .all()
-            ]
-            exp_ids = [
-                r[0]
-                for r in session.query(ExperimentRow.id)
-                .filter(ExperimentRow.project_id == project_id)
-                .all()
-            ]
+            # 2. experiments (+ measurements, picks, samples, attachments)
+            exp_ids = _ids(session.query(ExperimentRow.id).filter(
+                ExperimentRow.project_id == project_id))
             if exp_ids:
-                session.query(MeasurementRow).filter(
-                    MeasurementRow.experiment_id.in_(exp_ids)
-                ).delete(synchronize_session=False)
-                session.query(ExperimentAttachment).filter(
-                    ExperimentAttachment.experiment_id.in_(exp_ids)
-                ).delete(synchronize_session=False)
-                session.query(ExperimentRow).filter(
-                    ExperimentRow.id.in_(exp_ids)
-                ).delete(synchronize_session=False)
-            if campaign_ids:
-                session.query(Campaign).filter(
-                    Campaign.id.in_(campaign_ids)
-                ).delete(synchronize_session=False)
+                _del(session.query(MeasurementPickRow).filter(
+                    MeasurementPickRow.experiment_id.in_(exp_ids)))
+                _del(session.query(MeasurementRow).filter(
+                    MeasurementRow.experiment_id.in_(exp_ids)))
+                _del(session.query(SampleRow).filter(SampleRow.experiment_id.in_(exp_ids)))
+                _del(session.query(ExperimentAttachment).filter(
+                    ExperimentAttachment.experiment_id.in_(exp_ids)))
+                _del(session.query(ExperimentRow).filter(ExperimentRow.id.in_(exp_ids)))
 
-            # 3. soft-delete project
-            row.is_archived = True
-            row.updated_at = _utcnow()
+            # 3. campaigns (+ cycle pauses) and DOE plans (+ cycle runs)
+            campaign_ids = _ids(session.query(Campaign.id).filter(
+                Campaign.project_id == project_id))
+            if campaign_ids:
+                _del(session.query(DOECyclePauseRow).filter(
+                    DOECyclePauseRow.campaign_id.in_(campaign_ids)))
+                _del(session.query(Campaign).filter(Campaign.id.in_(campaign_ids)))
+            plan_ids = _ids(session.query(DOEPlanRow.id).filter(
+                DOEPlanRow.project_id == project_id))
+            _del(session.query(DOECycleRunRow).filter(
+                DOECycleRunRow.project_id == project_id))
+
+            # 4. lab tasks: the project's own, plus tasks of its DOE plans
+            task_ids = _ids(session.query(LabTaskRow.id).filter(
+                LabTaskRow.project_id == project_id))
+            if plan_ids:
+                task_ids += _ids(session.query(LabTaskRow.id).filter(
+                    LabTaskRow.doe_plan_id.in_(plan_ids)))
+            task_ids = list(dict.fromkeys(task_ids))
+            if task_ids:
+                _del(session.query(SampleRow).filter(SampleRow.lab_task_id.in_(task_ids)))
+                _del(session.query(LabTaskAttachmentRow).filter(
+                    LabTaskAttachmentRow.task_id.in_(task_ids)))
+                link_ids = _ids(session.query(ElnLinkRow.id).filter(
+                    ElnLinkRow.local_type == "lab_task", ElnLinkRow.local_id.in_(task_ids)))
+                if link_ids:
+                    _del(session.query(ElnSyncConflictRow).filter(
+                        ElnSyncConflictRow.link_id.in_(link_ids)))
+                    _del(session.query(ElnLinkRow).filter(ElnLinkRow.id.in_(link_ids)))
+                _del(session.query(LabTaskRow).filter(LabTaskRow.id.in_(task_ids)))
+            if plan_ids:
+                _del(session.query(DOEPlanRow).filter(DOEPlanRow.id.in_(plan_ids)))
+
+            # 5. chat, history, wiki, audits, outcomes, snapshots, approvals
+            sess_ids = _ids(session.query(ChatSessionRow.id).filter(
+                ChatSessionRow.project_id == project_id))
+            msg_count = _del(session.query(ChatMessageRow).filter(
+                ChatMessageRow.project_id == project_id))
+            if sess_ids:
+                _del(session.query(ChatMessageRow).filter(
+                    ChatMessageRow.session_id.in_(sess_ids)))
+                _del(session.query(ChatSessionRow).filter(ChatSessionRow.id.in_(sess_ids)))
+            hist_count = _del(session.query(ProjectPayloadHistoryRow).filter(
+                ProjectPayloadHistoryRow.project_id == project_id))
+            wiki_count = _del(session.query(WikiPage).filter(WikiPage.project_id == project_id))
+            audit_count = _del(session.query(KbIngestAudit).filter(
+                KbIngestAudit.project_id == project_id))
+            outcome_count = _del(session.query(RecommendOutcomeRow).filter(
+                RecommendOutcomeRow.project_id == project_id))
+            snap_count = _del(session.query(AcquisitionSnapshot).filter(
+                AcquisitionSnapshot.project_id == project_id))
+            approval_count = _del(session.query(McpApprovalRequestRow).filter(
+                McpApprovalRequestRow.project_id == project_id))
+            member_count = _del(session.query(ProjectMemberRow).filter(
+                ProjectMemberRow.project_id == project_id))
+
+            # 6. company-level assets keep existing; only the pointer goes.
+            prod_unlinked = session.query(ProductRow).filter(
+                ProductRow.project_id == project_id
+            ).update({"project_id": None}, synchronize_session=False)
+            ver_unlinked = session.query(FormulationVersion).filter(
+                FormulationVersion.project_id == project_id
+            ).update({"project_id": None}, synchronize_session=False)
+
+            # 7. true delete of the project row itself (was: archive).
+            session.delete(row)
 
             return {
                 "document_count": len(doc_ids),
                 "campaign_count": len(campaign_ids),
                 "experiment_count": len(exp_ids),
+                "doe_plan_count": len(plan_ids),
+                "lab_task_count": len(task_ids),
+                "chat_session_count": len(sess_ids),
+                "chat_message_count": msg_count,
+                "payload_history_count": hist_count,
+                "wiki_page_count": wiki_count,
+                "kb_ingest_audit_count": audit_count,
+                "recommend_outcome_count": outcome_count,
+                "acquisition_snapshot_count": snap_count,
+                "mcp_approval_count": approval_count,
+                "member_count": member_count,
+                "products_unlinked": prod_unlinked,
+                "formulation_versions_unlinked": ver_unlinked,
             }
 
     def migrate_legacy(self, snapshots: list[LegacySnapshotPayload]) -> list[ProjectSummary]:
