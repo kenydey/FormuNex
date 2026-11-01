@@ -1132,11 +1132,9 @@ def dispatch_file_ingest(
         if get_settings().celery_eager:
             task_id = f"fileingest-{uuid.uuid4().hex[:16]}"
             task_manager.register_celery_task(task_id, "file_ingest")
-            threading.Thread(
-                target=lambda: _safe_file_ingest(task_id, payload),
-                name="file-ingest",
-                daemon=True,
-            ).start()
+            from .eager_pool import submit as _eager_submit
+
+            _eager_submit(_safe_file_ingest, "file-ingest", task_id, payload)
             return task_id
         async_result = run_file_ingest_task.delay(payload)
         task_manager.register_celery_task(async_result.id, "file_ingest")
@@ -1190,11 +1188,9 @@ def dispatch_kb_ingest(
     if get_settings().celery_eager:
         task_id = f"kbingest-{uuid.uuid4().hex[:16]}"
         task_manager.register_celery_task(task_id, "kb_ingest")
-        threading.Thread(
-            target=lambda: _safe_kb_ingest(task_id, payload),
-            name="kb-ingest",
-            daemon=True,
-        ).start()
+        from .eager_pool import submit as _eager_submit
+
+        _eager_submit(_safe_kb_ingest, "kb-ingest", task_id, payload)
         return task_id
     async_result = run_kb_ingest_task.delay(payload)
     task_manager.register_celery_task(async_result.id, "kb_ingest")
@@ -1973,11 +1969,9 @@ def dispatch_wiki_compile(source_id: str) -> str | None:
         if settings.celery_eager:
             task_id = f"wikicompile-{uuid.uuid4().hex[:16]}"
             task_manager.register_celery_task(task_id, "wiki_compile")
-            threading.Thread(
-                target=lambda: _safe_wiki_compile(task_id, payload),
-                name="wiki-compile",
-                daemon=True,
-            ).start()
+            from .eager_pool import submit as _eager_submit
+
+            _eager_submit(_safe_wiki_compile, "wiki-compile", task_id, payload)
             return task_id
         async_result = run_wiki_compile_task.delay(payload)
         task_manager.register_celery_task(async_result.id, "wiki_compile")
@@ -2105,11 +2099,9 @@ def dispatch_screening_job(
         if get_settings().celery_eager:
             task_id = f"screening-{uuid.uuid4().hex[:16]}"
             task_manager.register_celery_task(task_id, "screening")
-            threading.Thread(
-                target=lambda: _safe_screening(task_id, payload),
-                name="screening",
-                daemon=True,
-            ).start()
+            from .eager_pool import submit as _eager_submit
+
+            _eager_submit(_safe_screening, "screening", task_id, payload)
             return task_id
         async_result = run_screening_task.delay(payload)
         task_manager.register_celery_task(async_result.id, "screening")

@@ -36,7 +36,6 @@ therefore start a daemon thread and return 202 immediately — same contract as
 from __future__ import annotations
 
 import socket
-import threading
 import uuid
 from urllib.parse import urlparse
 
@@ -308,7 +307,7 @@ def submit(
 def _submit_eager_background(
     task, payload: dict, kind: str, *, task_id: str | None = None
 ) -> str:
-    """Run the Celery task body in a daemon thread; return a client task_id now.
+    """Run the Celery task body on the shared bounded eager pool; return a client task_id now.
 
     Under ``task_always_eager``, ``task.delay()`` blocks until the job finishes.
     HTTP handlers must not wait on that — return 202 and let SSE/status poll
@@ -317,6 +316,8 @@ def _submit_eager_background(
     Caller should register the task id (PENDING) before invoking this so a
     fast thread cannot race ahead of registration.
     """
+    from ..worker.eager_pool import submit as _eager_submit
+
     task_id = task_id or str(uuid.uuid4())
 
     def _run() -> None:
@@ -327,11 +328,7 @@ def _submit_eager_background(
         except Exception:
             logger.exception("eager background task failed kind={} id={}", kind, task_id)
 
-    threading.Thread(
-        target=_run,
-        name=f"eager-{kind}-{task_id[:8]}",
-        daemon=True,
-    ).start()
+    _eager_submit(_run, name=f"eager-{kind}-{task_id[:8]}")
     return task_id
 
 
