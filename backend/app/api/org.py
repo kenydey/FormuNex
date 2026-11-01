@@ -103,19 +103,26 @@ def _compute_org_dashboard() -> dict:
         ).all()
         by_domain = {d: c for d, c in domain_counts if d}
 
+        # Stage 3 / SR-025: one latest-50 query serves all metrics (the old
+        # code ran this identical query once per metric), and the metric
+        # keys come from that same window — a metric absent from the window
+        # can never produce an entry (best_val stays None), so the full
+        # measured-column scan is pure overhead. Full SQL JSON aggregation
+        # is deliberately not used: json_each (SQLite) vs jsonb_each (PG)
+        # would split the dialect, and D-9 names PostgreSQL the target.
         top_performers = []
-        all_measured = session.execute(select(ExperimentRow.measured)).scalars().all()
+        window = session.execute(
+            select(ExperimentRow, ProjectRow)
+            .join(ProjectRow, ExperimentRow.project_id == ProjectRow.id, isouter=True)
+            .where(ExperimentRow.measured != None)
+            .order_by(ExperimentRow.created_at.desc()).limit(50)
+        ).all()
         metric_keys = set()
-        for m in all_measured:
-            if isinstance(m, dict):
-                metric_keys.update(m.keys())
+        for exp, _proj in window:
+            if isinstance(exp.measured, dict):
+                metric_keys.update(exp.measured.keys())
         for metric in list(metric_keys)[:5]:
-            best = session.execute(
-                select(ExperimentRow, ProjectRow)
-                .join(ProjectRow, ExperimentRow.project_id == ProjectRow.id, isouter=True)
-                .where(ExperimentRow.measured != None)
-                .order_by(ExperimentRow.created_at.desc()).limit(50)
-            ).all()
+            best = window
             best_exp, best_proj, best_val = None, None, None
             for exp, proj in best:
                 if exp.measured and metric in exp.measured:
@@ -146,13 +153,17 @@ def _compute_org_dashboard() -> dict:
             for name, data in ingredient_counts.items()
         ], key=lambda x: x["experiment_count"], reverse=True)[:20]
 
-        campaigns = session.execute(select(Campaign)).scalars().all()
-        converged_count = sum(1 for c in campaigns if c.loop_history and any(r.get("converged") for r in c.loop_history))
+        # Stage 3 / SR-025: only the loop_history column is read (the old
+        # code loaded full Campaign rows); the convergence walk itself
+        # stays in Python — JSON-array traversal is dialect-specific.
+        histories = session.execute(select(Campaign.loop_history)).scalars().all()
+        campaigns = [h for h in histories]
+        converged_count = sum(1 for h in campaigns if h and any(r.get("converged") for r in h))
         convergence_rate = round(converged_count / len(campaigns), 2) if campaigns else 0.0
         avg_rounds = 0.0
         if campaigns:
-            total_rounds = sum(len(c.loop_history) for c in campaigns if c.loop_history)
-            total_with_history = sum(1 for c in campaigns if c.loop_history)
+            total_rounds = sum(len(h) for h in campaigns if h)
+            total_with_history = sum(1 for h in campaigns if h)
             avg_rounds = round(total_rounds / total_with_history, 1) if total_with_history else 0.0
 
         week_ago = utcnow() - timedelta(days=7)
