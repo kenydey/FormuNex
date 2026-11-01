@@ -13,6 +13,7 @@ Follows the 0075 convention: every step checks first and is safe to repeat.
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 from sqlalchemy import Column, DateTime, String
 from sqlalchemy import inspect as sa_inspect
 
@@ -52,6 +53,17 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     existing = _columns()
+    # Stage 2 / SR-038 (0080 pattern): dropping `status` would silently
+    # re-approve draft/rejected rows on the next upgrade — the re-added
+    # column's server_default is "approved". Refuse while any row is not
+    # approved instead of destroying that distinction. Upgrade untouched.
+    if "status" in existing:
+        non_approved = op.get_bind().execute(sa.text(
+            f"SELECT COUNT(*) FROM {_TABLE} WHERE status IS NOT NULL AND status != 'approved'")).scalar()
+        if non_approved:
+            raise RuntimeError(
+                f"0076 downgrade refused: {non_approved} release row(s) are not 'approved'; "
+                "dropping the status column would re-approve them on the next upgrade")
     for col in ("approved_at", "approved_by", "status"):
         if col in existing:
             op.drop_column(_TABLE, col)

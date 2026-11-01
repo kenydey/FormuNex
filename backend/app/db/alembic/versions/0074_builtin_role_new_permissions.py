@@ -99,14 +99,40 @@ def upgrade() -> None:
         _store_permissions(bind, code, perms)
 
 
+def _frozen_permissions() -> dict[str, set[str]]:
+    """0051's frozen role copy is the expected post-0074 state: W0
+    updated it in place, so it already carries the two new strings
+    (and 0066's knowledge.read for sys_admin)."""
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "m0051_for_0074_guard", Path(__file__).resolve().parent / "0051_identity_rbac.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return {code: set(perms) for code, _zh, _en, perms in mod._ROLES}
+
+
 def downgrade() -> None:
     if not _has_table(_TABLE):
         return
     bind = op.get_bind()
+    # Stage 2 / SR-038 (0080 pattern): the upgrade cannot tell a string
+    # it added from the same string an admin granted manually (a manual
+    # grant predating 0074 is indistinguishable once present). Stripping
+    # blindly would destroy such grants, so refuse whenever a built-in
+    # row no longer matches the frozen post-upgrade state — i.e. someone
+    # edited it by hand since. Untouched rows strip exactly as before.
+    # Upgrade untouched.
+    frozen = _frozen_permissions()
     for code in _DELTA:
         perms = _load_permissions(bind, code)
         if perms is None:
             continue
+        if set(perms) != frozen.get(code, set()):
+            raise RuntimeError(
+                f"0074 downgrade refused: role '{code}' permissions were manually changed "
+                "after the upgrade; stripping the two W0 strings would destroy manual grants")
         stripped = [p for p in perms if p not in _ADDED]
         if len(stripped) == len(perms):
             continue

@@ -28,5 +28,17 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     cols = {c["name"] for c in inspect(bind).get_columns("products")}
+    # Stage 2 / SR-038 (0080 pattern): dropping the column loses the
+    # restore target for archived products (re-upgrade yields NULL and
+    # restore falls back to "rd" instead of the true prior state).
+    # Refuse while any product still carries a restore target.
+    # Upgrade untouched.
     if "archived_from_state" in cols:
+        n = bind.execute(sa.text(
+            "SELECT COUNT(*) FROM products WHERE archived_from_state IS NOT NULL "
+            "AND archived_from_state != ''")).scalar()
+        if n:
+            raise RuntimeError(
+                f"0079 downgrade refused: {n} product(s) still carry an archived_from_state; "
+                "dropping the column would lose their restore target")
         op.drop_column("products", "archived_from_state")
