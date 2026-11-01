@@ -51,11 +51,20 @@ def render_docx(content: dict, template: bytes | None = None) -> bytes:
     if template is not None:
         try:
             from docxtpl import DocxTemplate
+            from jinja2.sandbox import SandboxedEnvironment
         except ImportError as exc:
             raise MissingRenderDependency("docxtpl") from exc
 
+        # Stage 2 / SR-008: docxtpl's default Jinja environment is NOT
+        # sandboxed — verified in-sandbox: a template's
+        # ``{{ x.__class__.__name__ }}`` rendered "str", so a template
+        # uploaded by a company admin (or smuggled into one) could reach
+        # Python internals (SSTI). Render every template in a
+        # SandboxedEnvironment: normal tags, loops and filters keep
+        # working; dunder / private attribute access raises SecurityError
+        # instead of executing.
         tpl = DocxTemplate(io.BytesIO(template))
-        tpl.render({**content, "text": _text})
+        tpl.render({**content, "text": _text}, jinja_env=SandboxedEnvironment())
         out = io.BytesIO()
         tpl.save(out)
         return out.getvalue()
