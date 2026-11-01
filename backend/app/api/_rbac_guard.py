@@ -182,6 +182,10 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
     # Identity — user administration.
     (re.compile(r"^/api/identity/users$"), "admin.users"),
     (re.compile(r"^/api/identity/users/[^/]+/roles$"), "admin.users"),
+    # Stage 2 / SR-043: activation + session revocation (user.require in
+    # identity.py; registered here so the audit counts them covered).
+    (re.compile(r"^/api/identity/users/[^/]+/active$"), "admin.users"),
+    (re.compile(r"^/api/identity/users/[^/]+/sessions/revoke$"), "admin.users"),
     # PLM label-templates — plm.document.write OR admin.templates (OR logic).
     (re.compile(r"^/api/plm/label-templates$"), "plm.document.write OR admin.templates"),
     # 整合方案 P0 — endpoint-enforced (the endpoint itself calls require()):
@@ -200,6 +204,15 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
     # MCP approval decision — the endpoint itself enforces current_user plus
     # session/project attribution (admin.connectors for global scope).
     (re.compile(r"^/api/mcp/approvals/[^/]+/decide$"), "mcp approval (current_user + attribution)"),
+    # Stage 2 / SR-041: policy management (admin.connectors via
+    # _require_admin in mcp_approvals.py).
+    (re.compile(r"^/api/mcp/approvals/policies(/[^/]+/[^/]+/[^/]+)?$"), "admin.connectors"),
+    (re.compile(r"^/api/mcp/approvals/policies/backfill-expiry$"), "admin.connectors"),
+    # MCP tool call — endpoint-enforced (user.require knowledge.read in
+    # connectors.py). It stays in POLICY_EXEMPT as an admin_guard
+    # exemption note, but its coverage comes from this entry: an
+    # exemption is never coverage (stage 2 audit rule).
+    (re.compile(r"^/api/connectors/mcp/call$"), "knowledge.read"),
     # MCP session grant / revoke — per-chat personal actions; the endpoint
     # itself enforces current_user plus owner-or-admin.
     (re.compile(r"^/api/connectors/mcp/[^/]+/approve-session$"), "mcp session grant (current_user + owner)"),
@@ -209,6 +222,10 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
 # Endpoint-enforced sensitive reads (the endpoint itself calls require()).
 ENDPOINT_SENSITIVE_READS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/plm/audit$"), "audit.read"),
+    # Stage 2 / SR-041: policy list is admin-only (_require_admin).
+    (re.compile(r"^/api/mcp/approvals/policies$"), "admin.connectors"),
+    # MCP pending list: personal (current_user + attribution filter).
+    (re.compile(r"^/api/mcp/approvals/pending$"), "mcp approval (current_user + attribution)"),
 ]
 
 # (path pattern, reason). Deliberately no permission — verified by the audit
