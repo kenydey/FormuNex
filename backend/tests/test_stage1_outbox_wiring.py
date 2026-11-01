@@ -32,6 +32,13 @@ WIRED = [
     ("search", "run_search_task"),
     ("topic_sweep", "run_topic_sweep"),
     ("wiki_storm_report", "run_wiki_storm_report_task"),
+    # Stage 3 batch 2 (SR-026/063): the async endpoints' operations.
+    ("url_ingest", "run_url_ingest_task"),
+    ("task_ingest", "run_task_ingest_task"),
+    ("evidence_ingest", "run_evidence_ingest_task"),
+    ("document_generate", "run_document_generate_task"),
+    ("wiki_lint_run", "run_wiki_lint_task"),
+    ("wiki_lint_sweep", "run_wiki_lint_sweep_task"),
 ]
 
 
