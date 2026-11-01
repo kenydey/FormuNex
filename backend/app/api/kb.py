@@ -816,16 +816,20 @@ class IngestEvidenceResponse(BaseModel):
 
 @router.post(
     "/ingest-evidence",
-    response_model=IngestEvidenceResponse,
     summary="Evidence 一键入库全文（P3.2）",
 )
-def ingest_evidence(body: IngestEvidenceRequest) -> IngestEvidenceResponse:
+def ingest_evidence(body: IngestEvidenceRequest):
     """Fetch + persist fulltext for one Evidence row (user-clicked).
 
+    Stage 3 / SR-026: 202 + task_id, results via /api/tasks poll. The
+    fetch used to run inline (same 502-but-done shape as /ingest/url).
     Independent of 「入库图谱」. Does **not** confirm embodiment drafts or
     write the production formula pool. Idempotent via origin_url aliases.
+    The kb_enabled guard stays sync (409).
     """
-    from ..services import kb_ingest
+    from ..worker.tasks import run_evidence_ingest_task
+    from ._dispatch import submit
+    from ._idempotency import enqueue_outbox
 
     if not kb_index.kb_enabled():
         raise HTTPException(status_code=409, detail="知识库 v2 未启用（FORMUNEX_KB_V2_ENABLED）")
@@ -843,8 +847,9 @@ def ingest_evidence(body: IngestEvidenceRequest) -> IngestEvidenceResponse:
         oa_pdf_url=body.oa_pdf_url,
         is_oa=body.is_oa,
     )
-    result = kb_ingest.ingest_single_evidence(ev, project_id=body.project_id)
-    return IngestEvidenceResponse(**result)
+    payload = {"evidence": ev.model_dump(mode="json"), "project_id": body.project_id}
+    return submit(run_evidence_ingest_task, payload, "evidence_ingest",
+                  outbox_id=enqueue_outbox("evidence_ingest", payload))
 
 
 @router.post("/ingest", response_model=IngestResponse, summary="全文入库（幂等）", include_in_schema=False)

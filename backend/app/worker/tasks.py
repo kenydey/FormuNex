@@ -2321,3 +2321,37 @@ def _task_ingest_impl(task_id: str, payload: dict) -> dict:
 @celery_app.task(bind=True, base=_OutboxTask, outbox_operation="task_ingest", name="formunex.task_ingest")
 def run_task_ingest_task(self, payload: dict) -> dict:
     return _task_ingest_impl(self.request.id, payload)
+
+
+def _evidence_ingest_impl(task_id: str, payload: dict) -> dict:
+    """Stage 3 / SR-026: ``POST /kb/ingest-evidence`` worker body (was inline).
+
+    A business-level non-OK outcome (unsupported kind, already indexed)
+    is a *completed* task carrying the same dict the old sync route
+    returned — only exceptions become failed tasks. The kb_enabled
+    guard stays sync in the route (409).
+    """
+    from ..domain.schemas import Evidence
+    from ..services import kb_ingest
+
+    try:
+        publish_progress(
+            task_id, TaskProgressStatus.RUNNING, stage="ingest",
+            message="抓取全文中…", progress=0.02,
+        )
+        ev = Evidence(**(payload.get("evidence") or {}))
+        result = kb_ingest.ingest_single_evidence(ev, project_id=payload.get("project_id"))
+    except Exception as exc:
+        logger.exception("evidence ingest failed")
+        err = {"error": str(exc)}
+        persist_result(task_id, err, failed=True, message=str(exc))
+        _persist_terminal(task_id, "evidence_ingest", err, failed=True, message=str(exc))
+        raise
+    _persist_terminal(task_id, "evidence_ingest", result, message="入库完成")
+    persist_result(task_id, result, failed=False)
+    return result
+
+
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="evidence_ingest", name="formunex.evidence_ingest")
+def run_evidence_ingest_task(self, payload: dict) -> dict:
+    return _evidence_ingest_impl(self.request.id, payload)

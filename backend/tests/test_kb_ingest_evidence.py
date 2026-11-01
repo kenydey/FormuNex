@@ -20,6 +20,20 @@ from app.services.patent_ids import (
 LONG_TEXT = "# 防腐蚀专利\n\n" + "环氧树脂与磷酸锌协同防腐蚀机理研究。" * 60
 
 
+def _wait(client, task_id, timeout=30):
+    # Stage 3 / SR-026: /ingest-evidence is 202 + poll now.
+    import time
+
+    deadline = time.monotonic() + timeout
+    task: dict = {}
+    while time.monotonic() < deadline:
+        task = client.get(f"/api/tasks/{task_id}").json()
+        if task.get("state") in ("completed", "failed"):
+            return task
+        time.sleep(0.1)
+    return task
+
+
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
     monkeypatch.setenv("FORMUNEX_API_AUTH_ENABLED", "false")
@@ -117,8 +131,10 @@ def test_ingest_evidence_mock_success_and_skip(stores, monkeypatch):
             "url": "https://patents.google.com/patent/CN104789083B",
         },
     )
-    assert r1.status_code == 200, r1.text
-    body = r1.json()
+    assert r1.status_code == 202, r1.text
+    task1 = _wait(client, r1.json()["task_id"])
+    assert task1.get("state") == "completed", task1
+    body = task1["result"]
     assert body["ok"] is True
     assert body["status"] == "indexed"
     assert body["source_id"]
@@ -138,8 +154,10 @@ def test_ingest_evidence_mock_success_and_skip(stores, monkeypatch):
             "source": "surechembl",
         },
     )
-    assert r2.status_code == 200
-    body2 = r2.json()
+    assert r2.status_code == 202
+    task2 = _wait(client, r2.json()["task_id"])
+    assert task2.get("state") == "completed", task2
+    body2 = task2["result"]
     assert body2["ok"] is True
     assert body2["status"] == "skipped"
     assert body2["source_id"] == sid
@@ -153,8 +171,11 @@ def test_ingest_evidence_unsupported():
         "/api/kb/ingest-evidence",
         json={"identifier": "just a title", "source": "unknown-source-xyz"},
     )
-    assert r.status_code == 200
-    body = r.json()
+    assert r.status_code == 202
+    task = _wait(client, r.json()["task_id"])
+    # Business-level non-OK stays a completed task carrying the old body.
+    assert task.get("state") == "completed", task
+    body = task["result"]
     assert body["ok"] is False
     assert body["status"] == "failed"
     assert "不支持" in (body["reason"] or "")

@@ -116,3 +116,20 @@ def test_task_ingest_resolve_error_is_failed_task_not_502(client, monkeypatch):
 def test_task_ingest_malformed_web_identifier_stays_sync_400(client):
     r = client.post("/api/ingest/task", json={"doc_type": "web", "identifier": "not-a-url"})
     assert r.status_code == 400
+
+
+def test_evidence_ingest_crash_is_failed_task(client, monkeypatch):
+    # Stage 3 / SR-026 (3-3b): an unexpected crash in the worker surfaces
+    # as a failed task, not a lost request.
+    import app.services.kb_ingest as kb_ingest_mod
+
+    def boom(ev, **kw):
+        raise RuntimeError("store exploded")
+
+    monkeypatch.setattr(kb_ingest_mod, "ingest_single_evidence", boom)
+    r = client.post("/api/kb/ingest-evidence",
+                    json={"identifier": "CN104789083B", "source": "surechembl"})
+    assert r.status_code == 202, r.text
+    task = _wait(client, r.json()["task_id"])
+    assert task.get("state") == "failed", task
+    assert "store exploded" in (task.get("message") or str(task.get("result")))
