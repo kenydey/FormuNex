@@ -144,6 +144,7 @@ def make_engine(db_url: str) -> Engine:
     _ensure_measurement_lab_columns(engine)
     _ensure_audit_log_guard(engine)
     _ensure_doe_cycle_pause_table(engine)
+    _ensure_parse_shards_columns(engine)
     return engine
 
 
@@ -536,6 +537,28 @@ def _ensure_conflict_remote_units_column(engine: Engine) -> None:
     except Exception as exc:  # a concurrent starter may have added it first
         if "duplicate column" not in str(exc).lower():
             raise
+
+
+def _ensure_parse_shards_columns(engine: Engine) -> None:
+    """``parse_shards.parser_version`` + ``updated_at`` index (alembic 0088,
+    stage 2 / SR-037): nullable column, no backfill — legacy rows are
+    cache misses by definition, and the sweep removes them by age."""
+    from sqlalchemy import inspect, text
+
+    if "parse_shards" not in inspect(engine).get_table_names():
+        return
+    if "parser_version" not in {c["name"] for c in inspect(engine).get_columns("parse_shards")}:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE "parse_shards" ADD COLUMN parser_version VARCHAR(16)'))
+        except Exception as exc:  # a concurrent starter may have added it first
+            if "duplicate column" not in str(exc).lower():
+                raise
+    if not any(ix["name"] == "ix_parse_shards_updated_at"
+               for ix in inspect(engine).get_indexes("parse_shards")):
+        with engine.begin() as conn:
+            conn.execute(text('CREATE INDEX IF NOT EXISTS ix_parse_shards_updated_at '
+                              'ON "parse_shards" (updated_at)'))
 
 
 def _ensure_outbox_task_id_column(engine: Engine) -> None:

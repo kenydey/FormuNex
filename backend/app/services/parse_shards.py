@@ -9,17 +9,33 @@ Fail-open by contract (same as ``persist_structured``): any DB error —
 missing table on a database that has not run migration 0075 yet, a locked
 database, an unreachable engine — behaves as a cache miss and only logs a
 warning. A cache bug must never fail a parse.
+
+Stage 2 / SR-037: the SQL is dialect-neutral (SQLAlchemy ``text()`` with
+named parameters; no ``?`` placeholders, no ``INSERT OR REPLACE``), so
+the cache works on PostgreSQL exactly as on SQLite. ``updated_at`` is
+written as a naive-UTC datetime — the same convention as every other
+database column (``app.clock.utcnow``) — instead of an aware ISO string,
+so the stale sweep compares like with like. Each row carries a parser
+version: shards written by an older shard format are cache misses, never
+resumed into a merge built by a newer one.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
 _TABLE = "parse_shards"
+
+# Bump when the cached shard format changes (markdown layout, extras_json
+# schema, page-numbering convention). Rows without a matching version —
+# including legacy rows written before the column existed — are misses.
+PARSER_VERSION = "1"
 
 
 def content_sha256(content: bytes) -> str:
@@ -33,19 +49,27 @@ def _engine():
 
 
 def get_shard(content_sha: str, shard_index: int) -> dict | None:
-    """A cached completed shard, or None on a miss or any DB error."""
+    """A cached completed shard, or None on a miss or any DB error.
+
+    A row whose parser version differs from ``PARSER_VERSION`` is a
+    miss: it is never merged into a parse built by another format.
+    """
     try:
         engine = _engine()
         with engine.connect() as conn:
-            row = conn.exec_driver_sql(
-                f"SELECT page_start, page_end, parser, markdown, extras_json FROM {_TABLE} "
-                "WHERE content_sha256 = ? AND shard_index = ?",
-                (content_sha, shard_index),
+            row = conn.execute(
+                text(
+                    f"SELECT page_start, page_end, parser, markdown, extras_json, parser_version "
+                    f"FROM {_TABLE} WHERE content_sha256 = :sha AND shard_index = :idx"
+                ),
+                {"sha": content_sha, "idx": shard_index},
             ).first()
     except Exception as exc:  # noqa: BLE001 - fail-open cache
         logger.warning("parse_shards: cache read failed (fail-open): %s", exc)
         return None
     if row is None:
+        return None
+    if row[5] != PARSER_VERSION:
         return None
     return {
         "page_start": row[0],
@@ -53,6 +77,7 @@ def get_shard(content_sha: str, shard_index: int) -> dict | None:
         "parser": row[2],
         "markdown": row[3],
         "extras_json": row[4],
+        "parser_version": row[5],
     }
 
 
@@ -65,16 +90,31 @@ def put_shard(
     markdown: str,
     extras_json: str = "",
 ) -> bool:
-    """Cache a completed shard; False on any DB error (fail-open)."""
+    """Cache a completed shard; False on any DB error (fail-open).
+
+    The upsert is a DELETE-then-INSERT inside one transaction: it works
+    identically on SQLite and PostgreSQL, where ``INSERT OR REPLACE``
+    does not exist.
+    """
     try:
+        from ..clock import utcnow
+
         engine = _engine()
-        now = datetime.now(timezone.utc).isoformat()
         with engine.begin() as conn:
-            conn.exec_driver_sql(
-                f"INSERT OR REPLACE INTO {_TABLE} "
-                "(content_sha256, shard_index, page_start, page_end, parser, markdown, extras_json, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (content_sha, shard_index, page_start, page_end, parser, markdown, extras_json, now),
+            conn.execute(
+                text(f"DELETE FROM {_TABLE} WHERE content_sha256 = :sha AND shard_index = :idx"),
+                {"sha": content_sha, "idx": shard_index},
+            )
+            conn.execute(
+                text(
+                    f"INSERT INTO {_TABLE} "
+                    "(content_sha256, shard_index, page_start, page_end, parser, markdown, "
+                    "extras_json, parser_version, updated_at) "
+                    "VALUES (:sha, :idx, :ps, :pe, :parser, :md, :extras, :ver, :now)"
+                ),
+                {"sha": content_sha, "idx": shard_index, "ps": page_start, "pe": page_end,
+                 "parser": parser, "md": markdown, "extras": extras_json,
+                 "ver": PARSER_VERSION, "now": utcnow()},
             )
     except Exception as exc:  # noqa: BLE001 - fail-open cache
         logger.warning("parse_shards: cache write failed (fail-open): %s", exc)
@@ -87,9 +127,9 @@ def delete_for_content(content_sha: str) -> None:
     try:
         engine = _engine()
         with engine.begin() as conn:
-            conn.exec_driver_sql(
-                f"DELETE FROM {_TABLE} WHERE content_sha256 = ?",
-                (content_sha,),
+            conn.execute(
+                text(f"DELETE FROM {_TABLE} WHERE content_sha256 = :sha"),
+                {"sha": content_sha},
             )
     except Exception as exc:  # noqa: BLE001 - fail-open cache
         logger.warning("parse_shards: cache delete failed (fail-open): %s", exc)
@@ -98,12 +138,14 @@ def delete_for_content(content_sha: str) -> None:
 def sweep_stale(stale_days: int) -> int:
     """Delete crash-residue rows older than ``stale_days``; returns the count."""
     try:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=stale_days)).isoformat()
+        from ..clock import utcnow
+
+        cutoff = utcnow() - timedelta(days=stale_days)
         engine = _engine()
         with engine.begin() as conn:
-            result = conn.exec_driver_sql(
-                f"DELETE FROM {_TABLE} WHERE updated_at < ?",
-                (cutoff,),
+            result = conn.execute(
+                text(f"DELETE FROM {_TABLE} WHERE updated_at < :cutoff"),
+                {"cutoff": cutoff},
             )
             return result.rowcount or 0
     except Exception as exc:  # noqa: BLE001 - fail-open cache

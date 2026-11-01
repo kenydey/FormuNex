@@ -1106,6 +1106,8 @@ class ParseShard(Base):
 
     __tablename__ = "parse_shards"
 
+    __table_args__ = (Index("ix_parse_shards_updated_at", "updated_at"),)
+
     content_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
     shard_index: Mapped[int] = mapped_column(Integer, primary_key=True)
     page_start: Mapped[int] = mapped_column(Integer)  # 1-based, inclusive
@@ -1116,4 +1118,7 @@ class ParseShard(Base):
     # formulas, page numbers already offset to global) so a resumed merge
     # does not lose them for cached shards. "" = none (fail-open).
     extras_json: Mapped[str] = mapped_column(Text, default="")
+    # Stage 2 / SR-037 (alembic 0088): shard-format version. NULL = written
+    # before the column existed, hence a cache miss, never a resume.
+    parser_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
