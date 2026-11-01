@@ -45,7 +45,7 @@ def test_doe_cycle_requires_requirement():
 
 
 def test_doe_cycle_broker_down_503(monkeypatch):
-    monkeypatch.setattr("app.api._dispatch.broker_reachable", lambda: False)
+    monkeypatch.setattr("app.services.dispatch.broker_reachable", lambda: False)
     monkeypatch.setattr("app.api.doe.enqueue_outbox", lambda op, payload: None)
     r = client.post("/api/doe/cycle", json=_body())
     assert r.status_code == 503

@@ -13,6 +13,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.api import _dispatch
+from app.services import dispatch as _dispatch_kernel
 from app.config import get_settings
 from app.db import dispatcher
 from app.db.database import default_session_factory
@@ -39,7 +40,7 @@ def test_broker_down_returns_none_without_touching_celery(monkeypatch):
     exception propagating into the sync response."""
     settings = get_settings()
     monkeypatch.setattr(settings, "celery_eager", False, raising=False)
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: False)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: False)
     monkeypatch.setattr(
         worker_tasks.run_loop_task, "apply_async",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not publish")),
@@ -51,7 +52,7 @@ def test_broker_down_returns_none_without_touching_celery(monkeypatch):
 def test_non_eager_dispatch_publishes_under_one_id_and_records_it(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "celery_eager", False, raising=False)
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
     published: dict = {}
     monkeypatch.setattr(
         worker_tasks.run_loop_task, "apply_async",
@@ -76,7 +77,7 @@ def test_eager_dispatch_registers_before_the_thread_starts(monkeypatch):
     monkeypatch.setattr(settings, "celery_eager", True, raising=False)
     started: dict = {}
     monkeypatch.setattr(
-        _dispatch, "_submit_eager_background",
+        _dispatch_kernel, "_submit_eager_background",
         lambda task, payload, kind, task_id=None: started.setdefault("task_id", task_id),
     )
     registered: list = []

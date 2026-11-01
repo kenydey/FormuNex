@@ -11,7 +11,7 @@ from app.services import ocsr
 
 
 def test_a_down_broker_answers_immediately_without_pinging(monkeypatch):
-    import app.api._dispatch as dispatch
+    import app.services.dispatch as dispatch
     import app.worker.celery_app as celery_module
 
     monkeypatch.setattr(dispatch, "broker_reachable", lambda: False)
@@ -27,7 +27,7 @@ def test_a_down_broker_answers_immediately_without_pinging(monkeypatch):
 
 
 def test_a_reachable_broker_still_looks_for_the_molscribe_worker(monkeypatch):
-    import app.api._dispatch as dispatch
+    import app.services.dispatch as dispatch
     import app.worker.celery_app as celery_module
 
     monkeypatch.setattr(dispatch, "broker_reachable", lambda: True)

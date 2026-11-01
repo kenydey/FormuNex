@@ -74,7 +74,7 @@ def test_inverse_requires_requirement():
 
 
 def test_inverse_broker_down_503(monkeypatch):
-    monkeypatch.setattr("app.api._dispatch.broker_reachable", lambda: False)
+    monkeypatch.setattr("app.services.dispatch.broker_reachable", lambda: False)
     monkeypatch.setattr("app.api.design.enqueue_outbox", lambda op, payload: None)
     r = client.post("/api/design/inverse", json=_body())
     assert r.status_code == 503

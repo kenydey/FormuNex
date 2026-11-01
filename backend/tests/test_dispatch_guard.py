@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import _dispatch
+from app.services import dispatch as _dispatch_kernel
 from app.main import app
 
 
@@ -23,7 +24,7 @@ def client() -> TestClient:
 
 @pytest.fixture()
 def broker_down(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: False)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: False)
 
 
 REQUIREMENT = {"domain": "anticorrosion_coating", "substrate": "carbon_steel"}
@@ -75,7 +76,7 @@ def test_submission_does_not_wait_for_celery_to_exhaust_its_retries(
         calls.append("delay")
         raise RuntimeError("Retry limit exceeded while trying to reconnect")
 
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: False)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: False)
     from app.worker import tasks
 
     monkeypatch.setattr(tasks.run_recommend_task, "delay", explode)
@@ -95,7 +96,7 @@ def test_dispatch_failure_after_a_passing_probe_is_still_503(
     # delay() path after a green probe.
     settings = get_settings()
     monkeypatch.setattr(settings, "celery_eager", False, raising=False)
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
     from app.worker import tasks
 
     def explode(*_args, **_kwargs):
@@ -139,7 +140,7 @@ def test_eager_slow_task_returns_202_within_one_second(
 
     settings = get_settings()
     monkeypatch.setattr(settings, "celery_eager", True, raising=False)
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
 
     def slow_apply(*, args=None, task_id=None, **_kwargs):
         time.sleep(12)
@@ -167,7 +168,7 @@ def test_dispatch_timeout_detail_does_not_blame_redis(
 
     settings = get_settings()
     monkeypatch.setattr(settings, "celery_eager", False, raising=False)
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
 
     def hang(_payload):
         import time
@@ -175,7 +176,7 @@ def test_dispatch_timeout_detail_does_not_blame_redis(
         time.sleep(30)
 
     monkeypatch.setattr(tasks.run_recommend_task, "delay", hang)
-    monkeypatch.setattr(_dispatch, "_delay_with_timeout", lambda *a, **k: (_ for _ in ()).throw(
+    monkeypatch.setattr(_dispatch_kernel, "_delay_with_timeout", lambda *a, **k: (_ for _ in ()).throw(
         _dispatch._DispatchTimeout("task.delay > 10.0s")
     ))
 

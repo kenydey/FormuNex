@@ -72,12 +72,13 @@ def test_install_endpoint_accepts_known_name_non_eager(monkeypatch):
             published["task_id"] = task_id
 
     from app.api import _dispatch
+    from app.services import dispatch as _dispatch_kernel
     from app.config import get_settings
     from app.worker import tasks as worker_tasks
 
     settings = get_settings()
     monkeypatch.setattr(settings, "celery_eager", False, raising=False)
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
     monkeypatch.setattr(
         worker_tasks.run_deps_install_task,
         "apply_async",

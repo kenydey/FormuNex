@@ -46,7 +46,7 @@ def metrics() -> dict:
 
     from sqlalchemy import func, select
 
-    from ..api._dispatch import broker_probe_failure_count, broker_reachable
+    from ..services.dispatch import broker_probe_failure_count, broker_reachable
     from ..db.database import default_session_factory
     from ..db.models import TaskOutbox
     from ..db.outbox_store import list_outbox_rows

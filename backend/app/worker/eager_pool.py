@@ -1,14 +1,16 @@
 """Process-level bounded pool for eager-mode background work.
 
 Stage 3 / SR-066 (3-13): eager mode used to spawn one unbounded daemon
-thread per submission — ``_dispatch._submit_eager_background`` plus the
-four ``dispatch_*`` eager branches in ``tasks.py``. A burst of uploads,
-KB ingests, wiki compiles or screenings could therefore grow the thread
-count without bound. All five sites now submit here instead.
+thread per submission — the dispatch kernel's
+``_submit_eager_background`` plus the four ``dispatch_*`` eager branches
+in ``tasks.py``. A burst of uploads, KB ingests, wiki compiles or
+screenings could therefore grow the thread count without bound. All five
+sites now submit here instead.
 
-The pool is deliberately zero-dependency (stdlib only): both the API
-layer (``app.api._dispatch``) and the worker layer (``app.worker.tasks``)
-import it, and importing either of those back would close a cycle.
+The pool is deliberately zero-dependency (stdlib only): both the service
+layer (``app.services.dispatch``) and the worker layer
+(``app.worker.tasks``) import it, and importing either of those back
+would close a cycle.
 
 Bounds: the *thread count* is bounded (``MAX_WORKERS``); the work queue
 is not — a burst queues instead of spawning. That is the intended

@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.api import _dispatch
+from app.services import dispatch as _dispatch_kernel
 from app.api._idempotency import enqueue_outbox
 from app.config import get_settings
 from app.db.database import default_session_factory
@@ -38,7 +39,7 @@ def non_eager(monkeypatch):
 def test_broker_down_503_claims_the_id_and_the_row_keeps_it(monkeypatch, non_eager):
     """Probe fails: the 503 header names the id, and the outbox row already
     carries it, so startup recovery replays exactly that id."""
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: False)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: False)
     payload = {"query": "w1-10-claim-probe", "source_types": []}
     outbox_id = enqueue_outbox("search", payload)
     assert outbox_id
@@ -56,12 +57,12 @@ def test_broker_down_503_claims_the_id_and_the_row_keeps_it(monkeypatch, non_eag
 def test_producer_timeout_503_claims_the_same_id(monkeypatch, non_eager):
     """Producer timeout (the orphan window): the 503 still claims the id
     the abandoned thread may publish under."""
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
 
     def _boom(task, payload, task_id=None):
         raise _dispatch._DispatchTimeout("task.delay > 10.0s")
 
-    monkeypatch.setattr(_dispatch, "_delay_with_timeout", _boom)
+    monkeypatch.setattr(_dispatch_kernel, "_delay_with_timeout", _boom)
     payload = {"query": "w1-10-claim-timeout", "source_types": []}
     outbox_id = enqueue_outbox("search", payload)
     with pytest.raises(HTTPException) as excinfo:
@@ -76,7 +77,7 @@ def test_producer_timeout_503_claims_the_same_id(monkeypatch, non_eager):
 def test_submit_propagates_the_claim_header(monkeypatch, non_eager):
     """The HTTP wrapper adds nothing and drops nothing: the 503 a client
     actually sees carries the claim header."""
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: False)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: False)
     with pytest.raises(HTTPException) as excinfo:
         _dispatch.submit(worker_tasks.run_search_task, {"query": "x"}, "search")
     assert excinfo.value.status_code == 503

@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import _dispatch
+from app.services import dispatch as _dispatch_kernel
 from app.config import get_settings
 from app.main import app
 
@@ -141,7 +142,7 @@ def client() -> TestClient:
 
 
 def test_detailed_is_degraded_when_the_broker_is_down(client, monkeypatch):
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: False)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: False)
     body = client.get("/health/detailed").json()
     assert body["status"] == "degraded"
     assert body["task_broker"]["reachable"] is False
@@ -152,7 +153,7 @@ def test_detailed_is_degraded_when_the_broker_is_down(client, monkeypatch):
 
 
 def test_detailed_is_ok_when_broker_and_parsers_are_up(client, monkeypatch):
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
     monkeypatch.setattr("app.services.parsing.format_availability", lambda: {"pdf": True})
     body = client.get("/health/detailed").json()
     assert body["task_broker"]["reachable"] is True
@@ -163,7 +164,7 @@ def test_detailed_is_ok_when_broker_and_parsers_are_up(client, monkeypatch):
 def test_detailed_is_degraded_when_the_pdf_parser_is_missing(client, monkeypatch):
     """The old detailed endpoint reported ok through a missing parser; the
     shared formula must not."""
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
     monkeypatch.setattr("app.services.parsing.format_availability", lambda: {})
     body = client.get("/health/detailed").json()
     assert body["status"] == "degraded"

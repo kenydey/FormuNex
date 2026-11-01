@@ -293,7 +293,8 @@ def _start_loop_task(
 ) -> str | None:
     """Fire-and-forget closed-loop task; returns task_id for SSE tracking.
 
-    W1-10 ②: routed through ``_dispatch.dispatch_task`` like every other
+    W1-10 ②: routed through the dispatch kernel
+    (``services.dispatch.dispatch_task_kernel``) like every other
     submission instead of calling ``.delay()`` directly, so a dead broker
     yields an explicit dispatch failure (and the sync response can say the
     loop did not start) instead of a Celery exception failing the whole
@@ -302,7 +303,7 @@ def _start_loop_task(
     on dispatch failure; the caller turns that into a "loop not started"
     message — the sync itself already succeeded and must not fail for it.
     """
-    from ..api._dispatch import dispatch_task
+    from .dispatch import dispatch_task_kernel as dispatch_task
     from ..api._idempotency import enqueue_outbox
     from ..worker.tasks import run_loop_task, task_manager
 
@@ -335,9 +336,10 @@ def _start_loop_task(
     try:
         task_id = dispatch_task(run_loop_task, payload, "loop", outbox_id=outbox_id)
     except Exception as exc:
-        # dispatch_task already maps probe/publish failures to 503; the loop
-        # is fire-and-forget, so log and report "not started", never raise
-        # into the sync endpoint that already saved its results.
+        # dispatch_task_kernel already maps probe/publish failures to
+        # DispatchUnavailable; the loop is fire-and-forget, so log and
+        # report "not started", never raise into the sync endpoint that
+        # already saved its results.
         logger.warning("workbench loop dispatch failed: %s", exc)
         return None
     task_manager.register_celery_task(task_id, "loop")

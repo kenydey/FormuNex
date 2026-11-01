@@ -51,7 +51,7 @@ def client(tmp_path, monkeypatch):
     # a daemon thread: one minimal inverse-design request ran for 160 s and was still going while the following test
     # modules ran — in CI it scored candidates through test_optimizer_lab_seeding's spy and failed that test. Job
     # bodies have their own tests; here the dispatcher answers 202 and does not run them.
-    import app.api._dispatch as dispatch
+    import app.services.dispatch as dispatch
 
     monkeypatch.setattr(
         dispatch, "_submit_eager_background", lambda task, payload, kind, *, task_id=None: task_id or str(uuid.uuid4())

@@ -113,10 +113,10 @@ def maybe_schedule_summaries(source_id: str, *, visited_by_stage2: bool = False)
         # stays on default — inventing a queue no worker consumes would
         # silently drop it. Async execution is what keeps it off the request.
         from ...worker.tasks import run_toc_summaries_task
-        from ...api import _dispatch
+        from ..dispatch import dispatch_task_kernel
 
-        _dispatch.submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries")
-    except Exception as exc:  # broker down (503) etc: back to "none", the next qualifying visit retries
+        dispatch_task_kernel(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries")
+    except Exception as exc:  # broker down (DispatchUnavailable) etc: back to "none", the next qualifying visit retries
         log.warning("pageindex: summary dispatch failed for %s: %s", source_id, exc)
         store.set_summaries_status(source_id, STATUS_NONE)
         return False

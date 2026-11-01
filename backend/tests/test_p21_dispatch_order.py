@@ -15,6 +15,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import _dispatch
+from app.services import dispatch as _dispatch_kernel
 
 
 class _FakeTask:
@@ -36,13 +37,13 @@ class _FakeTask:
 @pytest.fixture()
 def events(monkeypatch):
     events: list = []
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
 
     def record(outbox_id, task_id):
         events.append(("record", outbox_id, task_id))
         return True
 
-    monkeypatch.setattr(_dispatch, "_record_outbox_task_id", record)
+    monkeypatch.setattr(_dispatch_kernel, "_record_outbox_task_id", record)
     return events
 
 
@@ -67,7 +68,7 @@ def test_publish_failure_still_leaves_the_recorded_id(monkeypatch, events):
     def boom(*_args, **_kwargs):
         raise RuntimeError("broker died mid-publish")
 
-    monkeypatch.setattr(_dispatch, "_delay_with_timeout", boom)
+    monkeypatch.setattr(_dispatch_kernel, "_delay_with_timeout", boom)
     with pytest.raises(HTTPException) as exc_info:
         _dispatch.submit(_FakeTask(events), {"k": "v"}, "doe_cycle", outbox_id="row-1")
     assert exc_info.value.status_code == 503

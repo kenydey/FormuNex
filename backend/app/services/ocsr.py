@@ -202,7 +202,7 @@ def _molscribe_worker_alive() -> bool:
     try:
         # With the broker down, ``control.ping`` spends 6–8 s in kombu's connection retries before it
         # gives up — on every poll of the settings panel. A plain TCP check settles that in milliseconds.
-        from ..api._dispatch import broker_reachable
+        from .dispatch import broker_reachable
 
         if not broker_reachable():
             alive = False

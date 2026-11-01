@@ -608,7 +608,7 @@ def _probe_health() -> dict:
     # submitted through Celery, so an unreachable broker breaks all of them
     # while the process keeps answering requests. Reporting only the database
     # let that outage look healthy from the outside.
-    from .api._dispatch import broker_reachable
+    from .services.dispatch import broker_reachable
 
     broker_ok = broker_reachable()
 
@@ -742,7 +742,7 @@ def health_detailed() -> dict:
     # W1-10 ④: same degraded formula as /health. Detailed used to ignore the
     # broker and the parsers entirely, so a broker outage or a missing PDF
     # parser still reported ok here while /health said degraded.
-    from .api._dispatch import broker_reachable
+    from .services.dispatch import broker_reachable
 
     broker_ok = broker_reachable()
 

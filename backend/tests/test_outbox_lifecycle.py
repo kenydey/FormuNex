@@ -572,15 +572,16 @@ def test_submit_records_the_celery_id_it_hands_out_via_the_broker(db, monkeypatc
     from types import SimpleNamespace
 
     from app.api import _dispatch
+    from app.services import dispatch as _dispatch_kernel
     from app.config import get_settings
 
     monkeypatch.setenv("FORMUNEX_CELERY_EAGER", "false")
     get_settings.cache_clear()
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
     # P2-1: the id is fixed before publishing and the broker uses it, so
     # the stub echoes the id it is given instead of inventing its own.
     monkeypatch.setattr(
-        _dispatch, "_delay_with_timeout",
+        _dispatch_kernel, "_delay_with_timeout",
         lambda task, payload, task_id=None: SimpleNamespace(id=task_id),
     )
     payload = {"k": "broker-submit"}

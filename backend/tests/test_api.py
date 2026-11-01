@@ -247,13 +247,14 @@ def _stub_celery_dispatch(monkeypatch):
     import uuid
 
     from app.api import _dispatch
+    from app.services import dispatch as _dispatch_kernel
     from app.worker import tasks
 
     class _Dispatched:
         def __init__(self, task_id: str | None = None) -> None:
             self.id = task_id or str(uuid.uuid4())
 
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: True)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
     monkeypatch.setattr(tasks.run_recommend_task, "delay", lambda _payload: _Dispatched())
     monkeypatch.setattr(
         tasks.run_recommend_task,

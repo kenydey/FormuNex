@@ -212,29 +212,27 @@ def test_ingest_trigger_off_by_setting(on_ingest, monkeypatch):
 
 
 def test_failed_dispatch_returns_to_none_and_retries(on_ingest, monkeypatch):
-    from fastapi import HTTPException
-
-    from app.api import _dispatch
+    from app.services import dispatch as _dispatch_kernel
 
     def broker_down(*args, **kwargs):
-        raise HTTPException(status_code=503, detail="down")
+        raise _dispatch_kernel.DispatchUnavailable("down", "test-task-id")
 
-    real_submit = _dispatch.submit
-    monkeypatch.setattr(_dispatch, "submit", broker_down)
+    real_dispatch = _dispatch_kernel.dispatch_task_kernel
+    monkeypatch.setattr(_dispatch_kernel, "dispatch_task_kernel", broker_down)
     sid = _ingest(_long_text("五"), "长篇专利五")
     trees = on_ingest["trees"]
     assert trees.get(sid).summaries_status == "none"
 
-    monkeypatch.setattr(_dispatch, "submit", real_submit)  # broker back: the next view schedules it
+    monkeypatch.setattr(_dispatch_kernel, "dispatch_task_kernel", real_dispatch)  # broker back: the next view schedules it
     assert summaries_mod.maybe_schedule_summaries(sid) is True
     assert _wait_status(trees, sid) == "done"
 
 
 def test_explicit_trigger_restores_status_when_not_queued(kb, monkeypatch):
-    from app.api import _dispatch
     from app.main import app
+    from app.services import dispatch as _dispatch_kernel
 
-    monkeypatch.setattr(_dispatch, "broker_reachable", lambda: False)
+    monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: False)
     sid, trees = kb["sid"], kb["trees"]
     r = TestClient(app).post(f"/api/kb/sources/{sid}/toc-tree/summarize")
     assert r.status_code == 503
