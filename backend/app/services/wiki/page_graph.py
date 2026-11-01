@@ -144,48 +144,39 @@ def _shared_neighbor_weight(
     return round(1.0 + shared / denom, 4)
 
 
-def build_page_graph(
-    *,
-    limit: int = 500,
-    kinds: list[str] | None = None,
-    include_orphan: bool = True,
-    project_id: str | None = None,
-) -> dict[str, Any]:
-    """Return {ok, nodes, edges, meta, insights} for Hub Wiki link graph."""
-    if not page_graph_enabled():
-        raise PermissionError("wiki_page_graph_enabled is false")
+def _scan_pages(store, *, scan_cap: int, kinds: list[str] | None, project_id: str | None):
+    """List pages for a graph build. Returns ``(rows, scan_capped)``.
 
-    t0 = time.perf_counter()
-    store = get_wiki_store()
-    scan_cap = min(2000, max(limit * 4, 200))
+    ``scan_capped`` is True when the raw scan hit the cap (``len == cap``):
+    more pages may exist beyond it, so totals count the scanned set only.
+    The cap is a deliberate bound — the scan reads every page's markdown.
+    """
     rows = store.list_pages(limit=scan_cap, offset=0)
-
+    scan_capped = len(rows) >= scan_cap
     if project_id:
         from .project_scope import filter_wiki_rows
 
         rows = filter_wiki_rows(rows, project_id)
-
-    kind_filter: set[str] | None = None
     if kinds:
         kind_filter = {k.strip().lower() for k in kinds if k and k.strip()}
+        if kind_filter:
+            rows = [r for r in rows if (r.kind or "").lower() in kind_filter]
+    return rows, scan_capped
 
-    if kind_filter:
-        rows = [r for r in rows if (r.kind or "").lower() in kind_filter]
 
+def _graph_data(store, rows):
+    """Edges, degrees, insights over scanned rows (shared by build/expand)."""
     alias_to_path: dict[str, str] = {}
     for r in rows:
         for a in _page_aliases(r):
             alias_to_path.setdefault(a, r.path)
 
-    # Collect directed edges (path → path) and broken link samples
     edge_set: set[tuple[str, str]] = set()
     broken = 0
     broken_items: list[dict[str, Any]] = []
     out_degree: dict[str, int] = {r.path: 0 for r in rows}
     in_degree: dict[str, int] = {r.path: 0 for r in rows}
-    title_of = {
-        r.path: ((r.title or "").strip() or r.path) for r in rows
-    }
+    title_of = {r.path: ((r.title or "").strip() or r.path) for r in rows}
 
     for r in rows:
         md = store.read_markdown(r.path) or ""
@@ -224,11 +215,9 @@ def build_page_graph(
             out_degree[r.path] = out_degree.get(r.path, 0) + 1
             in_degree[target_path] = in_degree.get(target_path, 0) + 1
 
-    # Degree for ranking / orphan filter
     def deg(path: str) -> int:
         return int(out_degree.get(path, 0)) + int(in_degree.get(path, 0))
 
-    # P1 insights from full scanned set (before limit truncate)
     orphans: list[dict[str, Any]] = []
     isolates: list[dict[str, Any]] = []
     for r in rows:
@@ -252,41 +241,89 @@ def build_page_graph(
     isolates.sort(key=lambda x: (x["path"] or ""))
     comp_count, comp_largest = _weak_components({r.path for r in rows}, edge_set)
     communities = _community_ids({r.path for r in rows}, edge_set)
-    neigh = _undirected_neighbors(edge_set)
+    return {
+        "alias_to_path": alias_to_path,
+        "edge_set": edge_set,
+        "out_degree": out_degree,
+        "in_degree": in_degree,
+        "title_of": title_of,
+        "deg": deg,
+        "orphans": orphans,
+        "isolates": isolates,
+        "comp_count": comp_count,
+        "comp_largest": comp_largest,
+        "communities": communities,
+        "neigh": _undirected_neighbors(edge_set),
+        "broken": broken,
+        "broken_items": broken_items,
+    }
+
+
+def _node_for(r, data) -> dict[str, Any]:
+    deg = data["deg"]
+    return {
+        "id": r.path,
+        "path": r.path,
+        "label": (r.title or "").strip() or r.path,
+        "kind": r.kind or "page",
+        "flags": list(r.flags or []),
+        "degree": deg(r.path),
+        "degree_in": int(data["in_degree"].get(r.path, 0)),
+        "degree_out": int(data["out_degree"].get(r.path, 0)),
+        "community": int(data["communities"].get(r.path, 0)),
+    }
+
+
+def build_page_graph(
+    *,
+    limit: int = 500,
+    offset: int = 0,
+    edge_limit: int = 2000,
+    edge_offset: int = 0,
+    kinds: list[str] | None = None,
+    include_orphan: bool = True,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Return {ok, nodes, edges, meta, insights} for Hub Wiki link graph.
+
+    Stage 3 / SR-067 (3-14): nodes and edges both paginate (offset/limit
+    over the degree-ranked candidates, edge_offset/edge_limit over the
+    edges between kept nodes). Previously only the first ``limit`` nodes
+    were reachable and every edge between them came back at once.
+    """
+    if not page_graph_enabled():
+        raise PermissionError("wiki_page_graph_enabled is false")
+
+    t0 = time.perf_counter()
+    store = get_wiki_store()
+    scan_cap = min(2000, max(offset + limit, limit * 4, 200))
+    rows, scan_capped = _scan_pages(store, scan_cap=scan_cap, kinds=kinds, project_id=project_id)
+    data = _graph_data(store, rows)
+    deg = data["deg"]
 
     candidates = list(rows)
     if not include_orphan:
         candidates = [r for r in candidates if deg(r.path) > 0]
 
     candidates.sort(key=lambda r: (-deg(r.path), r.path or ""))
-    truncated = len(candidates) > limit
-    kept = candidates[: max(1, min(limit, len(candidates)))] if candidates else []
+    total_nodes = len(candidates)
+    truncated = total_nodes > limit
+    kept = candidates[offset : offset + max(1, limit)] if candidates else []
     kept_paths = {r.path for r in kept}
 
-    nodes = [
-        {
-            "id": r.path,
-            "path": r.path,
-            "label": (r.title or "").strip() or r.path,
-            "kind": r.kind or "page",
-            "flags": list(r.flags or []),
-            "degree": deg(r.path),
-            "degree_in": int(in_degree.get(r.path, 0)),
-            "degree_out": int(out_degree.get(r.path, 0)),
-            "community": int(communities.get(r.path, 0)),
-        }
-        for r in kept
-    ]
+    nodes = [_node_for(r, data) for r in kept]
 
-    edges = [
+    all_edges = [
         {
             "source": a,
             "target": b,
-            "weight": _shared_neighbor_weight(a, b, neigh),
+            "weight": _shared_neighbor_weight(a, b, data["neigh"]),
         }
-        for a, b in sorted(edge_set)
+        for a, b in sorted(data["edge_set"])
         if a in kept_paths and b in kept_paths
     ]
+    edge_total = len(all_edges)
+    edges = all_edges[edge_offset : edge_offset + max(1, edge_limit)]
 
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     return {
@@ -296,26 +333,149 @@ def build_page_graph(
         "meta": {
             "node_count": len(nodes),
             "edge_count": len(edges),
-            "broken_links": broken,
+            "total_nodes": total_nodes,
+            "offset": offset,
+            "has_more": offset + len(nodes) < total_nodes,
+            "edge_total": edge_total,
+            "edge_offset": edge_offset,
+            "has_more_edges": edge_offset + len(edges) < edge_total,
+            "broken_links": data["broken"],
             "truncated": truncated,
             "scanned_pages": len(rows),
+            "scan_capped": scan_capped,
             "elapsed_ms": elapsed_ms,
             "project_id": project_id,
             "include_orphan": include_orphan,
-            "orphan_count": len(orphans),
-            "isolate_count": len(isolates),
-            "component_count": comp_count,
-            "largest_component": comp_largest,
+            "orphan_count": len(data["orphans"]),
+            "isolate_count": len(data["isolates"]),
+            "component_count": data["comp_count"],
+            "largest_component": data["comp_largest"],
             "community_count": len({n["community"] for n in nodes}) if nodes else 0,
             "weighting": "shared_neighbors",
         },
         "insights": {
-            "orphans": orphans[:_INSIGHT_CAP],
-            "isolates": isolates[:_INSIGHT_CAP],
-            "broken": broken_items,
+            "orphans": data["orphans"][:_INSIGHT_CAP],
+            "isolates": data["isolates"][:_INSIGHT_CAP],
+            "broken": data["broken_items"],
             "components": {
-                "count": comp_count,
-                "largest": comp_largest,
+                "count": data["comp_count"],
+                "largest": data["comp_largest"],
             },
+        },
+    }
+
+
+def expand_page_graph(
+    *,
+    path: str,
+    depth: int = 1,
+    limit: int = 500,
+    kinds: list[str] | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """On-demand neighborhood of one page (stage 3 / SR-067, 3-14).
+
+    Returns the page plus its undirected neighbors out to ``depth``
+    (1 or 2) and the edges among them — the client expands the canvas
+    one node at a time instead of fetching the whole graph. Raises
+    :class:`LookupError` when the page neither scans nor has readable
+    markdown. A page that exists but sits beyond the 2000-page scan cap
+    still expands its outgoing links (resolved against the scanned
+    alias map); incoming edges from unscanned pages cannot be seen,
+    and ``scan_capped`` says so.
+    """
+    if not page_graph_enabled():
+        raise PermissionError("wiki_page_graph_enabled is false")
+
+    t0 = time.perf_counter()
+    store = get_wiki_store()
+    rows, scan_capped = _scan_pages(store, scan_cap=2000, kinds=kinds, project_id=project_id)
+    data = _graph_data(store, rows)
+    row_by_path = {r.path: r for r in rows}
+
+    center_row = row_by_path.get(path)
+    center_md = None if center_row is not None else store.read_markdown(path)
+    if center_row is None and center_md is None:
+        raise LookupError(f"wiki page not found: {path}")
+
+    # Outgoing links of an unscanned center (its markdown resolves against
+    # the scanned alias map; targets outside the scan stay unresolved).
+    extra_edges: set[tuple[str, str]] = set()
+    if center_row is None and center_md:
+        for t in _link_targets_from_markdown(center_md):
+            target_path = _resolve_target(t, data["alias_to_path"])
+            if target_path and target_path != path and target_path in row_by_path:
+                extra_edges.add((path, target_path))
+
+    neigh = data["neigh"]
+    ring = {path}
+    frontier = {path}
+    for _ in range(max(1, min(depth, 2))):
+        nxt: set[str] = set()
+        for p in frontier:
+            nxt |= neigh.get(p, set())
+        nxt -= ring
+        ring |= nxt
+        frontier = nxt
+        if not frontier:
+            break
+    # Unscanned center's outgoing targets join the ring (depth counts them
+    # as direct neighbors).
+    if extra_edges:
+        ring |= {b for _, b in extra_edges}
+
+    node_rows = [r for r in rows if r.path in ring]
+    node_rows.sort(key=lambda r: (-data["deg"](r.path), r.path or ""))
+    if center_row is not None:
+        # The center itself must survive truncation, even when its degree
+        # ranks below the limit cutoff.
+        node_rows = [center_row] + [r for r in node_rows if r.path != path]
+    truncated = len(node_rows) > limit
+    node_rows = node_rows[: max(1, limit)]
+    kept_paths = {r.path for r in node_rows}
+    nodes = [_node_for(r, data) for r in node_rows]
+    if center_row is None:
+        # Synthetic center node (unscanned): degree from outgoing only.
+        nodes.append(
+            {
+                "id": path,
+                "path": path,
+                "label": path,
+                "kind": "page",
+                "flags": [],
+                "degree": len(extra_edges),
+                "degree_in": 0,
+                "degree_out": len(extra_edges),
+                "community": 0,
+            }
+        )
+        kept_paths.add(path)
+
+    edge_set = {e for e in data["edge_set"] if e[0] in kept_paths and e[1] in kept_paths}
+    edge_set |= {e for e in extra_edges if e[1] in kept_paths}
+    edges = [
+        {
+            "source": a,
+            "target": b,
+            "weight": _shared_neighbor_weight(a, b, data["neigh"]),
+        }
+        for a, b in sorted(edge_set)
+    ]
+
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    return {
+        "ok": True,
+        "path": path,
+        "nodes": nodes,
+        "edges": edges,
+        "meta": {
+            "depth": depth,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "truncated": truncated,
+            "scanned_pages": len(rows),
+            "scan_capped": scan_capped,
+            "elapsed_ms": elapsed_ms,
+            "project_id": project_id,
         },
     }

@@ -199,3 +199,92 @@ def test_shared_neighbor_weight_and_community(wiki_env):
         ("materials/b.md", "materials/a.md")
     )
     assert w_ab is not None and w_ab > 1.0
+
+
+# ── Stage 3 / SR-067 (3-14): pagination + on-demand expansion ─────────────
+
+
+def _chain(wiki, n: int):
+    """A -> B -> C ... chain of n pages plus one orphan."""
+    letters = ["a", "b", "c", "d", "e", "f", "g", "h"][:n]
+    for i, letter in enumerate(letters):
+        nxt = letters[i + 1].upper() if i + 1 < len(letters) else "Leaf"
+        _upsert(wiki, path=f"materials/{letter}.md", kind="material",
+                title=letter.upper(), body_extra=f"See [[{nxt}]]" if nxt != "Leaf" else "Leaf")
+    _upsert(wiki, path="materials/orphan.md", kind="material", title="Orphan Alone")
+
+
+def test_graph_node_pagination_covers_all_nodes(wiki_env):
+    _chain(wiki_env, 5)
+    client = TestClient(app)
+    seen: list[str] = []
+    offset = 0
+    while True:
+        body = client.get("/api/wiki/graph", params={"limit": 2, "offset": offset}).json()
+        assert body["ok"] is True
+        seen.extend(n["path"] for n in body["nodes"])
+        if not body["meta"]["has_more"]:
+            break
+        offset += 2
+        assert offset < 20
+    assert body["meta"]["total_nodes"] == 6
+    assert sorted(seen) == sorted(
+        ["materials/a.md", "materials/b.md", "materials/c.md",
+         "materials/d.md", "materials/e.md", "materials/orphan.md"]
+    )
+    # Order is stable: the first page is the degree-ranked head.
+    first = client.get("/api/wiki/graph", params={"limit": 2, "offset": 0}).json()
+    assert first["nodes"][0]["path"] == "materials/b.md"
+
+
+def test_graph_edge_pagination(wiki_env):
+    _chain(wiki_env, 4)
+    client = TestClient(app)
+    body = client.get("/api/wiki/graph", params={"limit": 100, "edge_limit": 2}).json()
+    assert len(body["edges"]) == 2
+    assert body["meta"]["edge_total"] == 3
+    assert body["meta"]["has_more_edges"] is True
+    tail = client.get(
+        "/api/wiki/graph", params={"limit": 100, "edge_limit": 2, "edge_offset": 2}
+    ).json()
+    assert len(tail["edges"]) == 1
+    assert tail["meta"]["has_more_edges"] is False
+    all_edges = {(e["source"], e["target"]) for e in body["edges"]} | {
+        (e["source"], e["target"]) for e in tail["edges"]
+    }
+    assert all_edges == {
+        ("materials/a.md", "materials/b.md"),
+        ("materials/b.md", "materials/c.md"),
+        ("materials/c.md", "materials/d.md"),
+    }
+
+
+def test_graph_expand_depth1_and_depth2(wiki_env):
+    _chain(wiki_env, 3)
+    client = TestClient(app)
+    mid = client.get("/api/wiki/graph/expand", params={"path": "materials/b.md"}).json()
+    assert mid["ok"] is True
+    assert {n["path"] for n in mid["nodes"]} == {
+        "materials/a.md", "materials/b.md", "materials/c.md",
+    }
+    assert {(e["source"], e["target"]) for e in mid["edges"]} == {
+        ("materials/a.md", "materials/b.md"),
+        ("materials/b.md", "materials/c.md"),
+    }
+    head1 = client.get(
+        "/api/wiki/graph/expand", params={"path": "materials/a.md", "depth": 1}
+    ).json()
+    assert {n["path"] for n in head1["nodes"]} == {"materials/a.md", "materials/b.md"}
+    head2 = client.get(
+        "/api/wiki/graph/expand", params={"path": "materials/a.md", "depth": 2}
+    ).json()
+    assert {n["path"] for n in head2["nodes"]} == {
+        "materials/a.md", "materials/b.md", "materials/c.md",
+    }
+
+
+def test_graph_expand_missing_page_returns_404(wiki_env):
+    _chain(wiki_env, 2)
+    client = TestClient(app)
+    r = client.get("/api/wiki/graph/expand", params={"path": "materials/nope.md"})
+    assert r.status_code == 404

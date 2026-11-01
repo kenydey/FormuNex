@@ -234,6 +234,9 @@ def apply_broken_endpoint(body: WikiApplyBrokenRequest) -> dict:
 @router.get("/graph")
 def wiki_page_graph(
     limit: int = Query(default=500, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+    edge_limit: int = Query(default=2000, ge=1, le=2000),
+    edge_offset: int = Query(default=0, ge=0),
     kinds: str | None = Query(
         default=None,
         description="Comma-separated page kinds (e.g. material,concept,theme)",
@@ -241,7 +244,11 @@ def wiki_page_graph(
     include_orphan: bool = Query(default=True),
     project_id: str | None = Query(default=None),
 ) -> dict:
-    """Wiki page [[wikilink]] graph for Hub canvas (not materials/formulation KG)."""
+    """Wiki page [[wikilink]] graph for Hub canvas (not materials/formulation KG).
+
+    Stage 3 / SR-067 (3-14): nodes page by offset/limit over the
+    degree-ranked candidates, edges page by edge_offset/edge_limit.
+    """
     _require_wiki()
     from ..services.wiki.page_graph import build_page_graph, page_graph_enabled
 
@@ -254,10 +261,53 @@ def wiki_page_graph(
     try:
         return build_page_graph(
             limit=limit,
+            offset=offset,
+            edge_limit=edge_limit,
+            edge_offset=edge_offset,
             kinds=kind_list,
             include_orphan=include_orphan,
             project_id=project_id,
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/graph/expand")
+def wiki_page_graph_expand(
+    path: str = Query(...),
+    depth: int = Query(default=1, ge=1, le=2),
+    limit: int = Query(default=500, ge=1, le=2000),
+    kinds: str | None = Query(
+        default=None,
+        description="Comma-separated page kinds (e.g. material,concept,theme)",
+    ),
+    project_id: str | None = Query(default=None),
+) -> dict:
+    """On-demand neighborhood of one wiki page (stage 3 / SR-067, 3-14).
+
+    Returns the page plus its neighbors out to ``depth`` and the edges
+    among them, so the canvas expands one node at a time. 404 when the
+    page neither scans nor has readable markdown.
+    """
+    _require_wiki()
+    from ..services.wiki.page_graph import expand_page_graph, page_graph_enabled
+
+    if not page_graph_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail="wiki_page_graph_enabled is false（FORMUNEX_WIKI_PAGE_GRAPH_ENABLED）",
+        )
+    kind_list = [k.strip() for k in (kinds or "").split(",") if k.strip()] or None
+    try:
+        return expand_page_graph(
+            path=path,
+            depth=depth,
+            limit=limit,
+            kinds=kind_list,
+            project_id=project_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
