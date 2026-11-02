@@ -153,3 +153,23 @@ def test_predictor_predict_full_returns_std():
         assert std["salt_spray_hours"] >= 0.0
     finally:
         registry.reset(persist=True)
+
+
+def test_build_registry_fallback_still_has_min_samples(monkeypatch):
+    """Datalab removal batch 2: the empty-registry fallback must satisfy
+    the class's attribute contract. It used to omit min_samples, so a
+    failed ModelRegistry() build surfaced later as AttributeError inside
+    _dataset instead of behaving like an empty registry."""
+    from app.db import store as store_mod
+    from app.services import training as training_mod
+
+    def _boom():
+        raise RuntimeError("store unavailable")
+
+    monkeypatch.setattr(store_mod, "get_experiment_store", _boom)
+    # Force the normal build to fail at store construction: ModelRegistry()
+    # calls _make_store -> get_experiment_store, patched above to raise.
+    reg = training_mod._build_registry()
+    assert reg.min_samples == 4
+    assert reg._records == []
+    assert reg._dataset(ProductDomain.anticorrosion_coating, "salt_spray_hours") is None

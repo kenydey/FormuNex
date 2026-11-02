@@ -693,6 +693,13 @@ def _build_registry() -> ModelRegistry:
         reg._store = JsonExperimentStore(str(empty))
         reg._models = {}
         reg._records = []
+        # The fallback used to omit min_samples, so the first _dataset call
+        # died with AttributeError instead of behaving like an empty
+        # registry (batch 2 exposed this: a failed ModelRegistry() build
+        # must still satisfy the class's attribute contract).
+        from ..config import Settings
+
+        reg.min_samples = Settings.model_fields["min_train_samples"].default
         return reg
 
 

@@ -26,6 +26,8 @@ _RETIRED_ENV_KEYS = frozenset({
     "FORMUNEX_USPTO_API_KEY",  # dead key in repo-root .env; nothing reads it (v27 P0-1)
     "FORMUNEX_RECOMMEND_AB_ENABLED",  # recommend A/B bucketing removed: no caller ever passed a user id
     "FORMUNEX_QA_MAX_EVIDENCE",  # never read; chat_rerank_top_k already caps the evidence list
+    "FORMUNEX_DATALAB_MAX_CONNECTIONS",  # Datalab removal batch 2: last readers (the Datalab stores) deleted
+    "FORMUNEX_DATALAB_MAX_KEEPALIVE_CONNECTIONS",  # same; remaining datalab_* fields die in batch 3
 })
 # Env keys read by subsystems but not declared on Settings.
 _INFRA_ENV_KEYS = frozenset({
@@ -1152,8 +1154,6 @@ class Settings(BaseSettings):
     datalab_api_url: str = "http://localhost:5001"
     datalab_api_token: str = ""  # DATALAB-API-KEY header（平台非 TESTING 模式必需）
     datalab_timeout_seconds: float = 30.0
-    datalab_max_connections: int = 10
-    datalab_max_keepalive_connections: int = 5
     # Soft-degrade default: ELN optional. Set true for ELN-mandatory deploys.
     datalab_required: bool = False
 

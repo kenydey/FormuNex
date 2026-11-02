@@ -32,7 +32,6 @@ DB = APP / "db"
 # 4-4 move. A new edge here fails the test until it is deliberately
 # added to this set with a reason.
 PINNED_DB_SERVICES_EDGES = {
-    ("app.db.campaign_store", "app.services.http_safe"),
     ("app.db.chunk_store", "app.services.kb_ann"),
     ("app.db.datalab_client", "app.services.http_safe"),
     ("app.db.datalab_client", "app.services.runtime_secrets"),
@@ -47,7 +46,6 @@ PINNED_DB_SERVICES_EDGES = {
     ("app.db.source_store", "app.services.provenance"),
     ("app.db.sqlite_lock", "app.services.redis_breaker"),
     ("app.db.store", "app.services._fsutil"),
-    ("app.db.store", "app.services.http_safe"),
     ("app.db.wiki_store", "app.services.wiki.embed"),
     ("app.db.wiki_store", "app.services.wiki.fts"),
 }

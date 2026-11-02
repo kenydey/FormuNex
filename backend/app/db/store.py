@@ -305,6 +305,9 @@ class LocalExperimentStore:
         return None
 
 
+_store: ExperimentStore | None = None
+
+
 def get_experiment_store(settings: Settings | None = None) -> ExperimentStore:
     """The experiment store is always the local main-DB ledger (Datalab removal
     batch 2: the DatalabExperimentStore and the datalab/auto switch are gone).
