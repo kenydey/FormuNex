@@ -1,15 +1,19 @@
-"""Shared domain schemas — the data contracts that flow end to end through the
-research → recommend → DOE → simulate → optimize pipeline.
-"""
+"""Formulation / DOE / lab DTOs: specs, formulations, plans, runs, measurements."""
 from __future__ import annotations
 
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
+from typing import Literal
 from uuid import uuid4
+from pydantic import BaseModel
+from pydantic import Field
+from pydantic import computed_field
+from pydantic import field_validator
+from pydantic import model_validator
 
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from .chat import EvidenceRef
 
 
 class Supplier(BaseModel):
@@ -35,8 +39,7 @@ class ProductDomain(str, Enum):
     anticorrosion_coating = "anticorrosion_coating"  # 防腐蚀涂料
     degreaser = "degreaser"  # 脱脂剂
     surface_treatment = "surface_treatment"  # 表面处理剂
-    autodeposition_coating = "autodeposition_coating"  # 自沉积涂料（Autodeposition/Autophoretic）
-
+    autodeposition_coating = "autodeposition_coating"
 
 class Substrate(str, Enum):
     carbon_steel = "carbon_steel"
@@ -47,14 +50,8 @@ class Substrate(str, Enum):
     # 补齐计划 2-11: 铸造/压铸铝合金与冷轧钢（汽车/家电常见基材）。
     a356 = "a356"  # A356 铸造铝合金
     adc12 = "adc12"  # ADC12 压铸铝合金
-    cold_rolled_steel = "cold_rolled_steel"  # 冷轧钢
+    cold_rolled_steel = "cold_rolled_steel"
 
-
-# 补齐计划 2-11: 配置化新增基材 —— 环境变量 FORMUNEX_EXTRA_SUBSTRATES
-# 为 JSON 数组 [{"value": "titanium", "label_zh": "钛合金", "label_en": "Titanium alloy"}]。
-# 内置基材走 Substrate 枚举；配置的基材以原字符串流通（Requirement.substrate
-# 为 Substrate | str），不改枚举。解析失败时 fail-open 为空列表（配置错误不阻断启动；
-# /api/meta/substrates 只返回解析出的条目，管理员可据此发现配置未生效）。
 EXTRA_SUBSTRATES_ENV = "FORMUNEX_EXTRA_SUBSTRATES"
 
 _BUILTIN_SUBSTRATE_LABELS: dict[str, tuple[str, str]] = {
@@ -67,7 +64,6 @@ _BUILTIN_SUBSTRATE_LABELS: dict[str, tuple[str, str]] = {
     "adc12": ("ADC12 压铸铝合金", "ADC12 die-cast aluminium alloy"),
     "cold_rolled_steel": ("冷轧钢", "Cold-rolled steel"),
 }
-
 
 def extra_substrates() -> list[dict[str, str]]:
     """Parse configured extra substrates from the environment (see above)."""
@@ -96,7 +92,6 @@ def extra_substrates() -> list[dict[str, str]]:
             })
     return out
 
-
 def substrate_options() -> list[dict[str, str]]:
     """All substrate options: builtins + configured extras (meta endpoint / UI)."""
     opts = [
@@ -104,7 +99,6 @@ def substrate_options() -> list[dict[str, str]]:
         for v, (zh, en) in _BUILTIN_SUBSTRATE_LABELS.items()
     ]
     return opts + extra_substrates()
-
 
 def coerce_substrate(value: Any) -> Substrate | str:
     """Validate a substrate value: builtin → Substrate member, configured extra → raw str.
@@ -126,19 +120,16 @@ def coerce_substrate(value: Any) -> Substrate | str:
     allowed = [s.value for s in Substrate] + [e["value"] for e in extra_substrates()]
     raise ValueError(f"未知基材 {text!r}，可选：{', '.join(allowed)}")
 
-
 def substrate_value(substrate: Any) -> str:
     """Plain-string value of a substrate (enum member or configured-extra str)."""
     if isinstance(substrate, Substrate):
         return substrate.value
     return str(substrate or "")
 
-
 class ObjectiveDirection(str, Enum):
     maximize = "maximize"
     minimize = "minimize"
     match_target = "match_target"
-
 
 class ObjectiveSpec(BaseModel):
     """One term of a multi-objective optimization goal (schema-driven contract)."""
@@ -169,7 +160,6 @@ class ObjectiveSpec(BaseModel):
             )
         return self
 
-
 class LeverSpec(BaseModel):
     """A tunable DOE/optimization factor (ingredient wt% or process parameter)."""
 
@@ -192,7 +182,6 @@ class LeverSpec(BaseModel):
         if self.low > self.high:
             raise ValueError(f"因子 {self.name}: low ({self.low}) 不能大于 high ({self.high})")
         return self
-
 
 class MaterialSpec(BaseModel):
     """Project-level raw material entry (extends global RAW_MATERIALS)."""
@@ -217,7 +206,6 @@ class MetricPriorSpec(BaseModel):
     prior_yaml: str | None = None
     builtin_alias: str | None = None
     confidence: str = "cold-start"
-
 
 class Requirement(BaseModel):
     """User-supplied R&D requirement captured from the left input panel."""
@@ -296,7 +284,6 @@ class Requirement(BaseModel):
             bits.append(f"{self.cleaning_efficiency:.0f}% cleaning")
         return ", ".join(bits)
 
-
 class Ingredient(BaseModel):
     name: str
     role: str  # e.g. resin, hardener, inhibitor, surfactant, solvent, pigment
@@ -347,7 +334,6 @@ class Ingredient(BaseModel):
             object.__setattr__(self, "component_type", self.role)
         return self
 
-
 class FormulationExplain(BaseModel):
     """Batch C: structured 「为何推荐」 display contract (no ranking effect)."""
 
@@ -362,7 +348,6 @@ class FormulationExplain(BaseModel):
     notes: list[str] = Field(default_factory=list)
     # Post-A′ #2: Requirement field → recommend/DOE wiring audit (display).
     effect_trace: list[dict[str, Any]] = Field(default_factory=list)
-
 
 class Formulation(BaseModel):
     name: str
@@ -393,19 +378,6 @@ class Formulation(BaseModel):
 
     def total_pct(self) -> float:
         return round(sum(i.weight_pct for i in self.ingredients), 4)
-
-
-class EvidenceRef(BaseModel):
-    """v20-1: 引用可解释性 —— 每条引用附带命中原因。
-
-    前端用此展示"为什么引用这条证据"。
-    """
-
-    id: str  # 如 "EV1"
-    hit_type: str  # "verbatim" | "cas" | "token" | "semantic"
-    hit_detail: str = ""  # 如 "逐字命中 '磷酸锌 10%'", "CAS 7779-90-0"
-    confidence: str = "high"  # "high" | "medium" | "low"
-
 
 class RecommendedFormulaComponent(BaseModel):
     """One row in the structured lab recipe table (LLM output + UI)."""
@@ -442,14 +414,12 @@ class RecommendedFormula(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     engine: Literal["llm", "offline"] = "llm"
 
-
 class RecommendedFormulaListResponse(BaseModel):
     """Wrapper for LLM structured output and API responses."""
 
     formulas: list[RecommendedFormula] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     engine: Literal["llm", "offline"] = "offline"
-
 
 class InferredSystem(BaseModel):
     """LLM-inferred formulation-system constraints (P2 persistence carrier).
@@ -464,178 +434,6 @@ class InferredSystem(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     metric_ranges: dict[str, tuple[float, float]] = Field(default_factory=dict)
     confidence: Literal["high", "medium", "low"] = "medium"
-
-
-EntityKind = Literal["chemical", "trade_product", "element", "parameter"]
-CompositionStatus = Literal["resolved", "partial", "mixture", "proprietary", "unknown"]
-
-
-class EvidenceEntityRef(BaseModel):
-    """KG entity linked to a retrieved evidence chunk."""
-
-    entity_id: str
-    kind: EntityKind
-    display_name: str
-    composition_status: CompositionStatus = "unknown"
-    surface_form: str | None = None
-
-
-class Evidence(BaseModel):
-    """A retrieved patent or literature snippet with a citation."""
-
-    source: str  # USPTO / EPO / literature / seed / surechembl
-    identifier: str
-    title: str
-    snippet: str
-    relevance: float = Field(ge=0, le=1)
-    is_seed_corpus: bool = False
-    entity_refs: list[EvidenceEntityRef] = Field(default_factory=list)
-    # Open Access metadata carried from the search tier so the full-text fetcher
-    # can skip non-OA literature with zero extra API calls.
-    oa_pdf_url: str | None = None
-    is_oa: bool | None = None
-    # Optional landing URL (e.g. Google Patents for SureChEMBL SCPN).
-    url: str | None = None
-    # Secondary UI link (e.g. SureChEMBL document page).
-    url_alt: str | None = None
-    # SureChEMBL / patent metadata for KG ingest + draft review (P3).
-    assignee: str | None = None
-    pub_date: str | None = None
-    # P0 domain-profile audit fields (optional; old clients ignore).
-    domain_tags: list[str] = Field(default_factory=list)
-    domain_match: Literal["strong", "weak", "none"] | None = None
-    taxonomy_source: Literal["arxiv", "openalex", "chemrxiv", "cpc", "lexical", "none"] | None = None
-    # P1 #16: page/paragraph anchors for citation lines (align CitationAnchor).
-    page: int | None = None
-    # PageIndex 借鉴 A5: 跨页末页（None = 单页，与 page 相同）。
-    page_end: int | None = None
-    paragraph: int | None = None
-    # W2-2 (P1-7): two-stage search→read — whether the full text is already
-    # persisted locally (read stage can skip the download). None = unknown.
-    has_fulltext: bool | None = None
-    # W4-6 (P0-19): citation count + publication year for age-normalized
-    # ranking (new papers not drowned by old ones). None = unknown.
-    cited_by: int | None = None
-    pub_year: int | None = None
-
-
-class Passage(BaseModel):
-    """A page-anchored full-text passage from the read stage (W2-2 / P1-7)."""
-
-    source_id: str = ""
-    page_no: int | None = None
-    char_start: int | None = None
-    char_end: int | None = None
-    section_title: str = ""
-    text: str = ""
-    # W3-3 (P1-24): how the passage text was obtained — "enrich" when
-    # fulltext_enrich already had the full text (reused, no new fetch),
-    # "ondemand" when this read call fetched it (or pulled a pre-existing
-    # local document from the store outside the enrich pipeline).
-    origin: str = ""
-
-
-class ParameterBoundary(BaseModel):
-    min_value: float | None = Field(None, description="最小值")
-    max_value: float | None = Field(None, description="最大值")
-    unit: str = Field(..., description="单位，如 g/L, °C, % 等")
-
-    @model_validator(mode="after")
-    def check_physical_laws(self) -> "ParameterBoundary":
-        lo, hi = self.min_value, self.max_value
-        if lo is not None and hi is not None and lo > hi:
-            raise ValueError(f"物理定律冲突: {lo} > {hi}")
-        if lo is not None and lo < 0 and self.unit.strip() in ("g/L", "mg/L", "kg", "%", "wt%"):
-            raise ValueError(f"浓度不能为负: {lo}{self.unit}")
-        return self
-
-
-class ProductMention(BaseModel):
-    """A commercial chemical product mentioned in a document."""
-
-    trade_name: str = Field(..., max_length=120)
-    grade: str = Field(default="", max_length=60)
-    supplier: str = Field(default="", max_length=120)
-    generic_name: str = Field(default="", max_length=200, description="对应通用化学名")
-    role: str = Field(default="", max_length=60, description="树脂/固化剂/颜料/助剂…")
-
-
-class SourceGuideSchema(BaseModel):
-    summary: str = Field(..., max_length=600, description="300字内核心化学机理与工艺摘要")
-    key_entities: list[str] = Field(..., min_length=1, max_length=30)
-    parameter_space: dict[str, ParameterBoundary] = Field(default_factory=dict)
-    faqs: list[str] = Field(..., min_length=1, max_length=5)
-    products: list[ProductMention] = Field(default_factory=list, max_length=30)
-    status: Literal["verified", "degraded"] = "verified"
-
-    @model_validator(mode="after")
-    def _trim_summary(self) -> "SourceGuideSchema":
-        if len(self.summary) > 300:
-            self.summary = self.summary[:300]
-        return self
-
-    @classmethod
-    def degraded(cls, reason: str = "提取失败") -> "SourceGuideSchema":
-        return cls(
-            summary=reason,
-            key_entities=["未知"],
-            parameter_space={},
-            faqs=["该文献结构化提取未成功，请人工审核"],
-            status="degraded",
-        )
-
-
-from .tradeoff_schemas import TradeOffAnalysis  # noqa: E402
-
-
-class ResearchResult(BaseModel):
-    requirement_headline: str
-    evidence: list[Evidence]
-    mechanism: str
-    recommended: list[Formulation]
-    chat_markdown: str
-    recommend_engine: Literal["llm", "offline"] = "offline"
-    tradeoff: TradeOffAnalysis | None = None
-    recommend_meta: dict | None = None
-    # F-4: C-8 round id — lets the /api/research entry path report adopt signals.
-    recommend_id: str | None = None
-    # KG relation insights of the round (component → substitutes / relations), produced by the recommend path
-    # with ``relation_insight``; kept in the project workspace's research block for the leaderboard banner.
-    relation_insights: list[dict] = Field(default_factory=list)
-
-
-class ComprehensiveReport(BaseModel):
-    """Output of the DeepResearchEngine deep-research orchestrator.
-
-    A citation-grounded research report synthesised by cross-validating web and
-    knowledge-base evidence, plus candidate formulations for the topic.
-    """
-
-    topic: str
-    report_markdown: str
-    citations: list[Evidence] = Field(default_factory=list)
-    candidates: list[Formulation] = Field(default_factory=list)
-    web_count: int = 0
-    kb_count: int = 0
-    engine: str = "offline"  # "llm" | "offline"
-    verified_claims: list[dict] = Field(default_factory=list)
-    claim_check_engine: str = "offline"
-    claim_check_pass_rate: float = 1.0
-
-
-class DeepResearchRequest(Requirement):
-    """Requirement plus a free-text research topic for /api/research/deep.
-
-    ``topic`` drives multi-source retrieval and synthesis; when empty the
-    requirement headline is used instead.
-    """
-
-    topic: str = ""
-    source_types: list[str] = Field(
-        default_factory=lambda: ["patents", "literature", "internet"],
-        description="与 /api/search 相同的信息源类别",
-    )
-
 
 class FactorCandidate(BaseModel):
     """Suggested DOE factor with literature/KB rationale."""
@@ -660,7 +458,6 @@ class FactorCandidate(BaseModel):
         _validate_factor_kind_levels(self.kind, self.levels, self.name)
         return self
 
-
 class DOEFactor(BaseModel):
     name: str
     low: float
@@ -680,7 +477,6 @@ class DOEFactor(BaseModel):
             )
         return self
 
-
 def _validate_factor_kind_levels(kind: str, levels: list[float | str] | None, name: str) -> None:
     """Shared kind/levels invariant for DOEFactor and FactorCandidate."""
     if kind not in ("continuous", "discrete"):
@@ -690,8 +486,6 @@ def _validate_factor_kind_levels(kind: str, levels: list[float | str] | None, na
             raise ValueError(
                 f"Factor {name!r}: discrete kind requires at least 2 levels, got {levels!r}"
             )
-    # continuous: levels are ignored by every engine, no error.
-
 
 class DOERun(BaseModel):
     run_id: int
@@ -707,7 +501,6 @@ class DOERun(BaseModel):
     infeasible: bool = False
     infeasible_reason: str | None = None
 
-
 class DOEPlan(BaseModel):
     design: str  # full_factorial / fractional_factorial / plackett_burman / ccd / lhs
     factors: list[DOEFactor]
@@ -718,7 +511,6 @@ class DOEPlan(BaseModel):
     # C-4b: plan lifecycle status (draft|active|completed|aborted); defaults to
     # draft when a plan is built. Serialized separately into doe_plans.status.
     status: str = "draft"
-
 
 class RunExplanation(BaseModel):
     """Why a recommended DOE run was selected (P1 adaptive DOE)."""
@@ -731,7 +523,6 @@ class RunExplanation(BaseModel):
     acquisition_score: float | None = None
     constraint_warnings: list[str] = Field(default_factory=list)
 
-
 class AnomalyFlag(BaseModel):
     """Flagged historical experiment that may need review or re-test."""
 
@@ -742,7 +533,6 @@ class AnomalyFlag(BaseModel):
     predicted: float | None = None
     actual: float | None = None
 
-
 class AdaptiveDOEMetadata(BaseModel):
     """Shared adaptive-DOE fields attached to active-learning responses."""
 
@@ -752,7 +542,6 @@ class AdaptiveDOEMetadata(BaseModel):
     anomalies: list[AnomalyFlag] = Field(default_factory=list)
     recommended_next_action: str = ""
     budget_remaining: int | None = None
-
 
 class BaybeRecommendResult(AdaptiveDOEMetadata):
     """Stateless baybe roundtrip payload (not persisted to DB)."""
@@ -772,7 +561,6 @@ class BaybeRecommendResult(AdaptiveDOEMetadata):
     # "compliance"}.
     physical_constraints: dict | None = None
 
-
 class ActiveDoeResult(AdaptiveDOEMetadata):
     """Active-learning DOE response — plan plus optional baybe campaign state."""
 
@@ -790,7 +578,6 @@ class ActiveDoeResult(AdaptiveDOEMetadata):
     # id under which /doe/active stored the plan in ``doe_plans`` ("" = not
     # persisted, so it cannot be dispatched / read back by id).
     plan_id: str = ""
-
 
 class OptimizationResult(BaseModel):
     iterations: int
@@ -816,42 +603,6 @@ class OptimizationResult(BaseModel):
     # not report a scalar acquisition. Persisted with the task result, so the
     # cockpit trend page reads it via GET /api/tasks/{task_id}.
     acquisition_history: list[dict] = Field(default_factory=list)
-
-
-class TaskState(str, Enum):
-    pending = "pending"
-    running = "running"
-    completed = "completed"
-    failed = "failed"
-    cancelled = "cancelled"
-
-
-class TaskStatus(BaseModel):
-    task_id: str
-    kind: str
-    state: TaskState
-    progress: float = 0.0
-    message: str = ""
-    result: dict[str, Any] | None = None
-    stream_url: str = ""
-    # P2：可观测
-    stage: str = ""
-    elapsed_ms: int | None = None
-    owner_id: str | None = None
-
-
-class AsyncTaskAccepted(BaseModel):
-    """HTTP 202 response when a Celery task is enqueued."""
-
-    task_id: str
-    stream_url: str
-    status_url: str
-    outbox_id: str | None = None
-
-
-# Backward-compatible alias used by some API modules
-TaskHandle = AsyncTaskAccepted
-
 
 class Measurement(BaseModel):
     """One lab-observed value, with the context that makes it comparable.
@@ -890,11 +641,9 @@ class Measurement(BaseModel):
             object.__setattr__(self, "passed", ok)
         return self
 
-
-# v13-3: 测量来源分类。真实测量（进 GP 训练）vs 虚拟/预测（默认不进 GP）。
 REAL_SOURCES = frozenset({"lab", "workbench"})
-VIRTUAL_SOURCES = frozenset({"baybe_opt", "predictor_virtual"})
 
+VIRTUAL_SOURCES = frozenset({"baybe_opt", "predictor_virtual"})
 
 class ExperimentRecord(BaseModel):
     """A single measured DOE/lab result fed back into the platform.
@@ -956,11 +705,9 @@ class ExperimentRecord(BaseModel):
     def measurement_for(self, metric: str) -> Measurement | None:
         return next((m for m in self.measurements if m.metric == metric), None)
 
-
 class ExperimentSubmission(BaseModel):
     records: list[ExperimentRecord]
     retrain: bool = True
-
 
 class ModelInfo(BaseModel):
     domain: ProductDomain
@@ -985,49 +732,10 @@ class ModelInfo(BaseModel):
     pinned: bool = False
     newer_version_id: str | None = None
 
-
 class TrainingReport(BaseModel):
     trained: list[ModelInfo]
     total_records: int
     message: str = ""
-
-
-# ── v0.5: IP analysis ────────────────────────────────────────────────────────
-
-class PatentRisk(BaseModel):
-    patent_id: str
-    title: str
-    risk: str  # "high" | "medium" | "low" | "unknown"
-    claim_overlap: str
-    recommendation: str
-
-
-class MoleculePatentCheck(BaseModel):
-    """molbloom molecular patent pre-screen result for one ingredient."""
-
-    name: str
-    smiles: str
-    patented: bool | None = None  # True=seen in patents, False=novel, None=unknown
-
-
-class IPReport(BaseModel):
-    formulation_name: str
-    novelty_score: float  # 0=likely infringes … 1=highly novel
-    risks: list[PatentRisk]
-    whitespace_hints: list[str]
-    raw_patents_searched: int
-    engine: str  # "llm" | "offline-keyword"
-    molecule_checks: list[MoleculePatentCheck] = Field(default_factory=list)
-
-
-class IPAnalysisRequest(BaseModel):
-    formulation: Formulation
-    limit_patents: int = 10
-
-
-# ── v0.5: Process parameter optimization ────────────────────────────────────
-
-# ── v0.6: Self-driving closed loop ───────────────────────────────────────────
 
 class LoopRequest(Requirement):
     """Requirement extended with closed-loop iteration controls."""
@@ -1044,7 +752,6 @@ class LoopRequest(Requirement):
     budget_remaining: int | None = None
     # v16: DOE 冷启动种子。None = 确定性默认 0；整数 = 可复现。  # v23-fix: 与 v22 的两处对齐
     seed: int | None = None
-
 
 class LoopReport(AdaptiveDOEMetadata):
     """One turn of the experiment → retrain → optimize → next-DOE loop."""
@@ -1067,64 +774,15 @@ class LoopReport(AdaptiveDOEMetadata):
     # 成本/碳足迹摘要（top 配方均值），供前端展示成本趋势
     cost_summary: dict | None = None
 
-
-# ── v0.6: Natural-language intent parsing ────────────────────────────────────
-
 class IntentParseRequest(BaseModel):
     text: str
-
 
 class IntentResult(BaseModel):
     requirement: Requirement
     confidence: float  # 0..1 heuristic confidence
     extracted_fields: list[str]  # which Requirement fields were populated
     engine: str  # "llm" | "offline-heuristic"
-    warnings: list[str] = Field(default_factory=list)  # e.g. controlled-chemical hits
-
-
-# ── v0.8: Hierarchical multi-agent review ────────────────────────────────────
-# All agent context and API responses are pure JSON (these pydantic models).
-# The supervisor (InitializeAgent) dispatches to expert agents (Chemist,
-# Inspector); each returns an AgentFinding; the supervisor aggregates them into
-# a single ReviewVerdict.
-
-class Recommendation(BaseModel):
-    """A concrete remediation suggested by an expert agent."""
-
-    kind: str  # "substitute_crosslinker" | "substitute_resin" | "swap_catalyst" | "remove" | "review"
-    target: str | None = None  # the offending ingredient, if any
-    suggestion: str  # the recommended material or action
-    rationale: str  # why this remediation applies
-
-
-class AgentIssue(BaseModel):
-    """One problem detected by an expert agent."""
-
-    code: str  # machine-readable, e.g. "isocyanate_water_incompatibility", "svhc"
-    severity: str  # "high" | "medium" | "low"
-    ingredient: str | None = None
-    message: str
-    recommendations: list[Recommendation] = Field(default_factory=list)
-
-
-class AgentFinding(BaseModel):
-    """The verdict from a single expert agent."""
-
-    agent: str  # "chemist" | "inspector"
-    status: str  # "pass" | "warn" | "intercept"
-    issues: list[AgentIssue] = Field(default_factory=list)
-    engine: str  # "deterministic" | "deterministic+llm"
-
-
-class ReviewVerdict(BaseModel):
-    """The aggregated verdict returned by the supervisor agent."""
-
-    formulation_name: str
-    overall_status: str  # "pass" | "warn" | "intercept" (worst of all findings)
-    findings: list[AgentFinding] = Field(default_factory=list)
-    recommendations: list[Recommendation] = Field(default_factory=list)  # merged + deduped
-    engine: str  # "deterministic" | "deterministic+llm"
-
+    warnings: list[str] = Field(default_factory=list)
 
 class DatalabSampleResponse(BaseModel):
     """Datalab POST /new-sample/ sample_list_entry contract."""
@@ -1136,7 +794,6 @@ class DatalabSampleResponse(BaseModel):
 
     model_config = {"extra": "ignore"}
 
-
 class DatalabItemEnvelope(BaseModel):
     """Datalab GET /get-item-data/{id} outer wrapper."""
 
@@ -1144,44 +801,12 @@ class DatalabItemEnvelope(BaseModel):
 
     model_config = {"extra": "ignore"}
 
-
 class DatalabDeleteResponse(BaseModel):
     """Datalab POST /delete-sample/ response."""
 
     status: str
 
     model_config = {"extra": "ignore"}
-
-
-class DocumentChunkResponse(BaseModel):
-    """A single document chunk with page/paragraph/offset provenance."""
-
-    id: str
-    source_id: str
-    ord: int
-    text: str
-    heading_path: str = ""
-    page: int | None = None
-    paragraph: int | None = None
-    offset_start: int | None = None
-    offset_end: int | None = None
-    meta: dict | None = None
-
-
-class ChunkListResponse(BaseModel):
-    """Wrapper for chunk retrieval responses.
-
-    P1-2: ``total`` is the full chunk count for the source, independent of
-    the page window (``limit``/``offset``). Callers must page until
-    ``len(chunks)`` reaches ``total`` — a first page alone is a truncation,
-    not the whole document.
-    """
-
-    chunks: list[DocumentChunkResponse]
-    total: int = 0
-
-
-# ── Inverse design: target properties → composition ──────────────────────────
 
 class HardConstraint(BaseModel):
     """A requirement the formulation must satisfy, not merely trade against.
@@ -1214,13 +839,11 @@ class HardConstraint(BaseModel):
         high = self.value_max if self.value_max is not None else self.value
         return max(0.0, self.value - float(actual), float(actual) - high)
 
-
 class TargetSpec(BaseModel):
     """What the design must achieve (hard) and what it should optimise (soft)."""
 
     hard: list[HardConstraint] = Field(default_factory=list)
     soft: list[ObjectiveSpec] = Field(default_factory=list)
-
 
 class InverseDesignRequest(Requirement):
     """Requirement extended with inverse-design search controls."""
@@ -1231,7 +854,6 @@ class InverseDesignRequest(Requirement):
     seed_with_llm: bool = True
     seed: int = 42
 
-
 class DesignCandidate(BaseModel):
     """One formulation on (or near) the frontier."""
 
@@ -1240,7 +862,6 @@ class DesignCandidate(BaseModel):
     feasible: bool = True
     violation: float = 0.0
     materials: list[str] = Field(default_factory=list)
-
 
 class InverseDesignResult(BaseModel):
     topic: str = ""
@@ -1255,11 +876,8 @@ class InverseDesignResult(BaseModel):
     engine: str = "nsga2-numpy"
     warnings: list[str] = Field(default_factory=list)
 
+from ..tradeoff_schemas import TradeOffAnalysis  # noqa: E402
 
+# Forward refs to later-defined classes (as in the original tail).
 Requirement.model_rebuild()
 InverseDesignRequest.model_rebuild()
-# Resolve VerificationDoe.doe_plan forward reference to DOEPlan (defined
-# above) — circular-import guard in tradeoff_schemas keeps it lazy.
-from .tradeoff_schemas import VerificationDoe  # TradeOffAnalysis: imported above
-TradeOffAnalysis.model_rebuild()
-VerificationDoe.model_rebuild()

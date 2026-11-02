@@ -20,6 +20,13 @@ from sqlalchemy.orm import Session
 
 from ....clock import utcnow
 from ....config import get_settings
+from ....domain.gate_input import (
+    DocumentData,
+    FormulationData,
+    GateInput,
+    MeasuredValue,
+    WaiverData,
+)
 from ....db.models import FormulationVersion, MeasurementRow
 from ....db.models_lab import MeasurementPickRow
 from ....db.models_plm import (
@@ -84,7 +91,9 @@ class Check:
         self.items.append({"key": item_key, "message": message,
                            "waivable": self.key in WAIVABLE if waivable is None else waivable})
 
-    def to_dict(self, waivers: dict[tuple[str, str, str | None], ReleaseGateWaiverRow]) -> dict[str, Any]:
+    def to_dict(
+        self, waivers: dict[tuple[str, str, str | None], ReleaseGateWaiverRow | WaiverData]
+    ) -> dict[str, Any]:
         items = []
         for it in self.items:
             # A waiver only applies when it was granted for this exact failure
@@ -198,7 +207,7 @@ def _items(session: Session, rev: ProductRevisionRow) -> tuple[FormulationVersio
     return fv, ghs_service.formulation_version_items(session, fv.id)
 
 
-def _check_total(c: Check, fv: FormulationVersion | None) -> None:
+def _check_total(c: Check, fv: FormulationVersion | FormulationData | None) -> None:
     if fv is None:
         c.fail("formulation_version", "修订版未关联配方版本")
         return
@@ -263,35 +272,56 @@ def _check_substances(session: Session, c: Check, items: list[dict], regs: list[
     return first
 
 
-def _check_objectives(session: Session, c: Check, rev: ProductRevisionRow) -> None:
-    acceptance = (rev.spec_snapshot or {}).get("acceptance") or []
+def _fetch_measured(
+    session: Session, winning_experiment_id: str | None
+) -> tuple[dict[str, MeasurementRow], dict[str, str]]:
+    """Reviewed measurements + manual picks for the winning experiment.
+
+    Split out of ``_check_objectives`` (stage 4 / SR-022) so the check
+    itself runs on pure data; the query block is verbatim.
+    """
+    measured: dict[str, MeasurementRow] = {}
+    picks: dict[str, str] = {}
+    if winning_experiment_id is None:
+        return measured, picks
+    for m in session.execute(
+        select(MeasurementRow).where(MeasurementRow.experiment_id == winning_experiment_id,
+                                     MeasurementRow.review_status == "reviewed")
+        .order_by(MeasurementRow.created_at)
+    ).scalars():
+        measured[m.metric] = m
+    # W1-1: a manual pick wins over the latest reviewed value — the same
+    # precedence ``representative_values`` / ``sync_mirror`` already use.
+    # A pick is honoured only while its measurement is still reviewed
+    # (an amend sends a value back to unreviewed); otherwise, and when
+    # there is no pick, behaviour is unchanged (latest reviewed wins).
+    picks = {p.metric: p.measurement_id for p in session.execute(
+        select(MeasurementPickRow).where(
+            MeasurementPickRow.experiment_id == winning_experiment_id)).scalars()}
+    for metric, measurement_id in picks.items():
+        picked = session.get(MeasurementRow, measurement_id)
+        if (picked is not None and picked.review_status == "reviewed"
+                and picked.experiment_id == winning_experiment_id):
+            measured[metric] = picked
+    return measured, picks
+
+
+def _check_objectives(
+    c: Check,
+    acceptance: list[dict],
+    measured: dict[str, MeasurementRow | MeasuredValue],
+    picks: dict[str, str],
+    winning_experiment_id: str | None,
+) -> None:
+    """Pure objectives check: ``measured``/``picks`` are pre-fetched (rows
+    or ``MeasuredValue`` dataclasses — only ``.value`` / ``.unit`` / ``.id``
+    are read, so both work). Callers fetch via ``_fetch_measured`` or
+    carry them in a ``GateInput``."""
     if not acceptance:
         c.notes.append("规格快照未定义关键指标（spec_snapshot.acceptance），本项不适用")
         c.not_applicable = True
         return
-    measured: dict[str, MeasurementRow] = {}
-    picks: dict[str, str] = {}
-    if rev.winning_experiment_id is not None:
-        for m in session.execute(
-            select(MeasurementRow).where(MeasurementRow.experiment_id == rev.winning_experiment_id,
-                                         MeasurementRow.review_status == "reviewed")
-            .order_by(MeasurementRow.created_at)
-        ).scalars():
-            measured[m.metric] = m
-        # W1-1: a manual pick wins over the latest reviewed value — the same
-        # precedence ``representative_values`` / ``sync_mirror`` already use.
-        # A pick is honoured only while its measurement is still reviewed
-        # (an amend sends a value back to unreviewed); otherwise, and when
-        # there is no pick, behaviour is unchanged (latest reviewed wins).
-        picks = {p.metric: p.measurement_id for p in session.execute(
-            select(MeasurementPickRow).where(
-                MeasurementPickRow.experiment_id == rev.winning_experiment_id)).scalars()}
-        for metric, measurement_id in picks.items():
-            picked = session.get(MeasurementRow, measurement_id)
-            if (picked is not None and picked.review_status == "reviewed"
-                    and picked.experiment_id == rev.winning_experiment_id):
-                measured[metric] = picked
-    else:
+    if winning_experiment_id is None:
         c.notes.append("修订版未指定定型实验（winning_experiment_id）")
     for a in acceptance:
         metric = a.get("metric")
@@ -342,7 +372,7 @@ def _ghs_constraints_for_revision(session: Session, rev: ProductRevisionRow):
     return merged
 
 
-def _classification_properties(docs: list[RegulatoryDocumentRow]) -> dict | None:
+def _classification_properties(docs: list[RegulatoryDocumentRow | DocumentData]) -> dict | None:
     """Mixture properties (flash point, boiling point, pH …) the package's SDS / label were classified with."""
     for d in docs:
         if d.doc_type in ("sds", "label"):
@@ -533,7 +563,7 @@ def _facts(d: RegulatoryDocumentRow) -> dict | None:
     return (d.content.get("meta") or {}).get("facts")
 
 
-def _check_consistency(c: Check, docs: list[RegulatoryDocumentRow]) -> None:
+def _check_consistency(c: Check, docs: list[RegulatoryDocumentRow | DocumentData]) -> None:
     values: dict[str, list[tuple[str, float]]] = {}
     for d in docs:
         f = _facts(d)
@@ -567,7 +597,7 @@ def _check_consistency(c: Check, docs: list[RegulatoryDocumentRow]) -> None:
     c.evidence["compared"] = {k: v for k, v in values.items()}
 
 
-def _check_sds_label(c: Check, docs: list[RegulatoryDocumentRow]) -> None:
+def _check_sds_label(c: Check, docs: list[RegulatoryDocumentRow | DocumentData]) -> None:
     """SDS / label consistency, compared within one regulation only: a CN
     SDS and an EU SDS legitimately differ (different rule sets), so the
     comparison key is (lang, regulation), never lang alone."""
@@ -608,7 +638,7 @@ def _norm(v: Any) -> Any:
     return sorted(v) if isinstance(v, list) else v
 
 
-def _check_fields(c: Check, docs: list[RegulatoryDocumentRow]) -> None:
+def _check_fields(c: Check, docs: list[RegulatoryDocumentRow | DocumentData]) -> None:
     for d in docs:
         missing = (d.content.get("validation") or {}).get("missing") or []
         if missing:
@@ -667,6 +697,86 @@ def _run_check(checks: dict[str, Check], key: str, fn, *args) -> Any:
         return None
 
 
+def build_gate_input(session: Session, revision_id: str) -> GateInput:
+    """Row -> GateInput adapter (stage 4 / SR-022), kept inside gate.py.
+
+    Every read here is one ``evaluate()`` already performs (same helpers,
+    same queries); the adapter only freezes the results into plain data.
+    It never runs a check, so ``evaluate_input`` on its output judges
+    exactly the data ``evaluate()`` sees.
+    """
+    rev = session.get(ProductRevisionRow, revision_id)
+    if rev is None:
+        raise GateError("产品修订版不存在")
+    product = session.get(ProductRow, rev.product_id)
+    fv, items = _items(session, rev)
+    docs, problems = select_package_documents(session, rev)
+    measured_rows, picks = _fetch_measured(session, rev.winning_experiment_id)
+    return GateInput(
+        revision_id=rev.id,
+        product_code=product.code if product else None,
+        rev=rev.rev,
+        formulation=FormulationData(snapshot=fv.snapshot, version_id=fv.id) if fv is not None else None,
+        items=items,
+        documents=[DocumentData(
+            id=d.id, doc_type=d.doc_type, lang=d.lang, version_no=d.version_no, status=d.status,
+            batch_id=d.batch_id, regulation=getattr(d, "regulation", None) or DEFAULT_REGULATION,
+            content=d.content or {}) for d in docs],
+        document_problems=problems,
+        acceptance=(rev.spec_snapshot or {}).get("acceptance") or [],
+        measured={metric: MeasuredValue(id=m.id, value=m.value, unit=m.unit)
+                  for metric, m in measured_rows.items()},
+        picks=picks,
+        winning_experiment_id=rev.winning_experiment_id,
+        waivers={k: WaiverData(id=w.id, reason=w.reason, waived_by=w.waived_by,
+                                created_at=w.created_at)
+                 for k, w in waivers_for(session, rev.id).items()},
+    )
+
+
+def evaluate_input(gate_input: GateInput) -> dict[str, Any]:
+    """Pure-structure gate evaluation (stage 4 / SR-022): no Session, no DB.
+
+    Runs the checks that depend only on ``GateInput``: formula_total,
+    objectives, documents, consistency, sds_label, required_fields, and
+    data_gaps when ``classification_results`` were supplied. The three
+    checks that need the live GHS engine / regulatory data
+    (substance_data, red_lines, classification_current) are reported
+    not_applicable with a note; use ``evaluate()`` for the full gate.
+    There is deliberately no ``passed`` key: pass/fail over the full
+    gate requires ``evaluate()``. ``pure_passed`` covers only the pure
+    checks.
+    """
+    checks = {key: Check(key, code, title) for key, code, title in CHECKS}
+    _run_check(checks, "formula_total", _check_total, checks["formula_total"], gate_input.formulation)
+    _run_check(checks, "objectives", _check_objectives, checks["objectives"],
+               gate_input.acceptance, gate_input.measured, gate_input.picks,
+               gate_input.winning_experiment_id)
+    _run_check(checks, "documents", _check_documents, checks["documents"], gate_input.document_problems)
+    _run_check(checks, "consistency", _check_consistency, checks["consistency"], gate_input.documents)
+    _run_check(checks, "sds_label", _check_sds_label, checks["sds_label"], gate_input.documents)
+    _run_check(checks, "required_fields", _check_fields, checks["required_fields"], gate_input.documents)
+    if gate_input.classification_results is None:
+        checks["data_gaps"].not_applicable = True
+        checks["data_gaps"].notes.append("未提供分类结果，数据缺口无法判定（需 evaluate() 的 GHS 引擎输出）")
+    else:
+        _run_check(checks, "data_gaps", _check_gaps, checks["data_gaps"],
+                   gate_input.classification_results)
+    for key in ("substance_data", "red_lines", "classification_current"):
+        checks[key].not_applicable = True
+        checks[key].notes.append("需会话与 GHS 引擎/法规数据，纯结构评估不适用（见 evaluate()）")
+    out = [checks[key].to_dict(gate_input.waivers) for key, _c, _t in CHECKS]
+    for o, (key, _c, _t) in zip(out, CHECKS, strict=True):
+        if checks[key].not_applicable and o["status"] == "pass":
+            o["status"] = "not_applicable"
+    pure_keys = ("formula_total", "objectives", "documents", "consistency",
+                 "sds_label", "required_fields", "data_gaps")
+    pure_passed = all(o["status"] in ("pass", "waived", "not_applicable")
+                      for o in out if o["key"] in pure_keys)
+    return {"revision_id": gate_input.revision_id, "product_code": gate_input.product_code,
+            "rev": gate_input.rev, "checks": out, "pure_evaluation": True, "pure_passed": pure_passed}
+
+
 def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
     rev = session.get(ProductRevisionRow, revision_id)
     if rev is None:
@@ -700,7 +810,11 @@ def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
                        for d in docs if d.doc_type in ("sds", "label")}) or [DEFAULT_REGULATION]
         components = _run_check(checks, "substance_data", _check_substances, session,
                                 checks["substance_data"], items, regs) or []
-    _run_check(checks, "objectives", _check_objectives, session, checks["objectives"], rev)
+    # The fetch stays inside _run_check so a query failure still lands as
+    # a fail-closed objectives item, exactly as before the SR-022 split.
+    _run_check(checks, "objectives", lambda: _check_objectives(
+        checks["objectives"], (rev.spec_snapshot or {}).get("acceptance") or [],
+        *_fetch_measured(session, rev.winning_experiment_id), rev.winning_experiment_id))
     if not docs_failed:
         _run_check(checks, "documents", _check_documents, checks["documents"], problems)
         _run_check(checks, "consistency", _check_consistency, checks["consistency"], docs)

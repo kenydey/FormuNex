@@ -17,7 +17,7 @@ from app.db.database import Base
 from app.db.models import ExperimentRow, MeasurementRow
 from app.db.models_lab import MeasurementPickRow
 from app.db.models_plm import ProductRevisionRow
-from app.services.plm.release.gate import Check, _check_objectives
+from app.services.plm.release.gate import Check, _check_objectives, _fetch_measured
 
 
 @pytest.fixture()
@@ -57,7 +57,9 @@ def _setup(session, *, pick_id=None, stale_pick=False):
 def test_pick_wins_over_latest_reviewed(session):
     rev, old, _new = _setup(session, pick_id="old")
     c = Check("objectives", "G3", "目标契约关键指标达标")
-    _check_objectives(session, c, rev)
+    measured, picks = _fetch_measured(session, rev.winning_experiment_id)
+    _check_objectives(c, (rev.spec_snapshot or {}).get("acceptance") or [],
+                      measured, picks, rev.winning_experiment_id)
     assert c.items == []
     assert c.evidence["salt_spray_hours"] == {"value": 600.0, "measurement_id": old.id, "basis": "manual"}
 
@@ -65,7 +67,9 @@ def test_pick_wins_over_latest_reviewed(session):
 def test_no_pick_keeps_latest_reviewed_behaviour(session):
     rev, _old, new = _setup(session)
     c = Check("objectives", "G3", "目标契约关键指标达标")
-    _check_objectives(session, c, rev)
+    measured, picks = _fetch_measured(session, rev.winning_experiment_id)
+    _check_objectives(c, (rev.spec_snapshot or {}).get("acceptance") or [],
+                      measured, picks, rev.winning_experiment_id)
     assert len(c.items) == 1
     assert c.evidence["salt_spray_hours"]["measurement_id"] == new.id
     assert c.evidence["salt_spray_hours"]["basis"] == "latest"
@@ -74,6 +78,8 @@ def test_no_pick_keeps_latest_reviewed_behaviour(session):
 def test_stale_pick_falls_back_to_latest_reviewed(session):
     rev, _old, new = _setup(session, pick_id="old", stale_pick=True)
     c = Check("objectives", "G3", "目标契约关键指标达标")
-    _check_objectives(session, c, rev)
+    measured, picks = _fetch_measured(session, rev.winning_experiment_id)
+    _check_objectives(c, (rev.spec_snapshot or {}).get("acceptance") or [],
+                      measured, picks, rev.winning_experiment_id)
     assert len(c.items) == 1
     assert c.evidence["salt_spray_hours"]["measurement_id"] == new.id

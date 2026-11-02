@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
-from .schemas import ObjectiveSpec
+from .schemas.doe import ObjectiveSpec
 
 if TYPE_CHECKING:
     # Avoid a circular import with app.domain.schemas (DOEPlan is defined
