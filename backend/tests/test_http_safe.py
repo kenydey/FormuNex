@@ -344,6 +344,9 @@ def test_every_redirect_hop_is_resolved_and_judged_again(dns):
 
 
 def test_a_proxied_request_is_handed_to_the_proxy_unpinned(dns, monkeypatch):
+    # Stage 5 / SR-082: proxy mode no longer passes everything through —
+    # only allowlisted hosts reach the proxy; the rest of the contract
+    # (NO_PROXY → direct and pinned, unmatched scheme → direct) is unchanged.
     monkeypatch.setenv("https_proxy", "http://proxy.invalid:3128")
     monkeypatch.setenv("no_proxy", "internal-ok.example")
     direct, proxied = Recorder(), Recorder()
@@ -353,8 +356,10 @@ def test_a_proxied_request_is_handed_to_the_proxy_unpinned(dns, monkeypatch):
         handed.append(proxy)
         return proxied.transport
 
-    with httpx.Client(transport=PinnedTransport(direct=direct.transport, via_proxy=via)) as client:
-        client.get("https://far.example/a")  # proxy resolves the name, not us
+    transport = PinnedTransport(direct=direct.transport, via_proxy=via,
+                                proxy_allowed_hosts={"far.example"})
+    with httpx.Client(transport=transport) as client:
+        client.get("https://far.example/a")  # allowlisted: proxy resolves the name, not us
         dns.set("internal-ok.example", [PUBLIC])
         client.get("https://internal-ok.example/b")  # NO_PROXY → direct and pinned
         dns.set("plain.example", [PUBLIC])
@@ -364,6 +369,23 @@ def test_a_proxied_request_is_handed_to_the_proxy_unpinned(dns, monkeypatch):
     assert [r.url.host for r in proxied.requests] == ["far.example"]  # untouched
     assert [r.url.host for r in direct.requests] == [PUBLIC, PUBLIC]
     assert dns.resolutions == 2  # far.example was never looked up here
+
+
+def test_a_proxied_request_to_an_unlisted_host_is_refused(dns, monkeypatch):
+    # Stage 5 / SR-082: fail-closed — no allowlist (the default) refuses
+    # every proxied request before anything leaves, and the refusal never
+    # resolves the host here either.
+    monkeypatch.setenv("https_proxy", "http://proxy.invalid:3128")
+    direct, proxied = Recorder(), Recorder()
+
+    def via(proxy: str):
+        return proxied.transport
+
+    with httpx.Client(transport=PinnedTransport(direct=direct.transport, via_proxy=via)) as client:
+        with pytest.raises(UnsafeAddressError):
+            client.get("https://far.example/a")
+    assert proxied.requests == []
+    assert dns.resolutions == 0
 
 
 # ── against a real socket: Host header, no connection reuse, TLS name ─────────

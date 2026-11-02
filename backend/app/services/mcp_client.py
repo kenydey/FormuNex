@@ -151,6 +151,14 @@ def save_mcp_servers(
             preset = True
         else:
             preset = bool(existing.get(sid, {}).get("admin_preset"))
+        # Stage 5 / SR-084: the readonly-tool allowlist is admin
+        # configuration, like admin_preset. An incoming entry that carries
+        # the key replaces it (an empty list clears it); an entry without
+        # the key (toggle / delete re-saves, imports) keeps the stored one.
+        if "readonly_tool_allowlist" in s:
+            allowlist = [str(t) for t in (s.get("readonly_tool_allowlist") or [])]
+        else:
+            allowlist = [str(t) for t in (existing.get(sid, {}).get("readonly_tool_allowlist") or [])]
         cleaned.append(
             {
                 "id": sid,
@@ -160,6 +168,7 @@ def save_mcp_servers(
                 "env": dict(s.get("env") or {}),
                 "transport": str(s.get("transport") or "stdio"),
                 "admin_preset": preset,
+                "readonly_tool_allowlist": allowlist,
             }
         )
     save_prefs({"mcp_servers": cleaned})
@@ -188,6 +197,44 @@ def is_writeish_tool(tool_name: str, annotations: dict | None = None) -> bool:
     "name looks write-like" to "not provably read-only from metadata".
     """
     return classify_tool(tool_name, annotations) != "read"
+
+
+# Stage 5 / SR-084: name fragments that mark a tool as file / database /
+# execution surface, independent of what the server *claims* in its
+# annotations. A compromised server can lie about readOnlyHint; it cannot
+# lie about its tool names without renaming the tools its clients use.
+_SENSITIVE_TOOL_FRAGMENTS = (
+    # "path" is deliberately absent: it false-positives on biology
+    # "pathway" tools, which are not file surface.
+    "file", "directory", "filesystem", "disk",
+    "sql", "database", "db", "sqlite", "postgres", "mysql", "mongo", "redis",
+    "write", "delete", "create", "update", "insert", "drop", "remove",
+    "exec", "shell",
+)
+
+
+def is_high_sensitivity_server(descriptors: list[dict] | None) -> bool:
+    """True when a server's tool set marks it high-sensitivity (SR-084).
+
+    Default口径: any tool that is not provably read-only from its
+    annotations (write or undeclared), or any tool whose name exposes
+    file / database / execution surface. ``None`` (unlistable server)
+    is not high-sensitivity here — that path is already denied by the
+    writeish check, which treats undeclared as write-class.
+    """
+    if not descriptors:
+        return False
+    for t in descriptors:
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or "")
+        ann = t.get("annotations") if isinstance(t.get("annotations"), dict) else {}
+        if classify_tool(name, ann) != "read":
+            return True
+        lowered = name.lower()
+        if any(frag in lowered for frag in _SENSITIVE_TOOL_FRAGMENTS):
+            return True
+    return False
 
 
 def _sleep(seconds: float) -> None:
@@ -847,10 +894,28 @@ def call_tool_readonly(
     Only provably read-only tools (``readOnlyHint=true``) execute here. Write
     tools — and undeclared tools, which default to write-class — are denied
     and must go through the session-granted path.
+
+    Stage 5 / SR-084: annotations are server self-declarations, so a
+    compromised server can label a destructive tool read-only and walk
+    through this path. On a high-sensitivity server (any write / file /
+    database / execution tool in its set) the called tool must *also* be
+    on the admin-configured ``readonly_tool_allowlist``; without a list
+    the call is denied and the admin must allowlist it explicitly.
+    Pure-read servers keep the annotation-only check, unchanged.
     """
     if settings is not None and not settings.mcp_client_enabled:
         return {"ok": False, "error": "mcp_client_enabled is off"}
-    if is_writeish_tool(tool_name, get_tool_annotations(server_id, tool_name)):
+    server = next((s for s in _prefs_servers() if s.get("id") == server_id and s.get("enabled")), None)
+    # One probe, reused for both the annotation check and the
+    # sensitivity check; [] (not None) keeps get_tool_annotations from
+    # probing a second time when the server is unlistable.
+    descriptors: list[dict] = []
+    if server is not None:
+        probed = probe_server(server)
+        if isinstance(probed, dict) and probed.get("ok"):
+            descriptors = probed.get("tools") or []
+    annotations = get_tool_annotations(server_id, tool_name, descriptors=descriptors)
+    if is_writeish_tool(tool_name, annotations):
         return {
             "ok": False,
             "error": f"write-like tool denied: {tool_name}",
@@ -859,6 +924,17 @@ def call_tool_readonly(
                 "tool_name": tool_name,
             },
         }
+    if server is not None and is_high_sensitivity_server(descriptors):
+        allowlist = [str(t) for t in (server.get("readonly_tool_allowlist") or [])]
+        if tool_name not in allowlist:
+            return {
+                "ok": False,
+                "error": f"tool not on the server's readonly allowlist: {tool_name}",
+                "mcp_permission_required": {
+                    "server_id": server_id,
+                    "tool_name": tool_name,
+                },
+            }
     return _call_tool(server_id, tool_name, arguments, settings=settings,
                      is_write=False, session_id=session_id, project_id=project_id)
 

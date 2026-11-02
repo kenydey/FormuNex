@@ -543,26 +543,31 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 
 class _RedactQueryToken(logging.Filter):
-    """The task stream takes the bearer token as ``?token=`` (EventSource cannot set headers); uvicorn's access log would
+    """The task stream takes a one-time ticket as a query parameter (EventSource cannot set headers); uvicorn's access log would
     write it, in clear, next to every progress connection. Replace the value before the record is formatted.
 
     Stage 5 / SR-095: the filter also sits on the root logger, so every
     stdlib logger (including the dispatch kernel, converted off loguru
-    this batch) gets the same redaction — one surface for SR-081's token
-    instead of one filter per logger. The substitution is idempotent
+    this batch) gets the same redaction — one surface for the stream
+    credential in the URL (Stage 5 / SR-081: ticket, previously the
+    bearer token) instead of one filter per logger. The substitution is idempotent
     (``***`` re-matches to itself), so the uvicorn.access copy and the
     root copy never double-redact. Both the message and %-args are
     scrubbed: f-string logging puts the token in the message itself."""
 
     _TOKEN = re.compile(r"([?&]token=)[^&\s\"]+")
+    _TICKET = re.compile(r"([?&]ticket=)[^&\s\"]+")
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
             record.msg = self._TOKEN.sub(r"\1***", record.msg)
+            record.msg = self._TICKET.sub(r"\1***", record.msg)
         if isinstance(record.args, tuple):
             record.args = tuple(self._TOKEN.sub(r"\1***", a) if isinstance(a, str) else a for a in record.args)
+            record.args = tuple(self._TICKET.sub(r"\1***", a) if isinstance(a, str) else a for a in record.args)
         elif isinstance(record.args, dict):
             record.args = {k: (self._TOKEN.sub(r"\1***", v) if isinstance(v, str) else v) for k, v in record.args.items()}
+            record.args = {k: (self._TICKET.sub(r"\1***", v) if isinstance(v, str) else v) for k, v in record.args.items()}
         return True
 
 

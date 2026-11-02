@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 from urllib.parse import quote
-from .http_safe import make_client
+from .http_safe import ssrf_safe_client
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,11 @@ def lookup_chebi(query: str, *, limit: int = 5, timeout_s: float = 6.0) -> list[
             "exact": "false",
         }
         url = f"{_OLS_SEARCH}?q={quote(q)}&ontology=chebi&rows={params['rows']}"
-        with make_client(timeout=timeout_s, follow_redirects=True) as client:
+        # Stage 5 / SR-083: the old client followed redirects unpinned, so
+        # a redirect from EBI to an internal address was fetched. The
+        # pinned client re-resolves and re-judges every hop, like the
+        # pdf/full-text paths already do.
+        with ssrf_safe_client(timeout=timeout_s, follow_redirects=True) as client:
             resp = client.get(
                 url,
                 headers={"Accept": "application/json", "User-Agent": "FormuNex/1.0"},

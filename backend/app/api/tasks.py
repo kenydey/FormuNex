@@ -234,6 +234,26 @@ async def _poll_until_terminal(
     )
 
 
+@router.post("/tasks/{task_id}/ticket")
+async def mint_task_stream_ticket(task_id: str, request: Request) -> dict:
+    """Stage 5 / SR-081: mint a one-time ticket for this task's SSE stream.
+
+    Native EventSource cannot set an Authorization header, and the old
+    answer — the bearer token in the stream URL — leaked it into browser
+    history, proxy logs and Referer headers. The ticket is single-use,
+    bound to this task id, and expires in 300 s; the caller opens
+    ``GET /api/tasks/{task_id}/stream?ticket=...`` with it. Ownership
+    matches the stream endpoint: the minting caller must own the task.
+    """
+    from ..middleware.api_auth import assert_owner, mint_task_ticket, request_owner
+
+    persisted = task_manager.get(task_id)
+    owner_to_check = persisted.owner_id if persisted else None
+    owner = request_owner(request)
+    assert_owner(owner_to_check, owner)
+    return {"ticket": mint_task_ticket(task_id, owner), "expires_in": 300}
+
+
 @router.get("/tasks/{task_id}/stream")
 async def stream_task_progress(task_id: str, request: Request) -> StreamingResponse:
     from ..middleware.api_auth import assert_owner, request_owner

@@ -71,7 +71,12 @@ async def structure_image_endpoint(
     供「图片创建项目 / 图片提问」共用。识别失败不抛错——返回
     ``recognized=False`` 与 warning，由前端决定降级为纯文字流程。
     """
-    content = await image.read()
+    # Stage 5 / SR-046: the old unbounded read() let one oversized image
+    # exhaust the worker; the 10 MiB the docstring promises is now enforced
+    # while reading (413 past the cap), like every other upload path.
+    from ..api._uploads import read_upload_capped
+
+    content = await read_upload_capped(image, image.filename or "structure.png", limit=10 * 1024 * 1024)
     try:
         # The recognizer waits on a Celery result (up to molscribe_timeout_s, 180 s
         # by default) — on the event loop that froze the whole worker for the

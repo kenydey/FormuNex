@@ -19,9 +19,11 @@ transport, so each hop is re-resolved and re-judged (the callers keep their own 
 Two deliberate limits:
 
 * A request that an environment proxy (``HTTPS_PROXY`` / ``NO_PROXY``) handles is passed to that
-  proxy unpinned: the proxy resolves the name, not this process, and an egress proxy is where that
-  policy has to live. (httpx also ignores env proxies once a ``transport=`` is given, which would
-  have broken every proxied deployment.)
+  proxy unpinned: the proxy resolves the name, not this process. Stage 5 / SR-082 closes the
+  hole that left: in proxy mode the host must be on the operator's
+  ``egress_proxy_allowed_hosts`` list, otherwise the request is refused before it leaves. An
+  empty list refuses every proxied request. (httpx also ignores env proxies once a
+  ``transport=`` is given, which would have broken every proxied deployment.)
 * The pinned transport keeps no idle connections. The pool keys a connection by *address*, so a
   kept-alive connection could otherwise carry a later request for a different host that merely
   shares the IP — over a certificate that was never checked for that name.
@@ -263,12 +265,20 @@ class PinnedTransport(httpx.BaseTransport):
         verify: ssl.SSLContext | bool | str | None = None,
         direct: httpx.BaseTransport | None = None,
         via_proxy: Callable[[str], httpx.BaseTransport] | None = None,
+        proxy_allowed_hosts: Any = None,
     ) -> None:
         self._verify = shared_ssl_context() if verify is None else verify
         self._direct = direct or httpx.HTTPTransport(
             verify=self._verify, limits=httpx.Limits(max_keepalive_connections=0)
         )
         self._via_proxy = via_proxy or self._default_via_proxy
+        # Stage 5 / SR-082: None means "no list was supplied", which is
+        # fail-closed — a proxied request is refused until the operator
+        # allowlists its host. Exact host match after lowercasing.
+        self._proxy_allowed_hosts = (
+            None if proxy_allowed_hosts is None
+            else {str(h).lower().rstrip(".") for h in proxy_allowed_hosts}
+        )
         self._proxied: dict[str, httpx.BaseTransport] = {}
         self._lock = threading.Lock()
 
@@ -285,6 +295,12 @@ class PinnedTransport(httpx.BaseTransport):
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         proxy = env_proxy_for(request.url)
         if proxy:
+            host = (request.url.host or "").lower().rstrip(".")
+            if self._proxy_allowed_hosts is None or host not in self._proxy_allowed_hosts:
+                raise UnsafeAddressError(
+                    f"proxied host {host!r} is not on egress_proxy_allowed_hosts",
+                    request=request,
+                )
             return self._proxy_transport(proxy).handle_request(request)
 
         host = request.url.raw_host.decode("ascii") if request.url.raw_host else ""
@@ -315,4 +331,10 @@ def ssrf_safe_client(**kwargs: Any) -> httpx.Client:
     if "transport" in kwargs or "mounts" in kwargs:
         raise TypeError("ssrf_safe_client installs its own transport")
     verify = kwargs.setdefault("verify", shared_ssl_context())
-    return make_client(transport=PinnedTransport(verify=verify), **kwargs)
+    try:
+        from ..config import get_settings
+
+        allowed = get_settings().egress_proxy_allowed_hosts
+    except Exception:  # noqa: BLE001 - settings unavailable in bare unit tests
+        allowed = None
+    return make_client(transport=PinnedTransport(verify=verify, proxy_allowed_hosts=allowed), **kwargs)

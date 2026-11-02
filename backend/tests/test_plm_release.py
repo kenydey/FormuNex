@@ -192,8 +192,11 @@ def test_login_refresh_logout_and_lockout(env):
 
     for _ in range(5):
         assert c.post("/api/identity/login", json={"username": "rd", "password": "wrong"}).status_code == 401
+    # Stage 5 / SR-047: a locked account answers exactly like a wrong
+    # password — the old distinct "locked" message was an account-existence
+    # oracle. The lock fact goes only to the audit log.
     locked = c.post("/api/identity/login", json={"username": "rd", "password": PASSWORD})
-    assert locked.status_code == 401 and "锁定" in locked.json()["detail"]
+    assert locked.status_code == 401 and locked.json()["detail"] == "用户名或密码错误"
     assert c.post("/api/identity/login", json={"username": "ghost", "password": "x"}).json()["detail"] == "用户名或密码错误"
 
 

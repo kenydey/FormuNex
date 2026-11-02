@@ -973,6 +973,27 @@ def diff_document(document_id: str, against: str | None = None) -> dict[str, Any
         return {"from": other.id, "to": row.id, **diff_documents(other.content, row.content)}
 
 
+def _require_docx_bytes(data: bytes) -> None:
+    """Stage 5 / SR-046: a template upload must be a structurally valid .docx.
+
+    The old check (``PK`` prefix only) accepted any zip — including a zip
+    whose entries a docx reader would choke on mid-render. ``testzip``
+    verifies every entry's CRC, and ``[Content_Types].xml`` is mandatory
+    in OOXML, so a file passing here is at least a well-formed container;
+    the docxtpl parse below still decides whether it is a usable template.
+    """
+    import zipfile
+    from io import BytesIO
+
+    try:
+        with zipfile.ZipFile(BytesIO(data)) as zf:
+            if zf.testzip() is not None:
+                raise zipfile.BadZipFile("corrupt entry")
+            zf.read("[Content_Types].xml")
+    except Exception:  # noqa: BLE001 - any container defect means "not a docx"
+        raise HTTPException(status_code=422, detail="模板必须是 .docx 文件") from None
+
+
 @router.post("/templates", status_code=201)
 async def upload_template(
     file: UploadFile = File(...),
@@ -984,9 +1005,10 @@ async def upload_template(
     """Upload a Word template (docxtpl / Jinja tags) used for future renderings of that document type."""
     from ..services.plm.documents import service as docs
 
-    data = await file.read()
-    if not data.startswith(b"PK"):
-        raise HTTPException(status_code=422, detail="模板必须是 .docx 文件")
+    from ..api._uploads import read_upload_capped
+
+    data = await read_upload_capped(file, file.filename or "template")
+    _require_docx_bytes(data)
     try:
         from io import BytesIO
 
@@ -1045,9 +1067,10 @@ async def preview_template(
         raise HTTPException(status_code=422, detail="需上传模板文件或提供 template_id")
     with _session() as session:
         if file is not None:
-            data = await file.read()
-            if not data.startswith(b"PK"):
-                raise HTTPException(status_code=422, detail="模板必须是 .docx 文件")
+            from ..api._uploads import read_upload_capped
+
+            data = await read_upload_capped(file, file.filename or "template")
+            _require_docx_bytes(data)
         else:
             row = session.get(DocTemplateRow, template_id)
             if row is None or row.engine != "docx":

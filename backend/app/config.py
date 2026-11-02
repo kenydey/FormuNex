@@ -1167,6 +1167,14 @@ class Settings(BaseSettings):
     # X-Forwarded-For. 0 = none: the TCP peer is the client. Without this every user behind the proxy shares one
     # rate-limit bucket (the proxy's address); setting it higher than the real number lets a client choose its own bucket.
     trusted_proxy_hops: int = Field(default=0, ge=0, le=5)
+    # Stage 5 / SR-082: hosts the pinned transport may reach through an
+    # environment proxy (HTTPS_PROXY / NO_PROXY). A request that an env
+    # proxy handles is otherwise passed to the proxy unpinned — the proxy
+    # resolves the name, so a proxy-side misconfiguration re-opens SSRF.
+    # Empty (the default) refuses ALL proxied requests: an operator who
+    # runs behind an egress proxy must list the fetchable hosts here.
+    # Env form is a JSON list, e.g. FORMUNEX_EGRESS_PROXY_ALLOWED_HOSTS='["www.ebi.ac.uk"]'.
+    egress_proxy_allowed_hosts: list[str] = Field(default_factory=list)
     api_token: str | None = None
     ingest_max_upload_bytes: int = 20 * 1024 * 1024  # 20 MiB per file
     # P2: URL 下载上限 —— 无上限时一个超大 PDF/页面可吃掉 worker 内存。

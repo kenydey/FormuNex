@@ -490,6 +490,12 @@ def test_readonly_denies_wordlist_outside_destructive_tools(monkeypatch):
 
 
 def test_readonly_allows_declared_read(fake_session, monkeypatch):
+    # Stage 5 / SR-084: call_tool_readonly now probes the tool list once
+    # for the sensitivity check (production already probed once inside
+    # get_tool_annotations; the probe just moved). Stub the probe here
+    # so the test still counts exactly one tool execution.
+    monkeypatch.setattr(mcp_client, "probe_server",
+                        lambda s: {"ok": True, "tools": [{"name": "search", "annotations": {"readOnlyHint": True}}], "names": ["search"]})
     monkeypatch.setattr(mcp_client, "get_tool_annotations",
                         lambda *a, **k: {"readOnlyHint": True})
     planner, state, sleeps = fake_session

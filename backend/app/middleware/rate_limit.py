@@ -13,6 +13,10 @@ from starlette.responses import JSONResponse, Response
 # NOTE: order matters — the first matching prefix wins, so list more specific
 # paths (e.g. /api/research/deep) before their parents (e.g. /api/research).
 _RATE_RULES: tuple[tuple[str, str, int, float], ...] = (
+    # Stage 5 / SR-047: per-IP login throttle, stacked on top of the
+    # per-account lock-out — without it an attacker could spray passwords
+    # across many accounts without tripping any single account's lock.
+    ("POST", "/api/identity/login", 60, 60.0),
     ("POST", "/api/search/stream", 20, 60.0),
     ("POST", "/api/search", 30, 60.0),
     ("POST", "/api/research/deep", 3, 300.0),

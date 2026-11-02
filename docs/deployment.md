@@ -21,6 +21,7 @@
    - `FORMUNEX_DB_URL` —— 默认 `sqlite:///./data/formunex.db`；多 worker 生产改 `postgresql://…`
    - `FORMUNEX_DATALAB_API_URL` —— 仅当 `FORMUNEX_DATALAB_REQUIRED=true` 时必需
 3. 可选项：LLM vendor key 缺失时自动降级为离线实现，不阻塞启动。
+4. 出站代理（阶段 5 / SR-082）：文献 / 全文抓取走 SSRF 安全客户端，直接连接时只连解析后全为公网地址的 host；一旦环境设置了 `HTTPS_PROXY`（或 `HTTP_PROXY`），请求会经代理发出，解析与判定由代理负责。为此代理模式下代码再做一道白名单校验：`FORMUNEX_EGRESS_PROXY_ALLOWED_HOSTS`（JSON 列表，如 `'["www.ebi.ac.uk"]'`）列出允许经代理抓取的 host，未列出的 host 直接拒绝；**该列表为空时所有经代理的抓取都会被拒绝**——在代理后方部署时必须按实际抓取源填写，否则文献 / 全文抓取会失败。只设代理、不配白名单不是“放行”，是 fail-closed。
 4. 文档字体：受控文档（SDS / TDS / COA / 标签）的 PDF 必须嵌入中文字体，否则审核被拒。后端镜像已内置文泉驿微米黑（TrueType，Apache-2.0 / GPLv3 双许可）并设置 `FORMUNEX_PLM_DOC_FONT_PATH`；如需换用企业字体，挂载 TrueType（`.ttf` / TrueType `.ttc`）文件并改此变量即可（CFF 字体如 Noto CJK `.otc` 无法嵌入）。
 
 ## 启动

@@ -124,7 +124,13 @@ def _check_password(session: Session, user: UserRow | None, password: str, *, ac
     if not user.is_active:
         raise AuthError("账号已停用")
     if passwords.is_locked(user.locked_until, now):
-        raise AuthError("登录失败次数过多，账号已临时锁定")
+        # Stage 5 / SR-047: the locked state used to answer differently
+        # from a wrong password, confirming the account exists and is
+        # locked — an account-existence oracle. The caller now gets the
+        # generic failure; the lock fact goes only to the audit log.
+        hash_chain.append(session, actor=user.id, action=f"{action}.locked", entity_type="user", entity_id=user.id,
+                          detail={"locked": True})
+        raise AuthError(generic)
     if not passwords.verify_password(user.password_hash, password):
         user.failed_logins, user.locked_until = passwords.register_failure(user.failed_logins or 0, now)
         hash_chain.append(session, actor=user.id, action=f"{action}.failed", entity_type="user", entity_id=user.id,

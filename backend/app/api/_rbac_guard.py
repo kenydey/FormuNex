@@ -196,6 +196,10 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/plm/formula-mappings(/|$)"), "plm.document.write (import) OR formulation.freeze (create-revision)"),
     # Task cancel — ownership (assert_owner), not a permission.
     (re.compile(r"^/api/tasks/[^/]+/cancel$"), "ownership (assert_owner)"),
+    # Stage 5 / SR-081: stream ticket mint — ownership (assert_owner),
+    # not a permission; it serves the stream endpoint, which is itself
+    # owner-checked, and the ticket is single-use and task-bound.
+    (re.compile(r"^/api/tasks/[^/]+/ticket$"), "ownership (assert_owner)"),
     # G7 Excel imports — already endpoint-enforced (user.require in plm.py),
     # only never registered here; the audit flagged them as uncovered.
     (re.compile(r"^/api/plm/import/(formulas|companies)$"), "plm.document.write"),

@@ -30,6 +30,9 @@ class McpServerIn(BaseModel):
     enabled: bool = True
     env: dict[str, str] = Field(default_factory=dict)
     transport: str = "stdio"
+    # Stage 5 / SR-084: readonly tools an admin explicitly allows on a
+    # high-sensitivity server; empty denies every readonly call there.
+    readonly_tool_allowlist: list[str] = Field(default_factory=list)
 
 
 class McpServersReplace(BaseModel):

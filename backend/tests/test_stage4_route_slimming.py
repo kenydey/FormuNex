@@ -111,9 +111,11 @@ def test_route_line_caps():
     # the template parse/render raise sites); the cap moves with it.
     # 5-6 / SR-100 added the /substances/count endpoint (10 lines);
     # the cap moves with it for the same reason.
+    # 5-7 / SR-046 added the docx structure helper plus capped reads
+    # (23 lines); the cap moves with it for the same reason.
     caps = {
         "api/chat.py": 146,
-        "api/plm.py": 2008,
+        "api/plm.py": 2031,
         "api/plm_ws.py": 191,
     }
     for rel, cap in caps.items():

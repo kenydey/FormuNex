@@ -1,9 +1,12 @@
 """Bearer API token authentication — enabled by default for public deployments."""
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import secrets
+import threading
+import time
 from pathlib import Path
 
 from fastapi import Request
@@ -140,23 +143,16 @@ def _extract_bearer(request: Request) -> str | None:
 
 
 def _extract_token(request: Request) -> str | None:
-    """Bearer header, or ?token= on GET task stream endpoints (EventSource cannot set headers)."""
-    bearer = _extract_bearer(request)
-    if bearer:
-        return bearer
-    # EventSource (browser SSE) cannot set Authorization headers, so the task
-    # progress stream accepts ?token=. Restrict to the known task stream path
-    # to avoid leaking the token to unrelated /stream endpoints.
-    path = request.url.path
-    if (
-        request.method == "GET"
-        and path.startswith("/api/tasks/")
-        and path.endswith("/stream")
-    ):
-        query_token = request.query_params.get("token")
-        if query_token:
-            return query_token.strip()
-    return None
+    """Bearer token from the Authorization header, nothing else.
+
+    Stage 5 / SR-081 removed the old query-token branch: a bearer token in
+    a URL lands in browser history, proxy logs and Referer headers. Task
+    streams for header-less clients (native EventSource) now use the
+    single-use tickets from :func:`mint_task_ticket` instead, accepted by
+    the middleware gate — not by this extractor, so no other code path
+    can mistake a ticket for a bearer token.
+    """
+    return _extract_bearer(request)
 
 
 def _safe_eq(a: str, b: str) -> bool:
@@ -207,6 +203,63 @@ def _is_valid_access_token(provided: str) -> bool:
     return True
 
 
+# ── Stage 5 / SR-081: one-time task-stream tickets ─────────────────────────
+# A ticket is minted by an already-authenticated caller (POST
+# /api/tasks/{id}/ticket) and lets a header-less client open that one task's
+# SSE stream exactly once, within a short window. Unlike the bearer token it
+# replaces in URLs, a leaked ticket is useless after first use, is bound to
+# one task id, and carries no login identity beyond the owner recorded here.
+_TASK_TICKET_TTL_S = 300.0
+
+
+@dataclasses.dataclass
+class _TaskTicket:
+    task_id: str
+    owner: str
+    expires_at: float  # monotonic clock
+
+
+_TICKETS: dict[str, _TaskTicket] = {}
+_TICKET_LOCK = threading.Lock()
+
+
+def mint_task_ticket(task_id: str, owner: str, *, ttl_s: float = _TASK_TICKET_TTL_S) -> str:
+    """Mint a single-use stream ticket for *task_id*, owned by *owner*."""
+    ticket = secrets.token_urlsafe(32)
+    now = time.monotonic()
+    with _TICKET_LOCK:
+        for key in [k for k, v in _TICKETS.items() if v.expires_at <= now]:
+            del _TICKETS[key]
+        _TICKETS[ticket] = _TaskTicket(task_id=task_id, owner=owner, expires_at=now + ttl_s)
+    return ticket
+
+
+def consume_task_ticket(ticket: str, task_id: str) -> str | None:
+    """Consume *ticket*: return its owner iff live and bound to *task_id*.
+
+    Consumption is unconditional — a wrong-task or expired guess burns the
+    ticket, so a stolen ticket cannot be probed against other tasks.
+    """
+    with _TICKET_LOCK:
+        rec = _TICKETS.pop(ticket, None)
+    if rec is None or rec.task_id != task_id or rec.expires_at <= time.monotonic():
+        return None
+    return rec.owner
+
+
+def _accept_task_ticket(request: Request) -> str | None:
+    """Owner for a valid stream ticket on this request, else None."""
+    if request.method != "GET":
+        return None
+    parts = request.url.path.split("/")
+    if len(parts) != 5 or parts[1] != "api" or parts[2] != "tasks" or parts[4] != "stream":
+        return None
+    ticket = request.query_params.get("ticket")
+    if not ticket:
+        return None
+    return consume_task_ticket(ticket.strip(), parts[3])
+
+
 class ApiAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -216,6 +269,10 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         settings = get_settings()
         if not settings.api_auth_enabled or _is_public_path(request.url.path):
+            return await call_next(request)
+        ticket_owner = _accept_task_ticket(request)
+        if ticket_owner is not None:
+            request.state.task_ticket_owner = ticket_owner
             return await call_next(request)
         provided = _extract_token(request)
         # Signed-in user (方案 §4.4): a valid access token passes; revocation and permissions are
@@ -282,6 +339,9 @@ def request_owner(request: Request) -> str:
     """
     from ..services.identity import tokens
 
+    ticket_owner = getattr(request.state, "task_ticket_owner", None)
+    if ticket_owner:
+        return ticket_owner
     provided = _extract_token(request)
     if provided and tokens.looks_like_access_token(provided):
         try:

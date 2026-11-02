@@ -106,12 +106,14 @@ def test_health_detail_is_not_public(client):
     assert client.get("/health/detailed").status_code == 401
 
 
-def test_the_token_in_the_query_string_works_only_for_the_task_stream(client):
-    # EventSource cannot set headers, so GET /api/tasks/<id>/stream accepts ?token= — nothing else may.
+def test_the_bearer_token_in_the_query_string_opens_nothing(client):
+    # Stage 5 / SR-081: the bearer token no longer travels in URLs at
+    # all — the task stream takes a minted one-time ticket instead (see
+    # test_stage5_task_tickets.py). A query-string bearer is now 401
+    # everywhere, including the stream.
     assert client.get("/api/meta", params={"token": TOKEN}).status_code == 401
-    assert client.get("/api/tasks/1/stream", params={"token": "wrong"}).status_code == 401
+    assert client.get("/api/tasks/1/stream", params={"token": TOKEN}).status_code == 401
     assert client.post("/api/tasks/1/cancel", params={"token": TOKEN}).status_code == 401
-    assert client.get("/api/tasks/1/stream", params={"token": TOKEN}).status_code != 401
 
 
 @pytest.mark.parametrize(
