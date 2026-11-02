@@ -1,6 +1,9 @@
 import { Suspense, lazy, type ReactNode } from "react";
-import { Navigate, createBrowserRouter, useLocation } from "react-router-dom";
+import { Navigate, createBrowserRouter, useLocation, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import { Button, Result } from "antd";
 import { useSession } from "./session";
+import { errorText } from "@/shared/feedback";
 import { Shell } from "./Shell";
 import { PageSpin } from "@/shared/PageSpin";
 import { Forbidden } from "@/shared/feedback";
@@ -16,11 +19,28 @@ const L = (f: () => Promise<{ default: React.ComponentType }>) => {
 };
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const { me, ready } = useSession();
+  const { t } = useTranslation();
+  const { me, ready, error, logout, reload } = useSession();
   const location = useLocation();
+  const navigate = useNavigate();
   const desktopInfo = useDesktop((s) => s.info);
   if (needsSetup(desktopInfo)) return <Navigate to="/setup" replace />;
   if (!ready) return <PageSpin />;
+  // SR-075: a non-401 session failure is an error page, not a bounce to
+  // /login — the token may be fine and the login page would only mislead.
+  if (error) {
+    return (
+      <Result
+        status="error"
+        title={t("session.load_failed", "会话加载失败")}
+        subTitle={errorText(error)}
+        extra={[
+          <Button key="retry" type="primary" onClick={() => void reload()}>{t("common.retry", "重试")}</Button>,
+          <Button key="logout" onClick={() => void logout().then(() => navigate("/login"))}>{t("session.logout", "退出登录")}</Button>,
+        ]}
+      />
+    );
+  }
   if (!me) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
   return <>{children}</>;
 }

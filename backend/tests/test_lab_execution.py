@@ -220,6 +220,23 @@ def test_review_flow_mirror_amendment_and_picks(lab, monkeypatch):
     assert out["values"]["density_g_cm3"]["basis"] == "manual" and out["values"]["density_g_cm3"]["value"] == 1.36
 
 
+def test_review_queue_count_matches_list_and_project_filter(lab):
+    """Stage 5 / SR-099: the badge count uses the list's filter, without
+    serializing rows — count, list length and project scoping agree."""
+    c, h = lab["c"], lab["h"]
+    task = _dispatch(lab, _plan(c))[0]
+    _record(lab, "tech", task["id"], DENSITY)
+    _record(lab, "tech", task["id"], SALT)
+    assert c.get("/api/lab/review-queue/count").json() == {"count": 2}
+    assert len(c.get("/api/lab/review-queue").json()) == 2
+    assert c.get("/api/lab/review-queue/count?project_id=proj-test").json() == {"count": 2}
+    assert c.get("/api/lab/review-queue/count?project_id=proj-nope").json() == {"count": 0}
+    assert c.get("/api/lab/review-queue?project_id=proj-nope").json() == []
+    mid = c.get("/api/lab/review-queue").json()[0]["id"]
+    assert c.post(f"/api/lab/measurements/{mid}/review", headers=h["qa"], json={"decision": "accept"}).status_code == 200
+    assert c.get("/api/lab/review-queue/count").json() == {"count": 1}
+
+
 def test_rejection_returns_the_task_to_the_operator(lab):
     c, h = lab["c"], lab["h"]
     task = _dispatch(lab, _plan(c), metrics=["density_g_cm3"])[0]

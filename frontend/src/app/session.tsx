@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { useQueryClient } from "@tanstack/react-query";
 import { getAccessToken, logoutBody, refreshAccessToken, rememberRefreshToken, setAccessToken } from "@/api/auth";
 import { ApiError, call } from "@/api/client";
+import { useUi } from "./store";
 
 export interface Me {
   id: string;
@@ -16,6 +17,10 @@ export interface Me {
 interface Session {
   me: Me | null;
   ready: boolean;
+  /** Stage 5 / SR-075: a non-401 /me failure lands here instead of
+   * becoming an unhandled rejection that bounces a valid session to
+   * the login page. Null on success; RequireAuth renders it. */
+  error: unknown | null;
   can: (permission: string, projectId?: string | null) => boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -26,25 +31,33 @@ const Ctx = createContext<Session | null>(null);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
+  const setProject = useUi((s) => s.setProject);
   const [me, setMe] = useState<Me | null>(null);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState<unknown | null>(null);
 
   const reload = useCallback(async () => {
-    if (!getAccessToken()) await refreshAccessToken();
-    if (!getAccessToken()) {
-      setMe(null);
-      return;
-    }
+    setError(null);
     try {
+      if (!getAccessToken()) await refreshAccessToken();
+      if (!getAccessToken()) {
+        setMe(null);
+        return;
+      }
       setMe(await call<Me>("GET", "/api/identity/me"));
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) setMe(null);
-      else throw e;
+      setMe(null);
+      if (e instanceof ApiError && e.status === 401) return;
+      // Recorded, not swallowed: explicit callers (login) still see the
+      // throw, while the mount effect below only needs to avoid an
+      // unhandled rejection — the error page reads this state.
+      setError(e);
+      throw e;
     }
   }, []);
 
   useEffect(() => {
-    reload().finally(() => setReady(true));
+    reload().catch(() => undefined).finally(() => setReady(true));
   }, [reload]);
 
   const login = useCallback(async (username: string, password: string) => {
@@ -60,9 +73,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } finally {
       setAccessToken(null);
       setMe(null);
+      // SR-075: the persisted project selection belongs to the outgoing
+      // user; leaving it would hand the next login the previous user's
+      // project context.
+      setProject(null);
       qc.clear();
     }
-  }, [qc]);
+  }, [qc, setProject]);
 
   const can = useCallback(
     (permission: string, projectId?: string | null) =>
@@ -71,7 +88,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [me],
   );
 
-  const value = useMemo(() => ({ me, ready, can, login, logout, reload }), [me, ready, can, login, logout, reload]);
+  const value = useMemo(() => ({ me, ready, error, can, login, logout, reload }), [me, ready, error, can, login, logout, reload]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

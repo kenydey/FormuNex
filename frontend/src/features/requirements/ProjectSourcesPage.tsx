@@ -25,9 +25,9 @@ export default function ProjectSourcesPage() {
   const qc = useQueryClient();
   const params = useParams();
   const uiProject = useUi((s) => s.projectId);
-  const setProject = useUi((s) => s.setProject);
+  // SR-075: no follow-browsing effect here either (see SpecStudioPage) —
+  // the page reads its route param, falling back to the stored selection.
   const projectId = params.projectId ?? uiProject ?? "";
-  useEffect(() => { if (params.projectId) setProject(params.projectId); }, [params.projectId, setProject]);
   const [filter, setFilter] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
 

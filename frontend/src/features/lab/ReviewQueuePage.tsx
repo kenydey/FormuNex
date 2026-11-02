@@ -18,7 +18,7 @@ export default function ReviewQueuePage() {
   const projectId = useUi((s) => s.projectId);
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string[]>([]);
-  const q = useQuery({ queryKey: ["lab", "review-queue", projectId], enabled: can("lab.review"),
+  const q = useQuery({ queryKey: ["lab", "review-queue", projectId], enabled: can("lab.review", projectId),
     queryFn: () => call<Measurement[]>("GET", `/api/lab/review-queue${projectId ? `?project_id=${projectId}` : ""}`) });
   const review = useMutation({
     mutationFn: async ({ ids, decision, reason }: { ids: string[]; decision: "accept" | "reject"; reason?: string }) => {
@@ -38,7 +38,7 @@ export default function ReviewQueuePage() {
       void qc.invalidateQueries({ queryKey: ["lab"] });
     },
   });
-  if (!can("lab.review")) return <Forbidden permission="lab.review" />;
+  if (!can("lab.review", projectId)) return <Forbidden permission="lab.review" />;
   const own = new Set((q.data ?? []).filter((m) => m.operator_id === me?.id).map((m) => m.id));
   return (
     <PageContainer subTitle={t("review.sub", "录入人不能复核自己的数据；驳回会把任务单退回录入人")}>

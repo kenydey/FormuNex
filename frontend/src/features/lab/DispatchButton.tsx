@@ -42,9 +42,9 @@ export function DispatchButton({ planId }: { planId: string }) {
   });
   return (
     <>
-      <Button type="primary" disabled={!can("doe.write")} onClick={() => setOpen(true)}>{t("doe.dispatch", "下发为实验任务")}</Button>
+      <Button type="primary" disabled={!can("doe.write", projectId)} onClick={() => setOpen(true)}>{t("doe.dispatch", "下发为实验任务")}</Button>
       <Modal open={open} title={t("doe.dispatch", "下发为实验任务")} onCancel={() => setOpen(false)} confirmLoading={dispatch.isPending}
-        okButtonProps={{ disabled: !can("doe.write") }}
+        okButtonProps={{ disabled: !can("doe.write", projectId) }}
         onOk={async () => dispatch.mutate(await form.validateFields())}>
         <Form form={form} layout="vertical">
           <Form.Item name="metrics" label={t("doe.metrics", "待测指标")} rules={[{ required: true }]}>

@@ -609,6 +609,15 @@ async def import_instrument_file(
     return out
 
 
+@router.get("/review-queue/count")
+def review_queue_count(project_id: str | None = None) -> dict[str, int]:
+    """Stage 5 / SR-099: badge count with the list's filter, no row payload."""
+    from ..services.lab import measurements as meas
+
+    with _session() as session:
+        return {"count": meas.review_queue_count(session, project_id=project_id)}
+
+
 @router.get("/review-queue")
 def review_queue(project_id: str | None = None, limit: int = Query(200, ge=1, le=1000)) -> list[dict[str, Any]]:
     from ..services.lab import measurements as meas

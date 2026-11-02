@@ -1,7 +1,7 @@
 import { BulbOutlined, GlobalOutlined, LockOutlined, LogoutOutlined, PlusOutlined, UserOutlined } from "@ant-design/icons";
-import { Badge, Button, Dropdown, Select, Space, Tooltip, theme } from "antd";
+import { App, Badge, Button, Dropdown, Select, Space, Tooltip, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { Suspense, useState, type CSSProperties } from "react";
+import { Suspense, useEffect, useState, type CSSProperties } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
@@ -36,14 +36,31 @@ export function Shell() {
   const navigate = useNavigate();
   const { me, logout, can } = useSession();
   const ui = useUi();
+  const setProject = useUi((s) => s.setProject);
+  const { message } = App.useApp();
   const { token } = theme.useToken();
   const [pwOpen, setPwOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => call<ProjectSummary[]>("GET", "/api/projects") });
+  // SR-072 + SR-099, decided together: the badge counts the queue for the
+  // currently selected project (the same project_id filter the queue page
+  // uses), via the count endpoint — no more fetching 1000 rows for a number.
+  // A global lab.review holder with no selection sees the global count;
+  // a project-scoped holder sees nothing until their project is selected.
   const reviewQueue = useQuery({
-    queryKey: ["lab", "review-queue", "count"], enabled: can("lab.review"), refetchInterval: 60_000,
-    queryFn: () => call<unknown[]>("GET", "/api/lab/review-queue?limit=1000"),
+    queryKey: ["lab", "review-queue", "count", ui.projectId],
+    enabled: can("lab.review", ui.projectId), refetchInterval: 60_000,
+    queryFn: () => call<{ count: number }>("GET",
+      `/api/lab/review-queue/count${ui.projectId ? `?project_id=${ui.projectId}` : ""}`),
   });
+  // SR-075: a persisted selection pointing at a deleted (or never-shared)
+  // project must not keep driving queries at it — clear it once, loudly.
+  useEffect(() => {
+    if (projects.data && ui.projectId && !projects.data.some((p) => p.id === ui.projectId)) {
+      setProject(null);
+      message.warning(t("shell.project_gone", "上次选择的项目已不存在，已清空项目选择"));
+    }
+  }, [projects.data, ui.projectId, setProject, message, t]);
 
   const visible = visibleNav(can);
   const derived = deriveNav(location.pathname);
@@ -98,7 +115,7 @@ export function Shell() {
         </Space.Compact>
         <TaskCenter />
         <Tooltip title={t("shell.review_queue", "待复核测量值")}>
-          {can("lab.review") && <Badge count={reviewQueue.data?.length ?? 0} size="small">
+          {can("lab.review", ui.projectId) && <Badge count={reviewQueue.data?.count ?? 0} size="small">
             <Button type="text" onClick={() => navigate("/lab/measurements?tab=review")}>{t("shell.todo", "待办")}</Button>
           </Badge>}
         </Tooltip>

@@ -345,17 +345,38 @@ def sync_mirror(session: Session, experiment_id: int) -> None:
     session.flush()
 
 
+def _review_queue_conditions(project_id: str | None = None):
+    """Stage 5 / SR-099: the unreviewed-measurement filter, shared by the
+    list and the count so the badge can never disagree with the queue.
+    (The SampleRow join in the list cannot change the row count — one
+    measurement has at most one sample — so the count omits it.)"""
+    conds = [MeasurementRow.review_status == "unreviewed"]
+    if project_id:
+        conds.append(LabTaskRow.project_id == project_id)
+    return conds
+
+
 def review_queue(session: Session, *, project_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
     q = (select(MeasurementRow, LabTaskRow.task_no, SampleRow.sample_no)
          .join(LabTaskRow, LabTaskRow.id == MeasurementRow.lab_task_id, isouter=True)
          .join(SampleRow, SampleRow.id == MeasurementRow.sample_id, isouter=True)
-         .where(MeasurementRow.review_status == "unreviewed"))
-    if project_id:
-        q = q.where(LabTaskRow.project_id == project_id)
+         .where(*_review_queue_conditions(project_id)))
     out = []
     for m, task_no, sample_no in session.execute(q.order_by(MeasurementRow.created_at).limit(limit)).all():
         out.append({**measurement_dict(m), "task_no": task_no, "sample_no": sample_no})
     return out
+
+
+def review_queue_count(session: Session, *, project_id: str | None = None) -> int:
+    """Count of the same rows review_queue lists, without serializing them
+    (the top-bar badge used to fetch up to 1000 full rows for one number)."""
+    from sqlalchemy import func
+
+    q = (select(func.count())
+         .select_from(MeasurementRow)
+         .join(LabTaskRow, LabTaskRow.id == MeasurementRow.lab_task_id, isouter=True)
+         .where(*_review_queue_conditions(project_id)))
+    return session.execute(q).scalar_one()
 
 
 def history(session: Session, measurement_id: str) -> list[dict[str, Any]]:

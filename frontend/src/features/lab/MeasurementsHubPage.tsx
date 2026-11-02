@@ -2,6 +2,7 @@ import { Tabs } from "antd";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useSession } from "@/app/session";
+import { useUi } from "@/app/store";
 import { Forbidden } from "@/shared/feedback";
 import { useHubTab } from "@/shared/hubTabs";
 import QcReportPage from "../design/QcReportPage";
@@ -16,13 +17,18 @@ import ReviewQueuePage from "./ReviewQueuePage";
 export default function MeasurementsHubPage() {
   const { t } = useTranslation();
   const { can } = useSession();
+  // SR-072: the review tab follows the selected project, like the queue
+  // page and the badge — a project-scoped reviewer sees it only for
+  // their project; a global holder always sees it (can() checks the
+  // global grant first).
+  const projectId = useUi((s) => s.projectId);
   const [params] = useSearchParams();
-  const [tab, onChange] = useHubTab("tab", can("lab.review") ? ["parse", "review"] : ["parse"], "parse");
-  if (params.get("tab") === "review" && !can("lab.review")) return <Forbidden permission="lab.review" />;
+  const [tab, onChange] = useHubTab("tab", can("lab.review", projectId) ? ["parse", "review"] : ["parse"], "parse");
+  if (params.get("tab") === "review" && !can("lab.review", projectId)) return <Forbidden permission="lab.review" />;
   return (
     <Tabs activeKey={tab} onChange={onChange} items={[
       { key: "parse", label: t("hub.measurements.parse", "检测报告解析"), children: <QcReportPage /> },
-      ...(can("lab.review") ? [{ key: "review", label: t("hub.measurements.review", "待复核队列"), children: <ReviewQueuePage /> }] : []),
+      ...(can("lab.review", projectId) ? [{ key: "review", label: t("hub.measurements.review", "待复核队列"), children: <ReviewQueuePage /> }] : []),
     ]} />
   );
 }

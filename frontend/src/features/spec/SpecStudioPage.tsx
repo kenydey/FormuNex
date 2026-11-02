@@ -50,7 +50,11 @@ export default function SpecStudioPage() {
   const [tab, setTab] = useState("scenario");
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  useEffect(() => { setProject(projectId); }, [projectId, setProject]);
+  // SR-075: no follow-browsing effect — visiting a detail page must not
+  // silently rewrite the persisted top-bar selection (it used to stick
+  // to the next login). The page reads its own route param; the
+  // selection changes only by explicit choice (selector, project list,
+  // create modal) or by deletion cleanup below.
   useEffect(() => {
     if (q.data) {
       setReq(q.data.workspace.requirement ?? { domain: q.data.domain || "anticorrosion_coating", objectives: [] });
