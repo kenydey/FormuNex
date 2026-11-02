@@ -218,27 +218,35 @@ def test_the_access_log_does_not_carry_the_stream_token():
 
 
 def test_health_is_probed_once_per_window_and_never_blocks_on_a_probe_in_flight(monkeypatch):
-    import app.main as main
+    # Stage 5 / SR-089 moved the health zone to app.api.health; the
+    # contract under test is unchanged (one probe per window, no
+    # blocking on a probe in flight). SR-094 adds freshness fields, so
+    # the assertions read status/cached instead of exact dict equality.
+    from app.api import health as health_mod
 
-    main.reset_health_cache()
+    health_mod.reset_health_cache()
     calls = []
 
     def probe():
         calls.append(1)
         return {"status": "ok"}
 
-    monkeypatch.setattr(main, "_probe_health", probe)
-    assert main.health() == {"status": "ok"} and main.health() == {"status": "ok"}
+    monkeypatch.setattr(health_mod, "_probe_health", probe)
+    first = health_mod.health()
+    assert first["status"] == "ok" and first["cached"] is False
+    second = health_mod.health()
+    assert second["status"] == "ok" and second["cached"] is True
+    assert second["as_of"] == first["as_of"] == first["cached_at"]
     assert len(calls) == 1
     # window over, but another request is already probing: answer with the previous result at once
-    main._health_cache["at"] = 0.0
-    assert main._health_lock.acquire(blocking=False)
+    health_mod._health_cache["at"] = 0.0
+    assert health_mod._health_lock.acquire(blocking=False)
     try:
-        assert main.health() == {"status": "ok"}
+        assert health_mod.health()["status"] == "ok"
         assert len(calls) == 1
     finally:
-        main._health_lock.release()
-    main.reset_health_cache()
+        health_mod._health_lock.release()
+    health_mod.reset_health_cache()
 
 
 # ── task ids never become part of a path ─────────────────────────────────────────────────────────────────────────────
