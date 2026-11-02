@@ -187,10 +187,8 @@ class ModelRegistry:
         record identical to one already held is skipped the same way, so a
         repeated "回灌并训练" click cannot inflate ``n_samples``. The backing
         store's ``add`` upserts on the same rule, so the persisted set stays
-        in sync with memory across restarts (native/SQL + JSON stores; the
-        Datalab store skips already-indexed labels because it has no remote
-        update path, so a corrected Datalab value updates memory and retrains
-        but reverts to the remote value on restart — flagged, not papered over).
+        in sync with memory across restarts (native/SQL + JSON stores upsert
+        in place, so a corrected value persists).
         """
         from ..db.store import _copy_record_values, _same_training_values
 
@@ -668,7 +666,7 @@ class ModelRegistry:
             return [t.info for t in self._models.values()]
 
 
-# Global registry — uses configured ExperimentStore (Datalab or local main-DB).
+# Global registry — uses configured ExperimentStore (local main-DB).
 # On startup, migrate legacy experiments.json and inline SQL rows if needed.
 def _build_registry() -> ModelRegistry:
     from ..db.migrate import migrate_experiments_if_needed
@@ -707,9 +705,9 @@ class _RegistryProxy:
     """Lazy :class:`ModelRegistry` built on first use.
 
     Import-time construction crashed the backend whenever the configured
-    ExperimentStore (Datalab) was not yet reachable: ``get_experiment_store``
+    ExperimentStore was not yet reachable: ``get_experiment_store``
     raises, uvicorn fails to import the app, and the container restarts in a
-    loop until Datalab happens to come up. Deferring construction to first
+    loop until the store happens to come up. Deferring construction to first
     actual use lets the API boot, pass health checks, and fail only on the
     specific code path that needs lab data — with a normal request error
     instead of a whole-process crash.

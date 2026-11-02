@@ -410,41 +410,6 @@ def test_elabftw_push_pull_and_conflicts(lab, monkeypatch):
     assert pull()["unchanged"] == 2 and c.get("/api/lab/eln/conflicts").json() == []
 
 
-def test_datalab_is_read_only_and_migration_moves_records(lab):
-    from app.db.database import default_session_factory
-    from app.db.models import ExperimentRow, MeasurementRow
-    from app.db.models_lab import ElnLinkRow
-    from app.services.eln.connectors.base import ConnectorError
-    from app.services.eln.connectors.datalab import DatalabConnector
-    from app.services.lab.datalab_migration import migrate
-    from app.services.lab.measurements import sync_mirror
-
-    with pytest.raises(ConnectorError):
-        DatalabConnector("http://dl").push_plan({})
-    items = {"fm_1": {"blocks_obj": {"formumind_training": {"blockype": "x", "data": {
-        "domain": "anticorrosion_coating", "project_id": "p1", "factors": {"T": 150},
-        "measured": {"salt_spray_hours": 720, "note": "text"}, "label": "旧实验"}}}}}
-    with default_session_factory()() as s:
-        s.add_all([ExperimentRow(item_id="fm_1", domain="anticorrosion_coating", project_id="", factors={}, measured={}),
-                   ExperimentRow(item_id="fm_gone", domain="anticorrosion_coating", project_id="", factors={},
-                                 measured={})])
-        s.commit()
-        dry = migrate(s, items.get, dry_run=True)
-        s.rollback()
-        assert dry["migrated"] == 1 and dry["missing"] == ["fm_gone"] and dry["measurements"] == 1
-        report = migrate(s, items.get)
-        s.commit()
-        row = s.query(ExperimentRow).filter_by(label="旧实验").one()
-        assert row.item_id is None and row.measured == {"salt_spray_hours": 720} and row.factors == {"T": 150}
-        m = s.query(MeasurementRow).filter_by(experiment_id=row.id).one()
-        assert m.review_status == "legacy" and m.external_ref == "datalab:fm_1:salt_spray_hours"
-        assert s.query(ElnLinkRow).filter_by(connector="datalab", local_id=str(row.id)).count() == 1
-        sync_mirror(s, row.id)  # legacy values stay in the mirror the optimiser reads
-        assert row.measured == {"salt_spray_hours": 720}
-        assert migrate(s, items.get)["candidates"] == 1  # only the missing one is left
-        assert report["migrated"] == 1
-
-
 def test_native_backend_is_the_default(monkeypatch):
     from app.config import Settings
     from app.db.store import LocalExperimentStore, get_experiment_store, reset_experiment_store
@@ -456,8 +421,6 @@ def test_native_backend_is_the_default(monkeypatch):
         assert isinstance(store, LocalExperimentStore)
     finally:
         reset_experiment_store(None)
-
-
 
 
 def test_2_15_push_task_alias_calls_push_plan():
@@ -504,84 +467,6 @@ def test_2_15_legacy_subclass_without_push_plan_fails_loudly():
 
     with pytest.raises(TypeError, match="push_plan"):
         Legacy()
-
-
-def test_datalab_campaign_rows_move_inline_and_read_back_identically(lab):
-    """M7 leftover: workbench (campaign) rows living in Datalab items move into ``sample_refs``."""
-    import asyncio
-
-    from app.db.campaign_store import LocalCampaignStore, _blocks_for_row
-    from app.db.database import default_session_factory
-    from app.db.models import Campaign
-    from app.db.models_lab import ElnLinkRow
-    from app.services.lab.datalab_migration import migrate_campaigns
-    from app.services.workbench_training import workbench_record_label
-
-    def item(planned, actual, meas, status, note=None, tags=None):
-        return {"refcode": "fm:abc", "blocks_obj": _blocks_for_row(planned_params=planned, actual_params=actual,
-                                                                   measurements=meas, status=status, note=note,
-                                                                   tags=tags)}
-
-    items = {
-        "fm_c1_r1": item({"T": 150}, {"T": 152}, {"salt_spray_hours": 720}, "Completed", "批次 A", ["复测"]),
-        "fm_c1_r2": item({"T": 170}, {"T": 170}, {}, "Pending"),
-    }
-    factory = default_session_factory()
-    with factory() as s:
-        dl = Campaign(name="Datalab 工作台", sample_refs=[
-            {"id": 1, "item_id": "fm_c1_r1", "parent_campaign_id": 7},
-            {"id": 2, "item_id": "fm_c1_r2"},
-            {"id": 3, "item_id": "fm_c1_gone"},
-        ])
-        native = Campaign(name="原生", sample_refs=[{"id": 1, "item_id": "local_c2_r1", "status": "Pending",
-                                                    "planned_params": {"T": 1}, "actual_params": {}, "measurements": {}}])
-        s.add_all([dl, native])
-        s.commit()
-        dl_id, native_refs = dl.id, list(native.sample_refs)
-
-        dry = migrate_campaigns(s, items.get, dry_run=True)
-        s.rollback()
-        assert (dry["campaigns"], dry["rows"], dry["already_native"]) == (1, 2, 1)
-        assert dry["missing"] == [{"campaign_id": dl_id, "row_id": 3, "item_id": "fm_c1_gone"}]
-        assert s.get(Campaign, dl_id).sample_refs[0] == {"id": 1, "item_id": "fm_c1_r1", "parent_campaign_id": 7}
-
-        report = migrate_campaigns(s, items.get)
-        s.commit()
-        assert (report["rows"], len(report["missing"]), report["pruned"]) == (2, 1, 0)
-        assert s.query(ElnLinkRow).filter_by(connector="datalab", local_type="campaign_row").count() == 2
-
-    rows = asyncio.run(LocalCampaignStore(factory).list_rows(dl_id))
-    by_id = {r.id: r for r in rows}
-    r1 = by_id[1]
-    assert (r1.item_id, r1.status, r1.planned_params, r1.actual_params, r1.measurements, r1.note, r1.tags,
-            r1.parent_campaign_id) == ("fm_c1_r1", "Completed", {"T": 150}, {"T": 152},
-                                       {"salt_spray_hours": 720}, "批次 A", ["复测"], 7)
-    assert by_id[2].status == "Pending" and by_id[2].planned_params == {"T": 170}
-    # item_id is the training records' identity: unchanged label, no duplicate records after the switch
-    assert workbench_record_label(dl_id, r1.item_id) == f"wb:{dl_id}:fm_c1_r1"
-
-    with factory() as s:
-        assert s.query(Campaign).filter_by(name="原生").one().sample_refs == native_refs  # untouched
-        again = migrate_campaigns(s, items.get)  # idempotent: only the missing ref is retried
-        assert again["rows"] == 0 and len(again["missing"]) == 1
-        pruned = migrate_campaigns(s, items.get, prune_missing=True)
-        s.commit()
-        assert pruned["pruned"] == 1 and [r["id"] for r in s.get(Campaign, dl_id).sample_refs] == [1, 2]
-
-
-def test_2_15_datalab_push_plan_read_only():
-    """补齐计划 2-15：Datalab push_plan 同样只读报错（别名 push_task 走同一路径）。"""
-    import warnings
-
-    from app.services.eln.connectors.base import ConnectorError
-    from app.services.eln.connectors.datalab import DatalabConnector
-
-    with pytest.raises(ConnectorError, match="只读"):
-        DatalabConnector("http://dl").push_plan({})
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        with pytest.raises(ConnectorError, match="只读"):
-            DatalabConnector("http://dl").push_task({})
 
 
 def test_2_15_pull_since_passthrough(tmp_path):

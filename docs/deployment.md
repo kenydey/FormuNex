@@ -19,7 +19,6 @@
    - `FORMUNEX_API_TOKEN` —— 生产 bearer 令牌（`docker-compose.prod.yml` 强制开启鉴权）
    - `FORMUNEX_API_AUTH_ENABLED=true` 与 `FORMUNEX_ENVIRONMENT=production` —— 生产必查项（阶段 0 / SR-013：代码默认鉴权已改为 fail-closed，未设置即开启；但生产部署仍须显式核对这两项，缺一不可——只设其一、或误用开发 compose 上生产，都是部署事故）
    - `FORMUNEX_DB_URL` —— 默认 `sqlite:///./data/formunex.db`；多 worker 生产改 `postgresql://…`
-   - `FORMUNEX_DATALAB_API_URL` —— 仅当 `FORMUNEX_DATALAB_REQUIRED=true` 时必需
 3. 可选项：LLM vendor key 缺失时自动降级为离线实现，不阻塞启动。
 4. 出站代理（阶段 5 / SR-082）：文献 / 全文抓取走 SSRF 安全客户端，直接连接时只连解析后全为公网地址的 host；一旦环境设置了 `HTTPS_PROXY`（或 `HTTP_PROXY`），请求会经代理发出，解析与判定由代理负责。为此代理模式下代码再做一道白名单校验：`FORMUNEX_EGRESS_PROXY_ALLOWED_HOSTS`（JSON 列表，如 `'["www.ebi.ac.uk"]'`）列出允许经代理抓取的 host，未列出的 host 直接拒绝；**该列表为空时所有经代理的抓取都会被拒绝**——在代理后方部署时必须按实际抓取源填写，否则文献 / 全文抓取会失败。只设代理、不配白名单不是“放行”，是 fail-closed。
 4. 文档字体：受控文档（SDS / TDS / COA / 标签）的 PDF 必须嵌入中文字体，否则审核被拒。后端镜像已内置文泉驿微米黑（TrueType，Apache-2.0 / GPLv3 双许可）并设置 `FORMUNEX_PLM_DOC_FONT_PATH`；如需换用企业字体，挂载 TrueType（`.ttf` / TrueType `.ttc`）文件并改此变量即可（CFF 字体如 Noto CJK `.otc` 无法嵌入）。
@@ -58,8 +57,6 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 | `GET /api/ops/evidence-stats` | 证据压缩（第二层 LLM）触发率与节省的 token；进程内计数，重启清零 |
 | `GET /api/ops/recommend-stats?days=N` | 推荐被采纳 / 被实验验证的比例（需要 `recommend_outcomes` 表） |
 | `GET /api/kb/relevance-shadow/stats` | 主题相关性"影子模式"的拒绝率与重叠度——决定何时把 `kb_relevance_shadow` 切到强制 |
-| `GET /api/ops/datalab-orphans` | 回滚时没能从 DataLab 删掉的样本：`PENDING` 待清理、`DONE` 已清、`DEAD` 放弃（需手工删） |
-| `POST /api/ops/datalab-orphans/cleanup` | 立即重试 `PENDING`（启动时也会跑一遍；DataLab 未配置 / 不可达时不消耗重试次数） |
 
 ## 可选：主题雷达
 
@@ -90,11 +87,11 @@ docker compose start backend worker
 
 | 现象 | 排查 |
 |------|------|
-| 后端启动即退出，日志 `Startup configuration check failed` | 按错误信息补 `.env` 缺失项（token / DB URL / Datalab URL） |
+| 后端启动即退出，日志 `Startup configuration check failed` | 按错误信息补 `.env` 缺失项（token / DB URL） |
 | 日志 `SQLite ... production ... postgresql` 警告 | 单机可忽略；多 worker 生产必须切 Postgres（SQLite 写锁） |
 | 日志 `SQLite ... write lock is disabled ...` 警告 | 未配 `FORMUNEX_REDIS_URL`，跨进程写锁已关闭：单进程可忽略；uvicorn + celery 共写或多 worker 请配 Redis 或切 Postgres |
 | 前端 502 / 空白 | 先看 `backend` healthcheck 是否 healthy，再看 `docker compose logs backend` |
-| 401 UNAUTHORIZED（ELN 相关） | `FORMUNEX_DATALAB_API_TOKEN` 缺失或错误，值放 `.env` |
+| 401 UNAUTHORIZED（ELN 相关） | ELN 连接器凭据（eLabFTW API key）缺失或错误，值放 `.env` |
 | 文档审核提示“PDF 未嵌入中文字体” | 后端未找到可嵌入的 TrueType 中文字体：确认用的是当前镜像，或 `FORMUNEX_PLM_DOC_FONT_PATH` 指向的文件存在且为 TrueType |
 | 磁盘满（Errno 28） | 清理 `./data/backups` 旧备份；检查 pytest 临时目录 |
 

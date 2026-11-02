@@ -197,7 +197,7 @@ export function previousVersion(versions: FormulationVersion[], v: FormulationVe
     ?? versions.find((x) => x.version === v.version - 1);
 }
 
-/** Top-level keys a DataLab DeepDiff touches (e.g. "values_changed"), flattened to the changed paths when present. */
+/** Top-level keys a DeepDiff touches (e.g. "values_changed"), flattened to the changed paths when present. */
 export function deepDiffSummary(diff: Record<string, unknown> | undefined | null): string[] {
   if (!diff) return [];
   const out: string[] = [];

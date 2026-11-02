@@ -820,15 +820,15 @@ into `cost_cny_per_kg` is backlog).
 ### 5.20 Referential integrity check
 
 Most cross-table references in this schema are plain string columns, and several
-**cannot** become foreign keys: under `FORMUNEX_CAMPAIGN_BACKEND=datalab` the
-row a reference points at lives in an external ELN, so a database constraint
+**cannot** become foreign keys: a row a reference points at may live in an
+external ELN mirrored through a connector, so a database constraint
 would reject perfectly valid data. The honest alternative to a constraint you
 cannot enforce is a check you actually run — otherwise orphans accumulate
 silently and the first symptom is a retrieval quietly returning less than it
 should.
 
 `GET /api/kb/integrity` reports every soft reference with its orphan count.
-References that are structurally unjoinable (Datalab-backed) are flagged
+References that are structurally unjoinable (externally-backed) are flagged
 `unjoinable` and excluded from the orphan total rather than reported as a bogus
 count.
 
@@ -1103,7 +1103,7 @@ The **Export ▾** menu on each leaderboard card offers:
 | GET | `/api/models` | list trained models with `n_samples`, `R²`, `cv_R²`, `RMSE` |
 | **GET** | **`/api/kb/integrity`** | **orphan report over the soft references (§5.20)** |
 | GET | `/api/meta`, `/api/templates/{domain}` | metadata & baseline templates |
-| GET | `/health` | database, **task broker** and Datalab reachability |
+| GET | `/health` | database and **task broker** |
 
 Interactive docs: after starting the backend, visit `http://localhost:8000/docs`.
 
@@ -1136,7 +1136,6 @@ curl -s localhost:8000/health
 {"status": "ok",
  "database":    {"ok": true,  "scheme": "sqlite"},
  "task_broker": {"required": true, "reachable": true},
- "datalab":     {"required": false, "reachable": false}}
 ```
 
 - `status` is `degraded` — not failed — when a dependency is unreachable, and
@@ -1289,8 +1288,7 @@ Enterprise ELN: `docker compose -f docker-compose.yml -f docker-compose.eln.yml 
 > recreates only the services whose definition changed and leaves the rest on
 > the old network, so the backend stops resolving `redis` and any
 > `localhost:`-style URL starts pointing at the container itself. The symptom is
-> `task_broker.reachable:false` and `datalab.reachable:false` **at the same
-> time**, with `docker compose ps` showing everything "Up" — and a redis row
+> `task_broker.reachable:false` with `docker compose ps` showing everything "Up" — and a redis row
 > with no published ports, which is the tell. `docker compose down` then `up -d`
 > realigns everything.
 

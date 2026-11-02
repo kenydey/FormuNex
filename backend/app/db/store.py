@@ -15,10 +15,7 @@ adding a second one, and a labelless record identical (domain, project,
 factors, cure temperature, measured) to one already stored is skipped. The
 training registry, the SQL lab-ledger mirror and the workbench "回灌并训练"
 button all write through here, so a second sync / second click must not grow
-the training set. The Datalab store cannot update a remote sample in place, so
-it only skips already-indexed labels there (corrected values still update the
-in-memory registry and retrain, but the remote SSOT row keeps the old value
-until a Datalab update path exists).
+the training set.
 """
 from __future__ import annotations
 
@@ -27,23 +24,18 @@ import logging
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import Settings, get_settings
 from ..services._fsutil import replace_with_retry
-from ..domain.schemas import ExperimentRecord, Measurement, ProductDomain
-from .datalab_envelope import datalab_block, validate_blocks
+from ..domain.schemas import ExperimentRecord, Measurement
 from .models import ExperimentRow
 from .session_utils import commit_session
 
 logger = logging.getLogger(__name__)
-
-_TRAINING_BLOCK = "formumind_training"
-_TRAINING_BLOCKS = (_TRAINING_BLOCK,)
-
 
 class ExperimentStore(Protocol):
     def all(self) -> list[ExperimentRecord]: ...
@@ -54,24 +46,6 @@ class ExperimentStore(Protocol):
 
 def _new_training_item_id() -> str:
     return f"formumind_exp_{uuid.uuid4().hex[:8]}"
-
-
-def _training_block_data(rec: ExperimentRecord) -> dict[str, Any]:
-    return {
-        "domain": rec.domain.value,
-        "project_id": rec.project_id,
-        "factors": rec.factors,
-        "cure_temperature_c": rec.cure_temperature_c,
-        "measured": rec.measured,
-        "source": rec.source,
-        "label": rec.label,
-    }
-
-
-def _blocks_for_training(rec: ExperimentRecord) -> dict[str, Any]:
-    return {
-        _TRAINING_BLOCK: datalab_block(_TRAINING_BLOCK, _training_block_data(rec)),
-    }
 
 
 def _coerce_factor_floats(raw: dict | None) -> dict[str, float | str]:
@@ -90,20 +64,6 @@ def _coerce_factor_floats(raw: dict | None) -> dict[str, float | str]:
             except ValueError:
                 out[str(key)] = val  # 离散因子值，保留
     return out
-
-
-def _record_from_item_data(item_data: dict[str, Any]) -> ExperimentRecord:
-    validate_blocks(item_data, _TRAINING_BLOCKS)
-    data = (item_data.get("blocks_obj") or {}).get(_TRAINING_BLOCK, {}).get("data") or {}
-    return ExperimentRecord(
-        domain=ProductDomain(data.get("domain", "anticorrosion_coating")),
-        project_id=str(data.get("project_id") or ""),
-        factors=_coerce_factor_floats(data.get("factors") or {}),
-        cure_temperature_c=data.get("cure_temperature_c"),
-        measured=dict(data.get("measured") or {}),
-        source=str(data.get("source") or "lab"),
-        label=str(data.get("label") or ""),
-    )
 
 
 class JsonExperimentStore:

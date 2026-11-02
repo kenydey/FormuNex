@@ -60,7 +60,7 @@ OUTBOX_RECORD_DETAIL = (
 # broker; do not claim Redis is definitively down (ELN/lab errors use their own copy).
 DISPATCH_FAILURE_DETAIL = (
     "任务提交失败：Celery 在入队阶段异常。请查看 API 日志确认原因；"
-    "若为台账/ELN 相关错误，请检查 Datalab 而非 Redis。"
+    "若为台账/ELN 相关错误，请检查 ELN 连接器而非 Redis。"
 )
 
 

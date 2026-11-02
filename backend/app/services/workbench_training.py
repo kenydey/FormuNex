@@ -21,7 +21,7 @@ def persist_workbench_lab_ledger(
 ) -> dict:
     """Upsert Completed workbench measurements into SQL ``ExperimentRow`` for dossier S5.
 
-    Independent of the training registry / Datalab reachability: Hub 卷宗
+    Independent of the training registry: Hub 卷宗
     ``_lab_slice`` reads ``ExperimentRow`` by ``project_id``. When the registry
     falls back to an empty JSON store (ELN down), this path still fills S5.
     Idempotent on ``wb:{campaign}:{item_id}`` labels.
@@ -360,7 +360,7 @@ def ingest_workbench_rows(
         try:
             registry.add(to_add, retrain=retrain)
         except Exception as exc:
-            # Lab ledger already persisted; training store (Datalab) may be down.
+            # Lab ledger already persisted; training store may be down.
             logger.warning(
                 "workbench_training: registry.add failed after lab ledger "
                 "(campaign=%s upserted=%s): %s",

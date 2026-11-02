@@ -15,8 +15,8 @@ Row lifecycle::
 
 ``DONE`` is the success mark and ``FAILED`` the failure mark: crash
 recovery replays neither (a FAILED row is visible to operators instead
-of silently vanishing into DONE). ``CONFIRMED`` is reserved for the
-Datalab reconciliation phase.
+of silently vanishing into DONE). ``CONFIRMED`` is reserved for the legacy
+reconciliation phase (removed with the Datalab backend; no longer produced).
 
 At-least-once (D-4 decision): the outbox does NOT deduplicate execution.
 A row can run more than once — a crash between dispatch and the

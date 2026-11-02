@@ -174,7 +174,7 @@ def _ensure_experiment_columns(engine: Engine) -> None:
 
 
 def _ensure_campaign_columns(engine: Engine) -> None:
-    """只读守护：campaigns 表必须具备 workbench / Datalab 列。"""
+    """只读守护：campaigns 表必须具备 workbench 列。"""
     _require_columns(
         engine,
         "campaigns",

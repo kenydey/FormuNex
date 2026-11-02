@@ -91,21 +91,14 @@ services:
       # 默认 MiniLM（轻量）；bge-m3（多语言推荐，需 ~2GB 下载）。
       FORMUNEX_EMBEDDING_MODEL: ${FORMUNEX_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
       # Platform bearer auth (distinct from LLM vendor keys in Settings).
-      # Intranet lab default OFF. Production ELN compose defaults ON
-      # (see docker-compose.eln.yml :-true).
+      # Intranet lab default OFF. Production deployments default ON.
       FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
       # The nginx in the frontend container is the one proxy in front of the API: rate-limit per real client, not per proxy.
       FORMUNEX_TRUSTED_PROXY_HOPS: ${FORMUNEX_TRUSTED_PROXY_HOPS:-1}
-      # FormuNex M7: experiments live in FormuNex's own database (native). Datalab is opt-in through
-      # docker-compose.eln.yml, which sets datalab + REQUIRED=true; external ELNs otherwise sync via connectors.
+      # Experiments live in FormuNex's own database (native); external ELNs sync via connectors.
       FORMUNEX_CAMPAIGN_BACKEND: ${FORMUNEX_CAMPAIGN_BACKEND:-native}
       FORMUNEX_EXPERIMENT_BACKEND: ${FORMUNEX_EXPERIMENT_BACKEND:-native}
-      FORMUNEX_DATALAB_REQUIRED: ${FORMUNEX_DATALAB_REQUIRED:-false}
-      FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
-      # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
-      # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。
       # 值放 .env（已 gitignore），不要写死在本文件里。
-      FORMUNEX_DATALAB_API_TOKEN: ${FORMUNEX_DATALAB_API_TOKEN:-}
       # Optional Neo4j graph-store adapter (sibling to SQLite KG).
       FORMUNEX_NEO4J_ENABLED: "true"
       FORMUNEX_NEO4J_URI: bolt://kg:7687
@@ -151,16 +144,10 @@ services:
       FORMUNEX_CELERY_EAGER: "false"
       FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
       FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
-      # FormuNex M7: experiments live in FormuNex's own database (native). Datalab is opt-in through
-      # docker-compose.eln.yml, which sets datalab + REQUIRED=true; external ELNs otherwise sync via connectors.
+      # Experiments live in FormuNex's own database (native); external ELNs sync via connectors.
       FORMUNEX_CAMPAIGN_BACKEND: ${FORMUNEX_CAMPAIGN_BACKEND:-native}
       FORMUNEX_EXPERIMENT_BACKEND: ${FORMUNEX_EXPERIMENT_BACKEND:-native}
-      FORMUNEX_DATALAB_REQUIRED: ${FORMUNEX_DATALAB_REQUIRED:-false}
-      FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
-      # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
-      # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。
       # 值放 .env（已 gitignore），不要写死在本文件里。
-      FORMUNEX_DATALAB_API_TOKEN: ${FORMUNEX_DATALAB_API_TOKEN:-}
       # Optional Neo4j graph-store adapter (sibling to SQLite KG).
       FORMUNEX_NEO4J_ENABLED: "true"
       FORMUNEX_NEO4J_URI: bolt://kg:7687
@@ -235,16 +222,10 @@ services:
       FORMUNEX_CELERY_EAGER: "false"
       FORMUNEX_COLBERT_INDEX_DIR: /app/data/colbert_index
       FORMUNEX_API_AUTH_ENABLED: ${FORMUNEX_API_AUTH_ENABLED:-false}
-      # FormuNex M7: experiments live in FormuNex's own database (native). Datalab is opt-in through
-      # docker-compose.eln.yml, which sets datalab + REQUIRED=true; external ELNs otherwise sync via connectors.
+      # Experiments live in FormuNex's own database (native); external ELNs sync via connectors.
       FORMUNEX_CAMPAIGN_BACKEND: ${FORMUNEX_CAMPAIGN_BACKEND:-native}
       FORMUNEX_EXPERIMENT_BACKEND: ${FORMUNEX_EXPERIMENT_BACKEND:-native}
-      FORMUNEX_DATALAB_REQUIRED: ${FORMUNEX_DATALAB_REQUIRED:-false}
-      FORMUNEX_DATALAB_API_URL: http://host.docker.internal:5001
-      # Datalab 平台为 PYDATALAB_TESTING=false，每个端点都要求 DATALAB-API-KEY 头；
-      # 缺失时后端日志出现 401 UNAUTHORIZED（前端文案会误导成「ELN 不可达」）。
       # 值放 .env（已 gitignore），不要写死在本文件里。
-      FORMUNEX_DATALAB_API_TOKEN: ${FORMUNEX_DATALAB_API_TOKEN:-}
       FORMUNEX_NEO4J_ENABLED: "true"
       FORMUNEX_NEO4J_URI: bolt://kg:7687
       FORMUNEX_NEO4J_USER: neo4j

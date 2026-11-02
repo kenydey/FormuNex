@@ -4,7 +4,7 @@
 # CI proved the Dockerfile's extras *resolve* (scripts/check_docker_extras.py, dry-run) and nothing ever built the image, so
 # "installs" and "runs" were two different claims with only one of them checked. This builds it and then does what a user's
 # first five minutes do: import the app, run the migrations, boot the server, read /health, and push a text file and a PDF
-# through the ingest endpoint - with no volume mounted, no Redis, no Datalab, because that is the out-of-the-box case.
+# through the ingest endpoint - with no volume mounted and no Redis, because that is the out-of-the-box case.
 #
 #   scripts/docker_smoke.sh                 # build + every check
 #   SKIP_BUILD=1 IMAGE=my:tag scripts/docker_smoke.sh
@@ -159,7 +159,6 @@ docker run -d --name "$NAME" -p "127.0.0.1:${PORT}:8000" \
   -e FORMUNEX_CELERY_EAGER=true \
   -e FORMUNEX_CAMPAIGN_BACKEND=sqlite \
   -e FORMUNEX_EXPERIMENT_BACKEND=sqlite \
-  -e FORMUNEX_DATALAB_REQUIRED=false \
   -e FORMUNEX_NEO4J_ENABLED=false \
   "$IMAGE" >/dev/null
 wait_for "$BOOT_TIMEOUT" "/health answers with the database ok" health_database_ok || true

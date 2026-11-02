@@ -111,7 +111,7 @@ def fetch_campaign_data_for_baybe(
 
     Returns ``(actual_X, measurements_Y)`` where measurement columns follow
     ``Campaign.objectives_snapshot`` order (SSOT = ``ObjectiveSpec.metric``).
-    Data is read from the campaign store (Datalab SSOT or sqlite fallback).
+    Data is read from the campaign store (native store).
     """
     import pandas as pd
 

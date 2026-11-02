@@ -46,7 +46,6 @@ os.environ.update(
         "FORMUNEX_CELERY_EAGER": "true",
         "FORMUNEX_CAMPAIGN_BACKEND": "sqlite",
         "FORMUNEX_EXPERIMENT_BACKEND": "sqlite",
-        "FORMUNEX_DATALAB_REQUIRED": "false",
         "FORMUNEX_KB_INGEST_AUTO": "false",
         "FORMUNEX_DB_URL": f"sqlite:///{TMP}/fuzz.db",
         "FORMUNEX_DATA_DIR": TMP,

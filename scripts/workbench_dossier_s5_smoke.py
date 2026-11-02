@@ -7,7 +7,7 @@ refreshes the dossier pack, and asserts S5 lab rows come from ExperimentRow
 
 Requires:
   - wiki/dossier flags on (script enables via env-flags when allowed)
-  - campaign backend reachable (sqlite or Datalab)
+  - campaign backend reachable (sqlite or native)
 
 Usage:
   python3 scripts/workbench_dossier_s5_smoke.py
@@ -112,16 +112,14 @@ def main() -> int:
         "/api/experiments/workbench/campaigns",
         {"plan": plan, "project_id": pid, "name": "S5 smoke campaign"},
     )
-    if code in (502, 503) or (
-        isinstance(body, dict) and "Datalab" in str(body.get("detail") or body)
-    ):
+    if code in (502, 503):
         print(
             f"WARN  create workbench campaign: status={code} — "
-            "Datalab/ELN unreachable; pytest covers sqlite path.\n"
+            "backend unavailable; pytest covers sqlite path.\n"
             f"      {str(body)[:180]}"
         )
-        print(f"\nproject_id = {pid} (campaign blocked by ELN)")
-        print("Workbench → dossier S5 smoke soft-skipped (ELN down).")
+        print(f"\nproject_id = {pid} (campaign blocked by backend outage)")
+        print("Workbench → dossier S5 smoke soft-skipped (backend down).")
         return 0
 
     cid = body.get("campaign_id") if isinstance(body, dict) else None

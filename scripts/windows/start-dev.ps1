@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Runs backend (uvicorn), Celery worker and the Vite dev server as host
-    processes, with the infrastructure (Redis, Neo4j, optional Datalab ELN and
+    processes, with the infrastructure (Redis, Neo4j and
     the MolScribe worker) left to Docker. Mirrors scripts/dev/start-dev.sh.
 
     Windows-specific handling that this script exists for:
@@ -30,10 +30,6 @@
     Do not touch Docker infra (Redis/Neo4j). Use when the containers are managed
     elsewhere.
 
-.PARAMETER RequireEln
-    Treat an unreachable Datalab ELN as fatal instead of degrading to the local
-    sqlite ledger.
-
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\windows\start-dev.ps1 start
 
@@ -45,8 +41,7 @@ param(
     [ValidateSet('start', 'stop', 'status', 'restart')]
     [string]$Action = 'start',
     [switch]$NoFrontend,
-    [switch]$NoInfra,
-    [switch]$RequireEln
+    [switch]$NoInfra
 )
 
 $ErrorActionPreference = 'Stop'
@@ -183,36 +178,14 @@ function Set-FormuNexEnv {
     $env:FORMUNEX_COLBERT_INDEX_DIR = Join-Path $dataDir 'colbert_index'
 
     $env:FORMUNEX_CELERY_EAGER = 'false'
-    $env:FORMUNEX_DATALAB_API_URL = if ($env:FORMUNEX_DATALAB_API_URL) { $env:FORMUNEX_DATALAB_API_URL } else { 'http://127.0.0.1:5001' }
 }
 
 function Resolve-ElnMode {
-    <#
-        Datalab is a core dependency for lab/recommend/workbench/optimize, but a
-        Windows dev box frequently has no ELN running. Probe it: when reachable,
-        run in ELN mode; otherwise degrade to the local sqlite ledger instead of
-        failing to start (the product default is auto + REQUIRED=false).
-    #>
-    $url = $env:FORMUNEX_DATALAB_API_URL
-    $reachable = Test-HttpOk -Url "$($url.TrimEnd('/'))/" -TimeoutSec 3
-    if ($reachable) {
-        $env:FORMUNEX_CAMPAIGN_BACKEND = 'datalab'
-        $env:FORMUNEX_EXPERIMENT_BACKEND = 'datalab'
-        $env:FORMUNEX_DATALAB_REQUIRED = 'true'
-        Write-Ok "Datalab ELN reachable at $url - ELN mode"
-        return
-    }
-    if ($RequireEln) {
-        Write-Err "Datalab ELN unreachable at $url and -RequireEln was given."
-        Write-Note 'Start it: docker compose -f docker-compose.yml -f docker-compose.eln.yml up -d'
-        Write-Note 'See deploy/eln/README.md.'
-        exit 1
-    }
-    $env:FORMUNEX_CAMPAIGN_BACKEND = 'auto'
-    $env:FORMUNEX_EXPERIMENT_BACKEND = 'auto'
-    $env:FORMUNEX_DATALAB_REQUIRED = 'false'
-    Write-Warn2 "Datalab ELN unreachable at $url - starting in soft-degrade mode (local sqlite ledger)."
-    Write-Note 'DOE/workbench stay usable; ELN-backed campaigns need: docker compose -f docker-compose.yml -f docker-compose.eln.yml up -d'
+    # Datalab removal batch 5: the ledger is always native; external ELNs
+    # sync through the lab connectors. Kept as a no-op so the call site
+    # below keeps reading in order.
+    $env:FORMUNEX_CAMPAIGN_BACKEND = 'native'
+    $env:FORMUNEX_EXPERIMENT_BACKEND = 'native'
 }
 
 # ------------------------------------------------------------------- infra ---
@@ -233,7 +206,7 @@ function Start-Infra {
     Push-Location $Root
     try {
         # redis is mandatory (Celery broker + SSE pub/sub); kg (Neo4j) is the
-        # graph store. MolScribe/ELN are started separately (heavy: ~1.9 GB / stack).
+        # graph store. MolScribe is started separately (heavy: ~1.9 GB).
         Invoke-Streamed { & $docker.Source compose up -d redis kg 2>&1 | ForEach-Object { Write-Note $_ } }
     } finally {
         Pop-Location
@@ -267,7 +240,7 @@ function Start-Api {
         Write-Ok "API ready on http://127.0.0.1:$ApiPort  (log: $out)"
         try {
             $health = Invoke-RestMethod -Uri "http://127.0.0.1:$ApiPort/health" -TimeoutSec 5
-            Write-Note "status=$($health.status) database=$($health.database.scheme) broker=$($health.task_broker.reachable) datalab=$($health.datalab.reachable)"
+            Write-Note "status=$($health.status) database=$($health.database.scheme) broker=$($health.task_broker.reachable)"
         } catch { }
     } else {
         Write-Warn2 "API did not answer /health within 90s - inspect $out and $err"
@@ -406,7 +379,6 @@ function Invoke-Status {
     $rows += [pscustomobject]@{ Component = 'Frontend'; Check = ":5173"; State = if (Test-HttpOk -Url "http://127.0.0.1:$VitePort/" -TimeoutSec 2) { 'up' } else { 'down' } }
     $rows += [pscustomobject]@{ Component = 'Redis';    Check = ':6379'; State = if (Test-PortOpen -Port 6379) { 'up' } else { 'down' } }
     $rows += [pscustomobject]@{ Component = 'Neo4j';    Check = ':7687'; State = if (Test-PortOpen -Port 7687) { 'up' } else { 'down' } }
-    $rows += [pscustomobject]@{ Component = 'Datalab';  Check = ':5001'; State = if (Test-HttpOk -Url 'http://127.0.0.1:5001/' -TimeoutSec 2) { 'up' } else { 'down' } }
 
     foreach ($r in $rows) {
         $colour = if ($r.State -eq 'up') { 'Green' } else { 'Red' }
@@ -422,7 +394,7 @@ function Invoke-Status {
         try {
             $h = Invoke-RestMethod -Uri "http://127.0.0.1:$ApiPort/health" -TimeoutSec 5
             Write-Host ''
-            Write-Note "health: status=$($h.status) db=$($h.database.scheme) broker=$($h.task_broker.reachable) datalab=$($h.datalab.reachable) ledger=$($h.datalab.ledger_mode)"
+            Write-Note "health: status=$($h.status) db=$($h.database.scheme) broker=$($h.task_broker.reachable)"
         } catch { }
     }
 

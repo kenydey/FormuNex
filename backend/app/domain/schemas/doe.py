@@ -308,7 +308,7 @@ class Ingredient(BaseModel):
     def _coerce_numeric(cls, v: Any) -> Any:
         """Normalize numeric fields that may arrive as strings.
 
-        LLM/Datalab responses sometimes carry numbers as strings (e.g.
+        LLM responses sometimes carry numbers as strings (e.g.
         molar_mass="35.046" or "381.9 g/mol"). Bare ``float(...)`` drops
         unit-bearing values to None; extract the leading number instead so
         gate/chemistry parsers see a real float.
@@ -696,9 +696,8 @@ class ExperimentRecord(BaseModel):
         """Flat metric → value view.
 
         A computed field rather than a plain property so it survives
-        ``model_dump()`` — the JSON store and the Datalab block writer both
-        serialize records, and a rolled-back binary must still be able to read
-        what a newer one wrote.
+        ``model_dump()`` — the JSON store serializes records, and a rolled-back
+        binary must still be able to read what a newer one wrote.
         """
         return {m.metric: m.value for m in self.measurements}
 
@@ -783,30 +782,6 @@ class IntentResult(BaseModel):
     extracted_fields: list[str]  # which Requirement fields were populated
     engine: str  # "llm" | "offline-heuristic"
     warnings: list[str] = Field(default_factory=list)
-
-class DatalabSampleResponse(BaseModel):
-    """Datalab POST /new-sample/ sample_list_entry contract."""
-
-    item_id: str
-    name: str | None = None
-    refcode: str | None = None
-    status: str | None = None
-
-    model_config = {"extra": "ignore"}
-
-class DatalabItemEnvelope(BaseModel):
-    """Datalab GET /get-item-data/{id} outer wrapper."""
-
-    item_data: dict[str, Any] = Field(default_factory=dict)
-
-    model_config = {"extra": "ignore"}
-
-class DatalabDeleteResponse(BaseModel):
-    """Datalab POST /delete-sample/ response."""
-
-    status: str
-
-    model_config = {"extra": "ignore"}
 
 class HardConstraint(BaseModel):
     """A requirement the formulation must satisfy, not merely trade against.

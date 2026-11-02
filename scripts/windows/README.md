@@ -21,7 +21,7 @@ Neither the installer nor the runner activates the venv: they call
 
 - **Python 3.12** (recommended) — `winget install --id Python.Python.3.12`
 - **Node.js 20+** — for the Vite frontend
-- **Docker Desktop** — Redis (:6379), Neo4j (:7687); optional Datalab ELN (:5001)
+- **Docker Desktop** — Redis (:6379), Neo4j (:7687)
 
 ### Redis, without Docker
 
@@ -36,11 +36,10 @@ needs Redis ≥ 6.0 and fails on every older one - the 5.0.14.1 port below inclu
 | Redis in WSL2 | 6.x / 7.x | `sudo apt install redis-server`; reachable on `localhost:6379` from Windows. |
 | Docker Desktop | 7.x | `docker compose up -d redis` (what `start-dev.ps1` does unless `-NoInfra`). |
 
-### Datalab (the ELN)
+### External ELNs
 
-Datalab is a Linux-container product: it needs Docker Desktop **with Linux containers**, and there is no native Windows build.
-Without it `start-dev.ps1` says `Datalab ELN unreachable ... starting in soft-degrade mode (local sqlite ledger)` and carries on:
-DOE and the workbench stay usable, only ELN-backed campaigns need it.
+The ledger itself is native and needs no ELN. External ELNs (eLabFTW) sync
+through the lab connectors when configured.
 
 Python version matters: ColBERT (`ragatouille` → `voyager`) has Windows wheels
 only up to **CPython 3.12**. On 3.13/3.14 the installer skips ColBERT and warns,
@@ -121,10 +120,8 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\start-dev.ps1 stop
 
 1. Brings up Docker infra (`docker compose up -d redis kg`) and waits for
    Redis; skipped with `-NoInfra`.
-2. Probes the Datalab ELN at `FORMUNEX_DATALAB_API_URL` (default
-   `http://127.0.0.1:5001`). Reachable → `datalab` backends + `DATALAB_REQUIRED=true`.
-   Unreachable → `auto` + `false`, i.e. the local sqlite ledger, with a warning
-   (`-RequireEln` makes it fatal instead).
+2. Sets the native ledger backends (`FORMUNEX_CAMPAIGN_BACKEND` /
+   `FORMUNEX_EXPERIMENT_BACKEND` = `native`).
 3. Runs `alembic upgrade head` so a stale schema cannot bite later
    (`schema drift: 缺失列 document_chunks.bbox …`).
 4. Starts API (`uvicorn app.main:app --reload --reload-dir app`), Celery worker
@@ -147,7 +144,6 @@ and `FORMUNEX_ENV_FILE` pointing at the repo `.env` when present.
 | Health | http://127.0.0.1:8000/health |
 | Frontend | http://127.0.0.1:5173 |
 | Neo4j browser | http://127.0.0.1:7474 |
-| Datalab ELN (if started) | http://127.0.0.1:5001 |
 
 ## Troubleshooting
 
@@ -162,7 +158,7 @@ and `FORMUNEX_ENV_FILE` pointing at the repo `.env` when present.
 | `celery` exits immediately | Missing `--pool=solo` on Windows. |
 | `No matching distribution found for torch` | Use the CPU index: `pip install torch --extra-index-url https://download.pytorch.org/whl/cpu`. |
 | Frontend reports missing dependencies | `cd frontend; npm install --legacy-peer-deps`. |
-| `/health` shows `status: degraded` | Expected without LLM/ELN credentials. Check `database.ok`, `task_broker.reachable`, `datalab.reachable`. |
+| `/health` shows `status: degraded` | Expected without LLM/ELN credentials. Check `database.ok`, `task_broker.reachable`. |
 | Redis unreachable and Docker absent | Install Memurai, a plain-process Redis (tporadowski), or run Redis inside WSL2 - see *Redis, without Docker* above. Celery and SSE task progress need it. |
 | `celery.err.log`: ``unknown command `HELLO` `` / every upload answers 503 | `FORMUNEX_REDIS_PROTOCOL=3` against a Redis older than 6.0. Remove it (the default, `2`, works with every Redis). |
 

@@ -8,7 +8,6 @@ import threading
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -26,16 +25,10 @@ from ..domain.schemas import (
     Requirement,
 )
 from .campaign_types import WorkbenchRow
-from .datalab_envelope import datalab_block, validate_blocks
 from .session_utils import commit_session
 from .models import Campaign
 
 logger = logging.getLogger(__name__)
-
-_PARAMS_BLOCK = "formumind_params"
-_MEASUREMENTS_BLOCK = "formumind_measurements"
-_CAMPAIGN_BLOCKS = (_PARAMS_BLOCK, _MEASUREMENTS_BLOCK)
-
 
 def _run_async(coro):
     """Run async store methods from sync callers without nesting event loops."""
@@ -45,10 +38,6 @@ def _run_async(coro):
         return asyncio.run(coro)
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
         return ex.submit(lambda: asyncio.run(coro)).result()
-
-
-def _validate_campaign_blocks(item_data: dict[str, Any]) -> None:
-    validate_blocks(item_data, _CAMPAIGN_BLOCKS)
 
 
 def _utcnow() -> datetime:
@@ -66,54 +55,6 @@ def campaign_domain(campaign: Campaign) -> ProductDomain:
 def _new_item_id(campaign_id: int, run_id: int) -> str:
     suffix = uuid.uuid4().hex[:8]
     return f"formumind_c{campaign_id}_r{run_id}_{suffix}"
-
-
-def _blocks_for_row(
-    *,
-    planned_params: dict,
-    actual_params: dict,
-    measurements: dict,
-    status: str,
-    note: str | None = None,
-    tags: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        _PARAMS_BLOCK: datalab_block(
-            _PARAMS_BLOCK,
-            {
-                "planned_params": planned_params,
-                "actual_params": actual_params,
-                "status": status,
-                "note": note,
-                "tags": list(tags or []),
-            },
-        ),
-        _MEASUREMENTS_BLOCK: datalab_block(_MEASUREMENTS_BLOCK, dict(measurements)),
-    }
-
-
-def _parse_row_from_item(
-    campaign_id: int,
-    row_id: int,
-    item_id: str,
-    item_data: dict[str, Any],
-) -> WorkbenchRow:
-    _validate_campaign_blocks(item_data)
-    blocks = item_data.get("blocks_obj") or {}
-    params_block = (blocks.get(_PARAMS_BLOCK) or {}).get("data") or {}
-    meas_block = (blocks.get(_MEASUREMENTS_BLOCK) or {}).get("data") or {}
-    return WorkbenchRow(
-        id=row_id,
-        campaign_id=campaign_id,
-        item_id=item_id,
-        status=str(params_block.get("status") or "Pending"),
-        planned_params=dict(params_block.get("planned_params") or {}),
-        actual_params=dict(params_block.get("actual_params") or {}),
-        measurements=dict(meas_block),
-        note=params_block.get("note"),
-        tags=list(params_block.get("tags") or []),
-        refcode=item_data.get("refcode"),
-    )
 
 
 class CampaignStoreInterface(ABC):

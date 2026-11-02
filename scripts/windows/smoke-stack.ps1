@@ -11,8 +11,7 @@
     included (its PID used to go unrecorded, so every `start` left an orphan behind).
 
     Needs a Redis on :6379 (Memurai, Redis for Windows, or the one Docker Desktop runs) and the venv install.bat builds.
-    Datalab, Neo4j and the frontend are not part of it: Datalab is a Linux-container product (see README.md here), and a
-    missing one must only degrade the ledger, which the first check pins.
+    Neo4j and the frontend are not part of it.
 
     Prints one PASS / FAIL line per check and exits 0 only when every check passed.
 
@@ -119,7 +118,7 @@ if (-not $env:FORMUNEX_API_AUTH_ENABLED) { $env:FORMUNEX_API_AUTH_ENABLED = 'fal
 
 $start = Invoke-Runner -Action 'start' -Extra @('-NoInfra', '-NoFrontend')
 Check 'start exits 0 and reaches "Stack up."' (($start.Code -eq 0) -and ($start.Text -match 'Stack up\.')) "exit code $($start.Code)"
-Check 'the missing Datalab only degrades the ledger (no ELN here)' ($start.Text -match 'soft-degrade|ELN mode') 'the runner printed neither mode'
+Check 'start needs no ELN (native ledger)' ($start.Text -notmatch 'Datalab') 'the runner still mentions Datalab'
 Check 'the worker was confirmed ready (no 60 s timeout warning)' ($start.Text -notmatch 'worker not confirmed ready') 'celery never logged "ready."'
 
 $apiPid = Get-PidFromFile -Kind 'api'
@@ -138,9 +137,8 @@ if ($health) {
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     1..3 | ForEach-Object { Invoke-RestMethod -Uri "$Api/health" -TimeoutSec 10 | Out-Null }
     Write-Host ("info  /health takes {0:N0} ms per call" -f ($timer.ElapsedMilliseconds / 3))
-    # Where those milliseconds go: /health probes Datalab, and with nothing listening on :5001 a refused loopback connection takes
-    # seconds to be reported on Windows - the probe gives up after datalab_client.LOOPBACK_CONNECT_TIMEOUT_S (0.5 s), which is about
-    # what the line above shows. (`localhost` to Redis is not the cause: it connects in milliseconds, as the next lines show.)
+    # (`localhost` to Redis is not the cause of slow /health calls: it connects
+    # in milliseconds, as the next lines show.)
     foreach ($target in @(@('localhost', 6379), @('127.0.0.1', 6379), @('127.0.0.1', 5001))) {
         $connect = [System.Diagnostics.Stopwatch]::StartNew()
         try { $probe = New-Object System.Net.Sockets.TcpClient($target[0], $target[1]); $probe.Close() } catch { }

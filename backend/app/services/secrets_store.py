@@ -53,7 +53,7 @@ SECRET_REGISTRY: list[tuple[str, str, str, str]] = [
 NON_SECRET_ATTRS = frozenset(
     {"openalex_mailto", "unpaywall_mailto", "mineru_base_url", "langfuse_public_key", "langfuse_host"}
 )
-# Entries whose value is an address that credentials are sent to: validated like the Datalab URL.
+# Entries whose value is an address that credentials are sent to: validated like a service URL.
 _SERVICE_URL_ATTRS = {
     "mineru_base_url": "MinerU API 地址",
     "langfuse_host": "Langfuse 地址",
@@ -129,7 +129,7 @@ def check_env_value(value: str, *, what: str = "value") -> str:
     return value
 
 
-# Link-local (cloud metadata), unspecified and multicast addresses are never a Datalab server; internal and loopback
+# Link-local (cloud metadata), unspecified and multicast addresses are never an ELN server; internal and loopback
 # addresses are the normal deployment (a compose service name, host.docker.internal, localhost), so they stay allowed.
 _METADATA_HOSTS = frozenset({"metadata.google.internal", "metadata", "instance-data"})
 

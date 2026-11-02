@@ -916,7 +916,7 @@ async def workbench_attachment_counts(
     return WorkbenchAttachmentCounts(campaign_id=campaign_id, counts=counts)
 
 
-# ── Native row versions (no Datalab refcode) ────────────────────────────────
+# ── Native row versions (no refcode) ──────────────────────────────────────────
 # The native store keeps a row as one JSON entry of ``campaigns.sample_refs``
 # and overwrites it in place on every save, so it has no history of its own.
 # Each native save therefore appends the changed rows' snapshots to the

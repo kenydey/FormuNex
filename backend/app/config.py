@@ -27,11 +27,11 @@ _RETIRED_ENV_KEYS = frozenset({
     "FORMUNEX_RECOMMEND_AB_ENABLED",  # recommend A/B bucketing removed: no caller ever passed a user id
     "FORMUNEX_QA_MAX_EVIDENCE",  # never read; chat_rerank_top_k already caps the evidence list
     "FORMUNEX_DATALAB_MAX_CONNECTIONS",  # Datalab removal batch 2: last readers (the Datalab stores) deleted
-    "FORMUNEX_DATALAB_MAX_KEEPALIVE_CONNECTIONS",  # same; remaining datalab_* fields die in batch 3
+    "FORMUNEX_DATALAB_MAX_KEEPALIVE_CONNECTIONS",  # retired with the Datalab removal (batch 5)
     "FORMUNEX_DATALAB_API_URL",  # Datalab removal batch 3: backend deleted; the migration script takes --datalab-url
-    "FORMUNEX_DATALAB_API_TOKEN",  # same; migration script takes --datalab-token / env directly
-    "FORMUNEX_DATALAB_TIMEOUT_SECONDS",  # same; migration script takes --timeout
-    "FORMUNEX_DATALAB_REQUIRED",  # same; no backend switch remains to require
+    "FORMUNEX_DATALAB_API_TOKEN",  # retired with the Datalab removal (batch 5)
+    "FORMUNEX_DATALAB_TIMEOUT_SECONDS",  # retired with the Datalab removal (batch 5)
+    "FORMUNEX_DATALAB_REQUIRED",  # retired with the Datalab removal (batch 5)
 })
 # Env keys read by subsystems but not declared on Settings.
 _INFRA_ENV_KEYS = frozenset({
@@ -78,7 +78,7 @@ _INFRA_ENV_KEYS = frozenset({
     "FORMUNEX_PG_PASSWORD",            # docker-compose.eln.yml
     "FORMUNEX_PG_DB",                  # docker-compose.eln.yml
     "FORMUNEX_USE_HOST_NETWORK",       # scripts/deploy-docker.sh
-    "FORMUNEX_DATALAB_PROBE_TIMEOUT_S",  # scripts/start_all.sh
+    "FORMUNEX_DATALAB_PROBE_TIMEOUT_S",  # retired with the Datalab removal (batch 5)
 })
 
 
@@ -1198,20 +1198,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_removed_eln_backends(self) -> "Settings":
-        # Datalab removal batch 2: the only backend is native (plus the
-        # deprecated "sqlite" alias). "datalab"/"auto" no longer boot: the
-        # switch silently flipping the system of record was the reason
-        # auto was never recommended, and the Datalab stores are deleted.
-        # Operators with Datalab rows run backend/scripts/
-        # migrate_datalab_to_native.py first, then keep the native default.
+        # Datalab removal batch 5: the only backend is native (plus the
+        # deprecated "sqlite" alias). "datalab"/"auto" no longer boot, and
+        # the migration tool was removed with the backend: Datalab rows
+        # had to be migrated to native before the removal.
         for field in ("campaign_backend", "experiment_backend"):
             value = (getattr(self, field) or "").strip().lower()
             if value not in ("native", "sqlite"):
                 raise ValueError(
                     f"{field}={value!r} is no longer supported: the Datalab ELN "
-                    "backend was removed; migrate Datalab rows to native first "
-                    "(backend/scripts/migrate_datalab_to_native.py) and use "
-                    "the native default"
+                    "backend was removed (its migration tool went with it); "
+                    "use the native default"
                 )
         return self
 
