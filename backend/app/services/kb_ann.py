@@ -62,6 +62,11 @@ _lock = threading.Lock()
 _buckets: dict[str, dict[str, Any]] = {}  # model -> {"index", "ids", "dim"}
 _manifest: dict[str, Any] | None = None
 _last_error: str | None = None
+# Stage 5 / SR-093: at most one background rebuild runs at a time
+# (single-flight); _generation is bumped by invalidate() so a build
+# started before an invalidation can never publish over the fresh state.
+_build_thread: threading.Thread | None = None
+_generation = 0
 
 
 def _index_dir() -> str:
@@ -174,7 +179,7 @@ def _scan_vectors() -> dict[str, list[tuple[str, Any]]]:
     return out
 
 
-def _build_from_scan(faiss, np, scan: dict[str, list[tuple[str, Any]]]) -> dict[str, dict[str, Any]]:
+def _build_from_scan(faiss, np, scan: dict[str, list[tuple[str, Any]]], *, atomic: bool = False) -> dict[str, dict[str, Any]]:
     buckets: dict[str, dict[str, Any]] = {}
     for model, items in scan.items():
         if not items:
@@ -186,7 +191,14 @@ def _build_from_scan(faiss, np, scan: dict[str, list[tuple[str, Any]]]) -> dict[
         mat = np.stack([v for _, v in items]).astype(np.float32)
         index = faiss.IndexFlatIP(dim)
         index.add(mat)
-        faiss.write_index(index, _bucket_path(model))
+        if atomic:
+            # Background builds publish without holding _lock, so a
+            # concurrent load must never observe a half-written file.
+            tmp = _bucket_path(model) + ".tmp"
+            faiss.write_index(index, tmp)
+            replace_with_retry(tmp, _bucket_path(model))
+        else:
+            faiss.write_index(index, _bucket_path(model))
         buckets[model] = {
             "index": index,
             "ids": [cid for cid, _ in items],
@@ -454,9 +466,17 @@ def ensure_index() -> dict[str, Any]:
     the build race guard). An uncomputable fingerprint also forces a
     rebuild attempt.
 
+    Stage 5 / SR-093: the full rebuild no longer blocks queries. When an
+    in-memory index exists, the rebuild runs in a background thread and
+    this call returns the old index as ready; queries serve it until the
+    new index swaps in atomically (see _rebuild_job). Only a first build
+    (nothing to serve) still runs synchronously, and the delta path —
+    incremental and bounded — stays synchronous so its freshness
+    contract is unchanged.
+
     Returns ``{"ready": bool, "buckets": {...}, "error": str|None}``.
     """
-    global _buckets, _manifest, _last_error
+    global _buckets, _manifest, _last_error, _build_thread
     faiss, np = _faiss(), _numpy()
     if faiss is None or np is None:
         return {"ready": False, "buckets": {}, "error": "faiss/numpy unavailable"}
@@ -490,6 +510,19 @@ def ensure_index() -> dict[str, Any]:
             _last_error = error or "delta update failed"
             logger.info("kb_ann %s", _last_error)
             return {"ready": False, "buckets": {}, "error": _last_error}
+        if _buckets and fp is not None:
+            # Stage 5 / SR-093: a full rebuild is needed but an index is
+            # already serving — rebuild in the background and keep serving
+            # the old buckets until the new ones swap in atomically (see
+            # _rebuild_job for the switch semantics). Single-flight: a
+            # running rebuild is never duplicated. Callers that need the
+            # fresh index (tests, ops) use wait_for_build().
+            if _build_thread is None or not _build_thread.is_alive():
+                _build_thread = threading.Thread(
+                    target=_rebuild_job, args=(faiss, np, fp, _generation), daemon=True
+                )
+                _build_thread.start()
+            return {"ready": True, "buckets": _manifest or {}, "error": None}
         if _buckets:
             logger.info(
                 "kb_ann fingerprint changed, dropping in-memory index for rebuild"
@@ -532,17 +565,85 @@ def ensure_index() -> dict[str, Any]:
         return {"ready": True, "buckets": manifest, "error": None}
 
 
+def _rebuild_job(faiss, np, fp_before: dict[str, Any], generation: int) -> None:
+    """Background full rebuild (Stage 5 / SR-093). Switch semantics:
+
+    - Queries keep serving the old buckets for the whole job: the job
+      builds fresh objects and never touches ``_buckets`` until the swap.
+    - The job's own race guard (pre-scan vs post-scan fingerprint) still
+      applies, exactly like the synchronous build.
+    - Publish order is sidecars, then manifest, all atomic renames, so
+      persisted state is always a self-consistent pair.
+    - The swap itself re-checks both the generation (invalidate() since
+      job start discards) and the live fingerprint (a write landing
+      between the race guard and the swap discards). On any discard the
+      old in-memory index keeps serving and the next ensure retries.
+    """
+    global _build_thread, _buckets, _manifest, _last_error
+    try:
+        scan = _scan_vectors()
+        buckets = _build_from_scan(faiss, np, scan, atomic=True)
+        if not buckets:
+            raise RuntimeError("no embeddable vectors in corpus")
+        fp_new = _current_fingerprint()
+        if fp_new is None or fp_new != fp_before:
+            logger.info("kb_ann background build raced with concurrent DB write, discarded")
+            return
+        manifest = _manifest_for(buckets, fp_new)
+        if generation != _generation:
+            logger.info("kb_ann background build superseded by invalidate(), discarded")
+            return
+        for model, b in buckets.items():
+            _write_sidecar(_bucket_path(model) + ".ids.json", b["ids"], b["removed"])
+        _write_manifest(manifest)
+    except Exception as exc:  # noqa: BLE001 - fail-open, like every path here
+        logger.warning("kb_ann background build failed: %s", exc)
+        with _lock:
+            _last_error = f"background build failed: {exc}"
+            _build_thread = None
+        return
+    with _lock:
+        _build_thread = None
+        if generation != _generation:
+            logger.info("kb_ann background build superseded by invalidate(), discarded")
+            return
+        fp_now = _current_fingerprint()
+        if fp_now is None or fp_now != fp_new:
+            logger.info("kb_ann background build stale at swap, discarded")
+            return
+        _buckets, _manifest, _last_error = buckets, manifest, None
+
+
+def wait_for_build(timeout_s: float = 30.0) -> bool:
+    """Join a running background rebuild, if any.
+
+    For tests and ops that need the fresh index rather than the served
+    old one. Returns True when an index is in memory afterwards.
+    """
+    with _lock:
+        thread = _build_thread
+    if thread is not None:
+        thread.join(timeout=timeout_s)
+    with _lock:
+        return bool(_buckets)
+
+
 def search(model: str, query_vec: list[float], k: int) -> list[tuple[str, float]] | None:
     """Top-k ANN search in one model bucket.
 
     Returns ``[(chunk_id, cosine_score)]`` or ``None`` when the index is not
     usable (caller falls back to brute force). Never raises.
+
+    Stage 5 / SR-093: no lock here. Buckets are never mutated in place
+    (deltas clone, builds create fresh dicts) and the publish step is a
+    single reference assignment, so the bucket grabbed here stays valid
+    for the whole search even while a rebuild runs — this is what
+    unblocks queries during builds, together with the background job.
     """
     np = _numpy()
     if np is None:
         return None
-    with _lock:
-        bucket = _buckets.get(model or "")
+    bucket = _buckets.get(model or "")
     if not bucket:
         return None
     try:
@@ -575,9 +676,12 @@ def search(model: str, query_vec: list[float], k: int) -> list[tuple[str, float]
 
 def invalidate() -> None:
     """Drop the in-memory index (forces rebuild on next ensure_index)."""
-    global _buckets, _manifest, _last_error
+    global _buckets, _manifest, _last_error, _generation
     with _lock:
         _buckets, _manifest, _last_error = {}, None, None
+        # A running background job keeps its generation and therefore
+        # cannot publish over this fresh state (see _rebuild_job).
+        _generation += 1
 
 
 def index_stats() -> dict[str, Any]:

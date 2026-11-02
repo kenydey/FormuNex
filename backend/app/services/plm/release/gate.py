@@ -844,13 +844,17 @@ def evaluate(session: Session, revision_id: str) -> dict[str, Any]:
             o["status"] = "not_applicable"
     passed = all(o["status"] in ("pass", "waived", "not_applicable") for o in out)
     batches = {d.batch_id for d in docs if d.batch_id}
+    # Stage 5 / SR-091: the old per-batch session.get was one query per
+    # batch id (usually single digits, but N+1 all the same). One IN query
+    # returns the same surviving set.
+    existing_batches = set(session.scalars(select(BatchRow.id).where(BatchRow.id.in_(batches))).all()) if batches else set()
     return {
         "revision_id": rev.id, "product_code": product.code if product else None, "rev": rev.rev,
         "passed": passed, "evaluated_at": utcnow().isoformat(), "checks": out,
         "documents": [{"id": d.id, "doc_type": d.doc_type, "lang": d.lang, "version_no": d.version_no,
                        "status": d.status, "batch_id": d.batch_id,
                        "regulation": getattr(d, "regulation", None) or DEFAULT_REGULATION} for d in docs],
-        "batches": sorted(b for b in batches if session.get(BatchRow, b) is not None),
+        "batches": sorted(batches & existing_batches),
     }
 
 
