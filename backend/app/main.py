@@ -150,6 +150,25 @@ async def lifespan(_app: FastAPI):
 
         for warning in run_startup_db_checks(settings):
             logger.warning("startup check: %s", warning)
+    # Stage 5 / SR-080: built-in roles are code-owned — converge the
+    # database to the live definition on every real boot (insert
+    # missing roles, reset edited permission sets). The mechanism
+    # existed and was unit-tested but no production path ever called
+    # it, so a drifted role set survived restarts. Failure here only
+    # warns: roles stay as they are (today's behaviour) and the
+    # failure is visible in the log instead of silent.
+    if not skip_bootstrap:
+        try:
+            from .db.database import default_session_factory
+            from .services.identity.rbac import sync_builtin_roles
+
+            with default_session_factory()() as session:
+                changed = sync_builtin_roles(session)
+                session.commit()
+            if changed:
+                logger.warning("startup: built-in roles converged: %s", changed)
+        except Exception as exc:
+            log_handled_exception(logger, exc, "lifespan: sync_builtin_roles failed")
     # P1 #25: production + SQLite is a foot-gun under multi-worker write load.
     try:
         env = (settings.environment or "").strip().lower()

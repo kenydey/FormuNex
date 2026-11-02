@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import JSON, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .models import Base, _utcnow
@@ -38,6 +38,13 @@ class RegulatoryDataRelease(Base):
         Index("uq_approved_release_per_digest", "input_digest", unique=True,
               sqlite_where=text("status = 'approved'"),
               postgresql_where=text("status = 'approved'")),
+        # Stage 5 / SR-079: the status vocabulary is closed — draft /
+        # approved / rejected / superseded / import. Anything else is a
+        # writer bug, not a new state (migration 0092 adds the same
+        # CHECK to existing databases).
+        CheckConstraint(
+            "status IN ('draft', 'approved', 'rejected', 'superseded', 'import')",
+            name="ck_release_status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

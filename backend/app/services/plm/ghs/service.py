@@ -132,10 +132,14 @@ def latest_data_release(session: Session) -> str | None:
     rows (unreviewed supplier-SDS imports) are likewise invisible, for
     the same reason. Pre-0076 rows are approved.
     """
+    # Stage 5 / SR-079: id is only a DETERMINISTIC tiebreaker, not a
+    # recency signal (ids are random uuids). After supersede-on-approve
+    # at most one approved row exists, so the tiebreak only matters for
+    # pre-migration stacks sharing a created_at second.
     return session.execute(
         select(RegulatoryDataRelease.id)
         .where(RegulatoryDataRelease.status == "approved")
-        .order_by(RegulatoryDataRelease.created_at.desc())
+        .order_by(RegulatoryDataRelease.created_at.desc(), RegulatoryDataRelease.id.desc())
         .limit(1)
     ).scalar_one_or_none()
 

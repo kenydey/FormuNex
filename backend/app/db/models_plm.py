@@ -70,6 +70,13 @@ class ClassificationResultRow(Base):
 
     __tablename__ = "classification_results"
 
+    # Stage 5 / SR-080④, decided: NO composite unique key on
+    # (revision_id, inputs_hash). Classification rows are per-computation
+    # records — persist() inserts on every classify (gate, SDS, label,
+    # ...), and recompute deliberately stacks new rows while old rows
+    # stay untouched (phase3a/3b semantics). A unique key breaks that
+    # write path; stacking is the accepted design, not a bug.
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     revision_id: Mapped[str | None] = mapped_column(
         ForeignKey("product_revisions.id", ondelete="CASCADE"), nullable=True, index=True

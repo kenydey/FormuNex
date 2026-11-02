@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0091(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0091_stage3_indexes``)."""
+def test_revision_chain_head_is_0092(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0092_stage5_data_semantics``)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0091(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0091"
+    assert heads[0] == "0092"
 
 
 def test_0090_allow_ttl_column_up_down(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -307,6 +307,38 @@ def test_0091_indexes_up_down(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) 
     assert "ix_experiments_created_at" not in _index_names("experiments")
     assert "ix_experiments_project_created" not in _index_names("experiments")
     assert "ix_projects_archived_updated" not in _index_names("projects")
+
+
+def test_0092_constraints_up_down(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0092 adds the release CHECK and drops it on downgrade.
+
+    The batch rebuild for the CHECK must not take the 0085 partial unique
+    index down with it — asserted on both directions. (The
+    classification composite unique key was removed from 0092 by
+    decision: stacking is the accepted design.)
+    """
+    from tests.alembic_helpers import run_downgrade, run_upgrade
+
+    def _checks(table: str) -> set[str]:
+        engine = create_engine(tmp_db_url)
+        try:
+            return {c["name"] for c in inspect(engine).get_check_constraints(table)}
+        finally:
+            engine.dispose()
+
+    def _index_names(table: str) -> set[str]:
+        engine = create_engine(tmp_db_url)
+        try:
+            return {i["name"] for i in inspect(engine).get_indexes(table)}
+        finally:
+            engine.dispose()
+
+    run_upgrade(tmp_db_url, monkeypatch)
+    assert "ck_release_status" in _checks("regulatory_data_releases")
+    assert "uq_approved_release_per_digest" in _index_names("regulatory_data_releases")
+    run_downgrade(tmp_db_url, monkeypatch, "0091")
+    assert "ck_release_status" not in _checks("regulatory_data_releases")
+    assert "uq_approved_release_per_digest" in _index_names("regulatory_data_releases")
 
 
 def test_migrations_partial_columns_branch(
