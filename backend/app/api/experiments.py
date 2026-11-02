@@ -5,7 +5,8 @@ per-(domain, metric) prediction models that supersede the empirical surrogate.
 
 The workbench routes persist per-campaign execution rows for AG Grid editing
 and BayBE closed-loop feedback from ``actual_params`` / ``measurements``.
-Workbench row data is stored in Datalab (SSOT) via :class:`DatalabCampaignStore`.
+Workbench row data is stored in the local main-DB ledger via
+:class:`LocalCampaignStore` (the Datalab backend was removed).
 """
 from __future__ import annotations
 
@@ -38,28 +39,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["experiments"])
 
 
-def _ensure_eln_when_required() -> None:
-    """Fail fast when product ELN backends are configured but Datalab is down.
-
-    Some list endpoints still read the local SQL index for ids/labels. Under
-    product defaults (``datalab`` + ``DATALAB_REQUIRED``) that must not look
-    like a healthy sqlite ledger — probe ELN first and raise the shared 503.
-    """
-    from ..db.datalab_client import DatalabUnavailableError, check_datalab_reachable
-
-    settings = get_settings()
-    backends = {
-        (settings.campaign_backend or "").lower(),
-        (settings.experiment_backend or "").lower(),
-    }
-    if not (settings.datalab_required or "datalab" in backends):
-        return
-    ok, reason = check_datalab_reachable(
-        settings.datalab_api_url,
-        timeout=min(2.0, settings.datalab_timeout_seconds),
-    )
-    if not ok:
-        raise DatalabUnavailableError(settings.datalab_api_url, reason)
 
 
 class GridRowUpdate(BaseModel):
@@ -405,7 +384,6 @@ def list_experiments(
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> list[ExperimentSummary]:
     """Stored experiments, newest first."""
-    _ensure_eln_when_required()
     from sqlalchemy import func
 
     from ..db.database import default_session_factory
@@ -457,7 +435,6 @@ def list_workbench_campaigns(limit: int = 1000, offset: int = 0) -> list[Workben
     # Stage 3 / SR-027: page cap follows the repo's le=1000 precedent.
     limit = max(0, min(limit, 1000))
     offset = max(0, offset)
-    _ensure_eln_when_required()
     from ..db.database import default_session_factory
     from ..db.models import Campaign
 
@@ -2103,7 +2080,6 @@ def get_experiment(
     Declared last so the literal ``/experiments/<name>`` routes above win.
     404 when it does not exist or, with ``project_id``, belongs to another project.
     """
-    _ensure_eln_when_required()
     from ..db.database import default_session_factory
     from ..db.models import ExperimentRow, MeasurementRow
 

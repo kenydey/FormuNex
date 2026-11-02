@@ -1203,6 +1203,25 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _reject_removed_eln_backends(self) -> "Settings":
+        # Datalab removal batch 2: the only backend is native (plus the
+        # deprecated "sqlite" alias). "datalab"/"auto" no longer boot: the
+        # switch silently flipping the system of record was the reason
+        # auto was never recommended, and the Datalab stores are deleted.
+        # Operators with Datalab rows run backend/scripts/
+        # migrate_datalab_to_native.py first, then keep the native default.
+        for field in ("campaign_backend", "experiment_backend"):
+            value = (getattr(self, field) or "").strip().lower()
+            if value not in ("native", "sqlite"):
+                raise ValueError(
+                    f"{field}={value!r} is no longer supported: the Datalab ELN "
+                    "backend was removed; migrate Datalab rows to native first "
+                    "(backend/scripts/migrate_datalab_to_native.py) and use "
+                    "the native default"
+                )
+        return self
+
+    @model_validator(mode="after")
     def _default_deps_install_for_environment(self) -> "Settings":
         if self.deps_install_enabled is not None:
             return self

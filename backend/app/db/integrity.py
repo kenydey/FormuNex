@@ -82,7 +82,6 @@ def _count_orphans(
 
 def check_integrity(session_factory: sessionmaker[Session] | None = None) -> IntegrityReport:
     """Scan every soft reference and report orphans."""
-    from ..config import get_settings
     from .database import default_session_factory
     from .models import (
         Campaign,
@@ -96,11 +95,9 @@ def check_integrity(session_factory: sessionmaker[Session] | None = None) -> Int
     )
 
     factory = session_factory or default_session_factory()
-    settings = get_settings()
-    external = settings.campaign_backend.lower() == "datalab" or (
-        settings.experiment_backend.lower() == "datalab"
-    )
-    report = IntegrityReport(external_backend=external)
+    # Datalab removal batch 2: the backend is always native, so there is
+    # no external backend to report. The field stays for report shape.
+    report = IntegrityReport(external_backend=False)
 
     checks = [
         ("document_chunks.source_id -> source_documents.id",

@@ -258,16 +258,14 @@ async def lifespan(_app: FastAPI):
             import threading
 
             threading.Thread(target=_bg_enrich, name="pubchem-enrich", daemon=True).start()
+    # Datalab removal batch 2: the stores are always native; warm the
+    # singletons so first requests do not pay session-factory setup.
     try:
         from .db.campaign_store import get_campaign_store
         from .db.store import get_experiment_store
 
-        if settings.campaign_backend.lower() in ("datalab", "auto") or settings.experiment_backend.lower() in (
-            "datalab",
-            "auto",
-        ):
-            get_campaign_store(settings)
-            get_experiment_store(settings)
+        get_campaign_store(settings)
+        get_experiment_store(settings)
     except Exception as exc:
         log_handled_exception(logger, exc, "lifespan: ELN store initialization failed", level=logging.ERROR)
     # Initialize session memory service (startup phase)
