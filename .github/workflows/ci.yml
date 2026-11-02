@@ -57,17 +57,34 @@ jobs:
         run: ruff check .
 
       - name: Migration discipline (P2-2)
-        # New migrations must not drop tables or columns: a destructive
+        # Stage 5 / SR-069: the "history is frozen" rule from AGENTS.md
+        # ("迁移纪律") is enforced here, not just documented. Three fails:
+        # (1) an existing migration file modified on this branch — history
+        # is never rewritten, a fix ships as a new migration instead;
+        # (2) a new migration dropping a table or column on the upgrade
+        # path, via the op.* API or via raw SQL (op.execute("DROP ..."))
+        # that would otherwise bypass the op.* grep — a destructive
         # schema change needs a separate proposal first (row-count audit +
-        # data migration before the drop) — see AGENTS.md "迁移纪律".
-        # Only files ADDED on this branch are checked; existing migrations
-        # are never rewritten. On pushes to main the diff is empty and the
-        # step passes vacuously (the review already happened on the branch).
+        # data migration before the drop);
+        # (3) origin/main unresolvable: the check must FAIL, never warn
+        # and skip, or a shallow checkout would silently disable it.
+        # Only the upgrade path counts: a downgrade() that drops columns
+        # the same migration added is just undoing it, not destroying
+        # data. The awk filter removes the downgrade() body (up to the
+        # next top-level def) before grepping. On pushes to main the
+        # diff is empty and the step passes vacuously (the review already
+        # happened on the branch).
         run: |
           cd "${GITHUB_WORKSPACE}"
           if ! git rev-parse --verify --quiet origin/main >/dev/null; then
-            echo "::warning::origin/main not found; migration-discipline check skipped"
-            exit 0
+            echo "::error::origin/main not found; migration-discipline check cannot run without full history (fetch-depth: 0 required). Refusing to skip."
+            exit 1
+          fi
+          mapfile -t modified < <(git diff --name-only --diff-filter=M origin/main...HEAD -- backend/app/db/alembic/versions/)
+          if [ "${#modified[@]}" -gt 0 ]; then
+            echo "::error::Existing migration file(s) modified on this branch. Migration history is frozen; ship the fix as a new migration instead."
+            printf '%s\n' "${modified[@]}"
+            exit 1
           fi
           mapfile -t added < <(git diff --name-only --diff-filter=A origin/main...HEAD -- backend/app/db/alembic/versions/)
           if [ "${#added[@]}" -eq 0 ]; then
@@ -76,19 +93,15 @@ jobs:
           fi
           echo "New migration files:"
           printf '%s\n' "${added[@]}"
-          # Only the upgrade path counts: a downgrade() that drops columns
-          # the same migration added is just undoing it, not destroying
-          # data. The awk filter removes the downgrade() body (up to the
-          # next top-level def) before grepping.
           hits=""
           for f in "${added[@]}"; do
             if awk '(/^def downgrade\(/){skip=1} (/^def / && !/^def downgrade\(/){skip=0} !skip' "$f" \
-              | grep -q -E '\.drop_(table|column)\('; then
+              | grep -q -i -E '\.drop_(table|column)\(|DROP[[:space:]]+(TABLE|COLUMN)'; then
               hits="$hits $f"
             fi
           done
           if [ -n "$hits" ]; then
-            echo "::error::New migration(s) drop a table or column on the upgrade path. File a separate proposal first (row-count audit + data migration before the drop); see AGENTS.md."
+            echo "::error::New migration(s) drop a table or column on the upgrade path (op.* API or raw SQL). File a separate proposal first (row-count audit + data migration before the drop); see AGENTS.md."
             printf '%s\n' $hits
             exit 1
           fi
@@ -477,7 +490,10 @@ jobs:
 
   # FormuNex Ant Design frontend (plan §3.4, F1–F5); the one-shot cut-over renamed
   # frontend-next/ -> frontend/ and deleted the legacy frontend/.
-  # The Playwright smoke test needs a running stack and is run by hand (frontend/e2e/README.md).
+  # The Playwright smoke test needs a running stack and is run by hand; its
+  # dir (frontend/e2e/) is local-only and gitignored (SR-090), so no README
+  # for it lives in git. The blocking route guard is the vitest route
+  # smoke (frontend/src/app/routeSmoke.test.ts), run by the Unit tests step.
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15

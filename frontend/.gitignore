@@ -3,6 +3,9 @@ dist
 *.local
 test-results
 playwright-report
+# Stage 5 / SR-090: the hand-run Playwright smoke dir is local-only —
+# ignored, never deleted, never committed.
+e2e/
 src-tauri/target
 src-tauri/gen/schemas
 src-tauri/tauri.release.conf.json
