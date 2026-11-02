@@ -155,8 +155,9 @@ def rerun_review(run_id: str, body: RerunRequest) -> dict:
     try:
         from ..services.evidence_reviewer import ReviewerModelError, review_answer
     except Exception as exc:  # noqa: BLE001
+        logger.exception("reviewer import failed: %s", exc)
         raise HTTPException(
-            status_code=500, detail=f"reviewer unavailable: {exc}"
+            status_code=500, detail="reviewer unavailable"
         ) from exc
 
     try:
@@ -166,7 +167,7 @@ def rerun_review(run_id: str, body: RerunRequest) -> dict:
     except ReviewerModelError as exc:
         logger.error("rerun reviewer 模型失败: %s", exc)
         raise HTTPException(
-            status_code=503, detail=f"reviewer model failed: {exc}"
+            status_code=503, detail="reviewer model failed"
         ) from exc
 
     answer_snapshot = body.answer

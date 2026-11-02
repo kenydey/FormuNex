@@ -65,21 +65,49 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def canonicalize(obj: Any) -> Any:
-    """Recursively sort lists so element order does not affect the hash.
+# Stage 5 / SR-087: (operation -> dotted field paths) whose lists are
+# order-insensitive — the ONLY lists canonicalize sorts. Inventory
+# (2026-11-02, 23 enqueue sites / 19 ops): every other list field is
+# order-sensitive (time series, ranked lists, DOE factor/run order,
+# evidence order, perspectives with [:5] truncation, ...) or free-form /
+# UNKNOWN (document_generate's nested dicts), so it keeps its order in
+# the hash. Scoped by operation, not by bare field name: a free-form doc
+# payload could contain a same-named list with different semantics.
+_ORDER_INSENSITIVE_LISTS: dict[str, frozenset[tuple[str, ...]]] = {
+    # deps installs a package SET (pip resolves the set); the only order
+    # trace is the human-readable summary text, not the job result.
+    "deps": frozenset({("names",)}),
+}
 
-    Two submissions that differ only in the order of a source list are the
-    same job, and must not produce two outbox rows.
+
+def canonicalize(obj: Any, *, sort_paths: frozenset[tuple[str, ...]] = frozenset()) -> Any:
+    """Recursively canonicalize for the idempotency hash.
+
+    Dict key order never matters (``json.dumps(sort_keys=True)`` at the
+    hash site). Lists keep their order EXCEPT lists whose dotted field
+    path is in ``sort_paths`` — sorting any other list would collapse
+    distinct jobs into one key (e.g. two loop submissions whose
+    ``prior_rmse_history`` differs only in order, or two searches whose
+    ``source_types`` order differs, which the search cache itself treats
+    as distinct). Callers must pass the operation's allowlist, not a
+    blanket sort: see :func:`idempotency_key`.
     """
-    if isinstance(obj, dict):
-        return {k: canonicalize(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        items = [canonicalize(i) for i in obj]
-        try:
-            return sorted(items, key=lambda x: json.dumps(x, sort_keys=True, ensure_ascii=False))
-        except TypeError:
+    sort = frozenset(sort_paths)
+
+    def walk(node: Any, path: tuple[str, ...]) -> Any:
+        if isinstance(node, dict):
+            return {k: walk(v, path + (k,)) for k, v in node.items()}
+        if isinstance(node, list):
+            items = [walk(i, path) for i in node]
+            if path in sort:
+                try:
+                    return sorted(items, key=lambda x: json.dumps(x, sort_keys=True, ensure_ascii=False))
+                except TypeError:
+                    return items
             return items
-    return obj
+        return node
+
+    return walk(obj, ())
 
 
 def idempotency_key(operation: str, payload: dict) -> str:
@@ -87,8 +115,17 @@ def idempotency_key(operation: str, payload: dict) -> str:
 
     Deterministic from ``(operation, payload)`` alone, so the worker can
     recompute it from the payload it received to find its own outbox row.
+
+    Only the operation's declared order-insensitive lists are sorted
+    (SR-087); everything else keeps its order. One-time consequence:
+    rows keyed before this change from an unsorted list no longer match
+    a resubmission — those old keys were the collision bug itself, so
+    the new row is the correct outcome, not a duplicate.
     """
-    data = {"op": operation, "payload": canonicalize(payload)}
+    data = {
+        "op": operation,
+        "payload": canonicalize(payload, sort_paths=_ORDER_INSENSITIVE_LISTS.get(operation, frozenset())),
+    }
     raw = json.dumps(data, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 

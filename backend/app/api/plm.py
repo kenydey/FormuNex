@@ -210,8 +210,7 @@ def resolve_regulatory_review_item(item_id: str, body: ReviewResolveIn,
     """Mark a queue item resolved (no further action needed). The item keeps
     its detail for audit; a later re-seed will not regenerate it."""
     user.require("regulatory.review")
-    from datetime import datetime
-
+    from ..clock import utcnow
     from ..db.models_regulatory import RegulatoryReviewItem
 
     with _session() as session:
@@ -222,7 +221,7 @@ def resolve_regulatory_review_item(item_id: str, body: ReviewResolveIn,
             raise HTTPException(status_code=409, detail=f"复核项已处理（{row.status}）")
         row.status = "resolved"
         row.resolved_by = user.id
-        row.resolved_at = datetime.now()
+        row.resolved_at = utcnow()
         if body.note:
             detail = dict(row.detail or {})
             detail["resolution_note"] = body.note
@@ -985,7 +984,8 @@ async def upload_template(
 
         DocxTemplate(BytesIO(data)).get_undeclared_template_variables()
     except Exception as exc:  # noqa: BLE001 - any parse failure means an unusable template
-        raise HTTPException(status_code=422, detail=f"模板无法解析：{exc}") from None
+        logger.exception("template parse failed: %s", exc)
+        raise HTTPException(status_code=422, detail="模板无法解析") from None
     with _session() as session:
         try:
             row = docs.save_template(session, doc_type=doc_type, lang=lang, name=name, data=data, is_default=is_default)
@@ -1062,7 +1062,8 @@ async def preview_template(
     except MissingRenderDependency as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
     except Exception as exc:  # noqa: BLE001 - template tag errors surface here
-        raise HTTPException(status_code=422, detail=f"模板渲染失败：{exc}") from None
+        logger.exception("template render failed: %s", exc)
+        raise HTTPException(status_code=422, detail="模板渲染失败") from None
     return Response(out, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     headers={"Content-Disposition": f'attachment; filename="template-preview-{doc_type}-{lang}.docx"'})
 

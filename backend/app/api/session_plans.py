@@ -5,6 +5,8 @@ same as the other routers; no per-endpoint auth code here.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -12,6 +14,8 @@ from ..services import session_plan as plan_svc
 from ._principal import CurrentUser, current_user
 
 router = APIRouter(prefix="/api/session-plans", tags=["session-plans"])
+
+logger = logging.getLogger(__name__)
 
 
 class PhaseIn(BaseModel):
@@ -62,7 +66,8 @@ def get_plan(plan_id: str) -> dict:
     try:
         plan = plan_svc.get_plan(plan_id)
     except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("session_plans get_plan failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
     return _to_out(plan)

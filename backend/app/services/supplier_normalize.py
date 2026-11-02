@@ -103,10 +103,19 @@ def _parse_int(v: Any) -> int | None:
 
 
 def _parse_datetime(v: Any) -> datetime | None:
+    """Normalize an observed-at value to the naive-UTC DB convention.
+
+    Stage 5 / SR-085: an aware input converts to UTC *first*, then drops
+    tzinfo — the old code stripped the offset without converting, so an
+    observation stamped ``...+08:00`` landed 8 hours late and
+    ``is_stale_price`` could flip at day boundaries.
+    """
+    from ..clock import parse_iso_to_naive_utc, to_naive_utc
+
     if v is None or v == "":
         return None
     if isinstance(v, datetime):
-        return v.replace(tzinfo=None) if v.tzinfo else v
+        return to_naive_utc(v)
     s = str(v).strip()
     if not s:
         return None
@@ -114,7 +123,7 @@ def _parse_datetime(v: Any) -> datetime | None:
         # date-only or ISO
         if len(s) == 10 and s[4] == "-" and s[7] == "-":
             return datetime.fromisoformat(s)
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+        return parse_iso_to_naive_utc(s)
     except ValueError:
         return None
 

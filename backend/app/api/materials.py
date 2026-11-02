@@ -377,7 +377,7 @@ def substitutes(body: SubstituteRequest) -> dict:
         logger.exception("materials substitutes failed: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail=f"材料替代分析失败：{exc}",
+            detail="材料替代分析失败",
         ) from exc
 
 
@@ -436,7 +436,7 @@ def substitution_triggers(body: SubstitutionTriggersRequest) -> dict:
         raise
     except Exception as exc:
         logger.exception("substitution-triggers failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"替换触发扫描失败：{exc}") from exc
+        raise HTTPException(status_code=500, detail="替换触发扫描失败") from exc
 
 
 @router.post("/availability", response_model=MaterialView)

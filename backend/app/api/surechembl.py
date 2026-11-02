@@ -1,6 +1,7 @@
 """SureChEMBL P3 APIs — KG ingest + human-reviewed embodiment drafts."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -9,6 +10,8 @@ from pydantic import BaseModel, Field
 from ..services import surechembl_drafts, surechembl_kg
 
 router = APIRouter(prefix="/surechembl", tags=["surechembl"])
+
+logger = logging.getLogger(__name__)
 
 
 class IngestDocumentRequest(BaseModel):
@@ -51,7 +54,8 @@ def ingest_document(body: IngestDocumentRequest) -> dict:
             section=body.section,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"SureChEMBL KG 入库失败：{exc}") from exc
+        logger.exception("SureChEMBL KG ingest failed: %s", exc)
+        raise HTTPException(status_code=500, detail="SureChEMBL KG 入库失败") from exc
 
 
 @router.post("/extract-example-draft")

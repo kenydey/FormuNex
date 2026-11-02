@@ -416,16 +416,89 @@ from .strict_json import install as _install_strict_json  # noqa: E402
 _install_strict_json()
 
 
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+
+
+def _is_out_of_range_int(value: object) -> bool:
+    """True for an integer (or digit string) outside the int64 range every
+    id column uses. A digit string longer than 19 digits cannot be in
+    range, so it is decided by length alone (and never converted — Python
+    caps ``int()`` digit counts, and a hostile 5000-digit query param must
+    not become a second exception inside the handler)."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value < _INT64_MIN or value > _INT64_MAX
+    if isinstance(value, str):
+        s = value.strip()
+        if s[:1] in ("+", "-"):
+            s = s[1:]
+        if s.isdigit():
+            return len(s) > 19 or not (_INT64_MIN <= int(s) <= _INT64_MAX)
+    return False
+
+
+def _walk_out_of_range_ints(value: object) -> bool:
+    if _is_out_of_range_int(value):
+        return True
+    if isinstance(value, dict):
+        return any(_walk_out_of_range_ints(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_walk_out_of_range_ints(v) for v in value)
+    return False
+
+
+async def _request_carries_out_of_range_int(request: Request | None) -> bool:
+    """Stage 5 / SR-096: does this request itself carry an out-of-range id?
+
+    The handler cannot see the value that overflowed, so it decides by
+    range instead of by exception text: path params, query params and a
+    JSON body are scanned for integers outside int64. A request carrying
+    one cannot name an existing row, so its OverflowError is the id
+    overflow. Anything else re-raises as a defect.
+
+    Dialect note: SQLite raises ``OverflowError`` on bind; PostgreSQL
+    raises ``sqlalchemy.exc.DataError`` (NumericValueOutOfRange) for the
+    same input instead — that class has no handler here because psycopg
+    is unavailable in this environment to verify it against, and mapping
+    it blind would be a behaviour claim without evidence.
+    """
+    if request is None:
+        return False
+    try:
+        for v in (request.path_params or {}).values():
+            if _is_out_of_range_int(v):
+                return True
+        for v in request.query_params.values():
+            if _is_out_of_range_int(v):
+                return True
+    except Exception:
+        return False
+    try:
+        body = await request.body()
+    except Exception:
+        return False
+    if not body:
+        return False
+    try:
+        import json as _json
+
+        return _walk_out_of_range_ints(_json.loads(body))
+    except Exception:
+        return False
+
+
 @app.exception_handler(OverflowError)
-async def integer_out_of_range_handler(_request: Request, exc: OverflowError) -> JSONResponse:
+async def integer_out_of_range_handler(request: Request, exc: OverflowError) -> JSONResponse:
     """An id too large for the database cannot belong to any row: answer 404, not 500.
 
-    Path / query / body ids are declared ``int`` — unbounded in Python — and every one of them reaches SQLite as a
-    parameter, which raises ``OverflowError: Python int too large to convert to SQLite INTEGER`` above 2**63. The fuzz
-    found 20 endpoints answering ``GET /api/experiments/999999999999999999999999999999/attachments`` with a 500.
+    Path / query / body ids are declared ``int`` — unbounded in Python — and every one of them reaches the database as
+    a parameter, which overflows above 2**63. The fuzz found 20 endpoints answering
+    ``GET /api/experiments/999999999999999999999999999999/attachments`` with a 500.
     Any other ``OverflowError`` is still a defect and still surfaces as one.
     """
-    if "SQLite INTEGER" in str(exc):
+    if await _request_carries_out_of_range_int(request):
         return JSONResponse(status_code=404, content={"detail": "Not found"})
     raise exc
 
@@ -449,40 +522,53 @@ def _json_safe_errors(errors: list) -> list:
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """Log 422 validation errors so intermittent autosave failures are traceable.
+    """Log 422 validation errors so intermittent failures are traceable.
 
     The default handler silently returns 422 without logging *which* field failed,
-    which made the project-autosave 422s impossible to diagnose. This keeps the
-    exact same response body but records the field path + type + message for
-    /api/projects (the noisy autosave path); other routes stay quiet.
+    which made the project-autosave 422s impossible to diagnose. Stage 5 /
+    SR-097 extends the log to every route at debug level (debug keeps the
+    noisy paths out of production logs; the summary carries path + field
+    path + type only, never body values, so a rejected value cannot leak
+    through the log). The response body is unchanged.
     """
-    if request.url.path.startswith("/api/projects"):
-        errs = exc.errors()
-        detail = [
-            {
-                "loc": ".".join(str(x) for x in e.get("loc", [])),
-                "type": e.get("type"),
-                "msg": e.get("msg"),
-            }
-            for e in errs
-        ]
-        logger.warning("PUT %s validation failed (%d errors): %s", request.url.path, len(errs), detail)
+    errs = exc.errors()
+    detail = [
+        {
+            "loc": ".".join(str(x) for x in e.get("loc", [])),
+            "type": e.get("type"),
+        }
+        for e in errs
+    ]
+    logger.debug("%s %s validation failed (%d errors): %s", request.method, request.url.path, len(errs), detail)
     return JSONResponse(status_code=422, content={"detail": _json_safe_errors(exc.errors())})
 
 
 class _RedactQueryToken(logging.Filter):
     """The task stream takes the bearer token as ``?token=`` (EventSource cannot set headers); uvicorn's access log would
-    write it, in clear, next to every progress connection. Replace the value before the record is formatted."""
+    write it, in clear, next to every progress connection. Replace the value before the record is formatted.
+
+    Stage 5 / SR-095: the filter also sits on the root logger, so every
+    stdlib logger (including the dispatch kernel, converted off loguru
+    this batch) gets the same redaction — one surface for SR-081's token
+    instead of one filter per logger. The substitution is idempotent
+    (``***`` re-matches to itself), so the uvicorn.access copy and the
+    root copy never double-redact. Both the message and %-args are
+    scrubbed: f-string logging puts the token in the message itself."""
 
     _TOKEN = re.compile(r"([?&]token=)[^&\s\"]+")
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = self._TOKEN.sub(r"\1***", record.msg)
         if isinstance(record.args, tuple):
             record.args = tuple(self._TOKEN.sub(r"\1***", a) if isinstance(a, str) else a for a in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {k: (self._TOKEN.sub(r"\1***", v) if isinstance(v, str) else v) for k, v in record.args.items()}
         return True
 
 
 logging.getLogger("uvicorn.access").addFilter(_RedactQueryToken())
+logging.getLogger().addFilter(_RedactQueryToken())
 
 
 # /health is public and does real work (a Datalab HTTP probe, a database query, a broker connect, parser discovery): with

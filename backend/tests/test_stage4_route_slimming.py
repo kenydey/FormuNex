@@ -107,9 +107,11 @@ def test_chat_orchestration_exports():
 
 def test_route_line_caps():
     # Nailed at the post-4-3 sizes: growth fails, shrinkage is fine.
+    # 5-2 / SR-045 added one net line to plm.py (exception logging at
+    # the template parse/render raise sites); the cap moves with it.
     caps = {
         "api/chat.py": 146,
-        "api/plm.py": 1997,
+        "api/plm.py": 1998,
         "api/plm_ws.py": 191,
     }
     for rel, cap in caps.items():

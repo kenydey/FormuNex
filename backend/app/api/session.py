@@ -141,7 +141,7 @@ async def save_session(
         logger.error(f"Error saving session {payload.session_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            detail="Internal server error"
         )
 
 
@@ -184,7 +184,7 @@ async def load_session(
         logger.error(f"Error loading session {session_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            detail="Internal server error"
         )
 
 
@@ -229,7 +229,7 @@ async def get_session_info(
         logger.error(f"Error getting session info for {session_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            detail="Internal server error"
         )
 
 
@@ -269,7 +269,7 @@ async def delete_session(
         logger.error(f"Error deleting session {session_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            detail="Internal server error"
         )
 
 
@@ -318,7 +318,7 @@ async def list_sessions(
         logger.error(f"Error listing sessions: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            detail="Internal server error"
         )
 
 

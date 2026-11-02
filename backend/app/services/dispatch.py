@@ -32,7 +32,9 @@ import socket
 import uuid
 from urllib.parse import urlparse
 
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 BROKER_PROBE_TIMEOUT_S = 1.0
 
@@ -45,6 +47,13 @@ BROKER_DOWN_DETAIL = (
 DISPATCH_TIMEOUT_DETAIL = (
     "任务提交超时：Celery producer 在时限内未完成入队。请检查 worker 负载"
     "或重启 API 进程；这不代表消息队列一定不可达。"
+)
+
+# Outbox record failure — the row is what makes a 503 recoverable, so a
+# dispatch whose id never landed is not a dispatch at all (SR-088).
+OUTBOX_RECORD_DETAIL = (
+    "任务提交失败：任务台账写入失败，提交的任务号无法用于恢复查询。"
+    "请检查数据库后重试，不要重复提交。"
 )
 
 # Non-timeout failure after a green probe — may be serialisation or a flaky
@@ -101,7 +110,7 @@ def _redis_ping(url: str) -> bool:
             with socket.create_connection(endpoint, timeout=BROKER_PROBE_TIMEOUT_S):
                 return True
         except OSError as exc:
-            logger.warning("broker unreachable at {}:{} ({})", *endpoint, exc)
+            logger.warning("broker unreachable at %s:%s (%s)", *endpoint, exc)
             _bump_broker_probe_failure()
             return False
     try:
@@ -118,7 +127,7 @@ def _redis_ping(url: str) -> bool:
             _bump_broker_probe_failure()
         return ok
     except Exception as exc:
-        logger.warning("broker ping failed for {} ({})", urlparse(url).hostname, exc)
+        logger.warning("broker ping failed for %s (%s)", urlparse(url).hostname, exc)
         _bump_broker_probe_failure()
         return False
 
@@ -147,7 +156,7 @@ def broker_reachable() -> bool:
         with socket.create_connection(endpoint, timeout=BROKER_PROBE_TIMEOUT_S):
             return True
     except OSError as exc:
-        logger.warning("broker unreachable at {}:{} ({})", *endpoint, exc)
+        logger.warning("broker unreachable at %s:%s (%s)", *endpoint, exc)
         _bump_broker_probe_failure()
         return False
 
@@ -205,10 +214,12 @@ def dispatch_task_kernel(
     ``X-FormuNex-Task-Id`` header: a client that gets a 503 polls that id
     instead of blindly resubmitting (which would duplicate the work if the
     timed-out publish did land). The row carries the same id, so startup
-    recovery replays under exactly the id the client holds. Claim-by-id is
-    about traceability, not deduplication: execution stays at-least-once
-    (D-4, stage 1 / SR-015-SR-016), and a late publish plus a replay can
-    still run the payload twice. ``detail``
+    recovery replays under exactly the id the client holds. Stage 5 /
+    SR-088 hardens the gate: if the record itself fails, the dispatch
+    fails here instead of publishing an id recovery cannot replay.
+    Claim-by-id is about traceability, not deduplication: execution stays
+    at-least-once (D-4, stage 1 / SR-015-SR-016), and a late publish plus
+    a replay can still run the payload twice. ``detail``
     stays a plain string — the frontend parses error bodies as JSON with a
     string detail, so the id travels in a header, not in the body.
     """
@@ -220,12 +231,16 @@ def dispatch_task_kernel(
     # published under exactly that id.
     task_id = task_id or str(uuid.uuid4())
     if outbox_id and not _record_outbox_task_id(outbox_id, task_id):
-        logger.warning(
-            "outbox {}: task id {} not recorded before dispatch; "
-            "recovery will replay under a new id",
+        # Stage 5 / SR-088: a 503 whose id never landed on the row is
+        # unrecoverable — the client would poll an id recovery cannot
+        # replay under. Fail the dispatch here, before the probe, instead
+        # of warning and publishing an orphan id.
+        logger.error(
+            "outbox %s: task id %s not recorded; failing dispatch",
             outbox_id,
             task_id,
         )
+        raise DispatchUnavailable(OUTBOX_RECORD_DETAIL, task_id)
     if not broker_reachable():
         raise DispatchUnavailable(BROKER_DOWN_DETAIL, task_id)
 
@@ -246,7 +261,7 @@ def dispatch_task_kernel(
         # W1-10 ①: the abandoned thread may still publish under this id —
         # the header + the row above are what make that outcome claimable
         # instead of a silent duplicate.
-        logger.error("celery dispatch timed out for {} (task_id={}): {}", kind, task_id, exc)
+        logger.error("celery dispatch timed out for %s (task_id=%s): %s", kind, task_id, exc)
         raise DispatchUnavailable(
             f"{DISPATCH_TIMEOUT_DETAIL}（{exc}）", task_id) from exc
     except Exception as exc:
@@ -255,7 +270,7 @@ def dispatch_task_kernel(
         # claim "Redis is down" — that mislabels ELN/serialisation failures.
         # The row already carries task_id (recorded above), so recovery
         # replays under the id the client would have held.
-        logger.exception("celery dispatch failed for {} (task_id={})", kind, task_id)
+        logger.exception("celery dispatch failed for %s (task_id=%s)", kind, task_id)
         raise DispatchUnavailable(
             f"{DISPATCH_FAILURE_DETAIL}（{exc}）", task_id) from exc
     return task_id
@@ -283,7 +298,7 @@ def _submit_eager_background(
             # paths that key off the Celery request id keep working.
             task.apply(args=(payload,), task_id=task_id)
         except Exception:
-            logger.exception("eager background task failed kind={} id={}", kind, task_id)
+            logger.exception("eager background task failed kind=%s id=%s", kind, task_id)
 
     _eager_submit(_run, name=f"eager-{kind}-{task_id[:8]}")
     return task_id

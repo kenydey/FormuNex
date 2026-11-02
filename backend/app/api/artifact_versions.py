@@ -8,6 +8,8 @@ same as the other routers; no per-endpoint auth code here.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -16,6 +18,8 @@ from ..services import artifact_diff as diffsvc
 from ..services import artifact_versions as svc
 
 router = APIRouter(prefix="/api/artifacts", tags=["artifacts"])
+
+logger = logging.getLogger(__name__)
 
 
 class CreateLineageBody(BaseModel):
@@ -110,7 +114,8 @@ def get_version(version_id: str) -> dict:
     try:
         version = svc.get_version(version_id)
     except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("artifact_versions failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
     if version is None:
         raise HTTPException(status_code=404, detail="version not found")
     return version.to_dict()
@@ -134,7 +139,8 @@ def diff_version(version_id: str, against: str) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("artifact_versions failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
     result = diffsvc.diff_versions(
         old_bytes.decode("utf-8", errors="replace"),
         new_bytes.decode("utf-8", errors="replace"),
@@ -156,7 +162,8 @@ def verify_version(version_id: str) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("artifact_versions failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.put("/versions/{version_id}/content", response_model=dict)
@@ -185,7 +192,8 @@ def restore_version(version_id: str, body: RestoreVersionBody) -> dict:
     try:
         old = svc.get_version(version_id)
     except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("artifact_versions failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
     if old is None:
         raise HTTPException(status_code=404, detail="version not found")
     try:

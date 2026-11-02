@@ -94,14 +94,38 @@ def test_mark_done_flips_only_inflight_rows(db) -> None:
         assert s.get(TaskOutbox, dead.id).status == "DEAD"
 
 
-def test_mark_done_matches_regardless_of_list_order(db) -> None:
-    """The worker recomputes the key from the payload it received."""
+def test_mark_done_matches_for_order_insensitive_payloads(db) -> None:
+    """The worker recomputes the key from the payload it received.
+
+    Stage 5 / SR-087 changed what "the same payload" means: only
+    declared order-insensitive lists (``deps.names``) and dict key order
+    are ignored. The old version of this test used swapped
+    ``research_deep`` sources — but sources order IS the job identity
+    (evidence order follows input order), so that vehicle no longer
+    matches; see the companion test below.
+    """
+    with db() as s:
+        row = _add_row(s, "deps", {"names": ["numpy", "pandas"]})
+        s.commit()
+        assert mark_done(s, "deps", {"names": ["pandas", "numpy"]}) is True
+        s.commit()
+        assert s.get(TaskOutbox, row.id).status == "DONE"
+        row2 = _add_row(s, "research_deep", {"topic": "t", "sources": [{"i": 1}]})
+        s.commit()
+        assert mark_done(s, "research_deep", {"sources": [{"i": 1}], "topic": "t"}) is True
+        s.commit()
+        assert s.get(TaskOutbox, row2.id).status == "DONE"
+
+
+def test_mark_done_ignores_swapped_order_sensitive_lists(db) -> None:
+    """SR-087: a worker that received the sources in a different order
+    received a different job, so its key must NOT match the row."""
     with db() as s:
         row = _add_row(s, "research_deep", {"sources": [{"i": 1}, {"i": 2}]})
         s.commit()
-        assert mark_done(s, "research_deep", {"sources": [{"i": 2}, {"i": 1}]}) is True
+        assert mark_done(s, "research_deep", {"sources": [{"i": 2}, {"i": 1}]}) is False
         s.commit()
-        assert s.get(TaskOutbox, row.id).status == "DONE"
+        assert s.get(TaskOutbox, row.id).status == "PENDING"
 
 
 def test_record_done_never_raises_when_db_is_broken(monkeypatch) -> None:
