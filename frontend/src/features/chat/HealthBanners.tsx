@@ -12,7 +12,7 @@ import type { PlatformHealth } from "./types";
 export const SETTINGS_MODEL_PATH = "/admin/settings/model";
 export const SETTINGS_DEPS_PATH = "/admin/settings/deps";
 
-/** /health every 30 s: rose banner for real outages, amber advisory for the soft-degraded local ELN ledger. */
+/** /health every 30 s: rose banner for real outages. */
 export function InfraHealthBanner() {
   const { t } = useTranslation();
   const [dismissed, setDismissed] = useState<string | null>(null);
@@ -23,16 +23,9 @@ export function InfraHealthBanner() {
   const st = infraState(q.data);
   if (st.level === "none" || dismissed === st.level) return null;
   const recheck = <Button size="small" loading={q.isFetching} onClick={() => void q.refetch()}>{t("shell.health.recheck", "重新检测")}</Button>;
-  if (st.level === "local") {
-    return <Alert banner closable type="warning" data-testid="infra-health-local-ledger" onClose={() => setDismissed("local")}
-      message={<Space wrap><b>{t("shell.health.local_ledger", "本地台账")}</b>
-        {st.hint || t("shell.health.local_hint", "Datalab 不可达；实验台账使用本地 sqlite（soft-degrade）。需要 ELN 时启动 compose 并打开 DATALAB_REQUIRED。")}</Space>}
-      action={recheck} />;
-  }
   const label = (i: InfraIssue) => {
     switch (i.code) {
       case "database": return t("shell.health.database", "数据库不可用");
-      case "datalab": return i.hint ? t("shell.health.datalab_hint", "Datalab ELN：{{h}}", { h: i.hint }) : t("shell.health.datalab", "Datalab ELN 不可达");
       case "broker": return t("shell.health.broker", "任务队列（Redis/Celery）不可达");
       case "pdf": return t("shell.health.pdf", "PDF 解析器未就绪");
       default: return t("shell.health.generic", "平台健康检查返回 degraded");

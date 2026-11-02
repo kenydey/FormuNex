@@ -1,42 +1,27 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { Alert, App, Button, Descriptions, Empty, Table, Tag, Typography, Upload, theme } from "antd";
-import { CheckCircleTwoTone, CloseCircleTwoTone, SyncOutlined, UploadOutlined } from "@ant-design/icons";
+import { App, Button, Descriptions, Empty, Table, Tag, Typography, Upload, theme } from "antd";
+import { CheckCircleTwoTone, CloseCircleTwoTone, UploadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { fx } from "./api";
 import { useSession } from "@/app/session";
-import { datalabSyncOutcome } from "./logic";
 import type { Attachment, QCMeasurement } from "./types";
 
-/** One training experiment: measured snapshot, typed QC measurements, attachments, Datalab sync (legacy ExperimentsBrowser detail). */
+/** One training experiment: measured snapshot, typed QC measurements, attachments (legacy ExperimentsBrowser detail). */
 export default function ExperimentDetailPage() {
   const { can } = useSession();
   const { id = "" } = useParams();
   const { t } = useTranslation();
   const { message } = App.useApp();
   const qc = useQueryClient();
-  const [syncMsg, setSyncMsg] = useState<{ type: "success" | "warning"; text: string } | null>(null);
   const summary = useQuery({ queryKey: ["formulation", "experiments", "one", id], enabled: !!id, queryFn: () => fx.experiment(id) });
   const meas = useQuery({ queryKey: ["formulation", "exp-meas", id], queryFn: () => fx.experimentMeasurements(id) });
   const atts = useQuery({ queryKey: ["formulation", "exp-atts", id], queryFn: () => fx.experimentAttachments(id) });
   const upload = useMutation({
     mutationFn: (file: File) => fx.uploadExperimentAttachment(id, file),
     onSuccess: () => { message.success(t("formulation.att.uploaded", "已上传")); void qc.invalidateQueries({ queryKey: ["formulation", "exp-atts", id] }); },
-    onError: (e) => message.error(errorText(e)),
-  });
-  const sync = useMutation({
-    mutationFn: () => fx.syncDatalab(id),
-    onSuccess: (r) => {
-      const o = datalabSyncOutcome(r);
-      setSyncMsg(o.skipped
-        ? { type: "warning", text: t("formulation.exp.sync_skipped", "Datalab 不可达，已跳过（fail-open），本地数据未动。") }
-        : { type: "success", text: t("formulation.exp.sync_done", "同步完成：{{n}} 条测量已回写，{{e}} 项失败。", { n: o.synced, e: o.errors }) });
-      void qc.invalidateQueries({ queryKey: ["formulation", "exp-meas", id] });
-      void qc.invalidateQueries({ queryKey: ["formulation", "experiments"] });
-    },
     onError: (e) => message.error(errorText(e)),
   });
   const s = summary.data;
@@ -46,11 +31,8 @@ export default function ExperimentDetailPage() {
     <PageContainer
       title={t("formulation.exp.detail_title", "实验 #{{id}}", { id })}
       subTitle={s?.label || undefined}
-      extra={<Button icon={<SyncOutlined />} disabled={!can("optimize.run")} loading={sync.isPending} onClick={() => sync.mutate()}>
-        {t("formulation.exp.sync", "从 Datalab 同步")}</Button>}
     >
       <ErrorAlert error={summary.error ?? meas.error ?? atts.error} />
-      {syncMsg && <Alert type={syncMsg.type} showIcon closable message={syncMsg.text} style={{ marginBottom: 12 }} onClose={() => setSyncMsg(null)} />}
       <ProCard direction="column" gutter={[0, 16]} ghost>
         <ProCard title={t("formulation.exp.summary", "实测摘要")} bordered loading={summary.isLoading}>
           {s && <Descriptions size="small" column={{ xs: 1, md: 3 }} style={{ marginBottom: 12 }} items={[

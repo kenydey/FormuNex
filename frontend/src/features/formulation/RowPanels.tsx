@@ -1,4 +1,4 @@
-/** Panels of one workbench row: attachments, DataLab versions, lineage chain, note and tag editors. */
+/** Panels of one workbench row: attachments, native versions, lineage chain, note and tag editors. */
 import { ModalForm, ProFormTextArea } from "@ant-design/pro-components";
 import { Alert, App, Button, Empty, Input, Modal, Popconfirm, Space, Steps, Table, Tag, Typography, Upload } from "antd";
 import { DeleteOutlined, DownloadOutlined, UploadOutlined } from "@ant-design/icons";
@@ -48,11 +48,11 @@ export function RowAttachments({ campaignId, rowId }: { campaignId: number; rowI
           { title: t("formulation.att.file", "文件"), render: (_d, a) => a.filename || a.source_document_id },
           { title: t("formulation.att.kind", "类型"), dataIndex: "kind", width: 110, render: (k: string) => <Tag>{k}</Tag> },
           { title: t("common.actions", "操作"), width: 150, render: (_d, a) => <Space>
-            <Button size="small" type="link" icon={<DownloadOutlined />} title={t("formulation.att.download_hint", "下载原件（DataLab 归档副本优先）")}
+            <Button size="small" type="link" icon={<DownloadOutlined />} title={t("formulation.att.download_hint", "下载原件（本地镜像）")}
               onClick={() => download(fx.rowAttachmentDownload(campaignId, rowId, a.id), a.filename || a.source_document_id).catch((e) => message.error(errorText(e)))}>
               {t("formulation.att.download", "下载")}</Button>
             <Popconfirm title={t("formulation.att.delete_q", "删除附件「{{f}}」？", { f: a.filename || a.source_document_id })}
-              description={t("formulation.att.delete_desc", "仅解除与实验的绑定，DataLab 归档副本保留（可追溯）。")}
+              description={t("formulation.att.delete_desc", "仅解除与实验的绑定，本地镜像保留（可追溯）。")}
               onConfirm={() => remove.mutate(a)}>
               <Button size="small" type="link" danger icon={<DeleteOutlined />} loading={remove.isPending && remove.variables?.id === a.id} />
             </Popconfirm>
@@ -62,7 +62,7 @@ export function RowAttachments({ campaignId, rowId }: { campaignId: number; rowI
   );
 }
 
-/** DataLab auto-saved versions of a row: compare with the previous one, restore (legacy RowVersionHistoryModal). */
+/** Auto-saved versions of a row: compare with the previous one, restore (legacy RowVersionHistoryModal). */
 export function RowVersions({ campaignId, rowId, onRestored }: { campaignId: number; rowId: number; onRestored?: () => void }) {
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
@@ -94,7 +94,7 @@ export function RowVersions({ campaignId, rowId, onRestored }: { campaignId: num
   return (
     <>
       <Typography.Paragraph type="secondary">
-        {t("formulation.rowver.intro", "每次保存台账时 DataLab 自动留档（零成本审计轨迹）。")}{list.data?.refcode && <Tag style={{ marginLeft: 8 }}>{list.data.refcode}</Tag>}
+        {t("formulation.rowver.intro", "每次保存台账时自动留档（零成本审计轨迹）。")}{list.data?.refcode && <Tag style={{ marginLeft: 8 }}>{list.data.refcode}</Tag>}
       </Typography.Paragraph>
       <ErrorAlert error={list.error} />
       <Table<RowVersion> size="small" rowKey="id" pagination={false} loading={list.isLoading} dataSource={versions}

@@ -89,8 +89,6 @@ describe("stream reducer", () => {
 describe("deep mode evidence", () => {
   it("classifies /health", () => {
     expect(infraState({ status: "ok" }).level).toBe("none");
-    expect(infraState({ status: "ok", datalab: { required: false, reachable: false, ledger_mode: "local", hint: "h" } }))
-      .toEqual({ level: "local", issues: [], hint: "h" });
     const d = infraState({ status: "degraded", database: { ok: false, scheme: "sqlite" }, task_broker: { required: true, reachable: false }, parsers: { pdf: false } });
     expect(d.issues.map((i) => i.code)).toEqual(["database", "broker", "pdf"]);
     expect(infraState({ status: "degraded" }).issues[0].code).toBe("generic");

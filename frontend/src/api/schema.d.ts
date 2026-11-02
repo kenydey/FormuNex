@@ -423,6 +423,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint Task Stream Ticket
+         * @description Stage 5 / SR-081: mint a one-time ticket for this task's SSE stream.
+         *
+         *     Native EventSource cannot set an Authorization header, and the old
+         *     answer — the bearer token in the stream URL — leaked it into browser
+         *     history, proxy logs and Referer headers. The ticket is single-use,
+         *     bound to this task id, and expires in 300 s; the caller opens
+         *     ``GET /api/tasks/{task_id}/stream?ticket=...`` with it. Ownership
+         *     matches the stream endpoint: the minting caller must own the task.
+         */
+        post: operations["mint_task_stream_ticket_api_tasks__task_id__ticket_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/stream": {
         parameters: {
             query?: never;
@@ -549,7 +576,7 @@ export interface paths {
         };
         /**
          * Recommendation Outcome
-         * @description P1-10: 双层信号水合 —— 页面刷新后徽标从后端重读，Datalab 验证
+         * @description P1-10: 双层信号水合 —— 页面刷新后徽标从后端重读，实验验证
          *     回写也能被前端看到（不再只靠组件局部 useState）。
          */
         get: operations["recommendation_outcome_api_formulations_recommend__recommend_id__outcome_get"];
@@ -926,7 +953,7 @@ export interface paths {
         put?: never;
         /**
          * Create Workbench Campaign
-         * @description Seed a campaign + pending rows from a generated DOE plan (Datalab samples).
+         * @description Seed a campaign + pending rows from a generated DOE plan.
          */
         post: operations["create_workbench_campaign_api_experiments_workbench_campaigns_post"];
         delete?: never;
@@ -982,7 +1009,7 @@ export interface paths {
         get?: never;
         /**
          * Sync Workbench
-         * @description Batch-update workbench rows from AG Grid edits (forwarded to Datalab).
+         * @description Batch-update workbench rows from AG Grid edits.
          */
         put: operations["sync_workbench_api_experiments_workbench_sync_put"];
         post?: never;
@@ -1003,11 +1030,10 @@ export interface paths {
         put?: never;
         /**
          * Reconcile Workbench
-         * @description Detect and prune stale ``sample_refs`` whose Datalab item was deleted.
+         * @description Detect and prune stale ``sample_refs``.
          *
-         *     Only a definitive 404 prunes; network / 5xx failures are reported in
-         *     ``errors`` and left untouched. Idempotent: a second call returns an empty
-         *     ``removed`` list once the campaign is clean.
+         *     Datalab removal batch 3: refs are local now, so there is no external
+         *     item to prune against; the local store reports nothing stale.
          */
         post: operations["reconcile_workbench_api_experiments_workbench__campaign_id__reconcile_post"];
         delete?: never;
@@ -1028,7 +1054,7 @@ export interface paths {
          * @description Data-quality snapshot for a campaign (read-only, no pruning).
          *
          *     Returns ``{stale_count, stale_refs, errors_count, dropped_total}``:
-         *     ``stale_*`` are sample refs whose Datalab item is gone (404), and
+         *     ``stale_*`` are sample refs with no local row, and
          *     ``dropped_total`` is the cumulative count of non-numeric / empty values
          *     discarded during workbench ingest (from ``data_quality`` loop_history
          *     events).
@@ -1060,8 +1086,8 @@ export interface paths {
          * @description Upload a file attachment (QC report, microscope image, etc.)
          *     and link it to an experiment.
          *
-         *     The file is forwarded to Datalab ELN as the document store;
-         *     a local ``ExperimentAttachment`` row keeps the reference.
+         *     The file is stored under backend/data/attachments/; a local
+         *     ``ExperimentAttachment`` row keeps the reference.
          */
         post: operations["upload_experiment_attachment_api_experiments__experiment_id__attachments_post"];
         delete?: never;
@@ -1128,12 +1154,10 @@ export interface paths {
         put?: never;
         /**
          * Restore Workbench Row Version
-         * @description P3: restore a DOE row's DataLab item to a saved version.
+         * @description P3: restore a DOE row to a saved audit-log version.
          *
          *     The platform mints a new "restored" version afterwards, so the operation is
          *     reversible — restoring again to any earlier version stays possible.
-         *     Native rows (no refcode) restore the audit-log snapshot ``version_id`` and
-         *     record the result as a new ``restore`` version — equally reversible.
          */
         post: operations["restore_workbench_row_version_api_experiments_workbench__campaign_id__rows__row_id__versions__version_id__restore_post"];
         delete?: never;
@@ -1151,14 +1175,12 @@ export interface paths {
         };
         /**
          * Workbench Row Versions
-         * @description P3: version history of a DOE row's DataLab item (auto-saved on every sync).
-         *
-         *     Native rows (no refcode) answer from the audit log instead (``source: "native"``,
+         * @description P3: version history of a DOE row from the audit log (``source: "native"``,
          *     ``refcode: null``; each entry also carries its ``snapshot``).
          *
          *     Without compare params returns ``{refcode, versions: [{id, version, action,
          *     timestamp, creator}]}``; with ``compare_v1`` + ``compare_v2`` returns the
-         *     DeepDiff between those two version ids under ``diff``.
+         *     snapshot diff between those two version ids under ``diff``.
          */
         get: operations["workbench_row_versions_api_experiments_workbench__campaign_id__rows__row_id__versions_get"];
         put?: never;
@@ -1178,11 +1200,7 @@ export interface paths {
         };
         /**
          * Download Workbench Row Attachment
-         * @description P4: download an attachment's original file.
-         *
-         *     Prefers the DataLab ELN copy (attachment note carries ``[datalab:<file_id>]``);
-         *     falls back to the local mirror stored under backend/data/attachments/ when the
-         *     platform copy is unreachable or was never uploaded.
+         * @description P4: download an attachment's original file from the local mirror.
          */
         get: operations["download_workbench_row_attachment_api_experiments_workbench__campaign_id__rows__row_id__attachments__attachment_id__download_get"];
         put?: never;
@@ -1205,11 +1223,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Workbench Row Attachment
-         * @description P4: unbind an attachment from the row.
-         *
-         *     Local attachment row is deleted; the DataLab ELN copy (if any) is kept for
-         *     traceability (platform delete-file API is out of sync with its storage —
-         *     see platform-maximize plan §P4).
+         * @description P4: unbind an attachment from the row (local row deleted).
          */
         delete: operations["delete_workbench_row_attachment_api_experiments_workbench__campaign_id__rows__row_id__attachments__attachment_id__delete"];
         options?: never;
@@ -1387,40 +1401,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/experiments/{experiment_id}/sync-datalab": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Sync Experiment From Datalab
-         * @description 手动触发单个实验的 Datalab -> MeasurementStore 同步 (P0-2)。
-         *
-         *     流程: 由 experiment_id 查 ExperimentRow, 取本次同步的 Datalab item_id
-         *     (请求体 ``datalab_item_id`` 优先, 否则行上绑定的 ``item_id``) -> 拉取
-         *     Datalab ``formumind_measurements`` 块 -> 校验块内 experiment_id 与调用方
-         *     一致 -> 写入 MeasurementStore 明细并回写 ``experiments.measured`` ->
-         *     成功后刷新训练 registry。
-         *
-         *     可见性语义: 行的 ``item_id`` 不被改写。本地训练记录
-         *     (``item_id IS NULL``) 同步后仍对 ``LocalExperimentStore`` 可见, 下一轮
-         *     DOE 的 ``load_prior_measurements()`` 可见 lab 实测; 已绑定 Datalab 的行
-         *     仍归 Datalab store 管 (Datalab 可达时 live 读)。
-         *
-         *     Fail-open: Datalab 不可达返回 ``{"synced": 0, "errors": [...]}`` 而不是
-         *     500; ``validated`` 恒为 None, 真实端到端验证见 scripts/verify_datalab.py。
-         */
-        post: operations["sync_experiment_from_datalab_api_experiments__experiment_id__sync_datalab_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/experiments/{experiment_id}": {
         parameters: {
             query?: never;
@@ -1479,7 +1459,16 @@ export interface paths {
         /**
          * Search Sources
          * @deprecated
-         * @description 同步一次性检索（legacy）。前端请使用 ``POST /api/search/stream`` 增量检索。
+         * @description Legacy 一次性检索，现为 202 + 轮询（与 /search/stream 同款任务）。
+         *
+         *     Stage 3 / SR-026: the inline iter_search held the connection for the
+         *     whole multi-source fan-out. The polled result carries the old
+         *     SearchResponse shape (the stream task's final data already is it;
+         *     source_status values are the same get_source_availability dicts).
+         *     Side effect to note: the shared task also indexes ColBERT and
+         *     dispatches the background KB build, as /search/stream always did —
+         *     legacy callers now get the stream behavior, which is what the
+         *     deprecation points them at. Frontend already uses /search/stream.
          */
         post: operations["search_sources_api_search_post"];
         delete?: never;
@@ -1586,7 +1575,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest From Url */
+        /**
+         * Ingest From Url
+         * @description Queue a URL ingest: 202 + task_id, results via /api/tasks poll.
+         *
+         *     Stage 3 / SR-026: fetch + parse used to run inline, holding the HTTP
+         *     connection until the fetch finished — a slow origin surfaced as a
+         *     502 while the work still completed behind it. SSRF pre-flight stays
+         *     sync (400): an unsafe URL never enters the worker queue. The
+         *     skipped gate before ColBERT indexing lives in the worker now.
+         */
         post: operations["ingest_from_url_api_ingest_url_post"];
         delete?: never;
         options?: never;
@@ -1623,6 +1621,10 @@ export interface paths {
         /**
          * Ingest From Task
          * @description DOI/arXiv id/专利号/URL → 全文 → 入库(编排见 services.document_task).
+         *
+         *     Stage 3 / SR-026: same 202 + poll shape as /ingest/url. Input-shape
+         *     errors stay sync 400s (a malformed web identifier never enters the
+         *     queue); a resolve failure surfaces as a failed task, not a 502.
          */
         post: operations["ingest_from_task_api_ingest_task_post"];
         delete?: never;
@@ -1726,7 +1728,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Chat */
+        /**
+         * Chat
+         * @description Thin route (stage 4 / SR-021): auth glue + service call + HTTP mapping.
+         */
         post: operations["chat_api_chat_post"];
         delete?: never;
         options?: never;
@@ -1745,10 +1750,7 @@ export interface paths {
         put?: never;
         /**
          * Chat Stream
-         * @description SSE 流式问答: 检索阶段提示 → 主回答逐 token → done(含引用/claims)。
-         *
-         *     结构化(StructuredAnswer)请求暂不走 token 流(需整包 JSON 校验),
-         *     完整生成后单发 done; markdown 请求全流式。
+         * @description Thin route (stage 4 / SR-021): auth glue + SSE wrap.
          */
         post: operations["chat_stream_api_chat_stream_post"];
         delete?: never;
@@ -2238,8 +2240,11 @@ export interface paths {
          * Evidence 一键入库全文（P3.2）
          * @description Fetch + persist fulltext for one Evidence row (user-clicked).
          *
+         *     Stage 3 / SR-026: 202 + task_id, results via /api/tasks poll. The
+         *     fetch used to run inline (same 502-but-done shape as /ingest/url).
          *     Independent of 「入库图谱」. Does **not** confirm embodiment drafts or
          *     write the production formula pool. Idempotent via origin_url aliases.
+         *     The kb_enabled guard stays sync (409).
          */
         post: operations["ingest_evidence_api_kb_ingest_evidence_post"];
         delete?: never;
@@ -2259,8 +2264,8 @@ export interface paths {
          * Integrity
          * @description Orphan scan over the references that carry no database constraint.
          *
-         *     Several of them cannot take one — under the Datalab backend the target row
-         *     lives in an external ELN — so the alternative to a constraint that cannot
+         *     Several of them cannot take one — the target row may live in a JSON
+         *     blob rather than a row — so the alternative to a constraint that cannot
          *     be enforced is a check that is actually run.
          */
         get: operations["integrity_api_kb_integrity_get"];
@@ -2367,6 +2372,191 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plm/regulatory/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Regulatory Updates
+         * @description Staged regulatory update packages (draft / approved / rejected).
+         */
+        get: operations["list_regulatory_updates_api_plm_regulatory_updates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Regulatory Releases
+         * @description Applied regulatory data releases, newest first.
+         */
+        get: operations["list_regulatory_releases_api_plm_regulatory_releases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/review-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Regulatory Review Items
+         * @description The seed review queue (W1-9 handling flow): items the import pipeline
+         *     could not decide on its own — unmatched OEL records, unparseable hazard
+         *     texts, ambiguous transport links. EHS works this queue: fix the source
+         *     file and re-seed (open items regenerate), or resolve an item that needs
+         *     no further action (resolved items survive re-seeds).
+         */
+        get: operations["list_regulatory_review_items_api_plm_regulatory_review_items_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/review-items/{item_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Regulatory Review Item
+         * @description Mark a queue item resolved (no further action needed). The item keeps
+         *     its detail for audit; a later re-seed will not regenerate it.
+         */
+        post: operations["resolve_regulatory_review_item_api_plm_regulatory_review_items__item_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/updates/clp-stage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stage Clp Update
+         * @description Stage an ECHA ATP table as a draft package (EHS approval still required).
+         */
+        post: operations["stage_clp_update_api_plm_regulatory_updates_clp_stage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/updates/ctx-fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Ctx Update
+         * @description Fetch EPA CTX enrichment for CAS numbers and stage it as a draft package.
+         */
+        post: operations["fetch_ctx_update_api_plm_regulatory_updates_ctx_fetch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/updates/{package_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Regulatory Update
+         * @description EHS approval: promote the package files and seed the new release.
+         */
+        post: operations["approve_regulatory_update_api_plm_regulatory_updates__package_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/updates/{package_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Regulatory Update
+         * @description Reject a draft package (files kept for audit).
+         */
+        post: operations["reject_regulatory_update_api_plm_regulatory_updates__package_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/regulatory/releases/{release_id}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rollback Regulatory Release
+         * @description Restore the archived files of a release and re-seed (new release).
+         */
+        post: operations["rollback_regulatory_release_api_plm_regulatory_releases__release_id__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plm/rulesets/{version}/recompute": {
         parameters: {
             query?: never;
@@ -2454,6 +2644,27 @@ export interface paths {
          * @description Look up substances by CAS (exact) or Chinese / English name (substring).
          */
         get: operations["search_substances_api_plm_substances_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/substances/count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count Substances
+         * @description Stage 5 / SR-100: total matches for the lookup filter, so the
+         *     substances page can say when its 100-row window truncates results.
+         */
+        get: operations["count_substances_api_plm_substances_count_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2707,8 +2918,10 @@ export interface paths {
         put?: never;
         /**
          * Archive Product Route
-         * @description G9: archive a product (lifecycle_state -> withdrawn). Withdrawal-grade
-         *     action: requires release.publish on the product's project.
+         * @description W1-8: archive a product (lifecycle_state -> withdrawn, pre-archive
+         *     state stored for restore). Withdrawal-grade action: requires
+         *     release.publish on the product's project. Released products are
+         *     refused — withdraw the release first.
          */
         post: operations["archive_product_route_api_plm_products__product_id__archive_post"];
         delete?: never;
@@ -2728,8 +2941,8 @@ export interface paths {
         put?: never;
         /**
          * Restore Product Route
-         * @description G9: restore an archived product (lifecycle_state -> rd). The
-         *     pre-archive state is not stored; a restored product re-enters as rd.
+         * @description W1-8: restore an archived product to its pre-archive state
+         *     (legacy rows archived before that state was stored restore to rd).
          */
         post: operations["restore_product_route_api_plm_products__product_id__restore_post"];
         delete?: never;
@@ -2803,11 +3016,17 @@ export interface paths {
          * Generate Document
          * @description Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).
          *
+         *     Stage 3 / SR-026: 202 + task_id, results via /api/tasks poll. The
+         *     generation (LLM + render, minutes for multi-regulation packs) used
+         *     to run inline behind the modal's spinner. The task result keeps the
+         *     historical shapes: a single version returns the single-document
+         *     shape, multiple versions return {"documents": [...]}.
+         *
          *     G2: for SDS / label, ``body.regulations`` selects the versions to
          *     generate (one per regulation); omitted means the default company's
          *     applicable_regulations, or ["CN"] when the company has no default.
-         *     A single version keeps the historical single-document response shape;
-         *     multiple versions return {"documents": [...]}.
+         *     That default resolution is a fast DB read and stays sync, as does
+         *     the regulations-misuse 422 for non-SDS/label types.
          */
         post: operations["generate_document_api_plm_revisions__revision_id__documents_post"];
         delete?: never;
@@ -2933,6 +3152,31 @@ export interface paths {
          * @description Review e-signature on one document (COA: issue). Required before the release gate passes.
          */
         post: operations["approve_document_api_plm_documents__document_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plm/documents/{document_id}/approve-exempt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Document Exempt
+         * @description Audited exemption approval for documents without author attribution (W1-5).
+         *
+         *     The normal approve path refuses ``created_by``-empty documents
+         *     fail-closed; this path approves them only with an explicit reason,
+         *     a password re-authentication and an audit record, and stamps the
+         *     exemption on the document itself.
+         */
+        post: operations["approve_document_exempt_api_plm_documents__document_id__approve_exempt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3114,6 +3358,13 @@ export interface paths {
         /**
          * Download Delivery
          * @description The delivery ZIP (all PDF / Word files + manifest.json with hashes and signatures).
+         *
+         *     W1-8/D10: only the CURRENT released version is distributable. A
+         *     withdrawn package's ZIP stops here (the artifact itself is kept
+         *     for the audit chain, it just no longer ships from this link), and
+         *     so does a superseded package's — its revision is no longer the
+         *     released one. Restoring a previous version (withdraw) re-opens
+         *     its ZIP through this same gate.
          */
         get: operations["download_delivery_api_plm_packages__package_id__delivery_get"];
         put?: never;
@@ -3784,6 +4035,46 @@ export interface paths {
         /** Set User Roles */
         put: operations["set_user_roles_api_identity_users__user_id__roles_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/users/{user_id}/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set User Active
+         * @description Stage 2 / SR-043: admin deactivation / activation (self excluded).
+         */
+        put: operations["set_user_active_api_identity_users__user_id__active_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/users/{user_id}/sessions/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke User Sessions
+         * @description Stage 2 / SR-043: admin revocation of another user's sessions (self excluded).
+         */
+        post: operations["revoke_user_sessions_api_identity_users__user_id__sessions_revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4464,6 +4755,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/lab/review-queue/count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Review Queue Count
+         * @description Stage 5 / SR-099: badge count with the list's filter, no row payload.
+         */
+        get: operations["review_queue_count_api_lab_review_queue_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/lab/review-queue": {
         parameters: {
             query?: never;
@@ -4609,6 +4920,32 @@ export interface paths {
         };
         /** Eln Conflicts */
         get: operations["eln_conflicts_api_lab_eln_conflicts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/lab/eln/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Eln Links
+         * @description Stage 1 / SR-017: ELN link sync states for operators (same shape as /eln/conflicts).
+         *
+         *     Filter ``sync_state=error`` to find links whose last pull partially
+         *     failed; the per-metric error text itself lives in that pull's
+         *     report (there is no error column on the link row — adding one is
+         *     a migration, deliberately not done here). Error rows are retried
+         *     by the next pull, not stuck behind the unchanged fast path.
+         */
+        get: operations["eln_links_api_lab_eln_links_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4811,6 +5148,10 @@ export interface paths {
         /**
          * Run Lint Endpoint
          * @description W4 ops: scan pages for stale/conflict/orphan/broken and persist flags.
+         *
+         *     Stage 3 / SR-063: 202 + task_id, results via /api/tasks poll. The
+         *     scan used to run in the request thread (multiple DB reads + file
+         *     reads per page). The wiki-enabled guard stays sync (409).
          */
         post: operations["run_lint_endpoint_api_wiki_lint_run_post"];
         delete?: never;
@@ -4831,6 +5172,8 @@ export interface paths {
         /**
          * Sweep Lint Endpoint
          * @description S1: re-lint currently flagged pages so obsolete lint flags are cleared.
+         *
+         *     Stage 3 / SR-063: same 202 + poll shape as /lint/run.
          */
         post: operations["sweep_lint_endpoint_api_wiki_lint_sweep_post"];
         delete?: never;
@@ -4869,8 +5212,35 @@ export interface paths {
         /**
          * Wiki Page Graph
          * @description Wiki page [[wikilink]] graph for Hub canvas (not materials/formulation KG).
+         *
+         *     Stage 3 / SR-067 (3-14): nodes page by offset/limit over the
+         *     degree-ranked candidates, edges page by edge_offset/edge_limit.
          */
         get: operations["wiki_page_graph_api_wiki_graph_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/wiki/graph/expand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Wiki Page Graph Expand
+         * @description On-demand neighborhood of one wiki page (stage 3 / SR-067, 3-14).
+         *
+         *     Returns the page plus its neighbors out to ``depth`` and the edges
+         *     among them, so the canvas expands one node at a time. 404 when the
+         *     page neither scans nor has readable markdown.
+         */
+        get: operations["wiki_page_graph_expand_api_wiki_graph_expand_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5891,6 +6261,10 @@ export interface paths {
         /**
          * List Sessions
          * @description List chat sessions, optionally scoped to a project (2026-09-05: 项目内会话).
+         *
+         *     Stage 0 / SR-006: a JWT caller only ever sees their own sessions
+         *     (platform admins see all, including legacy NULL-owner rows). No-JWT
+         *     callers (service key / dev) keep the legacy full list.
          */
         get: operations["list_sessions_api_session_list_get"];
         put?: never;
@@ -6100,6 +6474,67 @@ export interface paths {
         get: operations["list_pending_api_mcp_approvals_pending_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mcp/approvals/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Policies
+         * @description Management view of all MCP tool policies, with expiry state.
+         */
+        get: operations["list_policies_api_mcp_approvals_policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mcp/approvals/policies/{server_id}/{tool_name}/{scope}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke Policy
+         * @description Revoke one policy row (allow/ask/block, any scope).
+         */
+        delete: operations["revoke_policy_api_mcp_approvals_policies__server_id___tool_name___scope__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mcp/approvals/policies/backfill-expiry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Backfill Expiry
+         * @description One-time cleanup for pre-0090 allow rows: materialize expires_at
+         *     from created_at + scope TTL, delete already-expired rows.
+         */
+        post: operations["backfill_expiry_api_mcp_approvals_policies_backfill_expiry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7666,7 +8101,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/ops/datalab-orphans": {
+    "/api/ops/outbox": {
         parameters: {
             query?: never;
             header?: never;
@@ -7674,13 +8109,15 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Datalab Orphans
-         * @description Datalab samples a failed saga rollback could not delete (cleanup queue).
+         * Outbox Rows
+         * @description Stage 1 / SR-002: outbox rows for operators (oldest first).
          *
-         *     ``counts`` is per outbox status (PENDING = still to delete, DONE = cleaned,
-         *     DEAD = gave up — delete by hand); ``items`` lists the rows, oldest first.
+         *     API-only (no screen); guarded by the existing ``/api/ops`` admin.llm
+         *     rule in ``_rbac_guard``. Payloads are not returned (see
+         *     ``outbox_store.list_outbox_rows``); FAILED rows carry their error
+         *     summary here and are retried via the endpoint below.
          */
-        get: operations["datalab_orphans_api_ops_datalab_orphans_get"];
+        get: operations["outbox_rows_api_ops_outbox_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7689,7 +8126,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/ops/datalab-orphans/cleanup": {
+    "/api/ops/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Metrics
+         * @description Stage 1 / SR-029-SR-068: lightweight ops metrics (JSON, not Prometheus text).
+         *
+         *     Guarded by the existing ``/api/ops`` admin.llm rule. Counters marked
+         *     ``process_local`` reset on process restart (same convention as the
+         *     other ops counters); outbox counts and the 1 h failure count are
+         *     durable queries. No payloads are returned.
+         */
+        get: operations["metrics_api_ops_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ops/outbox/{row_id}/retry": {
         parameters: {
             query?: never;
             header?: never;
@@ -7699,13 +8161,66 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Datalab Orphans Cleanup
-         * @description Retry deleting the pending orphaned Datalab samples now.
+         * Outbox Retry
+         * @description Stage 1 / SR-002: manually retry a FAILED/DEAD outbox row.
          *
-         *     The same pass runs at startup; this is the manual trigger. Nothing is attempted
-         *     (and no retry burned) while Datalab is unconfigured or unreachable — see ``skipped``.
+         *     Rearms the stored row (same payload, attempts reset) and publishes
+         *     it under a fresh Celery id. A publish failure leaves the row
+         *     PENDING for the next recovery pass instead of losing the retry.
          */
-        post: operations["datalab_orphans_cleanup_api_ops_datalab_orphans_cleanup_post"];
+        post: operations["outbox_retry_api_ops_outbox__row_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ops/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rules Status Endpoint
+         * @description Stage 3 / SR-060 (3-7): what rule tables are live right now.
+         *
+         *     Guarded by the existing ``/api/ops`` admin.llm rule. No loads are
+         *     triggered: tables never loaded since start (or since the last
+         *     reload) report ``not_loaded``.
+         */
+        get: operations["rules_status_endpoint_api_ops_rules_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ops/rules/reload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rules Reload Endpoint
+         * @description Stage 3 / SR-060 (3-7): reload TOML rule tables at runtime.
+         *
+         *     Guarded by the existing ``/api/ops`` admin.llm rule. Clears the
+         *     cache, then loads every known table, so the response proves the
+         *     reload took effect (per-table source file + mtime, or fallback +
+         *     reason) instead of merely reporting that a cache was cleared.
+         *     Consumers (acid_stability, linker_roles, ambiguous_terms) read
+         *     through the same cache, so the next call in any of them sees the
+         *     new tables without a process restart.
+         */
+        post: operations["rules_reload_endpoint_api_ops_rules_reload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7772,7 +8287,7 @@ export interface paths {
          *     ``days`` window. Fail-open: returns empty stats (``available: False``)
          *     when the ``recommend_outcomes`` table does not exist yet.
          *     ``validated`` counts rounds with ``experiment_validated=True`` (U-4:
-         *     sync-datalab 成功后按 snapshot 指纹 fail-open 回写；C-5 pending 时恒为
+         *     lab 测量入库后按 snapshot 指纹 fail-open 回写；C-5 pending 时恒为
          *     null 的旧契约已过时）。
          */
         get: operations["recommend_stats_api_ops_recommend_stats_get"];
@@ -8686,7 +9201,20 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Call Mcp */
+        /**
+         * Call Mcp
+         * @description Readonly MCP tool proxy (Stage 0 / SR-007).
+         *
+         *     Previously this was doubly exempt (POLICY_EXEMPT + admin_guard) with
+         *     the approval gate off by default, so any token holder could call any
+         *     enabled server's read tools — including filesystem reads and
+         *     credential-backed external reads — with no permission, no session
+         *     attribution and no approval. Now: a signed-in account with
+         *     ``knowledge.read``; the approval gate inside ``_call_tool`` still
+         *     applies when ``mcp_approval_enabled``. Each call is logged with the
+         *     caller's user id, and the audit middleware attributes JWT callers
+         *     by login id (stage 2 / SR-042).
+         */
         post: operations["call_mcp_api_connectors_mcp_call_post"];
         delete?: never;
         options?: never;
@@ -8846,7 +9374,9 @@ export interface paths {
          *
          *     Only exposes status + coarse booleans needed for monitoring; URLs,
          *     error messages, and installed-extras inventory live in /health/detailed
-         *     (which requires auth).
+         *     (which requires auth). The answer carries ``as_of``/``cached_at``
+         *     (when the payload was probed) and ``cached`` (whether it came from
+         *     the 10 s cache) — see :func:`_with_freshness`.
          */
         get: operations["health_health_get"];
         put?: never;
@@ -8867,6 +9397,11 @@ export interface paths {
         /**
          * Health Detailed
          * @description Detailed infra snapshot — behind auth (not in public paths).
+         *
+         *     Unlike /health, this endpoint probes live on every call (no 10 s
+         *     cache): inside /health's cache window the two endpoints can
+         *     legitimately disagree, and /health's ``as_of``/``cached_at`` stamp
+         *     says which answer is newer (SR-094).
          */
         get: operations["health_detailed_health_detailed_get"];
         put?: never;
@@ -8993,7 +9528,7 @@ export interface components {
             /** Levers */
             levers?: components["schemas"]["LeverSpec"][];
             /** Materials */
-            materials?: components["schemas"]["app__domain__schemas__MaterialSpec"][];
+            materials?: components["schemas"]["app__domain__schemas__doe__MaterialSpec"][];
             /** Metric Priors */
             metric_priors?: components["schemas"]["MetricPriorSpec"][];
             /**
@@ -9101,6 +9636,11 @@ export interface components {
              * @default
              */
             plan_id: string;
+        };
+        /** ActiveIn */
+        ActiveIn: {
+            /** Is Active */
+            is_active: boolean;
         };
         /**
          * AdaptiveDOEMetadata
@@ -9732,6 +10272,22 @@ export interface components {
             persist: boolean;
             bridging?: components["schemas"]["BridgingIn"] | null;
         };
+        /** ClpStageIn */
+        ClpStageIn: {
+            /** Atp */
+            atp: string;
+            /** Regulation */
+            regulation: string;
+            /**
+             * Applies From
+             * @default
+             */
+            applies_from: string;
+            /** Entries */
+            entries?: {
+                [key: string]: unknown;
+            }[];
+        };
         /** CollectionCreate */
         CollectionCreate: {
             /** Project Id */
@@ -10050,6 +10606,11 @@ export interface components {
             /** Project Id */
             project_id?: string | null;
             requirement?: components["schemas"]["Requirement"] | null;
+        };
+        /** CtxFetchIn */
+        CtxFetchIn: {
+            /** Cas List */
+            cas_list?: string[];
         };
         /** DOEFactor */
         DOEFactor: {
@@ -10736,7 +11297,7 @@ export interface components {
         /** EnrichMaterialsRequest */
         EnrichMaterialsRequest: {
             /** Materials */
-            materials?: components["schemas"]["app__domain__schemas__MaterialSpec"][];
+            materials?: components["schemas"]["app__domain__schemas__doe__MaterialSpec"][];
         };
         /** EnrichMaterialsResponse */
         EnrichMaterialsResponse: {
@@ -10900,6 +11461,18 @@ export interface components {
              * @default high
              */
             confidence: string;
+        };
+        /** ExemptIn */
+        ExemptIn: {
+            /** Password */
+            password: string;
+            /**
+             * Comment
+             * @default
+             */
+            comment: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * ExperimentRecord
@@ -11598,25 +12171,6 @@ export interface components {
              * @default 0.9
              */
             relevance: number;
-        };
-        /** IngestEvidenceResponse */
-        IngestEvidenceResponse: {
-            /** Ok */
-            ok: boolean;
-            /** Status */
-            status: string;
-            /** Source Id */
-            source_id?: string | null;
-            /** Task Id */
-            task_id?: string | null;
-            /** Status Url */
-            status_url?: string | null;
-            /** Canonical Id */
-            canonical_id?: string | null;
-            /** Reason */
-            reason?: string | null;
-            /** Kind */
-            kind?: string | null;
         };
         /** IngestResponse */
         IngestResponse: {
@@ -13053,7 +13607,7 @@ export interface components {
             /** Levers */
             levers?: components["schemas"]["LeverSpec"][];
             /** Materials */
-            materials?: components["schemas"]["app__domain__schemas__MaterialSpec"][];
+            materials?: components["schemas"]["app__domain__schemas__doe__MaterialSpec"][];
             /** Metric Priors */
             metric_priors?: components["schemas"]["MetricPriorSpec"][];
             /**
@@ -13283,6 +13837,8 @@ export interface components {
              * @default stdio
              */
             transport: string;
+            /** Readonly Tool Allowlist */
+            readonly_tool_allowlist?: string[];
         };
         /** McpServersReplace */
         McpServersReplace: {
@@ -14530,11 +15086,8 @@ export interface components {
              * @default 10
              */
             top_k: number;
-            /**
-             * Alpha
-             * @default 0.3
-             */
-            alpha: number;
+            /** Alpha */
+            alpha?: number | null;
             /** Project Id */
             project_id?: string | null;
             /**
@@ -15031,7 +15584,7 @@ export interface components {
             /** Levers */
             levers?: components["schemas"]["LeverSpec"][];
             /** Materials */
-            materials?: components["schemas"]["app__domain__schemas__MaterialSpec"][];
+            materials?: components["schemas"]["app__domain__schemas__doe__MaterialSpec"][];
             /** Metric Priors */
             metric_priors?: components["schemas"]["MetricPriorSpec"][];
             /**
@@ -15207,6 +15760,14 @@ export interface components {
              * @default
              */
             reason: string;
+        };
+        /** ReviewResolveIn */
+        ReviewResolveIn: {
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /** RevisionIn */
         RevisionIn: {
@@ -15438,29 +15999,6 @@ export interface components {
              * @default 300
              */
             total_limit: number;
-        };
-        /** SearchResponse */
-        SearchResponse: {
-            /** Evidence */
-            evidence: components["schemas"]["Evidence"][];
-            /** Total */
-            total: number;
-            /**
-             * Source Status
-             * @default {}
-             */
-            source_status: {
-                [key: string]: components["schemas"]["SourceStatus"];
-            };
-            /**
-             * Used Seed Fallback
-             * @default false
-             */
-            used_seed_fallback: boolean;
-            /** Filter Report */
-            filter_report?: {
-                [key: string]: unknown;
-            } | null;
         };
         /** SecretTestRequest */
         SecretTestRequest: {
@@ -16142,23 +16680,6 @@ export interface components {
             status: string;
             /** Message */
             message: string;
-        };
-        /**
-         * SyncDatalabRequest
-         * @description POST /experiments/{id}/sync-datalab 请求体。
-         *
-         *     ``datalab_item_id``: 本次同步要拉取的 Datalab item。行保持本地训练记录
-         *     身份 (``item_id`` 不被改写), 因此同步到的 lab 测量对
-         *     ``LocalExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的
-         *     ``load_prior_measurements()`` 能吃到 lab 实测。若省略, 则回退使用行上
-         *     已绑定的 ``item_id`` (若行上也没有 -> 409)。
-         */
-        SyncDatalabRequest: {
-            /**
-             * Datalab Item Id
-             * @description 本次同步的 Datalab item id; 省略则用行上绑定的 item_id
-             */
-            datalab_item_id?: string | null;
         };
         /** TagUpdateRequest */
         TagUpdateRequest: {
@@ -17196,7 +17717,7 @@ export interface components {
          * MaterialSpec
          * @description Project-level raw material entry (extends global RAW_MATERIALS).
          */
-        app__domain__schemas__MaterialSpec: {
+        app__domain__schemas__doe__MaterialSpec: {
             /** Name */
             name: string;
             /**
@@ -17227,7 +17748,7 @@ export interface components {
             suppliers?: components["schemas"]["Supplier"][];
         };
         /** TaskStatus */
-        app__domain__schemas__TaskStatus: {
+        app__domain__schemas__task__TaskStatus: {
             /** Task Id */
             task_id: string;
             /** Kind */
@@ -17921,7 +18442,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["app__domain__schemas__TaskStatus"];
+                    "application/json": components["schemas"]["app__domain__schemas__task__TaskStatus"];
                 };
             };
             /** @description Validation Error */
@@ -17952,7 +18473,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["app__domain__schemas__TaskStatus"];
+                    "application/json": components["schemas"]["app__domain__schemas__task__TaskStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mint_task_stream_ticket_api_tasks__task_id__ticket_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -18796,7 +19350,10 @@ export interface operations {
     };
     list_workbench_campaigns_api_experiments_workbench_campaigns_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -18810,6 +19367,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkbenchCampaignSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -19597,43 +20163,6 @@ export interface operations {
             };
         };
     };
-    sync_experiment_from_datalab_api_experiments__experiment_id__sync_datalab_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                experiment_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["SyncDatalabRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_experiment_api_experiments__experiment_id__get: {
         parameters: {
             query?: {
@@ -19708,7 +20237,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SearchResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -19873,7 +20402,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IngestResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -19939,7 +20468,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IngestResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -20883,7 +21412,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IngestEvidenceResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -21071,6 +21600,290 @@ export interface operations {
             };
         };
     };
+    list_regulatory_updates_api_plm_regulatory_updates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    list_regulatory_releases_api_plm_regulatory_releases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    list_regulatory_review_items_api_plm_regulatory_review_items_get: {
+        parameters: {
+            query?: {
+                kind?: string | null;
+                status?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_regulatory_review_item_api_plm_regulatory_review_items__item_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewResolveIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stage_clp_update_api_plm_regulatory_updates_clp_stage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClpStageIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_ctx_update_api_plm_regulatory_updates_ctx_fetch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CtxFetchIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_regulatory_update_api_plm_regulatory_updates__package_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                package_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_regulatory_update_api_plm_regulatory_updates__package_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                package_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_regulatory_release_api_plm_regulatory_releases__release_id__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                release_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     recompute_ruleset_api_plm_rulesets__version__recompute_post: {
         parameters: {
             query?: {
@@ -21199,6 +22012,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    count_substances_api_plm_substances_count_get: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -21886,14 +22732,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            201: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -22123,6 +22967,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PasswordConfirm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_document_exempt_api_plm_documents__document_id__approve_exempt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExemptIn"];
             };
         };
         responses: {
@@ -23764,6 +24645,76 @@ export interface operations {
             };
         };
     };
+    set_user_active_api_identity_users__user_id__active_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActiveIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_user_sessions_api_identity_users__user_id__sessions_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_orthogonal_arrays_api_doe_designs_orthogonal_arrays_get: {
         parameters: {
             query?: never;
@@ -25082,6 +26033,39 @@ export interface operations {
             };
         };
     };
+    review_queue_count_api_lab_review_queue_count_get: {
+        parameters: {
+            query?: {
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     review_queue_api_lab_review_queue_get: {
         parameters: {
             query?: {
@@ -25360,6 +26344,39 @@ export interface operations {
         parameters: {
             query?: {
                 status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eln_links_api_lab_eln_links_get: {
+        parameters: {
+            query?: {
+                sync_state?: string | null;
             };
             header?: never;
             path?: never;
@@ -25801,9 +26818,50 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                offset?: number;
+                edge_limit?: number;
+                edge_offset?: number;
                 /** @description Comma-separated page kinds (e.g. material,concept,theme) */
                 kinds?: string | null;
                 include_orphan?: boolean;
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    wiki_page_graph_expand_api_wiki_graph_expand_get: {
+        parameters: {
+            query: {
+                path: string;
+                depth?: number;
+                limit?: number;
+                /** @description Comma-separated page kinds (e.g. material,concept,theme) */
+                kinds?: string | null;
                 project_id?: string | null;
             };
             header?: never;
@@ -28046,6 +29104,85 @@ export interface operations {
         };
     };
     list_pending_api_mcp_approvals_pending_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_policies_api_mcp_approvals_policies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    revoke_policy_api_mcp_approvals_policies__server_id___tool_name___scope__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+                tool_name: string;
+                scope: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_expiry_api_mcp_approvals_policies_backfill_expiry_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -31063,10 +32200,11 @@ export interface operations {
             };
         };
     };
-    datalab_orphans_api_ops_datalab_orphans_get: {
+    outbox_rows_api_ops_outbox_get: {
         parameters: {
             query?: {
                 status?: string | null;
+                operation?: string | null;
                 limit?: number;
             };
             header?: never;
@@ -31097,13 +32235,35 @@ export interface operations {
             };
         };
     };
-    datalab_orphans_cleanup_api_ops_datalab_orphans_cleanup_post: {
+    metrics_api_ops_metrics_get: {
         parameters: {
-            query?: {
-                max_rows?: number;
-            };
+            query?: never;
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    outbox_retry_api_ops_outbox__row_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                row_id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -31126,6 +32286,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rules_status_endpoint_api_ops_rules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    rules_reload_endpoint_api_ops_rules_reload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -31625,7 +32829,10 @@ export interface operations {
     };
     list_projects_api_projects_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -31639,6 +32846,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

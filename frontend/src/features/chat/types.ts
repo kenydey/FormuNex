@@ -121,7 +121,6 @@ export interface PlatformHealth {
   database?: { ok: boolean; scheme: string };
   task_broker?: { required: boolean; reachable: boolean };
   parsers?: Record<string, boolean>;
-  datalab?: { required: boolean; reachable: boolean; hint?: string; ledger_mode?: string };
 }
 
 export interface SessionPlan {

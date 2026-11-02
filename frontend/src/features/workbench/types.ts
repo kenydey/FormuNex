@@ -29,7 +29,6 @@ export interface CampaignSummary {
   strategy: string;
   row_count: number;
   project_id: string | null;
-  datalab_collection_id?: string | null;
 }
 
 export interface LoopStatus {

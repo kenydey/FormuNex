@@ -183,12 +183,8 @@ const en: Record<string, string> = {
   "shell.error.unknown": "Unknown error",
   "shell.health.broker": "Task queue (Redis/Celery) unreachable",
   "shell.health.database": "Database unavailable",
-  "shell.health.datalab": "Datalab ELN unreachable",
-  "shell.health.datalab_hint": "Datalab ELN: {{h}}",
   "shell.health.degraded": "Infrastructure degraded",
   "shell.health.generic": "Health check reports degraded",
-  "shell.health.local_hint": "Datalab unreachable; the lab ledger uses local sqlite (soft-degrade). Start compose and set DATALAB_REQUIRED when you need the ELN.",
-  "shell.health.local_ledger": "Local ledger",
   "shell.health.pdf": "PDF parser not ready",
   "shell.health.recheck": "Check again",
 };

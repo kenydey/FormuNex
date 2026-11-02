@@ -293,18 +293,14 @@ export function sessionTitle(messages: ChatMessage[]): string {
 
 // ── Banners ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type InfraIssue = { code: "database" | "datalab" | "broker" | "pdf" | "generic"; hint?: string };
+export type InfraIssue = { code: "database" | "broker" | "pdf" | "generic"; hint?: string };
 
-/** /health → none | local (soft-degraded ELN ledger) | degraded (with reasons). */
-export function infraState(h: PlatformHealth | null | undefined): { level: "none" | "local" | "degraded"; issues: InfraIssue[]; hint?: string } {
+/** /health → none | degraded (with reasons). */
+export function infraState(h: PlatformHealth | null | undefined): { level: "none" | "degraded"; issues: InfraIssue[] } {
   if (!h) return { level: "none", issues: [] };
-  if (h.status === "ok") {
-    const local = h.datalab?.ledger_mode === "local" && !h.datalab?.reachable && !h.datalab?.required;
-    return local ? { level: "local", issues: [], hint: h.datalab?.hint } : { level: "none", issues: [] };
-  }
+  if (h.status === "ok") return { level: "none", issues: [] };
   const issues: InfraIssue[] = [];
   if (h.database && !h.database.ok) issues.push({ code: "database" });
-  if (h.datalab?.required && !h.datalab.reachable) issues.push({ code: "datalab", hint: h.datalab.hint });
   if (h.task_broker?.required && !h.task_broker.reachable) issues.push({ code: "broker" });
   if (h.parsers && h.parsers.pdf === false) issues.push({ code: "pdf" });
   if (!issues.length) issues.push({ code: "generic" });
@@ -314,7 +310,6 @@ export function infraState(h: PlatformHealth | null | undefined): { level: "none
 /** /health unreachable is itself a degraded state. */
 export const UNREACHABLE_HEALTH: PlatformHealth = {
   status: "degraded", database: { ok: false, scheme: "unknown" }, task_broker: { required: true, reachable: false }, parsers: {},
-  datalab: { required: false, reachable: false, ledger_mode: "local" },
 };
 
 export type DegradedReason = "llm_key" | "online_deps";

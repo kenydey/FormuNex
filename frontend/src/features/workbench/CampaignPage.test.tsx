@@ -25,7 +25,6 @@ vi.mock("@/api/client", () => ({
     if (path.includes("bias-trend")) return { campaign_id: 7, trend: [], alerts: [], threshold_rmse: 50 };
     if (path === "/api/projects/p1") return { id: "p1", title: "P", headline: "", domain: "degreaser", created_at: "", updated_at: "", workspace: { requirement: null } };
     if (path === "/api/training-status") return { total_records: 10, min_samples: 4, sufficient: true, models_trained: 1 };
-    if (path === "/health") return { datalab: { ledger_mode: "local" } };
     return null;
   }),
   download: vi.fn(),

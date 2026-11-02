@@ -1020,7 +1020,7 @@ class RecommendOutcomeRow(Base):
     # Reserved: component fingerprint for later measurement correlation (C-5).
     formula_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     # U-4: 强成功层（实验验证）。adopt 记录用户采纳后，若该配方的实验数据
-    # 经 sync-datalab 同步入库（启发式成分名匹配），则标记为已实验验证。
+    # 经 lab 测量入库（启发式成分名匹配），则标记为已实验验证。
     experiment_validated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
     # 命中实验的摘要：{experiment_id, measured_keys, matched_ingredients...}

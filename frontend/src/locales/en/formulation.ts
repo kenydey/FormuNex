@@ -163,9 +163,6 @@ const en: Record<string, string> = {
   "formulation.exp.spec": "Spec",
   "formulation.exp.status": "Status",
   "formulation.exp.summary": "Measured summary",
-  "formulation.exp.sync": "Sync from Datalab",
-  "formulation.exp.sync_done": "Sync done: {{n}} measurements written back, {{e}} failed.",
-  "formulation.exp.sync_skipped": "Datalab unreachable; skipped (fail-open), local data unchanged.",
   "formulation.exp.typed": "Typed measurements · {{n}}",
   "formulation.exp.value": "Value",
 

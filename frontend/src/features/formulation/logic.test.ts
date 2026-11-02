@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildRowDiff, casChecksumOk, casStatus, csvCell, datalabSyncOutcome, deepDiffSummary, leaderboardToCsv, lineageTrend, paretoFront,
+  buildRowDiff, casChecksumOk, casStatus, csvCell, deepDiffSummary, leaderboardToCsv, lineageTrend, paretoFront,
   planVsActual, previousVersion, shiftAfterRemove, specText, valueMeetsSpec, versionTree, warningActions, weightTotal,
 } from "./logic";
 import type { FormulationVersion, WorkbenchRow } from "./types";
@@ -79,10 +79,6 @@ describe("misc", () => {
     expect(shiftAfterRemove(3, 1)).toBe(2);
     expect(shiftAfterRemove(1, 1)).toBeNull();
     expect(shiftAfterRemove(0, 1)).toBe(0);
-  });
-  it("reads Datalab sync outcome", () => {
-    expect(datalabSyncOutcome({ synced: 0, errors: ["x"] }).skipped).toBe(true);
-    expect(datalabSyncOutcome({ synced: 2 })).toEqual({ skipped: false, synced: 2, errors: 0 });
   });
   it("summarises DeepDiff", () => {
     expect(deepDiffSummary({ values_changed: { "root['a']": {} }, type_changes: ["root['b']"] })).toEqual(["values_changed: root['a']", "type_changes: root['b']"]);

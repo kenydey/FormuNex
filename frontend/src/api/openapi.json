@@ -1029,7 +1029,7 @@
       "content": {
        "application/json": {
         "schema": {
-         "$ref": "#/components/schemas/app__domain__schemas__TaskStatus"
+         "$ref": "#/components/schemas/app__domain__schemas__task__TaskStatus"
         }
        }
       }
@@ -1071,7 +1071,52 @@
       "content": {
        "application/json": {
         "schema": {
-         "$ref": "#/components/schemas/app__domain__schemas__TaskStatus"
+         "$ref": "#/components/schemas/app__domain__schemas__task__TaskStatus"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/tasks/{task_id}/ticket": {
+   "post": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Mint Task Stream Ticket",
+    "description": "Stage 5 / SR-081: mint a one-time ticket for this task's SSE stream.\n\nNative EventSource cannot set an Authorization header, and the old\nanswer — the bearer token in the stream URL — leaked it into browser\nhistory, proxy logs and Referer headers. The ticket is single-use,\nbound to this task id, and expires in 300 s; the caller opens\n``GET /api/tasks/{task_id}/stream?ticket=...`` with it. Ownership\nmatches the stream endpoint: the minting caller must own the task.",
+    "operationId": "mint_task_stream_ticket_api_tasks__task_id__ticket_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Task Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Mint Task Stream Ticket Api Tasks  Task Id  Ticket Post"
         }
        }
       }
@@ -1322,7 +1367,7 @@
      "metadata"
     ],
     "summary": "Recommendation Outcome",
-    "description": "P1-10: 双层信号水合 —— 页面刷新后徽标从后端重读，Datalab 验证\n回写也能被前端看到（不再只靠组件局部 useState）。",
+    "description": "P1-10: 双层信号水合 —— 页面刷新后徽标从后端重读，实验验证\n回写也能被前端看到（不再只靠组件局部 useState）。",
     "operationId": "recommendation_outcome_api_formulations_recommend__recommend_id__outcome_get",
     "parameters": [
      {
@@ -2283,17 +2328,49 @@
     "summary": "List Workbench Campaigns",
     "description": "All workbench campaigns, newest first, with row counts.",
     "operationId": "list_workbench_campaigns_api_experiments_workbench_campaigns_get",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "default": 1000,
+       "title": "Limit"
+      }
+     },
+     {
+      "name": "offset",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "default": 0,
+       "title": "Offset"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
+         "type": "array",
          "items": {
           "$ref": "#/components/schemas/WorkbenchCampaignSummary"
          },
-         "type": "array",
          "title": "Response List Workbench Campaigns Api Experiments Workbench Campaigns Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -2305,17 +2382,17 @@
      "experiments"
     ],
     "summary": "Create Workbench Campaign",
-    "description": "Seed a campaign + pending rows from a generated DOE plan (Datalab samples).",
+    "description": "Seed a campaign + pending rows from a generated DOE plan.",
     "operationId": "create_workbench_campaign_api_experiments_workbench_campaigns_post",
     "requestBody": {
+     "required": true,
      "content": {
       "application/json": {
        "schema": {
         "$ref": "#/components/schemas/CreateWorkbenchCampaignRequest"
        }
       }
-     },
-     "required": true
+     }
     },
     "responses": {
      "200": {
@@ -2446,7 +2523,7 @@
      "experiments"
     ],
     "summary": "Sync Workbench",
-    "description": "Batch-update workbench rows from AG Grid edits (forwarded to Datalab).",
+    "description": "Batch-update workbench rows from AG Grid edits.",
     "operationId": "sync_workbench_api_experiments_workbench_sync_put",
     "requestBody": {
      "content": {
@@ -2488,7 +2565,7 @@
      "experiments"
     ],
     "summary": "Reconcile Workbench",
-    "description": "Detect and prune stale ``sample_refs`` whose Datalab item was deleted.\n\nOnly a definitive 404 prunes; network / 5xx failures are reported in\n``errors`` and left untouched. Idempotent: a second call returns an empty\n``removed`` list once the campaign is clean.",
+    "description": "Detect and prune stale ``sample_refs``.\n\nDatalab removal batch 3: refs are local now, so there is no external\nitem to prune against; the local store reports nothing stale.",
     "operationId": "reconcile_workbench_api_experiments_workbench__campaign_id__reconcile_post",
     "parameters": [
      {
@@ -2533,7 +2610,7 @@
      "experiments"
     ],
     "summary": "Workbench Quality",
-    "description": "Data-quality snapshot for a campaign (read-only, no pruning).\n\nReturns ``{stale_count, stale_refs, errors_count, dropped_total}``:\n``stale_*`` are sample refs whose Datalab item is gone (404), and\n``dropped_total`` is the cumulative count of non-numeric / empty values\ndiscarded during workbench ingest (from ``data_quality`` loop_history\nevents).",
+    "description": "Data-quality snapshot for a campaign (read-only, no pruning).\n\nReturns ``{stale_count, stale_refs, errors_count, dropped_total}``:\n``stale_*`` are sample refs with no local row, and\n``dropped_total`` is the cumulative count of non-numeric / empty values\ndiscarded during workbench ingest (from ``data_quality`` loop_history\nevents).",
     "operationId": "workbench_quality_api_experiments_workbench__campaign_id__quality_get",
     "parameters": [
      {
@@ -2623,7 +2700,7 @@
      "experiments"
     ],
     "summary": "Upload Experiment Attachment",
-    "description": "Upload a file attachment (QC report, microscope image, etc.)\nand link it to an experiment.\n\nThe file is forwarded to Datalab ELN as the document store;\na local ``ExperimentAttachment`` row keeps the reference.",
+    "description": "Upload a file attachment (QC report, microscope image, etc.)\nand link it to an experiment.\n\nThe file is stored under backend/data/attachments/; a local\n``ExperimentAttachment`` row keeps the reference.",
     "operationId": "upload_experiment_attachment_api_experiments__experiment_id__attachments_post",
     "parameters": [
      {
@@ -2875,7 +2952,7 @@
      "experiments"
     ],
     "summary": "Restore Workbench Row Version",
-    "description": "P3: restore a DOE row's DataLab item to a saved version.\n\nThe platform mints a new \"restored\" version afterwards, so the operation is\nreversible — restoring again to any earlier version stays possible.\nNative rows (no refcode) restore the audit-log snapshot ``version_id`` and\nrecord the result as a new ``restore`` version — equally reversible.",
+    "description": "P3: restore a DOE row to a saved audit-log version.\n\nThe platform mints a new \"restored\" version afterwards, so the operation is\nreversible — restoring again to any earlier version stays possible.",
     "operationId": "restore_workbench_row_version_api_experiments_workbench__campaign_id__rows__row_id__versions__version_id__restore_post",
     "parameters": [
      {
@@ -2938,7 +3015,7 @@
      "experiments"
     ],
     "summary": "Workbench Row Versions",
-    "description": "P3: version history of a DOE row's DataLab item (auto-saved on every sync).\n\nNative rows (no refcode) answer from the audit log instead (``source: \"native\"``,\n``refcode: null``; each entry also carries its ``snapshot``).\n\nWithout compare params returns ``{refcode, versions: [{id, version, action,\ntimestamp, creator}]}``; with ``compare_v1`` + ``compare_v2`` returns the\nDeepDiff between those two version ids under ``diff``.",
+    "description": "P3: version history of a DOE row from the audit log (``source: \"native\"``,\n``refcode: null``; each entry also carries its ``snapshot``).\n\nWithout compare params returns ``{refcode, versions: [{id, version, action,\ntimestamp, creator}]}``; with ``compare_v1`` + ``compare_v2`` returns the\nsnapshot diff between those two version ids under ``diff``.",
     "operationId": "workbench_row_versions_api_experiments_workbench__campaign_id__rows__row_id__versions_get",
     "parameters": [
      {
@@ -3012,7 +3089,7 @@
      "experiments"
     ],
     "summary": "Download Workbench Row Attachment",
-    "description": "P4: download an attachment's original file.\n\nPrefers the DataLab ELN copy (attachment note carries ``[datalab:<file_id>]``);\nfalls back to the local mirror stored under backend/data/attachments/ when the\nplatform copy is unreachable or was never uploaded.",
+    "description": "P4: download an attachment's original file from the local mirror.",
     "operationId": "download_workbench_row_attachment_api_experiments_workbench__campaign_id__rows__row_id__attachments__attachment_id__download_get",
     "parameters": [
      {
@@ -3071,7 +3148,7 @@
      "experiments"
     ],
     "summary": "Delete Workbench Row Attachment",
-    "description": "P4: unbind an attachment from the row.\n\nLocal attachment row is deleted; the DataLab ELN copy (if any) is kept for\ntraceability (platform delete-file API is out of sync with its storage —\nsee platform-maximize plan §P4).",
+    "description": "P4: unbind an attachment from the row (local row deleted).",
     "operationId": "delete_workbench_row_attachment_api_experiments_workbench__campaign_id__rows__row_id__attachments__attachment_id__delete",
     "parameters": [
      {
@@ -3569,68 +3646,6 @@
     }
    }
   },
-  "/api/experiments/{experiment_id}/sync-datalab": {
-   "post": {
-    "tags": [
-     "experiments"
-    ],
-    "summary": "Sync Experiment From Datalab",
-    "description": "手动触发单个实验的 Datalab -> MeasurementStore 同步 (P0-2)。\n\n流程: 由 experiment_id 查 ExperimentRow, 取本次同步的 Datalab item_id\n(请求体 ``datalab_item_id`` 优先, 否则行上绑定的 ``item_id``) -> 拉取\nDatalab ``formumind_measurements`` 块 -> 校验块内 experiment_id 与调用方\n一致 -> 写入 MeasurementStore 明细并回写 ``experiments.measured`` ->\n成功后刷新训练 registry。\n\n可见性语义: 行的 ``item_id`` 不被改写。本地训练记录\n(``item_id IS NULL``) 同步后仍对 ``LocalExperimentStore`` 可见, 下一轮\nDOE 的 ``load_prior_measurements()`` 可见 lab 实测; 已绑定 Datalab 的行\n仍归 Datalab store 管 (Datalab 可达时 live 读)。\n\nFail-open: Datalab 不可达返回 ``{\"synced\": 0, \"errors\": [...]}`` 而不是\n500; ``validated`` 恒为 None, 真实端到端验证见 scripts/verify_datalab.py。",
-    "operationId": "sync_experiment_from_datalab_api_experiments__experiment_id__sync_datalab_post",
-    "parameters": [
-     {
-      "name": "experiment_id",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "integer",
-       "title": "Experiment Id"
-      }
-     }
-    ],
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "anyOf": [
-         {
-          "$ref": "#/components/schemas/SyncDatalabRequest"
-         },
-         {
-          "type": "null"
-         }
-        ],
-        "title": "Body"
-       }
-      }
-     }
-    },
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Sync Experiment From Datalab Api Experiments  Experiment Id  Sync Datalab Post"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
   "/api/experiments/{experiment_id}": {
    "get": {
     "tags": [
@@ -3710,7 +3725,7 @@
   "/api/search": {
    "post": {
     "summary": "Search Sources",
-    "description": "同步一次性检索（legacy）。前端请使用 ``POST /api/search/stream`` 增量检索。",
+    "description": "Legacy 一次性检索，现为 202 + 轮询（与 /search/stream 同款任务）。\n\nStage 3 / SR-026: the inline iter_search held the connection for the\nwhole multi-source fan-out. The polled result carries the old\nSearchResponse shape (the stream task's final data already is it;\nsource_status values are the same get_source_availability dicts).\nSide effect to note: the shared task also indexes ColBERT and\ndispatches the background KB build, as /search/stream always did —\nlegacy callers now get the stream behavior, which is what the\ndeprecation points them at. Frontend already uses /search/stream.",
     "operationId": "search_sources_api_search_post",
     "requestBody": {
      "content": {
@@ -3727,9 +3742,7 @@
       "description": "Successful Response",
       "content": {
        "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/SearchResponse"
-        }
+        "schema": {}
        }
       }
      },
@@ -3897,6 +3910,7 @@
   "/api/ingest/url": {
    "post": {
     "summary": "Ingest From Url",
+    "description": "Queue a URL ingest: 202 + task_id, results via /api/tasks poll.\n\nStage 3 / SR-026: fetch + parse used to run inline, holding the HTTP\nconnection until the fetch finished — a slow origin surfaced as a\n502 while the work still completed behind it. SSRF pre-flight stays\nsync (400): an unsafe URL never enters the worker queue. The\nskipped gate before ColBERT indexing lives in the worker now.",
     "operationId": "ingest_from_url_api_ingest_url_post",
     "requestBody": {
      "content": {
@@ -3913,9 +3927,7 @@
       "description": "Successful Response",
       "content": {
        "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/IngestResponse"
-        }
+        "schema": {}
        }
       }
      },
@@ -3973,7 +3985,7 @@
   "/api/ingest/task": {
    "post": {
     "summary": "Ingest From Task",
-    "description": "DOI/arXiv id/专利号/URL → 全文 → 入库(编排见 services.document_task).",
+    "description": "DOI/arXiv id/专利号/URL → 全文 → 入库(编排见 services.document_task).\n\nStage 3 / SR-026: same 202 + poll shape as /ingest/url. Input-shape\nerrors stay sync 400s (a malformed web identifier never enters the\nqueue); a resolve failure surfaces as a failed task, not a 502.",
     "operationId": "ingest_from_task_api_ingest_task_post",
     "requestBody": {
      "content": {
@@ -3990,9 +4002,7 @@
       "description": "Successful Response",
       "content": {
        "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/IngestResponse"
-        }
+        "schema": {}
        }
       }
      },
@@ -4169,6 +4179,7 @@
   "/api/chat": {
    "post": {
     "summary": "Chat",
+    "description": "Thin route (stage 4 / SR-021): auth glue + service call + HTTP mapping.",
     "operationId": "chat_api_chat_post",
     "requestBody": {
      "content": {
@@ -4207,7 +4218,7 @@
   "/api/chat/stream": {
    "post": {
     "summary": "Chat Stream",
-    "description": "SSE 流式问答: 检索阶段提示 → 主回答逐 token → done(含引用/claims)。\n\n结构化(StructuredAnswer)请求暂不走 token 流(需整包 JSON 校验),\n完整生成后单发 done; markdown 请求全流式。",
+    "description": "Thin route (stage 4 / SR-021): auth glue + SSE wrap.",
     "operationId": "chat_stream_api_chat_stream_post",
     "requestBody": {
      "content": {
@@ -5345,7 +5356,7 @@
      "kb"
     ],
     "summary": "Evidence 一键入库全文（P3.2）",
-    "description": "Fetch + persist fulltext for one Evidence row (user-clicked).\n\nIndependent of 「入库图谱」. Does **not** confirm embodiment drafts or\nwrite the production formula pool. Idempotent via origin_url aliases.",
+    "description": "Fetch + persist fulltext for one Evidence row (user-clicked).\n\nStage 3 / SR-026: 202 + task_id, results via /api/tasks poll. The\nfetch used to run inline (same 502-but-done shape as /ingest/url).\nIndependent of 「入库图谱」. Does **not** confirm embodiment drafts or\nwrite the production formula pool. Idempotent via origin_url aliases.\nThe kb_enabled guard stays sync (409).",
     "operationId": "ingest_evidence_api_kb_ingest_evidence_post",
     "requestBody": {
      "content": {
@@ -5362,9 +5373,7 @@
       "description": "Successful Response",
       "content": {
        "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/IngestEvidenceResponse"
-        }
+        "schema": {}
        }
       }
      },
@@ -5387,7 +5396,7 @@
      "kb"
     ],
     "summary": "Integrity",
-    "description": "Orphan scan over the references that carry no database constraint.\n\nSeveral of them cannot take one — under the Datalab backend the target row\nlives in an external ELN — so the alternative to a constraint that cannot\nbe enforced is a check that is actually run.",
+    "description": "Orphan scan over the references that carry no database constraint.\n\nSeveral of them cannot take one — the target row may live in a JSON\nblob rather than a row — so the alternative to a constraint that cannot\nbe enforced is a check that is actually run.",
     "operationId": "integrity_api_kb_integrity_get",
     "responses": {
      "200": {
@@ -5603,6 +5612,406 @@
     }
    }
   },
+  "/api/plm/regulatory/updates": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Regulatory Updates",
+    "description": "Staged regulatory update packages (draft / approved / rejected).",
+    "operationId": "list_regulatory_updates_api_plm_regulatory_updates_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array",
+         "title": "Response List Regulatory Updates Api Plm Regulatory Updates Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/releases": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Regulatory Releases",
+    "description": "Applied regulatory data releases, newest first.",
+    "operationId": "list_regulatory_releases_api_plm_regulatory_releases_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array",
+         "title": "Response List Regulatory Releases Api Plm Regulatory Releases Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/review-items": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "List Regulatory Review Items",
+    "description": "The seed review queue (W1-9 handling flow): items the import pipeline\ncould not decide on its own — unmatched OEL records, unparseable hazard\ntexts, ambiguous transport links. EHS works this queue: fix the source\nfile and re-seed (open items regenerate), or resolve an item that needs\nno further action (resolved items survive re-seeds).",
+    "operationId": "list_regulatory_review_items_api_plm_regulatory_review_items_get",
+    "parameters": [
+     {
+      "name": "kind",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Kind"
+      }
+     },
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response List Regulatory Review Items Api Plm Regulatory Review Items Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/review-items/{item_id}/resolve": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Resolve Regulatory Review Item",
+    "description": "Mark a queue item resolved (no further action needed). The item keeps\nits detail for audit; a later re-seed will not regenerate it.",
+    "operationId": "resolve_regulatory_review_item_api_plm_regulatory_review_items__item_id__resolve_post",
+    "parameters": [
+     {
+      "name": "item_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Item Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReviewResolveIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Resolve Regulatory Review Item Api Plm Regulatory Review Items  Item Id  Resolve Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/updates/clp-stage": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Stage Clp Update",
+    "description": "Stage an ECHA ATP table as a draft package (EHS approval still required).",
+    "operationId": "stage_clp_update_api_plm_regulatory_updates_clp_stage_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ClpStageIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Stage Clp Update Api Plm Regulatory Updates Clp Stage Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/updates/ctx-fetch": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Fetch Ctx Update",
+    "description": "Fetch EPA CTX enrichment for CAS numbers and stage it as a draft package.",
+    "operationId": "fetch_ctx_update_api_plm_regulatory_updates_ctx_fetch_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CtxFetchIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Fetch Ctx Update Api Plm Regulatory Updates Ctx Fetch Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/updates/{package_id}/approve": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Approve Regulatory Update",
+    "description": "EHS approval: promote the package files and seed the new release.",
+    "operationId": "approve_regulatory_update_api_plm_regulatory_updates__package_id__approve_post",
+    "parameters": [
+     {
+      "name": "package_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Package Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Approve Regulatory Update Api Plm Regulatory Updates  Package Id  Approve Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/updates/{package_id}/reject": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Reject Regulatory Update",
+    "description": "Reject a draft package (files kept for audit).",
+    "operationId": "reject_regulatory_update_api_plm_regulatory_updates__package_id__reject_post",
+    "parameters": [
+     {
+      "name": "package_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Package Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Reject Regulatory Update Api Plm Regulatory Updates  Package Id  Reject Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/regulatory/releases/{release_id}/rollback": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Rollback Regulatory Release",
+    "description": "Restore the archived files of a release and re-seed (new release).",
+    "operationId": "rollback_regulatory_release_api_plm_regulatory_releases__release_id__rollback_post",
+    "parameters": [
+     {
+      "name": "release_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Release Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Rollback Regulatory Release Api Plm Regulatory Releases  Release Id  Rollback Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/plm/rulesets/{version}/recompute": {
    "post": {
     "tags": [
@@ -5802,6 +6211,55 @@
           "additionalProperties": true
          },
          "title": "Response Search Substances Api Plm Substances Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/substances/count": {
+   "get": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Count Substances",
+    "description": "Stage 5 / SR-100: total matches for the lookup filter, so the\nsubstances page can say when its 100-row window truncates results.",
+    "operationId": "count_substances_api_plm_substances_count_get",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200,
+       "title": "Q"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": {
+          "type": "integer"
+         },
+         "title": "Response Count Substances Api Plm Substances Count Get"
         }
        }
       }
@@ -6469,7 +6927,7 @@
      "plm"
     ],
     "summary": "Archive Product Route",
-    "description": "G9: archive a product (lifecycle_state -> withdrawn). Withdrawal-grade\naction: requires release.publish on the product's project.",
+    "description": "W1-8: archive a product (lifecycle_state -> withdrawn, pre-archive\nstate stored for restore). Withdrawal-grade action: requires\nrelease.publish on the product's project. Released products are\nrefused — withdraw the release first.",
     "operationId": "archive_product_route_api_plm_products__product_id__archive_post",
     "parameters": [
      {
@@ -6514,7 +6972,7 @@
      "plm"
     ],
     "summary": "Restore Product Route",
-    "description": "G9: restore an archived product (lifecycle_state -> rd). The\npre-archive state is not stored; a restored product re-enters as rd.",
+    "description": "W1-8: restore an archived product to its pre-archive state\n(legacy rows archived before that state was stored restore to rd).",
     "operationId": "restore_product_route_api_plm_products__product_id__restore_post",
     "parameters": [
      {
@@ -6721,7 +7179,7 @@
      "plm"
     ],
     "summary": "Generate Document",
-    "description": "Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).\n\nG2: for SDS / label, ``body.regulations`` selects the versions to\ngenerate (one per regulation); omitted means the default company's\napplicable_regulations, or [\"CN\"] when the company has no default.\nA single version keeps the historical single-document response shape;\nmultiple versions return {\"documents\": [...]}.",
+    "description": "Generate a new version of an SDS / TDS / COA / label / TS (never edits an existing version).\n\nStage 3 / SR-026: 202 + task_id, results via /api/tasks poll. The\ngeneration (LLM + render, minutes for multi-regulation packs) used\nto run inline behind the modal's spinner. The task result keeps the\nhistorical shapes: a single version returns the single-document\nshape, multiple versions return {\"documents\": [...]}.\n\nG2: for SDS / label, ``body.regulations`` selects the versions to\ngenerate (one per regulation); omitted means the default company's\napplicable_regulations, or [\"CN\"] when the company has no default.\nThat default resolution is a fast DB read and stays sync, as does\nthe regulations-misuse 422 for non-SDS/label types.",
     "operationId": "generate_document_api_plm_revisions__revision_id__documents_post",
     "parameters": [
      {
@@ -6745,15 +7203,11 @@
      }
     },
     "responses": {
-     "201": {
+     "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Generate Document Api Plm Revisions  Revision Id  Documents Post"
-        }
+        "schema": {}
        }
       }
      },
@@ -7178,6 +7632,61 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Approve Document Api Plm Documents  Document Id  Approve Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/plm/documents/{document_id}/approve-exempt": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Approve Document Exempt",
+    "description": "Audited exemption approval for documents without author attribution (W1-5).\n\nThe normal approve path refuses ``created_by``-empty documents\nfail-closed; this path approves them only with an explicit reason,\na password re-authentication and an audit record, and stamps the\nexemption on the document itself.",
+    "operationId": "approve_document_exempt_api_plm_documents__document_id__approve_exempt_post",
+    "parameters": [
+     {
+      "name": "document_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Document Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ExemptIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Approve Document Exempt Api Plm Documents  Document Id  Approve Exempt Post"
         }
        }
       }
@@ -7634,7 +8143,7 @@
      "plm"
     ],
     "summary": "Download Delivery",
-    "description": "The delivery ZIP (all PDF / Word files + manifest.json with hashes and signatures).",
+    "description": "The delivery ZIP (all PDF / Word files + manifest.json with hashes and signatures).\n\nW1-8/D10: only the CURRENT released version is distributable. A\nwithdrawn package's ZIP stops here (the artifact itself is kept\nfor the audit chain, it just no longer ships from this link), and\nso does a superseded package's — its revision is no longer the\nreleased one. Restoring a previous version (withdraw) re-opens\nits ZIP through this same gate.",
     "operationId": "download_delivery_api_plm_packages__package_id__delivery_get",
     "parameters": [
      {
@@ -9412,6 +9921,106 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Set User Roles Api Identity Users  User Id  Roles Put"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/identity/users/{user_id}/active": {
+   "put": {
+    "tags": [
+     "identity"
+    ],
+    "summary": "Set User Active",
+    "description": "Stage 2 / SR-043: admin deactivation / activation (self excluded).",
+    "operationId": "set_user_active_api_identity_users__user_id__active_put",
+    "parameters": [
+     {
+      "name": "user_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "User Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ActiveIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Set User Active Api Identity Users  User Id  Active Put"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/identity/users/{user_id}/sessions/revoke": {
+   "post": {
+    "tags": [
+     "identity"
+    ],
+    "summary": "Revoke User Sessions",
+    "description": "Stage 2 / SR-043: admin revocation of another user's sessions (self excluded).",
+    "operationId": "revoke_user_sessions_api_identity_users__user_id__sessions_revoke_post",
+    "parameters": [
+     {
+      "name": "user_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "User Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Revoke User Sessions Api Identity Users  User Id  Sessions Revoke Post"
         }
        }
       }
@@ -11216,6 +11825,60 @@
     }
    }
   },
+  "/api/lab/review-queue/count": {
+   "get": {
+    "tags": [
+     "lab"
+    ],
+    "summary": "Review Queue Count",
+    "description": "Stage 5 / SR-099: badge count with the list's filter, no row payload.",
+    "operationId": "review_queue_count_api_lab_review_queue_count_get",
+    "parameters": [
+     {
+      "name": "project_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Project Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": {
+          "type": "integer"
+         },
+         "title": "Response Review Queue Count Api Lab Review Queue Count Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/lab/review-queue": {
    "get": {
     "tags": [
@@ -11656,6 +12319,61 @@
           "additionalProperties": true
          },
          "title": "Response Eln Conflicts Api Lab Eln Conflicts Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/lab/eln/links": {
+   "get": {
+    "tags": [
+     "lab"
+    ],
+    "summary": "Eln Links",
+    "description": "Stage 1 / SR-017: ELN link sync states for operators (same shape as /eln/conflicts).\n\nFilter ``sync_state=error`` to find links whose last pull partially\nfailed; the per-metric error text itself lives in that pull's\nreport (there is no error column on the link row — adding one is\na migration, deliberately not done here). Error rows are retried\nby the next pull, not stuck behind the unchanged fast path.",
+    "operationId": "eln_links_api_lab_eln_links_get",
+    "parameters": [
+     {
+      "name": "sync_state",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Sync State"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response Eln Links Api Lab Eln Links Get"
         }
        }
       }
@@ -12140,7 +12858,7 @@
      "wiki"
     ],
     "summary": "Run Lint Endpoint",
-    "description": "W4 ops: scan pages for stale/conflict/orphan/broken and persist flags.",
+    "description": "W4 ops: scan pages for stale/conflict/orphan/broken and persist flags.\n\nStage 3 / SR-063: 202 + task_id, results via /api/tasks poll. The\nscan used to run in the request thread (multiple DB reads + file\nreads per page). The wiki-enabled guard stays sync (409).",
     "operationId": "run_lint_endpoint_api_wiki_lint_run_post",
     "requestBody": {
      "content": {
@@ -12191,7 +12909,7 @@
      "wiki"
     ],
     "summary": "Sweep Lint Endpoint",
-    "description": "S1: re-lint currently flagged pages so obsolete lint flags are cleared.",
+    "description": "S1: re-lint currently flagged pages so obsolete lint flags are cleared.\n\nStage 3 / SR-063: same 202 + poll shape as /lint/run.",
     "operationId": "sweep_lint_endpoint_api_wiki_lint_sweep_post",
     "requestBody": {
      "content": {
@@ -12286,7 +13004,7 @@
      "wiki"
     ],
     "summary": "Wiki Page Graph",
-    "description": "Wiki page [[wikilink]] graph for Hub canvas (not materials/formulation KG).",
+    "description": "Wiki page [[wikilink]] graph for Hub canvas (not materials/formulation KG).\n\nStage 3 / SR-067 (3-14): nodes page by offset/limit over the\ndegree-ranked candidates, edges page by edge_offset/edge_limit.",
     "operationId": "wiki_page_graph_api_wiki_graph_get",
     "parameters": [
      {
@@ -12299,6 +13017,40 @@
        "minimum": 1,
        "default": 500,
        "title": "Limit"
+      }
+     },
+     {
+      "name": "offset",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "minimum": 0,
+       "default": 0,
+       "title": "Offset"
+      }
+     },
+     {
+      "name": "edge_limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 2000,
+       "minimum": 1,
+       "default": 2000,
+       "title": "Edge Limit"
+      }
+     },
+     {
+      "name": "edge_offset",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "minimum": 0,
+       "default": 0,
+       "title": "Edge Offset"
       }
      },
      {
@@ -12355,6 +13107,109 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Wiki Page Graph Api Wiki Graph Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/wiki/graph/expand": {
+   "get": {
+    "tags": [
+     "wiki"
+    ],
+    "summary": "Wiki Page Graph Expand",
+    "description": "On-demand neighborhood of one wiki page (stage 3 / SR-067, 3-14).\n\nReturns the page plus its neighbors out to ``depth`` and the edges\namong them, so the canvas expands one node at a time. 404 when the\npage neither scans nor has readable markdown.",
+    "operationId": "wiki_page_graph_expand_api_wiki_graph_expand_get",
+    "parameters": [
+     {
+      "name": "path",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Path"
+      }
+     },
+     {
+      "name": "depth",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 2,
+       "minimum": 1,
+       "default": 1,
+       "title": "Depth"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 2000,
+       "minimum": 1,
+       "default": 500,
+       "title": "Limit"
+      }
+     },
+     {
+      "name": "kinds",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Comma-separated page kinds (e.g. material,concept,theme)",
+       "title": "Kinds"
+      },
+      "description": "Comma-separated page kinds (e.g. material,concept,theme)"
+     },
+     {
+      "name": "project_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Project Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Wiki Page Graph Expand Api Wiki Graph Expand Get"
         }
        }
       }
@@ -14937,7 +15792,7 @@
      "session"
     ],
     "summary": "List Sessions",
-    "description": "List chat sessions, optionally scoped to a project (2026-09-05: 项目内会话).",
+    "description": "List chat sessions, optionally scoped to a project (2026-09-05: 项目内会话).\n\nStage 0 / SR-006: a JWT caller only ever sees their own sessions\n(platform admins see all, including legacy NULL-owner rows). No-JWT\ncallers (service key / dev) keep the legacy full list.",
     "operationId": "list_sessions_api_session_list_get",
     "parameters": [
      {
@@ -15492,6 +16347,117 @@
          "additionalProperties": true,
          "type": "object",
          "title": "Response List Pending Api Mcp Approvals Pending Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/mcp/approvals/policies": {
+   "get": {
+    "tags": [
+     "mcp-approvals"
+    ],
+    "summary": "List Policies",
+    "description": "Management view of all MCP tool policies, with expiry state.",
+    "operationId": "list_policies_api_mcp_approvals_policies_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response List Policies Api Mcp Approvals Policies Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/mcp/approvals/policies/{server_id}/{tool_name}/{scope}": {
+   "delete": {
+    "tags": [
+     "mcp-approvals"
+    ],
+    "summary": "Revoke Policy",
+    "description": "Revoke one policy row (allow/ask/block, any scope).",
+    "operationId": "revoke_policy_api_mcp_approvals_policies__server_id___tool_name___scope__delete",
+    "parameters": [
+     {
+      "name": "server_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Server Id"
+      }
+     },
+     {
+      "name": "tool_name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Tool Name"
+      }
+     },
+     {
+      "name": "scope",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Scope"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Revoke Policy Api Mcp Approvals Policies  Server Id   Tool Name   Scope  Delete"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/mcp/approvals/policies/backfill-expiry": {
+   "post": {
+    "tags": [
+     "mcp-approvals"
+    ],
+    "summary": "Backfill Expiry",
+    "description": "One-time cleanup for pre-0090 allow rows: materialize expires_at\nfrom created_at + scope TTL, delete already-expired rows.",
+    "operationId": "backfill_expiry_api_mcp_approvals_policies_backfill_expiry_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Backfill Expiry Api Mcp Approvals Policies Backfill Expiry Post"
         }
        }
       }
@@ -19772,14 +20738,14 @@
     }
    }
   },
-  "/api/ops/datalab-orphans": {
+  "/api/ops/outbox": {
    "get": {
     "tags": [
      "ops"
     ],
-    "summary": "Datalab Orphans",
-    "description": "Datalab samples a failed saga rollback could not delete (cleanup queue).\n\n``counts`` is per outbox status (PENDING = still to delete, DONE = cleaned,\nDEAD = gave up — delete by hand); ``items`` lists the rows, oldest first.",
-    "operationId": "datalab_orphans_api_ops_datalab_orphans_get",
+    "summary": "Outbox Rows",
+    "description": "Stage 1 / SR-002: outbox rows for operators (oldest first).\n\nAPI-only (no screen); guarded by the existing ``/api/ops`` admin.llm\nrule in ``_rbac_guard``. Payloads are not returned (see\n``outbox_store.list_outbox_rows``); FAILED rows carry their error\nsummary here and are retried via the endpoint below.",
+    "operationId": "outbox_rows_api_ops_outbox_get",
     "parameters": [
      {
       "name": "status",
@@ -19795,6 +20761,22 @@
         }
        ],
        "title": "Status"
+      }
+     },
+     {
+      "name": "operation",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Operation"
       }
      },
      {
@@ -19816,7 +20798,7 @@
         "schema": {
          "type": "object",
          "additionalProperties": true,
-         "title": "Response Datalab Orphans Api Ops Datalab Orphans Get"
+         "title": "Response Outbox Rows Api Ops Outbox Get"
         }
        }
       }
@@ -19834,23 +20816,46 @@
     }
    }
   },
-  "/api/ops/datalab-orphans/cleanup": {
+  "/api/ops/metrics": {
+   "get": {
+    "tags": [
+     "ops"
+    ],
+    "summary": "Metrics",
+    "description": "Stage 1 / SR-029-SR-068: lightweight ops metrics (JSON, not Prometheus text).\n\nGuarded by the existing ``/api/ops`` admin.llm rule. Counters marked\n``process_local`` reset on process restart (same convention as the\nother ops counters); outbox counts and the 1 h failure count are\ndurable queries. No payloads are returned.",
+    "operationId": "metrics_api_ops_metrics_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Metrics Api Ops Metrics Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/ops/outbox/{row_id}/retry": {
    "post": {
     "tags": [
      "ops"
     ],
-    "summary": "Datalab Orphans Cleanup",
-    "description": "Retry deleting the pending orphaned Datalab samples now.\n\nThe same pass runs at startup; this is the manual trigger. Nothing is attempted\n(and no retry burned) while Datalab is unconfigured or unreachable — see ``skipped``.",
-    "operationId": "datalab_orphans_cleanup_api_ops_datalab_orphans_cleanup_post",
+    "summary": "Outbox Retry",
+    "description": "Stage 1 / SR-002: manually retry a FAILED/DEAD outbox row.\n\nRearms the stored row (same payload, attempts reset) and publishes\nit under a fresh Celery id. A publish failure leaves the row\nPENDING for the next recovery pass instead of losing the retry.",
+    "operationId": "outbox_retry_api_ops_outbox__row_id__retry_post",
     "parameters": [
      {
-      "name": "max_rows",
-      "in": "query",
-      "required": false,
+      "name": "row_id",
+      "in": "path",
+      "required": true,
       "schema": {
-       "type": "integer",
-       "default": 50,
-       "title": "Max Rows"
+       "type": "string",
+       "title": "Row Id"
       }
      }
     ],
@@ -19862,7 +20867,7 @@
         "schema": {
          "type": "object",
          "additionalProperties": true,
-         "title": "Response Datalab Orphans Cleanup Api Ops Datalab Orphans Cleanup Post"
+         "title": "Response Outbox Retry Api Ops Outbox  Row Id  Retry Post"
         }
        }
       }
@@ -19873,6 +20878,54 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/ops/rules": {
+   "get": {
+    "tags": [
+     "ops"
+    ],
+    "summary": "Rules Status Endpoint",
+    "description": "Stage 3 / SR-060 (3-7): what rule tables are live right now.\n\nGuarded by the existing ``/api/ops`` admin.llm rule. No loads are\ntriggered: tables never loaded since start (or since the last\nreload) report ``not_loaded``.",
+    "operationId": "rules_status_endpoint_api_ops_rules_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Rules Status Endpoint Api Ops Rules Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/ops/rules/reload": {
+   "post": {
+    "tags": [
+     "ops"
+    ],
+    "summary": "Rules Reload Endpoint",
+    "description": "Stage 3 / SR-060 (3-7): reload TOML rule tables at runtime.\n\nGuarded by the existing ``/api/ops`` admin.llm rule. Clears the\ncache, then loads every known table, so the response proves the\nreload took effect (per-table source file + mtime, or fallback +\nreason) instead of merely reporting that a cache was cleared.\nConsumers (acid_stability, linker_roles, ambiguous_terms) read\nthrough the same cache, so the next call in any of them sees the\nnew tables without a process restart.",
+    "operationId": "rules_reload_endpoint_api_ops_rules_reload_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Rules Reload Endpoint Api Ops Rules Reload Post"
         }
        }
       }
@@ -19934,7 +20987,7 @@
      "ops"
     ],
     "summary": "Recommend Stats",
-    "description": "C-8: recommendation adoption telemetry (weak-success layer).\n\nTotals, adoption rate, and per-signal distribution over the trailing\n``days`` window. Fail-open: returns empty stats (``available: False``)\nwhen the ``recommend_outcomes`` table does not exist yet.\n``validated`` counts rounds with ``experiment_validated=True`` (U-4:\nsync-datalab 成功后按 snapshot 指纹 fail-open 回写；C-5 pending 时恒为\nnull 的旧契约已过时）。",
+    "description": "C-8: recommendation adoption telemetry (weak-success layer).\n\nTotals, adoption rate, and per-signal distribution over the trailing\n``days`` window. Fail-open: returns empty stats (``available: False``)\nwhen the ``recommend_outcomes`` table does not exist yet.\n``validated`` counts rounds with ``experiment_validated=True`` (U-4:\nlab 测量入库后按 snapshot 指纹 fail-open 回写；C-5 pending 时恒为\nnull 的旧契约已过时）。",
     "operationId": "recommend_stats_api_ops_recommend_stats_get",
     "parameters": [
      {
@@ -20548,17 +21601,49 @@
     ],
     "summary": "List Projects",
     "operationId": "list_projects_api_projects_get",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "default": 1000,
+       "title": "Limit"
+      }
+     },
+     {
+      "name": "offset",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "default": 0,
+       "title": "Offset"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
+         "type": "array",
          "items": {
           "$ref": "#/components/schemas/ProjectSummary"
          },
-         "type": "array",
          "title": "Response List Projects Api Projects Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -20572,14 +21657,14 @@
     "summary": "Create Project",
     "operationId": "create_project_api_projects_post",
     "requestBody": {
+     "required": true,
      "content": {
       "application/json": {
        "schema": {
         "$ref": "#/components/schemas/ProjectCreateRequest"
        }
       }
-     },
-     "required": true
+     }
     },
     "responses": {
      "200": {
@@ -22423,6 +23508,7 @@
      "connectors"
     ],
     "summary": "Call Mcp",
+    "description": "Readonly MCP tool proxy (Stage 0 / SR-007).\n\nPreviously this was doubly exempt (POLICY_EXEMPT + admin_guard) with\nthe approval gate off by default, so any token holder could call any\nenabled server's read tools — including filesystem reads and\ncredential-backed external reads — with no permission, no session\nattribution and no approval. Now: a signed-in account with\n``knowledge.read``; the approval gate inside ``_call_tool`` still\napplies when ``mcp_approval_enabled``. Each call is logged with the\ncaller's user id, and the audit middleware attributes JWT callers\nby login id (stage 2 / SR-042).",
     "operationId": "call_mcp_api_connectors_mcp_call_post",
     "requestBody": {
      "content": {
@@ -22767,7 +23853,7 @@
      "meta"
     ],
     "summary": "Health",
-    "description": "Minimal liveness probe — no sensitive infrastructure details leaked.\n\nOnly exposes status + coarse booleans needed for monitoring; URLs,\nerror messages, and installed-extras inventory live in /health/detailed\n(which requires auth).",
+    "description": "Minimal liveness probe — no sensitive infrastructure details leaked.\n\nOnly exposes status + coarse booleans needed for monitoring; URLs,\nerror messages, and installed-extras inventory live in /health/detailed\n(which requires auth). The answer carries ``as_of``/``cached_at``\n(when the payload was probed) and ``cached`` (whether it came from\nthe 10 s cache) — see :func:`_with_freshness`.",
     "operationId": "health_health_get",
     "responses": {
      "200": {
@@ -22791,7 +23877,7 @@
      "meta"
     ],
     "summary": "Health Detailed",
-    "description": "Detailed infra snapshot — behind auth (not in public paths).",
+    "description": "Detailed infra snapshot — behind auth (not in public paths).\n\nUnlike /health, this endpoint probes live on every call (no 10 s\ncache): inside /health's cache window the two endpoints can\nlegitimately disagree, and /health's ``as_of``/``cached_at`` stamp\nsays which answer is newer (SR-094).",
     "operationId": "health_detailed_health_detailed_get",
     "responses": {
      "200": {
@@ -23015,7 +24101,7 @@
      },
      "materials": {
       "items": {
-       "$ref": "#/components/schemas/app__domain__schemas__MaterialSpec"
+       "$ref": "#/components/schemas/app__domain__schemas__doe__MaterialSpec"
       },
       "type": "array",
       "title": "Materials"
@@ -23251,6 +24337,19 @@
     ],
     "title": "ActiveDoeResult",
     "description": "Active-learning DOE response — plan plus optional baybe campaign state."
+   },
+   "ActiveIn": {
+    "properties": {
+     "is_active": {
+      "type": "boolean",
+      "title": "Is Active"
+     }
+    },
+    "type": "object",
+    "required": [
+     "is_active"
+    ],
+    "title": "ActiveIn"
    },
    "AdaptiveDOEMetadata": {
     "properties": {
@@ -24923,6 +26022,37 @@
     "type": "object",
     "title": "ClassifyVersionRequest"
    },
+   "ClpStageIn": {
+    "properties": {
+     "atp": {
+      "type": "string",
+      "title": "Atp"
+     },
+     "regulation": {
+      "type": "string",
+      "title": "Regulation"
+     },
+     "applies_from": {
+      "type": "string",
+      "title": "Applies From",
+      "default": ""
+     },
+     "entries": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Entries"
+     }
+    },
+    "type": "object",
+    "required": [
+     "atp",
+     "regulation"
+    ],
+    "title": "ClpStageIn"
+   },
    "CollectionCreate": {
     "properties": {
      "project_id": {
@@ -25776,6 +26906,19 @@
      "plan"
     ],
     "title": "CreateWorkbenchCampaignRequest"
+   },
+   "CtxFetchIn": {
+    "properties": {
+     "cas_list": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Cas List"
+     }
+    },
+    "type": "object",
+    "title": "CtxFetchIn"
    },
    "DOEFactor": {
     "properties": {
@@ -27246,7 +28389,7 @@
     "properties": {
      "materials": {
       "items": {
-       "$ref": "#/components/schemas/app__domain__schemas__MaterialSpec"
+       "$ref": "#/components/schemas/app__domain__schemas__doe__MaterialSpec"
       },
       "type": "array",
       "title": "Materials"
@@ -27706,6 +28849,34 @@
     ],
     "title": "EvidenceRef",
     "description": "v20-1: 引用可解释性 —— 每条引用附带命中原因。\n\n前端用此展示\"为什么引用这条证据\"。"
+   },
+   "ExemptIn": {
+    "properties": {
+     "password": {
+      "type": "string",
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Password"
+     },
+     "comment": {
+      "type": "string",
+      "maxLength": 2000,
+      "title": "Comment",
+      "default": ""
+     },
+     "reason": {
+      "type": "string",
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Reason"
+     }
+    },
+    "type": "object",
+    "required": [
+     "password",
+     "reason"
+    ],
+    "title": "ExemptIn"
    },
    "ExperimentRecord": {
     "properties": {
@@ -29475,90 +30646,6 @@
     ],
     "title": "IngestEvidenceRequest",
     "description": "P3.2 — one-click fulltext ingest from a search Evidence row."
-   },
-   "IngestEvidenceResponse": {
-    "properties": {
-     "ok": {
-      "type": "boolean",
-      "title": "Ok"
-     },
-     "status": {
-      "type": "string",
-      "title": "Status"
-     },
-     "source_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Source Id"
-     },
-     "task_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Task Id"
-     },
-     "status_url": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Status Url"
-     },
-     "canonical_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Canonical Id"
-     },
-     "reason": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Reason"
-     },
-     "kind": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Kind"
-     }
-    },
-    "type": "object",
-    "required": [
-     "ok",
-     "status"
-    ],
-    "title": "IngestEvidenceResponse"
    },
    "IngestResponse": {
     "properties": {
@@ -32758,7 +33845,7 @@
      },
      "materials": {
       "items": {
-       "$ref": "#/components/schemas/app__domain__schemas__MaterialSpec"
+       "$ref": "#/components/schemas/app__domain__schemas__doe__MaterialSpec"
       },
       "type": "array",
       "title": "Materials"
@@ -33358,6 +34445,13 @@
       "type": "string",
       "title": "Transport",
       "default": "stdio"
+     },
+     "readonly_tool_allowlist": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Readonly Tool Allowlist"
      }
     },
     "type": "object",
@@ -36386,11 +37480,17 @@
       "default": 10
      },
      "alpha": {
-      "type": "number",
-      "maximum": 1,
-      "minimum": 0,
-      "title": "Alpha",
-      "default": 0.3
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 1,
+        "minimum": 0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Alpha"
      },
      "project_id": {
       "anyOf": [
@@ -37446,7 +38546,7 @@
      },
      "materials": {
       "items": {
-       "$ref": "#/components/schemas/app__domain__schemas__MaterialSpec"
+       "$ref": "#/components/schemas/app__domain__schemas__doe__MaterialSpec"
       },
       "type": "array",
       "title": "Materials"
@@ -37838,6 +38938,17 @@
      "decision"
     ],
     "title": "ReviewIn"
+   },
+   "ReviewResolveIn": {
+    "properties": {
+     "note": {
+      "type": "string",
+      "title": "Note",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "title": "ReviewResolveIn"
    },
    "RevisionIn": {
     "properties": {
@@ -38369,52 +39480,6 @@
     },
     "type": "object",
     "title": "SearchRequest"
-   },
-   "SearchResponse": {
-    "properties": {
-     "evidence": {
-      "items": {
-       "$ref": "#/components/schemas/Evidence"
-      },
-      "type": "array",
-      "title": "Evidence"
-     },
-     "total": {
-      "type": "integer",
-      "title": "Total"
-     },
-     "source_status": {
-      "additionalProperties": {
-       "$ref": "#/components/schemas/SourceStatus"
-      },
-      "type": "object",
-      "title": "Source Status",
-      "default": {}
-     },
-     "used_seed_fallback": {
-      "type": "boolean",
-      "title": "Used Seed Fallback",
-      "default": false
-     },
-     "filter_report": {
-      "anyOf": [
-       {
-        "additionalProperties": true,
-        "type": "object"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Filter Report"
-     }
-    },
-    "type": "object",
-    "required": [
-     "evidence",
-     "total"
-    ],
-    "title": "SearchResponse"
    },
    "SecretTestRequest": {
     "properties": {
@@ -39973,25 +41038,6 @@
      "message"
     ],
     "title": "SwitchResponse"
-   },
-   "SyncDatalabRequest": {
-    "properties": {
-     "datalab_item_id": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Datalab Item Id",
-      "description": "本次同步的 Datalab item id; 省略则用行上绑定的 item_id"
-     }
-    },
-    "type": "object",
-    "title": "SyncDatalabRequest",
-    "description": "POST /experiments/{id}/sync-datalab 请求体。\n\n``datalab_item_id``: 本次同步要拉取的 Datalab item。行保持本地训练记录\n身份 (``item_id`` 不被改写), 因此同步到的 lab 测量对\n``LocalExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的\n``load_prior_measurements()`` 能吃到 lab 实测。若省略, 则回退使用行上\n已绑定的 ``item_id`` (若行上也没有 -> 409)。"
    },
    "TagUpdateRequest": {
     "properties": {
@@ -42500,7 +43546,7 @@
     ],
     "title": "ComponentIn"
    },
-   "app__domain__schemas__MaterialSpec": {
+   "app__domain__schemas__doe__MaterialSpec": {
     "properties": {
      "name": {
       "type": "string",
@@ -42610,7 +43656,7 @@
     "title": "MaterialSpec",
     "description": "Project-level raw material entry (extends global RAW_MATERIALS)."
    },
-   "app__domain__schemas__TaskStatus": {
+   "app__domain__schemas__task__TaskStatus": {
     "properties": {
      "task_id": {
       "type": "string",

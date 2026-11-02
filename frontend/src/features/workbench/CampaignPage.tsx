@@ -56,9 +56,6 @@ export default function CampaignPage() {
     queryFn: () => call<CampaignDetail>("GET", `/api/experiments/workbench/${campaignId}`) });
   const quality = useQuery({ queryKey: ["workbench", campaignId, "quality"], enabled: Number.isFinite(campaignId), retry: false,
     queryFn: () => call<Quality>("GET", `/api/experiments/workbench/${campaignId}/quality`) });
-  const health = useQuery({ queryKey: ["health"], staleTime: 60_000, retry: false,
-    queryFn: () => call<{ datalab?: { ledger_mode?: string } }>("GET", "/health") });
-  const ledgerMode = health.data?.datalab?.ledger_mode;
   const attKey = useMemo(() => ["workbench", campaignId, "attachment-counts"], [campaignId]);
   const attCounts = useQuery({ queryKey: attKey, enabled: Number.isFinite(campaignId), retry: false,
     queryFn: () => call<AttachmentCounts>("GET", `/api/experiments/workbench/${campaignId}/attachment-counts`) });
@@ -306,9 +303,6 @@ export default function CampaignPage() {
     >
       <TrainingDataBanner />
       <ErrorAlert error={detail.error ?? save.error ?? reconcile.error ?? train.error ?? patch.error} />
-      {ledgerMode === "eln_required_down" && <Alert type="error" showIcon style={{ marginBottom: 12 }}
-        message={t("workbench.eln_down", "ELN（Datalab）为必需但当前不可达，台账写入可能失败")} />}
-      {ledgerMode === "eln" && <Alert type="info" showIcon style={{ marginBottom: 12 }} message={t("workbench.eln_on", "已连接外部 ELN：台账同时写入 Datalab，并保留逐次版本")} />}
       {!!d?.objectives_snapshot?.length && (
         <Alert type="info" style={{ marginBottom: 12 }} message={<Space wrap size={4}>{t("workbench.frozen", "本台账指标已冻结：")}
           {d.objectives_snapshot.map((o) => <Tag key={o.metric}>{o.display_name || o.metric}</Tag>)}</Space>} />

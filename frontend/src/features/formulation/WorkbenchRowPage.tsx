@@ -18,7 +18,7 @@ import type { ObjectiveSpec, WorkbenchRow } from "./types";
 
 const TABS = ["overview", "attachments", "versions", "lineage"] as const;
 
-/** One DOE workbench row: detail strip, lineage trend, QC, tags / note and every DataLab-backed action
+/** One DOE workbench row: detail strip, lineage trend, QC, tags / note and every row action
  * (legacy RowDetailBar + ExperimentDetail + AttachmentPreview + RowVersionHistoryModal + LineageTree + NoteEditor + TagPicker). */
 export default function WorkbenchRowPage() {
   const { campaignId: c = "", rowId: r = "" } = useParams();
@@ -40,7 +40,7 @@ export default function WorkbenchRowPage() {
   const lineage = useQuery({ queryKey: [...rowKey(c, r), "lineage"], queryFn: () => fx.rowLineage(c, r) });
   const meas = useQuery({ queryKey: [...rowKey(c, r), "qc"], queryFn: () => fx.rowMeasurements(c, r) });
   const atts = useQuery({ queryKey: [...rowKey(c, r), "attachments"], queryFn: () => fx.rowAttachments(c, r) });
-  // DataLab rows (refcode) and native-store rows (audit-log snapshots) both have versions; 404 = no version store.
+  // Imported rows (refcode) and native-store rows (audit-log snapshots) both have versions; 404 = no version store.
   const versions = useQuery({ queryKey: [...rowKey(c, r), "versions"], enabled: !!row, retry: false, queryFn: () => fx.rowVersions(c, r) });
   const noVersions = versions.error instanceof ApiError && versions.error.status === 404;
 
@@ -84,7 +84,7 @@ export default function WorkbenchRowPage() {
       {row && tab === "attachments" && <ProCard bordered><RowAttachments campaignId={campaignId} rowId={rowId} /></ProCard>}
       {row && tab === "versions" && <ProCard bordered>
         {!noVersions ? <RowVersions campaignId={campaignId} rowId={rowId} onRestored={() => void qc.invalidateQueries({ queryKey: ["formulation", "campaign", c] })} />
-          : <Empty description={t("formulation.rowver.no_refcode", "该行尚未同步到 DataLab，无版本记录")} />}
+          : <Empty description={t("formulation.rowver.no_refcode", "该行尚未导入 native，无版本记录")} />}
       </ProCard>}
       {row && tab === "lineage" && <ProCard bordered><RowLineage campaignId={campaignId} rowId={rowId} chain={lineage.data} loading={lineage.isLoading} error={lineage.error} /></ProCard>}
       {row && <>

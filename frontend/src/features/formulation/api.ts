@@ -26,7 +26,6 @@ export const fx = {
     fd.append("file", file);
     return call<Attachment>("POST", `/api/experiments/${id}/attachments?kind=${enc(kind)}`, fd);
   },
-  syncDatalab: (id: number | string) => call<{ synced?: number; errors?: unknown[] }>("POST", `/api/experiments/${id}/sync-datalab`, {}),
 
   experiment: (id: number | string) => call<ExperimentSummary>("GET", `/api/experiments/${enc(String(id))}`),
   campaign: (c: number | string) => call<WorkbenchCampaign>("GET", `/api/experiments/workbench/${c}`),

@@ -150,8 +150,8 @@ function VersionsTab({ campaignId, row, onRestored }: { campaignId: number; row:
   const { message } = App.useApp();
   const qc = useQueryClient();
   const key = ["workbench", campaignId, "row", row.id, "versions"];
-  // DataLab rows (refcode) answer from the ELN; native-store rows from the audit log (source: "native"). A 404 means
-  // the row has no version store at all (e.g. a Datalab ledger row that was never synced).
+  // Imported rows (refcode) answer from the stored snapshots; native-store rows from the audit log (source: "native"). A 404 means
+  // the row has no version store at all (e.g. a row that was never imported).
   const q = useQuery({ queryKey: key, retry: false,
     queryFn: () => call<{ refcode: string | null; source?: string; versions: VersionEntry[] }>("GET", `${base(campaignId, row.id)}/versions`) });
   const unavailable = q.error instanceof ApiError && q.error.status === 404;

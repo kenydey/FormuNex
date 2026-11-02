@@ -197,13 +197,6 @@ export function previousVersion(versions: FormulationVersion[], v: FormulationVe
     ?? versions.find((x) => x.version === v.version - 1);
 }
 
-/** Outcome of POST /api/experiments/{id}/sync-datalab (fail-open: nothing synced + errors = Datalab unreachable). */
-export function datalabSyncOutcome(r: { synced?: number; errors?: unknown[] }): { skipped: boolean; synced: number; errors: number } {
-  const synced = r.synced ?? 0;
-  const errors = Array.isArray(r.errors) ? r.errors.length : 0;
-  return { skipped: synced === 0 && errors > 0, synced, errors };
-}
-
 /** Top-level keys a DataLab DeepDiff touches (e.g. "values_changed"), flattened to the changed paths when present. */
 export function deepDiffSummary(diff: Record<string, unknown> | undefined | null): string[] {
   if (!diff) return [];

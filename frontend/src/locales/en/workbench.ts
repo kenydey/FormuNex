@@ -89,8 +89,6 @@ const en: Record<string, string> = {
   "workbench.dossier": "Auto-update this project's dossier on events",
   "workbench.dossier_confirm": "Only whitelisted events (ingest / DOE / ledger / loop…) refresh the matching dossier section; unknown events are skipped.\nThe global flag can still turn it off.",
   "workbench.dropped": "QC dropped {{n}} invalid values",
-  "workbench.eln_down": "The ELN (Datalab) is required but unreachable; ledger writes may fail",
-  "workbench.eln_on": "External ELN connected: the ledger is also written to Datalab with per-save versions",
   "workbench.engine": "Engine",
   "workbench.env_default": "Global default: {{v}}",
   "workbench.export": "Export",
