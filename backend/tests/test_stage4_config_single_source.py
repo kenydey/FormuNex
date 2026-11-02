@@ -43,7 +43,7 @@ REGISTRY_SNAPSHOT = frozenset([
     "citation_expand_enabled", "citation_locator_preflight_blocking",
     "citation_locator_preflight_enabled", "connectors_builtin_enabled",
     "content_filter_enabled", "content_filter_llm_judge",
-    "cross_encoder_rerank_enabled", "datalab_required", "deep_hyde_enabled",
+    "cross_encoder_rerank_enabled", "deep_hyde_enabled",
     "domain_profile_search", "enrich_compounds", "evidence_doi_verify_enabled",
     "evidence_provenance_enabled", "evidence_reviewer_enabled",
     "evidence_reviewer_fix_loop_enabled", "evidence_reviewer_llm_enabled",
@@ -132,7 +132,7 @@ def test_registry_validation_rejects_synthetic_mismatches():
 
 
 def test_registry_snapshot():
-    assert len(REGISTRY_SNAPSHOT) == 129
+    assert len(REGISTRY_SNAPSHOT) == 128
     assert {f.attr for f in FLAG_REGISTRY} == REGISTRY_SNAPSHOT
 
 

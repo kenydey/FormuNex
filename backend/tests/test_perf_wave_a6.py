@@ -423,41 +423,6 @@ def _ref(i, item, tags=(), note=""):
             "status": "Done", "planned_params": {}, "measurements": {}}
 
 
-def test_parse_datalab_search_id_map_sql(tmp_path, monkeypatch):
-    """id 映射只拉回 (item_id,id,campaign) 三列；映射语义与旧全表扫描一致。"""
-    sm, Campaign = _p8_campaign_db(tmp_path, monkeypatch)
-    with sm() as s:
-        s.add(Campaign(name="c1", sample_refs=[
-            _ref(1, "hit-a"),
-            _ref(2, ""),            # 空 item_id 跳过
-            {"id": 3},              # 缺 item_id 跳过
-            {"id": "bad", "item_id": "hit-bad"},  # 非法 id → row_id 0
-        ]))
-        s.add(Campaign(name="c2", sample_refs=[_ref(4, "hit-b")]))
-        s.commit()
-
-    from app.api.experiments import _parse_datalab_search
-
-    body = [
-        {"item_id": "hit-a", "blocks_obj": {}, "status": "Done"},
-        {"item_id": "hit-b", "blocks_obj": {}},
-        {"item_id": "hit-bad", "blocks_obj": {}},
-        {"item_id": "formumind_c7_r9_x", "blocks_obj": {}},  # 正则回退
-        {"item_id": "unknown", "blocks_obj": {}},
-    ]
-    res = _parse_datalab_search(body)
-    by_item = {r.item_id: r for r in res}
-    assert (by_item["hit-a"].campaign_id, by_item["hit-a"].row_id,
-            by_item["hit-a"].campaign_name) == (1, 1, "c1")
-    assert (by_item["hit-b"].campaign_id, by_item["hit-b"].row_id,
-            by_item["hit-b"].campaign_name) == (2, 4, "c2")
-    assert by_item["hit-bad"].row_id == 0  # 非法 ref id 容错
-    assert (by_item["formumind_c7_r9_x"].campaign_id,
-            by_item["formumind_c7_r9_x"].row_id) == (7, 9)
-    assert (by_item["unknown"].campaign_id, by_item["unknown"].row_id,
-            by_item["unknown"].campaign_name) == (0, 0, "")
-
-
 # ── P-9: MCP probe 结果缓存 ───────────────────────────────────────────────
 
 

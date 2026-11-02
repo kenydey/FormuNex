@@ -37,10 +37,9 @@ def test_wiki_grayscale_product_defaults_on():
     assert s.kg_relation_extract_enabled is False
 
 
-def test_datalab_soft_degrade_defaults():
-    """Top-5″ #2 kept REQUIRED=false; FormuNex M7 made the native store the default (Datalab is opt-in)."""
+def test_native_backends_are_defaults():
+    """Datalab removal batch 3: the native store is the only backend; its defaults stay pinned."""
     fields = Settings.model_fields
-    assert fields["datalab_required"].default is False
     assert fields["campaign_backend"].default == "native"
     assert fields["experiment_backend"].default == "native"
 

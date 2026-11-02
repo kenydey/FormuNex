@@ -14,8 +14,6 @@ def _settings(**overrides):
     base = {
         "db_url": "sqlite:///./data/formunex.db",
         "redis_url": "redis://localhost:6379/0",
-        "datalab_required": False,
-        "datalab_api_url": "http://localhost:5001",
         "environment": "development",
         "api_auth_enabled": False,
         "auth_jwt_secret": "k" * 48,
@@ -73,24 +71,6 @@ def test_unwritable_sqlite_data_dir_fails_fast(tmp_path, monkeypatch):
             run_startup_checks(_settings(db_url="sqlite:///./data/formunex.db"))
 
 
-def test_datalab_required_without_url_fails_fast(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "data").mkdir()
-    with pytest.raises(RuntimeError, match="FORMUNEX_DATALAB_API_URL"):
-        run_startup_checks(
-            _settings(datalab_required=True, datalab_api_url="  ")
-        )
-
-
-def test_datalab_required_with_url_passes(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "data").mkdir()
-    warnings = run_startup_checks(
-        _settings(datalab_required=True, datalab_api_url="http://datalab:5001")
-    )
-    assert warnings == []
-
-
 def test_postgres_url_skips_filesystem_check():
     warnings = run_startup_checks(
         _settings(db_url="postgresql://user:pw@db:5432/formunex")
@@ -115,19 +95,6 @@ def test_production_without_jwt_secret_warns(tmp_path, monkeypatch):
     assert len(warnings) == 1 and "FORMUNEX_AUTH_JWT_SECRET" in warnings[0]
 
 
-def test_multiple_errors_all_reported(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(RuntimeError) as exc_info:
-        run_startup_checks(
-            _settings(
-                db_url="oracle://host/db",
-                datalab_required=True,
-                datalab_api_url="",
-            )
-        )
-    msg = str(exc_info.value)
-    assert "unsupported scheme" in msg
-    assert "FORMUNEX_DATALAB_API_URL" in msg
 
 
 # ── Neo4j password ───────────────────────────────────────────────────────────

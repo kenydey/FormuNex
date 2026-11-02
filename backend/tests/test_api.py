@@ -13,7 +13,7 @@ def test_health():
     body = r.json()
     assert body["status"] in ("ok", "degraded")
     assert "database" in body
-    assert "datalab" in body
+    assert "datalab" not in body  # batch 3: health no longer reports Datalab
 
 
 def test_meta_lists_domains():

@@ -169,11 +169,8 @@ def test_upload_api_notifies_attachment_uploaded(env, monkeypatch):
         "app.services.wiki.dossier.notify_dossier_event_for_experiment",
         fake_notify,
     )
-    # Bypass datalab upload — force local store path by stubbing helpers used in endpoint
-    async def _no_item(**kwargs):
-        return None
-
-    async def _local_upload(content, filename, item_id=None):
+    # Uploads are local-only since batch 3: stub the local store helper
+    async def _local_upload(content, filename):
         # Create a SourceDocument so attach FK succeeds
         with commit_session(env["factory"]) as session:
             session.add(
@@ -190,8 +187,7 @@ def test_upload_api_notifies_attachment_uploaded(env, monkeypatch):
             )
         return "doc-upload-api"
 
-    monkeypatch.setattr("app.api.experiments._datalab_item_id_for", _no_item)
-    monkeypatch.setattr("app.api.experiments._upload_or_store_locally", _local_upload)
+    monkeypatch.setattr("app.api.experiments._store_attachment_locally", _local_upload)
     monkeypatch.setattr(
         "app.db.measurement_store.get_measurement_store",
         lambda: env["measurements"],
