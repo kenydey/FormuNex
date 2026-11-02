@@ -43,8 +43,8 @@ _utcnow = utcnow
 class ExperimentRow(Base):
     """One measured DOE/lab result fed back into the platform.
 
-    When ``item_id`` is set the payload lives in Datalab (``formumind_training`` block);
-    otherwise factors/measured JSON columns hold the full record (sqlite fallback).
+    When ``item_id`` is set it labels the external origin row (legacy Datalab rows keep theirs after import);
+    otherwise factors/measured JSON columns hold the full record.
     """
 
     __tablename__ = "experiments"

@@ -1,11 +1,9 @@
 """Referential integrity checks for the soft references.
 
 Most cross-table references in this schema are plain string columns with no
-foreign key, and several of them cannot become one: when
-``FORMUNEX_CAMPAIGN_BACKEND=datalab`` the row a reference points at lives in
-an external ELN, so a database-level constraint would reject perfectly valid
-data. The honest alternative to a constraint you cannot enforce is a check you
-run — otherwise orphans accumulate silently and the first symptom is a
+foreign key, and several of them cannot become one (JSON blobs, external
+ids). The honest alternative to a constraint you cannot enforce is a check
+you run — otherwise orphans accumulate silently and the first symptom is a
 retrieval that quietly returns less than it should.
 
 ``doe_plans.experiment_id`` and ``campaign_id`` used to be reported here as
@@ -114,7 +112,7 @@ def check_integrity(session_factory: sessionmaker[Session] | None = None) -> Int
          KGEntityLink, KGEntityLink.dst_entity_id, KGEntity, KGEntity.id, ""),
         ("doe_plans.campaign_id -> campaigns.id",
          DOEPlanRow, DOEPlanRow.campaign_id, Campaign, Campaign.id,
-         "campaign rows are local even under the Datalab backend"),
+         "campaign rows are local (embedded in sample_refs)"),
         ("doe_plans.experiment_id -> experiments.id",
          DOEPlanRow, DOEPlanRow.experiment_id, ExperimentRow, ExperimentRow.id,
          "migration 0014 corrected this from String(36) to Integer"),
@@ -135,8 +133,8 @@ def check_integrity(session_factory: sessionmaker[Session] | None = None) -> Int
                     OrphanReport(reference=reference, note=f"check failed: {exc}", unjoinable=True)
                 )
 
-        # Datalab-authoritative: sample_refs point at rows in an external ELN,
-        # so a missing local row is expected rather than an orphan.
+        # sample_refs embed rows locally (no external ELN): the count below
+        # is inventory only, not an orphan check (JSON has no join).
         try:
             campaigns_with_refs = int(
                 session.execute(
@@ -148,10 +146,10 @@ def check_integrity(session_factory: sessionmaker[Session] | None = None) -> Int
             campaigns_with_refs = 0
         report.references.append(
             OrphanReport(
-                reference="campaigns.sample_refs -> Datalab item_id",
+                reference="campaigns.sample_refs (local row JSON)",
                 checked=campaigns_with_refs,
                 unjoinable=True,
-                note="Datalab 为该数据的真相源，本地无对应行属正常",
+                note="行数据内嵌于 sample_refs，无外部真相源",
             )
         )
 

@@ -121,14 +121,14 @@ def test_a_rejected_secret_leaves_no_half_applied_batch(env_file):
     "url",
     ["http://169.254.169.254/latest", "http://metadata.google.internal/", "file:///etc/passwd", "http://u:p@datalab:5001", "http://"],
 )
-def test_datalab_url_rejects_metadata_and_non_http_targets(url):
+def test_service_url_rejects_metadata_and_non_http_targets(url):
     with pytest.raises(ValueError):
-        ss.validate_datalab_url(url)
+        ss.validate_service_url(url, what="ELN API URL")
 
 
 @pytest.mark.parametrize("url", ["http://localhost:5001", "http://datalab:5001", "http://host.docker.internal:5001", "https://eln.example.org"])
-def test_datalab_url_allows_the_normal_deployments(url):
-    assert ss.validate_datalab_url(url) == url
+def test_service_url_allows_the_normal_deployments(url):
+    assert ss.validate_service_url(url, what="ELN API URL") == url
 
 
 def test_the_env_file_is_private_and_concurrent_saves_keep_every_key(env_file):

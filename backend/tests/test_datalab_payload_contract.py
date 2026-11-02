@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from app.db.campaign_store import _blocks_for_row
-from app.db.datalab_client import DATALAB_BLOCK_KIND, DATALAB_SAMPLE_TYPE, datalab_sample_type
+from app.db.datalab_envelope import DATALAB_BLOCK_KIND
 from app.db.database import make_engine, make_session_factory
 from app.domain.schemas import DOEPlan, DOERun, ProductDomain
 

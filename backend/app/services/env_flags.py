@@ -462,12 +462,6 @@ FLAG_REGISTRY: tuple[EnvFlag, ...] = (
     # ── 数据与训练 ────────────────────────────────────────────────────────
     EnvFlag("auto_retrain", "实验自动重训",
             "提交新实验数据后自动重训代理模型。", "data"),
-    EnvFlag("datalab_required", "Datalab 硬依赖",
-            "True = ELN 不可达时硬失败 + /health degraded（Docker ELN 栈推荐）。"
-            "False（产品默认 · Top-5″ #2）= 与 campaign/experiment_backend=auto 联用时"
-            "不可达回退 sqlite「本地台账」，不标硬降级。",
-            "data",
-            "ELN 必装部署请开；笔记本/无 Docker 可保持关"),
     # ── 基础设施 ──────────────────────────────────────────────────────────
     EnvFlag("celery_eager", "任务同步执行",
             "后台任务在进程内同步执行（无需 Redis/Celery worker）。"

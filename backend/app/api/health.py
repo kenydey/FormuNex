@@ -15,13 +15,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 
 from ..config import get_settings
-from ..db.datalab_client import DATALAB_START_HINT, check_datalab_reachable
 from ..services.errors import optional_import
 
 router = APIRouter(tags=["meta"])
 
 
-# /health is public and does real work (a Datalab HTTP probe, a database query, a broker connect, parser discovery): with
+# /health is public and does real work (a database query, a broker connect, parser discovery): with
 # nothing in front of it, one unreachable dependency made every call take ~12 s and a flood of calls pinned the thread pool.
 # Probes are shared for _HEALTH_TTL_S, and while one is running everybody else gets the previous answer.
 _HEALTH_TTL_S = 10.0
@@ -76,17 +75,6 @@ def health() -> dict:
         _health_lock.release()
 
 
-def _ledger_mode(cfg, datalab_ok: bool, datalab_required: bool) -> str:
-    """Where experiment rows live, for the UI badge: ``native`` (FormuNex database, the default since M7 — Datalab is
-    simply not used), ``eln`` (Datalab reachable), ``eln_required_down`` (Datalab configured but down) or ``local``
-    (``auto`` backends that fell back to the local ledger because Datalab is unreachable: soft-degrade)."""
-    if datalab_ok:
-        return "eln"
-    if datalab_required:
-        return "eln_required_down"
-    if cfg.campaign_backend.lower() == "native" and cfg.experiment_backend.lower() == "native":
-        return "native"
-    return "local"
 
 
 def _worker_and_outbox_status(cfg) -> tuple[dict, dict, bool]:
@@ -158,14 +146,6 @@ def _worker_and_outbox_status(cfg) -> tuple[dict, dict, bool]:
 def _probe_health() -> dict:
     cfg = get_settings()
 
-    datalab_ok, datalab_reason = check_datalab_reachable(cfg.datalab_api_url)
-    datalab_required = (
-        cfg.campaign_backend.lower() == "datalab"
-        or cfg.experiment_backend.lower() == "datalab"
-        or cfg.datalab_required
-    )
-    # Soft-degrade ledger mode for UI badge (Top-5″ #2).
-    ledger_mode = _ledger_mode(cfg, datalab_ok, datalab_required)
 
     db_ok = True
     db_scheme = "postgresql" if cfg.db_url.startswith("postgresql") else "sqlite"
@@ -201,26 +181,8 @@ def _probe_health() -> dict:
 
     worker_status, outbox_status, ops_degraded = _worker_and_outbox_status(cfg)
     overall = "ok"
-    if not db_ok or not broker_ok or not pdf_ok or (datalab_required and not datalab_ok) or ops_degraded:
+    if not db_ok or not broker_ok or not pdf_ok or ops_degraded:
         overall = "degraded"
-
-    datalab_payload: dict = {
-        "required": datalab_required,
-        "reachable": datalab_ok,
-        "campaign_backend": cfg.campaign_backend,
-        "experiment_backend": cfg.experiment_backend,
-        "ledger_mode": ledger_mode,
-    }
-    if datalab_required and not datalab_ok:
-        hint = DATALAB_START_HINT
-        if datalab_reason:
-            hint = f"{hint} 原因：{datalab_reason}"
-        datalab_payload["hint"] = hint
-    elif ledger_mode == "local":
-        datalab_payload["hint"] = (
-            "Datalab 不可达；已启用本地 sqlite 台账（soft-degrade）。"
-            "需要 ELN 时启动 compose 并设 DATALAB_REQUIRED=true。"
-        )
 
     return {
         "status": overall,
@@ -230,7 +192,6 @@ def _probe_health() -> dict:
         "worker": worker_status,
         "outbox": outbox_status,
         "parsers": formats,
-        "datalab": datalab_payload,
     }
 
 
@@ -300,13 +261,6 @@ def health_detailed() -> dict:
     skip_probe = _skip_lifespan_bootstrap()
 
     llm_key = cfg.get_active_api_key()
-    datalab_ok, datalab_reason = check_datalab_reachable(cfg.datalab_api_url)
-    datalab_required = (
-        cfg.campaign_backend.lower() == "datalab"
-        or cfg.experiment_backend.lower() == "datalab"
-        or cfg.datalab_required
-    )
-    ledger_mode = _ledger_mode(cfg, datalab_ok, datalab_required)
 
     db_ok = True
     db_scheme = "postgresql" if cfg.db_url.startswith("postgresql") else "sqlite"
@@ -339,7 +293,7 @@ def health_detailed() -> dict:
 
     worker_status, outbox_status, ops_degraded = _worker_and_outbox_status(cfg)
     overall = "ok"
-    if not db_ok or not broker_ok or not pdf_ok or (datalab_required and not datalab_ok) or ops_degraded:
+    if not db_ok or not broker_ok or not pdf_ok or ops_degraded:
         overall = "degraded"
 
     return {
@@ -366,15 +320,6 @@ def health_detailed() -> dict:
         "worker": worker_status,
         "outbox": outbox_status,
         "parsers": formats,
-        "datalab": {
-            "required": datalab_required,
-            "reachable": datalab_ok,
-            "url": cfg.datalab_api_url,
-            "message": datalab_reason,
-            "campaign_backend": cfg.campaign_backend,
-            "experiment_backend": cfg.experiment_backend,
-            "ledger_mode": ledger_mode,
-        },
         "installed_extras": (
             {pkg: None for pkg in ("chemcrow", "paperqa", "patent_client", "sentence_transformers", "rdkit", "psycopg2")}
             if skip_probe

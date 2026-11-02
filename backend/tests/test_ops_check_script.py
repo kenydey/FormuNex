@@ -64,22 +64,7 @@ def test_one_unreadable_endpoint_does_not_hide_the_others(ops, api_fetch):
     text = "\n".join(lines)
     assert status == 1
     assert "UNREADABLE: RuntimeError: boom" in text
-    assert "== DataLab orphan cleanup" in text  # later probes still ran
-
-
-def test_dead_orphans_are_a_finding_only_in_strict_mode(ops, api_fetch):
-    def with_dead_orphans(path: str):
-        if path.endswith("/datalab-orphans"):
-            return {"counts": {"DEAD": 2, "PENDING": 1}, "items": []}
-        return api_fetch(path)
-
-    relaxed_lines, relaxed = ops.run_checks(with_dead_orphans)
-    strict_lines, strict = ops.run_checks(with_dead_orphans, strict=True)
-    assert relaxed == 0 and strict == 2
-    text = "\n".join(strict_lines)
-    assert "2 DataLab sample(s) could not be deleted" in text
-    assert "1 sample(s) still queued" in text  # the nudge to retry, in both modes
-    assert "FINDINGS" in "\n".join(relaxed_lines)  # reported either way; strict only changes the status
+    assert "== Relevance shadow" in text  # later probes still ran
 
 
 def test_an_unavailable_kb_index_is_a_finding(ops, api_fetch):

@@ -79,16 +79,6 @@ def run_startup_checks(settings) -> list[str]:
                 "Fix: check ownership/permissions or the container volume mount."
             )
 
-    # 3. ELN-mandatory deploys must point at a real Datalab URL.
-    if getattr(settings, "datalab_required", False):
-        url = (getattr(settings, "datalab_api_url", "") or "").strip()
-        if not url:
-            errors.append(
-                "FORMUNEX_DATALAB_REQUIRED=true but FORMUNEX_DATALAB_API_URL "
-                "is empty. Fix: set the Datalab URL in .env, or set "
-                "FORMUNEX_DATALAB_REQUIRED=false to fall back to the local ledger."
-            )
-
     # 4. Auth explicitly disabled in production is almost certainly a mistake
     #    (config auto-enables it for production envs).
     env = (getattr(settings, "environment", "") or "").strip().lower()

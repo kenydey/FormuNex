@@ -218,7 +218,7 @@ def try_mark_experiment_validated(
     只考虑同 project、已 adopted、未验证的行；命中多行时取分值最高的一行。
 
     返回命中的 ``recommend_id``，无命中返回 None。Fail-open：任何异常
-    返回 None，不抛错（调用方在 sync-datalab 成功路径调用，不得把同步
+    返回 None，不抛错（调用方在 lab 测量入库路径调用，不得把同步
     搞成 500）。
     """
     try:
@@ -333,7 +333,7 @@ def _try_validate_adopt_against_lab(
         snap_names = {aliases.get(n, n) for n in snap_names}
     if not snap_names:
         return False
-    # 有 lab 测量明细的实验行（sync-datalab / 手工录入都会写 measurements 表）。
+    # 有 lab 测量明细的实验行（lab 测量入库 / 手工录入都会写 measurements 表）。
     # v7 M3: 时序约束 —— 测量必须晚于推荐创建时间，否则数月前的无关实验
     # 会误标 experiment_validated。
     # v8: 用 measured_at（真实实验时间）优先，空时回退到 created_at（sync 时间）。
@@ -387,7 +387,7 @@ def outcome_stats(
         "by_signal": {},
         "window_days": days,
         "validated": 0,
-        "validated_note": "U-4：被采纳配方经 sync-datalab 同步出 lab 测量即计实验验证",
+        "validated_note": "U-4：被采纳配方经 lab 测量入库即计实验验证",
     }
     try:
         q = select(RecommendOutcomeRow)

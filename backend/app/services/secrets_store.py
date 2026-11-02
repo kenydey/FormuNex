@@ -44,8 +44,6 @@ SECRET_REGISTRY: list[tuple[str, str, str, str]] = [
     ("unpaywall_mailto", "FORMUNEX_UNPAYWALL_MAILTO", "Unpaywall 邮箱（开放获取全文查询，缺省沿用 OpenAlex mailto）", "research"),
     ("mineru_api_key", "FORMUNEX_MINERU_API_KEY", "MinerU 文档解析", "parse"),
     ("mineru_base_url", "FORMUNEX_MINERU_BASE_URL", "MinerU API 地址（默认官方云端，私有部署时修改）", "parse"),
-    ("datalab_api_url", "FORMUNEX_DATALAB_API_URL", "Datalab API URL", "infra"),
-    ("datalab_api_token", "FORMUNEX_DATALAB_API_TOKEN", "Datalab API Token（DATALAB-API-KEY）", "infra"),
     ("langfuse_public_key", "FORMUNEX_LANGFUSE_PUBLIC_KEY", "Langfuse Public Key", "observability"),
     ("langfuse_secret_key", "FORMUNEX_LANGFUSE_SECRET_KEY", "Langfuse Secret Key", "observability"),
     ("langfuse_host", "FORMUNEX_LANGFUSE_HOST", "Langfuse 地址（默认 cloud.langfuse.com，自托管时修改）", "observability"),
@@ -53,11 +51,10 @@ SECRET_REGISTRY: list[tuple[str, str, str, str]] = [
 
 # Entries that are addresses or contact e-mails, not credentials: shown in full, edited as plain text. (A key is masked.)
 NON_SECRET_ATTRS = frozenset(
-    {"openalex_mailto", "unpaywall_mailto", "datalab_api_url", "mineru_base_url", "langfuse_public_key", "langfuse_host"}
+    {"openalex_mailto", "unpaywall_mailto", "mineru_base_url", "langfuse_public_key", "langfuse_host"}
 )
 # Entries whose value is an address that credentials are sent to: validated like the Datalab URL.
 _SERVICE_URL_ATTRS = {
-    "datalab_api_url": "Datalab API URL",
     "mineru_base_url": "MinerU API 地址",
     "langfuse_host": "Langfuse 地址",
 }
@@ -160,11 +157,6 @@ def validate_service_url(url: str, *, what: str = "URL") -> str:
     if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
         raise ValueError(f"{what} must not be a link-local, unspecified or multicast address")
     return url
-
-
-def validate_datalab_url(url: str) -> str:
-    """The Datalab URL receives the ``DATALAB-API-KEY`` header on every call."""
-    return validate_service_url(url, what="Datalab API URL")
 
 
 def _quote_env_value(value: str) -> str:
@@ -533,10 +525,10 @@ def probe_secret(secret_id: str) -> dict:
             return {"ok": True, "message": "密钥已保存；在「功能开关」中启用 Langfuse 追踪后生效"}
         return {"ok": True, "message": "密钥已保存，下一次 LLM 调用起上报追踪"}
 
-    if secret_id in ("mineru_base_url", "datalab_api_token"):
+    if secret_id == "mineru_base_url":
         if effective_setting(s, secret_id):
             return {"ok": True, "message": "已配置"}
-        return {"ok": False, "message": "未配置（使用默认值）" if secret_id == "mineru_base_url" else "未配置（Datalab 未启用鉴权时可留空）"}
+        return {"ok": False, "message": "未配置（使用默认值）"}
 
     if secret_id.endswith("_api_key") and secret_id in _ATTR_BY_ID:
         if effective_setting(s, secret_id):

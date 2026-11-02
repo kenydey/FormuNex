@@ -28,6 +28,10 @@ _RETIRED_ENV_KEYS = frozenset({
     "FORMUNEX_QA_MAX_EVIDENCE",  # never read; chat_rerank_top_k already caps the evidence list
     "FORMUNEX_DATALAB_MAX_CONNECTIONS",  # Datalab removal batch 2: last readers (the Datalab stores) deleted
     "FORMUNEX_DATALAB_MAX_KEEPALIVE_CONNECTIONS",  # same; remaining datalab_* fields die in batch 3
+    "FORMUNEX_DATALAB_API_URL",  # Datalab removal batch 3: backend deleted; the migration script takes --datalab-url
+    "FORMUNEX_DATALAB_API_TOKEN",  # same; migration script takes --datalab-token / env directly
+    "FORMUNEX_DATALAB_TIMEOUT_SECONDS",  # same; migration script takes --timeout
+    "FORMUNEX_DATALAB_REQUIRED",  # same; no backend switch remains to require
 })
 # Env keys read by subsystems but not declared on Settings.
 _INFRA_ENV_KEYS = frozenset({
@@ -1142,23 +1146,13 @@ class Settings(BaseSettings):
     ingest_chunk_max_chars: int = 1600
     ingest_chunk_overlap: int = 200
 
-    # DOE workbench / campaign persistence (Headless ELN).
-    # Top-5″ #2（2026-09-25）：产品默认 soft-degrade —
-    # ``auto`` 探测 Datalab，可达则以其为 SSOT；不可达且 ``datalab_required=false``
-    # 时回退到本地台账（主数据库，与 db_url 同方言，非 SQLite 专属）。Docker ELN 栈仍显式 ``datalab`` + REQUIRED=true。
-    # 显式 ``sqlite`` 是 ``native`` 的已弃用别名（Phase 2D 2-24 起，仍接受并警告）。
-    # FormuNex M7 (方案 v1.1 §5.3.1): ``native`` is the default — FormuNex's own database is the system of record
-    # for experiments. ``datalab`` / ``auto`` keep Datalab
-    # as an external store for existing installations; new ones sync external ELNs through connectors instead.
-    campaign_backend: str = "native"  # native | datalab | auto | sqlite (deprecated alias of native)
-    datalab_api_url: str = "http://localhost:5001"
-    datalab_api_token: str = ""  # DATALAB-API-KEY header（平台非 TESTING 模式必需）
-    datalab_timeout_seconds: float = 30.0
-    # Soft-degrade default: ELN optional. Set true for ELN-mandatory deploys.
-    datalab_required: bool = False
+    # DOE workbench / campaign persistence. Datalab removal batch 3: the
+    # local main-DB ledger is the only backend (``native``); the deprecated
+    # ``sqlite`` alias is still accepted with a warning.
+    campaign_backend: str = "native"  # native | sqlite (deprecated alias of native)
 
-    # Experiment training persistence (Headless ELN) — same auto semantics.
-    experiment_backend: str = "native"  # native | datalab | auto | sqlite
+    # Experiment training persistence (local main-DB ledger).
+    experiment_backend: str = "native"  # native | sqlite (deprecated alias of native)
 
     # API security — Stage 0 / SR-013 fail-closed: unset means ON in every
     # environment; only an explicit false turns auth off.

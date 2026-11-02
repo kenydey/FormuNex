@@ -70,7 +70,6 @@ async def ingest_qc_report(
     a reviewer accepts it, so an upload can no longer overwrite a reviewed lab
     value or resurrect a rejected one.
     """
-    from ..config import get_settings
     from ..db.database import default_session_factory
     from ..services.parsing import parse_document
     from ..services.qc_ingest import ingest_qc_report_tx, sync_measurements_to_experiment
@@ -121,35 +120,6 @@ async def ingest_qc_report(
     if sync_measured and result.measurements:
         synced = await run_in_threadpool(sync_measurements_to_experiment, experiment_id)
 
-    # Phase 2.6: mirror the raw report bytes into Datalab ELN (best-effort).
-    # The report text + measurements are already persisted locally; this uploads
-    # the original file so the certificate is traceable in the ELN too, and
-    # records the ELN file id on the attachment.
-    try:
-        from ..db.campaign_store import get_campaign_store
-        from ..db.datalab_client import upload_file as _datalab_upload_file
-        from ..db.measurement_store import get_measurement_store as _get_ms
-
-        _row_item = None
-        if campaign_id > 0 and row_id > 0:
-            try:
-                _rows = get_campaign_store().list_rows_sync(campaign_id)
-                _match = next((r for r in _rows if r.id == row_id), None)
-                _row_item = _match.item_id if _match else None
-            except Exception:
-                _row_item = None
-        _file_id = await _datalab_upload_file(
-            get_settings().datalab_api_url,
-            content,
-            filename,
-            item_id=_row_item,
-        )
-        if _file_id:
-            _get_ms().set_attachment_datalab_ref(
-                experiment_id, result.source_id, _file_id
-            )
-    except Exception:
-        logger.warning("qc report Datalab archival failed", exc_info=True)
 
     message = ""
     if not result.measurements:

@@ -938,8 +938,8 @@ class IntegrityResponse(BaseModel):
 def integrity() -> IntegrityResponse:
     """Orphan scan over the references that carry no database constraint.
 
-    Several of them cannot take one — under the Datalab backend the target row
-    lives in an external ELN — so the alternative to a constraint that cannot
+    Several of them cannot take one — the target row may live in a JSON
+    blob rather than a row — so the alternative to a constraint that cannot
     be enforced is a check that is actually run.
     """
     from ..db.integrity import check_integrity

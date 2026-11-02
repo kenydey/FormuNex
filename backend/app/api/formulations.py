@@ -376,7 +376,7 @@ class AdoptRecommendationBody(BaseModel):
 
 @router.get("/formulations/recommend/{recommend_id}/outcome")
 def recommendation_outcome(recommend_id: str) -> dict:
-    """P1-10: 双层信号水合 —— 页面刷新后徽标从后端重读，Datalab 验证
+    """P1-10: 双层信号水合 —— 页面刷新后徽标从后端重读，实验验证
     回写也能被前端看到（不再只靠组件局部 useState）。"""
     from ..db import recommend_outcome_store
     from ..db.database import default_session_factory

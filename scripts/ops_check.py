@@ -2,15 +2,15 @@
 """One-shot health sweep over FormuNex's operations endpoints (API-only on purpose).
 
 The diagnostics below have no screen: they are for whoever runs the deployment. This script
-reads them all and prints one page, so "is the knowledge base healthy / is DataLab leaking
-samples / are recommendations being adopted" is a single command instead of five `curl`s.
+reads them all and prints one page, so "is the knowledge base healthy /
+are recommendations being adopted" is a single command instead of four `curl`s.
 
     python scripts/ops_check.py                                   # http://localhost:8000
     python scripts/ops_check.py --base-url https://formunex.example --token "$FORMUNEX_API_TOKEN"
     python scripts/ops_check.py --strict                          # non-zero exit on findings (cron / CI)
 
 Exit status: 0 = reachable and clean, 1 = an endpoint could not be read, 2 = findings
-(only with ``--strict``: dead DataLab orphans, an unavailable KB index).
+(only with ``--strict``: an unavailable KB index).
 
 Standard library only, so it runs anywhere the API is reachable.
 """
@@ -32,7 +32,6 @@ PROBES: tuple[tuple[str, str], ...] = (
     ("Evidence compression", "/api/ops/evidence-stats"),
     ("Recommendation adoption (7 d)", "/api/ops/recommend-stats?days=7"),
     ("Relevance shadow", "/api/kb/relevance-shadow/stats"),
-    ("DataLab orphan cleanup", "/api/ops/datalab-orphans"),
 )
 
 
@@ -80,15 +79,6 @@ def run_checks(fetch: Fetch, *, strict: bool = False) -> tuple[list[str], int]:
 
         if path.endswith("/kb-health") and isinstance(body, dict) and body.get("available") is False:
             findings.append("KB index reports available=false")
-        if path.endswith("/datalab-orphans") and isinstance(body, dict):
-            counts = body.get("counts") or {}
-            if counts.get("DEAD"):
-                findings.append(f"{counts['DEAD']} DataLab sample(s) could not be deleted and need manual cleanup")
-            if counts.get("PENDING"):
-                lines.append(
-                    f"   NOTE: {counts['PENDING']} sample(s) still queued — "
-                    "POST /api/ops/datalab-orphans/cleanup retries them now"
-                )
 
     lines.append("")
     if findings:

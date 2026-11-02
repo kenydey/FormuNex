@@ -697,8 +697,8 @@ def eln_connectors() -> list[dict[str, Any]]:
     from ..services.eln.sync import CONNECTORS
 
     s = get_settings()
-    configured = {"elabftw": bool(s.lab_elabftw_url and s.lab_elabftw_api_key), "datalab": bool(s.datalab_api_url)}
-    return [{"name": n, "configured": configured[n], "can_push": n != "datalab"} for n in CONNECTORS]
+    configured = {"elabftw": bool(s.lab_elabftw_url and s.lab_elabftw_api_key)}
+    return [{"name": n, "configured": configured[n], "can_push": True} for n in CONNECTORS]
 
 
 @router.post("/eln/{connector}/push")

@@ -32,7 +32,6 @@ from ..domain.schemas import DOEPlan, ExperimentSubmission, ModelInfo, ProductDo
 from ..services import io_export
 from ..services.training import registry
 from ._uploads import read_upload_capped
-from ..services.http_safe import make_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -459,7 +458,7 @@ async def create_workbench_campaign(
     payload: CreateWorkbenchCampaignRequest,
     request: Request,
 ) -> WorkbenchCampaignResponse:
-    """Seed a campaign + pending rows from a generated DOE plan (Datalab samples)."""
+    """Seed a campaign + pending rows from a generated DOE plan."""
     from ..middleware.api_auth import assert_owner, get_current_owner
 
     current_owner = get_current_owner(request)
@@ -544,7 +543,7 @@ async def sync_workbench(
     payload: BatchUpdateRequest,
     request: Request,
 ) -> WorkbenchSyncResponse:
-    """Batch-update workbench rows from AG Grid edits (forwarded to Datalab)."""
+    """Batch-update workbench rows from AG Grid edits."""
     from ..middleware.api_auth import assert_owner, get_current_owner
 
     store = get_campaign_store()
@@ -553,17 +552,15 @@ async def sync_workbench(
         raise HTTPException(status_code=404, detail="Campaign not found")
     assert_owner(getattr(_campaign, "owner_id", None), get_current_owner(request))
 
-    native = _is_native_store(store)
-    before_rows = await store.list_rows(payload.campaign_id) if native else []
+    before_rows = await store.list_rows(payload.campaign_id)
     updated, rows = await store.batch_sync(
         payload.campaign_id,
         [row.model_dump() for row in payload.rows],
     )
-    if native:
-        await run_in_threadpool(
-            _record_native_row_versions,
-            payload.campaign_id, before_rows, rows, get_current_owner(request), "workbench_row.update",
-        )
+    await run_in_threadpool(
+        _record_native_row_versions,
+        payload.campaign_id, before_rows, rows, get_current_owner(request), "workbench_row.update",
+    )
     # Best-effort: unknown factor keys → material pending queue / catalog.
     try:
         from ..services.material_promote import safe_propose_from_workbench_rows
@@ -646,11 +643,10 @@ async def sync_workbench(
 
 @router.post("/experiments/workbench/{campaign_id}/reconcile", response_model=dict)
 async def reconcile_workbench(campaign_id: int, request: Request) -> dict:
-    """Detect and prune stale ``sample_refs`` whose Datalab item was deleted.
+    """Detect and prune stale ``sample_refs``.
 
-    Only a definitive 404 prunes; network / 5xx failures are reported in
-    ``errors`` and left untouched. Idempotent: a second call returns an empty
-    ``removed`` list once the campaign is clean.
+    Datalab removal batch 3: refs are local now, so there is no external
+    item to prune against; the local store reports nothing stale.
     """
     from ..middleware.api_auth import assert_owner, get_current_owner
 
@@ -667,7 +663,7 @@ async def workbench_quality(campaign_id: int) -> dict:
     """Data-quality snapshot for a campaign (read-only, no pruning).
 
     Returns ``{stale_count, stale_refs, errors_count, dropped_total}``:
-    ``stale_*`` are sample refs whose Datalab item is gone (404), and
+    ``stale_*`` are sample refs with no local row, and
     ``dropped_total`` is the cumulative count of non-numeric / empty values
     discarded during workbench ingest (from ``data_quality`` loop_history
     events).
@@ -692,60 +688,14 @@ async def workbench_quality(campaign_id: int) -> dict:
 
 # ── Experiment attachments (Phase 0.2) ────────────────────────────────────────
 
-def _resolve_datalab_item_id(experiment_id: int, campaign_id: int, row_id: int) -> str | None:
-    """Blocking lookup behind :func:`_datalab_item_id_for` (campaign store / SQLite)."""
-    if campaign_id > 0 and row_id > 0:
-        from ..db.campaign_store import get_campaign_store
+async def _store_attachment_locally(content: bytes, filename: str) -> str:
+    """Store an attachment under backend/data/attachments/ and return its reference.
 
-        rows = get_campaign_store().list_rows_sync(campaign_id)
-        match = next((r for r in rows if r.id == row_id), None)
-        return match.item_id if match and match.item_id else None
-    if experiment_id > 0:
-        from ..db.database import default_session_factory
-        from ..db.models import ExperimentRow
-
-        # default_session_factory() is a factory: it is called once more to get the Session.
-        with default_session_factory()() as session:
-            row = session.get(ExperimentRow, experiment_id)
-            return row.item_id if row and row.item_id else None
-    return None
-
-
-async def _datalab_item_id_for(
-    experiment_id: int = 0, campaign_id: int = 0, row_id: int = 0
-) -> str | None:
-    """Resolve the Datalab sample id a file upload should attach to.
-
-    Workbench rows always live on a Datalab sample (formunex_cXX_rY_hash);
-    plain experiments only after they have been ingested from such a row.
-    Best-effort: any lookup failure yields ``None`` so uploads fall back to
-    the local-attachment path instead of crashing.
+    Datalab removal batch 3: uploads are local-only. Previously this tried
+    the Datalab ELN first and fell back to disk; the ELN attempt is gone
+    and the local path is the only path. The reference stays
+    ``local-<sha1[:16]>`` so existing notes keep resolving.
     """
-    try:
-        return await run_in_threadpool(_resolve_datalab_item_id, experiment_id, campaign_id, row_id)
-    except Exception:
-        logger.warning("datalab item_id resolve failed", exc_info=True)
-    return None
-
-
-async def _upload_or_store_locally(
-    content: bytes, filename: str, item_id: str | None = None
-) -> str:
-    """上传 Datalab；失败时落盘本地并返回指向真实文件的引用。
-
-    旧实现失败时伪造 ``local-{uuid}`` 引用——文件字节被丢弃却返回 200，
-    用户以为附件存在但内容永久丢失。现在失败路径把内容写入
-    ``backend/data/attachments/``，引用可追溯到真实文件。
-    """
-    from ..db.datalab_client import upload_file as datalab_upload_file
-
-    doc_id = await datalab_upload_file(
-        get_settings().datalab_api_url, content, filename, item_id=item_id
-    )
-    if doc_id:
-        return doc_id
-
-    # 本地兜底：落盘 + 内容哈希引用（local-<sha1[:16]>）
     import hashlib
     import uuid as _uuid
 
@@ -759,10 +709,10 @@ async def _upload_or_store_locally(
         base.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(content)
     except OSError:
-        logger.exception("attachment local fallback write failed")
+        logger.exception("attachment local write failed")
         raise HTTPException(
             status_code=503,
-            detail="附件存储不可用（Datalab 上传失败且本地落盘失败），请稍后重试",
+            detail="附件存储不可用（本地落盘失败），请稍后重试",
         )
     return local_id
 
@@ -839,18 +789,17 @@ async def upload_experiment_attachment(
     """Upload a file attachment (QC report, microscope image, etc.)
     and link it to an experiment.
 
-    The file is forwarded to Datalab ELN as the document store;
-    a local ``ExperimentAttachment`` row keeps the reference.
+    The file is stored under backend/data/attachments/; a local
+    ``ExperimentAttachment`` row keeps the reference.
     """
     from ..db.measurement_store import get_measurement_store
 
     filename = file.filename or "upload"
 
     # Size cap = Settings.ingest_max_upload_bytes (A11), enforced while reading.
-    # Upload to Datalab ELN (best-effort; falls back to local file storage)
+    # Store locally under backend/data/attachments/
     content = await read_upload_capped(file, filename)
-    item_id = await _datalab_item_id_for(experiment_id=experiment_id)
-    source_document_id = await _upload_or_store_locally(content, filename, item_id=item_id)
+    source_document_id = await _store_attachment_locally(content, filename)
     # Create local attachment link
     store = get_measurement_store()
     attachment_id = store.attach(
@@ -977,10 +926,6 @@ _NATIVE_VERSION_ENTITY = "workbench_row"
 _SNAPSHOT_FIELDS = ("status", "planned_params", "actual_params", "measurements", "note", "tags")
 
 
-def _is_native_store(store: Any) -> bool:
-    from ..db.campaign_store import LocalCampaignStore
-
-    return isinstance(store, LocalCampaignStore)
 
 
 def _row_snapshot(row: WorkbenchRow) -> dict:
@@ -1109,8 +1054,6 @@ def _snapshot_diff(old: dict, new: dict) -> dict:
 async def _native_row_or_404(campaign_id: int, row_id: int) -> tuple[Any, WorkbenchRow] | None:
     """(store, row) when the row lives in the native store without a refcode; None otherwise."""
     store = get_campaign_store()
-    if not _is_native_store(store):
-        return None
     rows = await store.list_rows(campaign_id)
     match = next((r for r in rows if r.id == row_id), None)
     if match is None:
@@ -1130,16 +1073,11 @@ async def restore_workbench_row_version(
     version_id: str,
     request: Request,
 ) -> dict:
-    """P3: restore a DOE row's DataLab item to a saved version.
+    """P3: restore a DOE row to a saved audit-log version.
 
     The platform mints a new "restored" version afterwards, so the operation is
     reversible — restoring again to any earlier version stays possible.
-    Native rows (no refcode) restore the audit-log snapshot ``version_id`` and
-    record the result as a new ``restore`` version — equally reversible.
     """
-    from ..config import get_settings
-    from ..db.campaign_store import get_campaign_store
-    from ..db.datalab_client import restore_item_version
 
     native = await _native_row_or_404(campaign_id, row_id)
     if native is not None:
@@ -1168,19 +1106,9 @@ async def restore_workbench_row_version(
         )
         return {"restored": True, "refcode": None, "version_id": version_id}
 
-    rows = await get_campaign_store().list_rows(campaign_id)
-    match = next((r for r in rows if r.id == row_id), None)
-    if match is None or not getattr(match, "refcode", None):
-        raise HTTPException(status_code=404, detail="该行无 DataLab 版本记录")
-    ok = await run_in_threadpool(
-        restore_item_version,
-        get_settings().datalab_api_url,
-        match.refcode,
-        version_id,
-    )
-    if not ok:
-        raise HTTPException(status_code=502, detail="DataLab 版本恢复失败")
-    return {"restored": True, "refcode": match.refcode}
+    # Rows still carrying a refcode have not been imported to native yet;
+    # the Datalab restore path was removed with the Datalab backend.
+    raise HTTPException(status_code=404, detail="该行尚未导入 native，无版本记录")
 
 
 @router.get(
@@ -1193,19 +1121,13 @@ async def workbench_row_versions(
     compare_v1: str = Query(default=""),
     compare_v2: str = Query(default=""),
 ) -> dict:
-    """P3: version history of a DOE row's DataLab item (auto-saved on every sync).
-
-    Native rows (no refcode) answer from the audit log instead (``source: "native"``,
+    """P3: version history of a DOE row from the audit log (``source: "native"``,
     ``refcode: null``; each entry also carries its ``snapshot``).
 
     Without compare params returns ``{refcode, versions: [{id, version, action,
     timestamp, creator}]}``; with ``compare_v1`` + ``compare_v2`` returns the
-    DeepDiff between those two version ids under ``diff``.
+    snapshot diff between those two version ids under ``diff``.
     """
-    from ..config import get_settings
-    from ..db.campaign_store import get_campaign_store
-    from ..db.datalab_client import diff_item_versions, list_item_versions
-
     if await _native_row_or_404(campaign_id, row_id) is not None:
         versions = await run_in_threadpool(_native_row_versions, campaign_id, row_id)
         if compare_v1 and compare_v2:
@@ -1216,23 +1138,7 @@ async def workbench_row_versions(
                     "diff": _snapshot_diff(by_id[compare_v1], by_id[compare_v2])}
         return {"refcode": None, "source": "native", "versions": versions}
 
-    rows = await get_campaign_store().list_rows(campaign_id)
-    match = next((r for r in rows if r.id == row_id), None)
-    if match is None or not getattr(match, "refcode", None):
-        raise HTTPException(status_code=404, detail="该行无 DataLab 版本记录")
-
-    settings = get_settings()
-    assert match.refcode  # guard 上方已保证非空
-    refcode = match.refcode
-    if compare_v1 and compare_v2:
-        diff = await run_in_threadpool(
-            diff_item_versions, settings.datalab_api_url, refcode, compare_v1, compare_v2
-        )
-        return {"refcode": refcode, "diff": diff}
-    versions = await run_in_threadpool(
-        list_item_versions, settings.datalab_api_url, refcode
-    )
-    return {"refcode": refcode, "versions": versions}
+    raise HTTPException(status_code=404, detail="该行尚未导入 native，无版本记录")
 
 
 @router.get(
@@ -1243,15 +1149,7 @@ async def download_workbench_row_attachment(
     row_id: int,
     attachment_id: str,
 ) -> Response:
-    """P4: download an attachment's original file.
-
-    Prefers the DataLab ELN copy (attachment note carries ``[datalab:<file_id>]``);
-    falls back to the local mirror stored under backend/data/attachments/ when the
-    platform copy is unreachable or was never uploaded.
-    """
-    import re
-
-    from ..db.datalab_client import get_file_bytes
+    """P4: download an attachment's original file from the local mirror."""
     from ..db.measurement_store import get_measurement_store
 
     experiment_id = await _resolve_workbench_experiment_id(campaign_id, row_id)
@@ -1273,25 +1171,7 @@ async def download_workbench_row_attachment(
         if doc is not None and doc.filename:
             filename = doc.filename
 
-    # 1) DataLab ELN copy
-    from ..config import get_settings
-
-    m = re.search(r"\[datalab:([0-9a-f]{24})\]", att.note or "")
-    if m:
-        content = await run_in_threadpool(
-            get_file_bytes,
-            get_settings().datalab_api_url,
-            m.group(1),
-            filename,
-        )
-        if content is not None:
-            return Response(
-                content=content,
-                media_type="application/octet-stream",
-                headers=attachment_headers(filename),
-            )
-
-    # 2) local mirror fallback (data/attachments/{local-<hash>}-{uuid}-{name})
+    # Local mirror (data/attachments/{local-<hash>}-{uuid}-{name}) (data/attachments/{local-<hash>}-{uuid}-{name})
     base = Path(get_settings().db_url.replace("sqlite:///", "")).parent / "attachments"
     if base.is_dir():
         prefix = f"{att.source_document_id}-"
@@ -1302,7 +1182,7 @@ async def download_workbench_row_attachment(
                     media_type="application/octet-stream",
                     headers=attachment_headers(filename),
                 )
-    raise HTTPException(status_code=404, detail="文件不可用（平台与本机均无副本）")
+    raise HTTPException(status_code=404, detail="文件不可用（本地无副本）")
 
 
 @router.delete(
@@ -1313,12 +1193,7 @@ async def delete_workbench_row_attachment(
     row_id: int,
     attachment_id: str,
 ) -> dict:
-    """P4: unbind an attachment from the row.
-
-    Local attachment row is deleted; the DataLab ELN copy (if any) is kept for
-    traceability (platform delete-file API is out of sync with its storage —
-    see platform-maximize plan §P4).
-    """
+    """P4: unbind an attachment from the row (local row deleted)."""
     from ..db.measurement_store import get_measurement_store
 
     experiment_id = await _resolve_workbench_experiment_id(campaign_id, row_id)
@@ -1364,8 +1239,7 @@ async def upload_workbench_row_attachment(
 
     filename = file.filename or "upload"
     content = await read_upload_capped(file, filename)
-    item_id = await _datalab_item_id_for(campaign_id=campaign_id, row_id=row_id)
-    source_document_id = await _upload_or_store_locally(content, filename, item_id=item_id)
+    source_document_id = await _store_attachment_locally(content, filename)
     store = get_measurement_store()
     attachment_id = store.attach(
         experiment_id, source_document_id, kind=kind, note=note
@@ -1500,26 +1374,6 @@ async def search_experiments(
     q: str = Query(default="", description="搜索关键词"),
 ) -> list[ExperimentSearchResult]:
     """Search across all campaigns by keyword (tags, params, measurements)."""
-    # In Datalab mode: delegate to Datalab search API
-    settings = get_settings()
-    backend = (settings.campaign_backend or "sqlite").lower()
-
-    if backend in ("datalab", "auto"):
-        from ..db.datalab_client import check_datalab_reachable, datalab_headers
-        ok, _ = await run_in_threadpool(check_datalab_reachable, settings.datalab_api_url, timeout=2.0)
-        if ok:
-            try:
-                async with make_async_client(
-                    base_url=settings.datalab_api_url.rstrip("/"),
-                    timeout=10.0,
-                    headers=datalab_headers(),
-                ) as client:
-                    resp = await client.get("/search/", params={"q": q})
-                    if resp.status_code < 400:
-                        return _parse_datalab_search(resp.json())
-            except Exception as exc:
-                logger.debug("datalab search failed, falling back to local scan: %s", exc)
-
     # Local SQLite scan — P-8: filter refs in SQL via json_each/json_extract
     # instead of pulling every campaign's full sample_refs JSON into Python.
     # The SQL predicate mirrors the old Python one: q (case-insensitive) is a
@@ -1557,7 +1411,7 @@ async def search_experiments(
                 continue
             if not isinstance(ref, dict):
                 continue
-            # 空 q：返回全部行（与 Datalab 搜索路径一致，A12 行为不一致修复）
+            # 空 q：返回全部行
             if q:
                 tags = " ".join(ref.get("tags") or [])
                 note = str(ref.get("note") or "")
@@ -1584,92 +1438,6 @@ async def search_experiments(
     return results
 
 
-def _parse_datalab_search(body: list[dict]) -> list[ExperimentSearchResult]:
-    """Map Datalab search hits onto local campaign/row ids when possible.
-
-    Previously always returned campaign_id=0 / row_id=0, which broke
-    Workbench「打开检索命中」→ selectWorkbenchCampaign(0).
-    """
-    import re
-
-    index: dict[str, tuple[int, int, str]] = {}
-    try:
-        from ..db.database import default_session_factory
-
-        with default_session_factory()() as session:
-            # P-8: 只把 (item_id, id, campaign) 三列拉回 Python，而非全表
-            # Campaign ORM + 完整 sample_refs JSON。item_id 的空值过滤在 SQL
-            # 侧完成（trim 后长度 > 0），语义与旧 Python 循环一致。
-            je = func.json_each(Campaign.sample_refs).table_valued("value")
-            item_id_expr = func.json_extract(je.c.value, "$.item_id")
-            stmt = (
-                select(
-                    item_id_expr.label("item_id"),
-                    func.json_extract(je.c.value, "$.id").label("rid"),
-                    Campaign.id,
-                    Campaign.name,
-                )
-                .select_from(Campaign)
-                .join(je, true())
-                .where(
-                    func.length(
-                        func.trim(func.coalesce(item_id_expr, ""))
-                    )
-                    > 0
-                )
-            )
-            for item_id_raw, rid, camp_id, camp_name in session.execute(stmt):
-                item_id = str(item_id_raw or "").strip()
-                if not item_id:
-                    continue
-                try:
-                    row_id = int(rid) if rid is not None else 0
-                except (TypeError, ValueError):
-                    row_id = 0
-                index[item_id] = (int(camp_id), row_id, str(camp_name or ""))
-    except Exception as exc:  # pragma: no cover
-        logger.debug("datalab search id map failed: %s", exc)
-
-    pat = re.compile(r"^formumind_c(\d+)_r(\d+)_")
-    results: list[ExperimentSearchResult] = []
-    for sample in body:
-        if not isinstance(sample, dict):
-            continue
-        blocks = sample.get("blocks_obj", {}) or {}
-        params_block = blocks.get("formumind_params", {}) or {}
-        meas_block = blocks.get("formumind_measurements", {}) or {}
-        item_id = str(sample.get("item_id") or "")
-        campaign_id, row_id, campaign_name = 0, 0, ""
-        if item_id in index:
-            campaign_id, row_id, campaign_name = index[item_id]
-        else:
-            m = pat.match(item_id)
-            if m:
-                campaign_id = int(m.group(1))
-                row_id = int(m.group(2))
-        # Prefer nested planned/actual if block uses workbench shape
-        pdata = params_block.get("data", {}) if isinstance(params_block, dict) else {}
-        planned = pdata.get("planned_params") if isinstance(pdata, dict) else None
-        if not isinstance(planned, dict):
-            planned = pdata if isinstance(pdata, dict) else {}
-        mdata = meas_block.get("data", {}) if isinstance(meas_block, dict) else {}
-        measurements = mdata if isinstance(mdata, dict) else {}
-        if isinstance(pdata, dict) and pdata.get("status"):
-            status = str(pdata.get("status"))
-        else:
-            status = str(sample.get("status", "Pending"))
-        results.append(
-            ExperimentSearchResult(
-                row_id=row_id,
-                campaign_id=campaign_id,
-                campaign_name=campaign_name,
-                item_id=item_id,
-                status=status,
-                planned_params=planned,
-                measurements=measurements,
-            )
-        )
-    return results
 
 
 # ── Phase 3.3: convergence webhook receiver ───────────────────────────────
@@ -1685,7 +1453,7 @@ class ConvergenceWebhookPayload(BaseModel):
 async def convergence_webhook(
     payload: ConvergenceWebhookPayload,
 ) -> dict[str, str]:
-    """Receive convergence notification from Datalab or loop engine."""
+    """Receive convergence notification from the loop engine."""
     logger = __import__("logging").getLogger(__name__)
     logger.info(
         "Convergence webhook: campaign=%d converged=%s round=%d msg=%s",
@@ -1946,128 +1714,6 @@ def get_doecyle_status(
 ) -> Dict[str, Any]:
     """Misspelled legacy path of :func:`get_doecycle_status`, kept for the legacy frontend."""
     return get_doecycle_status(campaign_id, request)
-
-
-# ── P0-2: Datalab -> 优化器手动同步 ──────────────────────────────────────────
-
-
-class SyncDatalabRequest(BaseModel):
-    """POST /experiments/{id}/sync-datalab 请求体。
-
-    ``datalab_item_id``: 本次同步要拉取的 Datalab item。行保持本地训练记录
-    身份 (``item_id`` 不被改写), 因此同步到的 lab 测量对
-    ``LocalExperimentStore`` (只读 ``item_id IS NULL``) 可见, 下一轮 DOE 的
-    ``load_prior_measurements()`` 能吃到 lab 实测。若省略, 则回退使用行上
-    已绑定的 ``item_id`` (若行上也没有 -> 409)。
-    """
-
-    datalab_item_id: str | None = Field(
-        default=None, description="本次同步的 Datalab item id; 省略则用行上绑定的 item_id"
-    )
-
-
-@router.post("/experiments/{experiment_id}/sync-datalab", response_model=Dict[str, Any])
-def sync_experiment_from_datalab(
-    experiment_id: int, body: SyncDatalabRequest | None = None
-) -> Dict[str, Any]:
-    """手动触发单个实验的 Datalab -> MeasurementStore 同步 (P0-2)。
-
-    流程: 由 experiment_id 查 ExperimentRow, 取本次同步的 Datalab item_id
-    (请求体 ``datalab_item_id`` 优先, 否则行上绑定的 ``item_id``) -> 拉取
-    Datalab ``formumind_measurements`` 块 -> 校验块内 experiment_id 与调用方
-    一致 -> 写入 MeasurementStore 明细并回写 ``experiments.measured`` ->
-    成功后刷新训练 registry。
-
-    可见性语义: 行的 ``item_id`` 不被改写。本地训练记录
-    (``item_id IS NULL``) 同步后仍对 ``LocalExperimentStore`` 可见, 下一轮
-    DOE 的 ``load_prior_measurements()`` 可见 lab 实测; 已绑定 Datalab 的行
-    仍归 Datalab store 管 (Datalab 可达时 live 读)。
-
-    Fail-open: Datalab 不可达返回 ``{"synced": 0, "errors": [...]}`` 而不是
-    500; ``validated`` 恒为 None, 真实端到端验证见 scripts/verify_datalab.py。
-    """
-    from ..db.database import default_session_factory
-    from ..db.models import ExperimentRow
-    from ..services.datalab_sync import (
-        block_experiment_id,
-        fetch_item_data,
-        sync_item_data_to_store,
-    )
-
-    factory = default_session_factory()
-    with factory() as session:
-        row = session.get(ExperimentRow, experiment_id)
-        bound_item_id = row.item_id if row else None
-        # U-4: 强成功层关联需要的快照（session 关闭后 row 即 detached）。
-        exp_project_id = (row.project_id or None) if row else None
-        exp_factors = dict(row.factors or {}) if row else {}
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"experiment {experiment_id} not found",
-        )
-    requested = (body.datalab_item_id if body else None) or ""
-    requested = requested.strip()
-    item_id = requested or bound_item_id
-    if not item_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"experiment {experiment_id} has no Datalab item_id; nothing to sync",
-        )
-
-    settings = get_settings()
-    item_data = fetch_item_data(
-        settings.datalab_api_url, item_id, timeout=settings.datalab_timeout_seconds
-    )
-    claimed = block_experiment_id(item_data)
-    if claimed is not None and claimed != experiment_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"datalab item {item_id} block claims experiment_id={claimed}, "
-                f"but caller asked for {experiment_id}"
-            ),
-        )
-    report = sync_item_data_to_store(
-        item_data, experiment_id, item_id=item_id
-    )
-    if report.get("synced"):
-        # 注意: 不回写 row.item_id。行的本地训练记录身份保持不变,
-        # LocalExperimentStore 的 item_id IS NULL 过滤语义不受影响,
-        # 这正是同步到的 lab 数据对优化器可见的前提。
-        try:
-            registry.load()
-            refreshed = True
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("registry refresh after datalab sync failed: %s", exc)
-            refreshed = False
-    else:
-        refreshed = False
-    report["registry_refreshed"] = refreshed
-    report["experiment_id"] = experiment_id
-    report["datalab_item_id"] = item_id
-    # U-4: 强成功层回写 —— 同步出 lab 测量后，启发式关联被采纳的推荐配方。
-    # fail-open：关联不上是正常情况，绝不影响同步结果本身。
-    if report.get("synced"):
-        try:
-            from ..db import recommend_outcome_store
-            from ..db.session_utils import commit_session
-
-            with factory() as vsession:
-                vrow = vsession.get(ExperimentRow, experiment_id)
-                measured_keys = list((vrow.measured or {}).keys()) if vrow else []
-            with commit_session(factory) as vsession:
-                validated_rid = recommend_outcome_store.try_mark_experiment_validated(
-                    vsession,
-                    project_id=exp_project_id,
-                    factors=exp_factors,
-                    experiment_id=experiment_id,
-                    measured_keys=measured_keys,
-                )
-            report["recommend_validated"] = validated_rid
-        except Exception as exc:  # noqa: BLE001 - fail-open
-            logger.warning("U-4 experiment validation write skipped: %s", exc)
-    return report
 
 
 @router.get("/experiments/{experiment_id}", response_model=ExperimentSummary)

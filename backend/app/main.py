@@ -133,7 +133,7 @@ async def lifespan(_app: FastAPI):
         resolve_api_token(settings)
     # ------------------------------------------------------------------
     # Wave 4: fail-fast on truly required startup configuration (bad db_url
-    # scheme, unwritable sqlite data dir, datalab_required without a URL).
+    # scheme, unwritable sqlite data dir).
     # Cheap and deterministic — runs unconditionally, never blocks on network.
     # ------------------------------------------------------------------
     from .startup_checks import run_startup_checks
@@ -398,14 +398,6 @@ app.include_router(auth_router.router)
 app.include_router(health_router.router)  # /health, /health/detailed (no /api prefix, as before)
 
 
-from .db.datalab_client import (
-    DatalabUnavailableError,
-)
-
-
-@app.exception_handler(DatalabUnavailableError)
-async def datalab_unavailable_handler(_request: Request, exc: DatalabUnavailableError) -> JSONResponse:
-    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 from .strict_json import install as _install_strict_json  # noqa: E402

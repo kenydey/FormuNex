@@ -179,12 +179,7 @@ class MeasurementStore:
             )
 
     def delete_attachment(self, attachment_id: str) -> bool:
-        """P4: unbind an attachment (local row only).
-
-        The DataLab ELN copy (if any) is intentionally kept — the platform's
-        delete-file API is inconsistent with its storage layout, so platform
-        removal is out of scope (v2 after fixing the platform side).
-        """
+        """P4: unbind an attachment (local row only)."""
         try:
             with commit_session(self._session_factory) as session:
                 row = session.get(ExperimentAttachment, attachment_id)
@@ -195,34 +190,6 @@ class MeasurementStore:
         except Exception as exc:
             logger.warning("delete_attachment({}) failed: {}", attachment_id, exc)
             return False
-
-    def set_attachment_datalab_ref(
-        self, experiment_id: int, source_document_id: str, datalab_file_id: str
-    ) -> None:
-        """Record the Datalab ELN file id on an attachment's note.
-
-        The QC-report pipeline stores the report text in sqlite and mirrors the
-        raw bytes into Datalab; this records the ELN copy's id so the two stay
-        traceable. Best-effort: a missing attachment is silently ignored.
-        """
-        try:
-            with commit_session(self._session_factory) as session:
-                row = (
-                    session.query(ExperimentAttachment)
-                    .filter(
-                        ExperimentAttachment.experiment_id == experiment_id,
-                        ExperimentAttachment.source_document_id == source_document_id,
-                    )
-                    .first()
-                )
-                if row is None:
-                    return
-                suffix = f"[datalab:{datalab_file_id}]"
-                row.note = (row.note + " " + suffix).strip() if row.note else suffix
-        except Exception as exc:
-            logger.warning(
-                "datalab ref record failed for experiment {}: {}", experiment_id, exc
-            )
 
     def experiments_for_document(self, source_document_id: str) -> list[int]:
         with self._session_factory() as session:

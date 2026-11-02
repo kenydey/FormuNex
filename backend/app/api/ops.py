@@ -112,34 +112,6 @@ def outbox_retry(row_id: str) -> dict:
     return {"outbox_id": row_id, "operation": operation, "task_id": task_id, "status": "PENDING"}
 
 
-@router.get("/datalab-orphans")
-def datalab_orphans(status: str | None = None, limit: int = 100) -> dict:
-    """Datalab samples a failed saga rollback could not delete (cleanup queue).
-
-    ``counts`` is per outbox status (PENDING = still to delete, DONE = cleaned,
-    DEAD = gave up — delete by hand); ``items`` lists the rows, oldest first.
-    """
-    from ..db.database import default_session_factory
-    from ..db.dispatcher import list_orphans
-
-    with default_session_factory()() as session:
-        return list_orphans(session, status=status, limit=limit)
-
-
-@router.post("/datalab-orphans/cleanup")
-def datalab_orphans_cleanup(max_rows: int = 50) -> dict:
-    """Retry deleting the pending orphaned Datalab samples now.
-
-    The same pass runs at startup; this is the manual trigger. Nothing is attempted
-    (and no retry burned) while Datalab is unconfigured or unreachable — see ``skipped``.
-    """
-    from ..db.database import default_session_factory
-    from ..db.dispatcher import drain_orphans
-
-    with default_session_factory()() as session:
-        return drain_orphans(session, max_rows=max(1, min(int(max_rows), 200)))
-
-
 @router.get("/rules")
 def rules_status_endpoint() -> dict:
     """Stage 3 / SR-060 (3-7): what rule tables are live right now.
@@ -231,7 +203,7 @@ def recommend_stats(
     ``days`` window. Fail-open: returns empty stats (``available: False``)
     when the ``recommend_outcomes`` table does not exist yet.
     ``validated`` counts rounds with ``experiment_validated=True`` (U-4:
-    sync-datalab 成功后按 snapshot 指纹 fail-open 回写；C-5 pending 时恒为
+    lab 测量入库后按 snapshot 指纹 fail-open 回写；C-5 pending 时恒为
     null 的旧契约已过时）。
     """
     from ..db import recommend_outcome_store

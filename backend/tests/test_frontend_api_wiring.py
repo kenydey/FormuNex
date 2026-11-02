@@ -182,8 +182,6 @@ API_ONLY_ROUTES: dict[str, str] = {
     "/api/kb/chunk-quality-sample": "runs a chunk-quality sample on demand (P2-8); the daily beat job is the normal trigger: " + _OPS,
     "/api/formulations/recommend/quality-dashboard": "adoption / validation rate of recommendations (increment #10) for an admin view: " + _OPS,
     "/api/experiments/hooks/reset-loop/{}": "manual restart of a converged closed loop; the workbench recovers by itself when the data changes (convergence is re-assessed at dispatch), so the screen has no button",
-    "/api/ops/datalab-orphans": _OPS,
-    "/api/ops/datalab-orphans/cleanup": _OPS,
     "/api/ops/evidence-stats": _OPS,
     "/api/ops/kb-health": _OPS,
     "/api/ops/recommend-stats": _OPS,

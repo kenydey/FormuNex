@@ -1,4 +1,4 @@
-"""Campaign workbench repository — Datalab Headless ELN (SSOT) with local main-DB fallback."""
+"""Campaign workbench repository — local main-DB ledger."""
 from __future__ import annotations
 
 import asyncio
@@ -26,10 +26,7 @@ from ..domain.schemas import (
     Requirement,
 )
 from .campaign_types import WorkbenchRow
-from .datalab_client import (
-    datalab_block,
-    validate_blocks,
-)
+from .datalab_envelope import datalab_block, validate_blocks
 from .session_utils import commit_session
 from .models import Campaign
 
@@ -120,7 +117,7 @@ def _parse_row_from_item(
 
 
 class CampaignStoreInterface(ABC):
-    """Abstract campaign + workbench row persistence (Datalab or local fallback)."""
+    """Abstract campaign + workbench row persistence (local main-DB ledger)."""
 
     @abstractmethod
     async def create_from_plan(
@@ -165,11 +162,10 @@ class CampaignStoreInterface(ABC):
         ...
 
     async def reconcile_sample_refs(self, campaign_id: int) -> dict:
-        """Detect and prune stale ``sample_refs`` whose Datalab item is gone.
+        """Detect and prune stale ``sample_refs``.
 
-        Returns ``{removed, kept, removed_count, errors}``. Network / 5xx
-        failures are reported in ``errors`` and never pruned (only a definitive
-        404 is treated as deleted). Idempotent.
+        Datalab removal batch 3: refs are local, so there is no external
+        item to prune against; always reports nothing removed.
         """
         return {"removed": [], "kept": [], "removed_count": 0, "errors": []}
 
@@ -317,7 +313,7 @@ class _CampaignMetaMixin:
 
 
 class LocalCampaignStore(_CampaignMetaMixin, CampaignStoreInterface):
-    """Local JSON-in-Campaign fallback when Datalab is unreachable (tests / offline)."""
+    """Local JSON-in-Campaign store (the only campaign store)."""
 
     async def create_from_plan(
         self,

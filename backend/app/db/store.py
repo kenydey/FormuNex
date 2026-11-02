@@ -35,10 +35,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from ..config import Settings, get_settings
 from ..services._fsutil import replace_with_retry
 from ..domain.schemas import ExperimentRecord, Measurement, ProductDomain
-from .datalab_client import (
-    datalab_block,
-    validate_blocks,
-)
+from .datalab_envelope import datalab_block, validate_blocks
 from .models import ExperimentRow
 from .session_utils import commit_session
 

@@ -33,15 +33,12 @@ DB = APP / "db"
 # added to this set with a reason.
 PINNED_DB_SERVICES_EDGES = {
     ("app.db.chunk_store", "app.services.kb_ann"),
-    ("app.db.datalab_client", "app.services.http_safe"),
-    ("app.db.datalab_client", "app.services.runtime_secrets"),
     ("app.db.material_store", "app.services.errors"),
     ("app.db.material_store", "app.services.supplier_normalize"),
     ("app.db.measurement_store", "app.services.errors"),
     ("app.db.product_store", "app.services.chemtools"),
     ("app.db.product_store", "app.services.errors"),
     ("app.db.project_store", "app.services.intent"),
-    ("app.db.reconciliation", "app.services.http_safe"),
     ("app.db.source_store", "app.services.patent_ids"),
     ("app.db.source_store", "app.services.provenance"),
     ("app.db.sqlite_lock", "app.services.redis_breaker"),

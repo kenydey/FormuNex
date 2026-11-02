@@ -1,4 +1,4 @@
-"""Workbench row types — decoupled from SQLAlchemy (Datalab is SSOT for row data)."""
+"""Workbench row types — decoupled from SQLAlchemy (rows embed in Campaign.sample_refs)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -7,7 +7,7 @@ from typing import Any
 
 @dataclass
 class WorkbenchRow:
-    """One AG-Grid execution row backed by a Datalab Sample ``item_id``."""
+    """One AG-Grid execution row (``item_id`` is its stable local label)."""
 
     id: int
     campaign_id: int

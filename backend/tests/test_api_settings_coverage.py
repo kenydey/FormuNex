@@ -40,7 +40,6 @@ def test_every_registry_entry_is_a_settings_field_with_a_matching_env_key():
         ("semantic_scholar_api_key", "research"),
         ("unpaywall_mailto", "research"),
         ("mineru_base_url", "parse"),
-        ("datalab_api_token", "infra"),
         ("langfuse_public_key", "observability"),
         ("langfuse_secret_key", "observability"),
         ("langfuse_host", "observability"),
@@ -152,12 +151,6 @@ def test_the_unpaywall_email_set_in_the_ui_is_the_one_queried(env_file, monkeypa
     assert seen["email"] == "lab@example.org"
 
 
-def test_the_datalab_token_set_in_the_ui_becomes_the_auth_header(env_file):
-    from app.db.datalab_client import datalab_headers
-
-    assert datalab_headers() == {}
-    ss.update_secrets({"datalab_api_token": "dl-token-123"})
-    assert datalab_headers() == {"DATALAB-API-KEY": "dl-token-123"}
 
 
 def test_langfuse_keys_replace_the_cached_client(env_file, monkeypatch):
@@ -181,7 +174,7 @@ def test_a_cleared_address_falls_back_to_the_default(env_file):
     assert setting_or_default(s, "mineru_base_url") == default
 
 
-@pytest.mark.parametrize("attr", ["mineru_base_url", "langfuse_host", "datalab_api_url"])
+@pytest.mark.parametrize("attr", ["mineru_base_url", "langfuse_host"])
 def test_addresses_that_receive_credentials_are_validated(env_file, attr):
     for bad in ("http://169.254.169.254/latest", "file:///etc/passwd", "http://user:pw@host/"):
         with pytest.raises(ValueError):

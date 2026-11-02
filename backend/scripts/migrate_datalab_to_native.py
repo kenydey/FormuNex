@@ -41,16 +41,22 @@ def main(argv: list[str] | None = None) -> int:
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
+    import os
+
+    import httpx
+
     from app.config import get_settings
-    from app.db.datalab_client import datalab_headers, list_item_versions
     from app.services.eln.connectors.base import ConnectorError
     from app.services.eln.connectors.datalab import DatalabConnector
     from app.services.lab.datalab_migration import migrate, migrate_campaigns
 
     s = get_settings()
-    api_url = args.datalab_url or s.datalab_api_url
-    conn = DatalabConnector(api_url, headers=datalab_headers(),
-                            timeout=s.datalab_timeout_seconds)
+    api_url = args.datalab_url or os.environ.get("FORMUNEX_DATALAB_API_URL", "")
+    if not api_url:
+        parser.error("--datalab-url or FORMUNEX_DATALAB_API_URL is required")
+    token = args.datalab_token or os.environ.get("FORMUNEX_DATALAB_API_TOKEN", "")
+    headers = {"DATALAB-API-KEY": token} if token else {}
+    conn = DatalabConnector(api_url, headers=headers, timeout=args.timeout)
 
     def fetch(item_id: str):
         try:
@@ -64,7 +70,25 @@ def main(argv: list[str] | None = None) -> int:
         # Versions are provenance only (metadata: id/version/action/time/
         # creator); a failure here must not block the row migration, and
         # migrate_campaigns records it per row instead of failing.
-        return list_item_versions(api_url, refcode)
+        # Vendored here (batch 3 deleted datalab_client): the versions
+        # endpoint path is the one list_item_versions used; if a real
+        # Datalab answers differently, this raises and the row still migrates.
+        url = api_url.rstrip("/") + f"/items/{refcode}/versions/"
+        with httpx.Client(base_url=api_url, timeout=args.timeout, headers=headers) as client:
+            resp = client.get(url)
+            if resp.status_code != 200:
+                raise RuntimeError(f"versions fetch HTTP {resp.status_code}")
+            body = resp.json()
+        versions = body.get("versions") if isinstance(body, dict) else None
+        if not isinstance(versions, list):
+            raise RuntimeError("versions response has no versions list")
+        out = []
+        for v in versions:
+            if not isinstance(v, dict):
+                continue
+            out.append({"id": str(v.get("_id") or v.get("id") or ""),
+                        "version": v.get("version"), "action": v.get("action")})
+        return out
 
     actor = "cli:migrate_datalab_to_native"
     result: dict = {}

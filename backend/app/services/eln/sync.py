@@ -45,7 +45,7 @@ from ..lab import tasks as task_svc
 from ..lab.methods import LabError
 from .connectors.base import ConnectorError, ElnConnector
 
-CONNECTORS = ("elabftw", "datalab")
+CONNECTORS = ("elabftw",)
 
 
 def get_connector(name: str) -> ElnConnector:
@@ -56,11 +56,6 @@ def get_connector(name: str) -> ElnConnector:
         from .connectors.elabftw import ElabftwConnector
 
         return ElabftwConnector(s.lab_elabftw_url, s.lab_elabftw_api_key)
-    if name == "datalab":
-        from ...db.datalab_client import datalab_headers
-        from .connectors.datalab import DatalabConnector
-
-        return DatalabConnector(s.datalab_api_url, headers=datalab_headers(), timeout=s.datalab_timeout_seconds)
     raise ConnectorError(f"未知 ELN 连接器 {name}")
 
 

@@ -2,7 +2,6 @@
 
 Called automatically on first startup after store backend upgrades. Idempotent:
 JSON is only read when the target store is empty; inline SQL rows migrate to
-Datalab only when ``experiment_backend=datalab`` and the Datalab index is empty.
 """
 from __future__ import annotations
 
@@ -54,17 +53,6 @@ def migrate_from_stores(json_path: str, target_store) -> int:
     return len(records)
 
 
-def migrate_inline_sql_to_datalab(legacy_store, datalab_store) -> int:
-    """Move inline SQL experiment rows (item_id=NULL) into Datalab."""
-    records = legacy_store.all()
-    if not records:
-        return 0
-    if datalab_store.count() > 0:
-        return 0
-    datalab_store.add(records)
-    legacy_store.clear()
-    log.info("Migrated %d inline SQL experiment record(s) to Datalab.", len(records))
-    return len(records)
 
 
 def clean_doe_metadata_from_factors() -> int:
@@ -157,31 +145,21 @@ def clean_doe_metadata_from_factors() -> int:
 def migrate_experiments_if_needed() -> int:
     """Migrate legacy JSON and inline SQL experiment data into the active store.
 
-    DatalabUnavailableError is degraded (logged) so a missing Datalab service
-    never prevents the server from starting; other unexpected exceptions
-    propagate so real bugs are not silently swallowed.
+    Other unexpected exceptions propagate so real bugs are not silently
+    swallowed.
     """
-    from .datalab_client import DatalabUnavailableError
 
     total = 0
+    from ..config import get_settings
+    from .store import get_experiment_store
+
+    settings = get_settings()
+    target = get_experiment_store()
+    total += migrate_from_stores(settings.experiments_path, target)
+
+    # 历史脏数据：清洗 factors 里残留的 _doe_metadata 等非数值 blob（幂等）
     try:
-        from ..config import get_settings
-        from .database import default_session_factory
-        from .store import LocalExperimentStore, get_experiment_store
-
-        settings = get_settings()
-        target = get_experiment_store()
-        total += migrate_from_stores(settings.experiments_path, target)
-
-        if settings.experiment_backend == "datalab":
-            legacy = LocalExperimentStore(default_session_factory())
-            total += migrate_inline_sql_to_datalab(legacy, target)
-
-        # 历史脏数据：清洗 factors 里残留的 _doe_metadata 等非数值 blob（幂等）
-        try:
-            clean_doe_metadata_from_factors()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("doe_metadata cleanup skipped: %s", exc)
-    except DatalabUnavailableError as exc:
-        log.warning("Experiment migration skipped (Datalab unavailable): %s", exc)
+        clean_doe_metadata_from_factors()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("doe_metadata cleanup skipped: %s", exc)
     return total
