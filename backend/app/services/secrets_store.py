@@ -196,6 +196,28 @@ def read_env_file(path: Path | None = None) -> dict[str, str]:
     return out
 
 
+def persist_settings_updates(updates: dict[str, str]) -> None:
+    """Single write path for Settings-field values (stage 4 / SR-055).
+
+    Applies a UI settings change in all three layers at once: the live
+    process env, the ``.env`` file (via :func:`write_env_updates`), and
+    the settings cache (invalidated first, so a failed ``.env`` write on a
+    read-only filesystem still leaves the live env effective instead of a
+    stale cached object). Callers keep their own OSError tolerance around
+    this call.
+
+    Overlay-backed values (secrets, LLM runtime, api token, optimizer
+    rules) do NOT use this: they persist via :func:`write_env_updates`
+    and take effect through the runtime overlay, not the cached Settings
+    object. Note the process boundary: this invalidates the cache in
+    *this* process only — Celery workers are separate processes and keep
+    their cached settings until restarted.
+    """
+    os.environ.update(updates)
+    get_settings.cache_clear()
+    write_env_updates(updates)
+
+
 def write_env_updates(updates: dict[str, str], path: Path | None = None) -> None:
     """Upsert env keys in ``.env`` (create file if missing).
 

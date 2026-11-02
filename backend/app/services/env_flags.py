@@ -5,9 +5,15 @@ True/False toggle.  Updates are applied in three layers so they both take
 effect immediately and survive restarts:
 
 1. ``os.environ`` — the live process environment;
-2. ``.env`` upsert (reusing :func:`secrets_store.write_env_updates`);
+2. ``.env`` upsert;
 3. ``get_settings.cache_clear()`` — every subsequent ``get_settings()`` call
    sees the new value (services read settings per call, not at import).
+
+All three layers go through one call,
+:func:`secrets_store.persist_settings_updates` (stage 4 / SR-055).
+"Immediately" means this process: Celery workers are separate processes
+and keep their cached settings until restarted, so a flag a worker task
+reads does not change in the worker until then.
 
 The LLM runtime overlay (``runtime_secrets``) is deliberately left untouched
 so an unsaved provider switch in the UI is not reset by a flag change.
@@ -489,17 +495,36 @@ FLAG_REGISTRY: tuple[EnvFlag, ...] = (
 _FLAG_BY_ATTR = {f.attr: f for f in FLAG_REGISTRY}
 
 
-def _validate_registry() -> None:
-    """Every flag must be a real boolean Settings field (import-time check)."""
-    for flag in FLAG_REGISTRY:
-        field = Settings.model_fields.get(flag.attr)
+def validate_flag_registry(registry=FLAG_REGISTRY, fields=None) -> None:
+    """Stage 4 / SR-055: the registry is the single source for UI flags.
+
+    Every entry must name a real boolean Settings field, and no attribute
+    may appear twice (the ``_FLAG_BY_ATTR`` lookup would silently drop the
+    second entry). Runs at import time on the real registry; the parameters
+    exist so tests can feed synthetic mismatches.
+
+    This is one direction only: it cannot catch a boolean Settings field
+    that never got a registry entry — 54 such fields exist and no marker
+    distinguishes "should be a flag" from "internal", so asserting full
+    equality would fail on the real code. That direction is pinned
+    instead by the registry snapshot in test_stage4_config_single_source:
+    removing or adding an entry fails the snapshot until the snapshot is
+    deliberately updated alongside it.
+    """
+    fields = Settings.model_fields if fields is None else fields
+    seen: set[str] = set()
+    for flag in registry:
+        if flag.attr in seen:
+            raise RuntimeError(f"env flag {flag.attr!r} is registered twice")
+        seen.add(flag.attr)
+        field = fields.get(flag.attr)
         if field is None:
             raise RuntimeError(f"env flag {flag.attr!r} is not a Settings field")
         if not isinstance(field.default, bool):
             raise RuntimeError(f"env flag {flag.attr!r} is not a boolean setting")
 
 
-_validate_registry()
+validate_flag_registry()
 
 
 def list_env_flags() -> list[dict]:
@@ -596,7 +621,7 @@ def update_env_flags(updates: dict[str, bool]) -> tuple[list[str], list[str]]:
     Refused attrs land in ``rejected_attrs`` so the settings endpoint can
     show them instead of silently dropping the request.
     """
-    from .secrets_store import _TOPOLOGY_FLAGS, _UI_MANAGED_KEYS, mark_ui_managed, write_env_updates
+    from .secrets_store import _TOPOLOGY_FLAGS, _UI_MANAGED_KEYS, mark_ui_managed, persist_settings_updates
 
     updated: list[str] = []
     rejected: list[str] = []
@@ -617,18 +642,16 @@ def update_env_flags(updates: dict[str, bool]) -> tuple[list[str], list[str]]:
             rejected.append(attr)
             continue
         value = "true" if raw else "false"
-        os.environ[flag.env_key] = value
         env_writes[flag.env_key] = value
         updated.append(attr)
 
     if updated:
         try:
-            write_env_updates(env_writes)
+            persist_settings_updates(env_writes)
         except OSError as exc:
             # Read-only FS etc. — the live process env still applied.
             logger.warning("env flags: .env persistence failed (%s)", exc)
         mark_ui_managed(env_writes)
-        get_settings.cache_clear()
         if "neo4j_enabled" in updated:
             try:
                 from . import neo4j_kg

@@ -411,15 +411,12 @@ def get_formulation_mode() -> dict:
 
 @router.post("/settings/formulation-mode")
 def set_formulation_mode(body: FormulationModeUpdate) -> dict:
-    import os
-    from ..services.secrets_store import write_env_updates
+    from ..services.secrets_store import persist_settings_updates
 
-    os.environ["FORMUNEX_FORMULATION_MODE"] = body.mode
     try:
-        write_env_updates({"FORMUNEX_FORMULATION_MODE": body.mode})
+        persist_settings_updates({"FORMUNEX_FORMULATION_MODE": body.mode})
     except OSError:
         pass  # read-only FS — live process env still applied
-    get_settings.cache_clear()
     return {"mode": body.mode, "status": "ok"}
 
 
@@ -456,15 +453,12 @@ def get_wiki_chat_mode() -> dict:
 
 @router.post("/settings/wiki-chat-mode")
 def set_wiki_chat_mode(body: WikiChatModeUpdate) -> dict:
-    import os
-    from ..services.secrets_store import write_env_updates
+    from ..services.secrets_store import persist_settings_updates
 
-    os.environ["FORMUNEX_WIKI_CHAT_MODE"] = body.mode
     try:
-        write_env_updates({"FORMUNEX_WIKI_CHAT_MODE": body.mode})
+        persist_settings_updates({"FORMUNEX_WIKI_CHAT_MODE": body.mode})
     except OSError:
         pass
-    get_settings.cache_clear()
     return {"mode": body.mode, "status": "ok"}
 
 

@@ -132,20 +132,11 @@ def apply_profile(profile: str) -> dict:
         raise ValueError(f"profile 必须是 {list(_PROFILES)} 之一, 收到 {profile!r}")
     flags, str_env = _PROFILES[profile]
 
-    import os
-
     env_updates: dict[str, str] = {_BOOL_ENV[a]: ("true" if flags[a] else "false") for a in flags}
     env_updates.update(str_env)
 
-    for key, value in env_updates.items():
-        os.environ[key] = value
-
-    from ..config import get_settings
-
-    get_settings.cache_clear()
-
     try:
-        secrets_store.write_env_updates(env_updates)
+        secrets_store.persist_settings_updates(env_updates)
         persisted = True
     except Exception as exc:  # read-only FS — live process env still applied
         logger.warning("profile env persistence skipped: %s", exc)
