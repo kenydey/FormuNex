@@ -42,13 +42,14 @@ def main(argv: list[str] | None = None) -> int:
     from sqlalchemy.orm import Session
 
     from app.config import get_settings
-    from app.db.datalab_client import datalab_headers
+    from app.db.datalab_client import datalab_headers, list_item_versions
     from app.services.eln.connectors.base import ConnectorError
     from app.services.eln.connectors.datalab import DatalabConnector
     from app.services.lab.datalab_migration import migrate, migrate_campaigns
 
     s = get_settings()
-    conn = DatalabConnector(args.datalab_url or s.datalab_api_url, headers=datalab_headers(),
+    api_url = args.datalab_url or s.datalab_api_url
+    conn = DatalabConnector(api_url, headers=datalab_headers(),
                             timeout=s.datalab_timeout_seconds)
 
     def fetch(item_id: str):
@@ -59,6 +60,12 @@ def main(argv: list[str] | None = None) -> int:
                 return None
             raise
 
+    def fetch_versions(refcode: str):
+        # Versions are provenance only (metadata: id/version/action/time/
+        # creator); a failure here must not block the row migration, and
+        # migrate_campaigns records it per row instead of failing.
+        return list_item_versions(api_url, refcode)
+
     actor = "cli:migrate_datalab_to_native"
     result: dict = {}
     engine = create_engine(args.db_url or s.db_url, future=True)
@@ -68,7 +75,8 @@ def main(argv: list[str] | None = None) -> int:
                 result["experiments"] = migrate(session, fetch, dry_run=args.dry_run, actor=actor)
             if args.only in (None, "campaigns"):
                 result["campaigns"] = migrate_campaigns(session, fetch, dry_run=args.dry_run,
-                                                        prune_missing=args.prune_missing_rows, actor=actor)
+                                                        prune_missing=args.prune_missing_rows, actor=actor,
+                                                        fetch_versions=fetch_versions)
             if args.dry_run:
                 session.rollback()
             else:

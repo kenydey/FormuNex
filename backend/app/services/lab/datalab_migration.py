@@ -82,7 +82,8 @@ def _is_inline(ref: dict[str, Any]) -> bool:
 
 def migrate_campaigns(session: Session, fetch_item: Callable[[str], dict[str, Any] | None], *,
                       dry_run: bool = False, prune_missing: bool = False,
-                      actor: str = "migration") -> dict[str, Any]:
+                      actor: str = "migration",
+                      fetch_versions: Callable[[str], list[dict[str, Any]]] | None = None) -> dict[str, Any]:
     """Copy Datalab-backed workbench (campaign) rows into ``campaigns.sample_refs``.
 
     In Datalab mode a campaign's ``sample_refs`` are an index (``{id, item_id}``) and every row —
@@ -99,7 +100,7 @@ def migrate_campaigns(session: Session, fetch_item: Callable[[str], dict[str, An
 
     campaigns = session.execute(select(Campaign).order_by(Campaign.id)).scalars().all()
     report: dict[str, Any] = {"campaigns": 0, "rows": 0, "already_native": 0, "missing": [], "pruned": 0,
-                              "errors": [], "dry_run": dry_run}
+                              "errors": [], "version_inventory": {}, "dry_run": dry_run}
     for campaign in campaigns:
         refs = [dict(r) for r in (campaign.sample_refs or [])]
         if not refs or all(_is_inline(r) for r in refs):
@@ -144,10 +145,34 @@ def migrate_campaigns(session: Session, fetch_item: Callable[[str], dict[str, An
                 inline["datalab_refcode"] = row.refcode
             new_refs.append(inline)
             moved += 1
+            version_info: dict[str, Any] = {"refcode": row.refcode, "version_count": 0, "version_ids": []}
+            if fetch_versions is not None and row.refcode:
+                try:
+                    versions = fetch_versions(row.refcode)
+                    version_info = {"refcode": row.refcode, "version_count": len(versions),
+                                    "version_ids": [v.get("id") for v in versions]}
+                except Exception as exc:  # noqa: BLE001 - versions are provenance, not data
+                    report["errors"].append({**where, "error": f"versions fetch failed: {exc}"})
+            report["version_inventory"][f"{campaign.id}:{row.id}"] = version_info
             if not dry_run:
                 session.add(ElnLinkRow(id=str(uuid.uuid4()), connector="datalab", external_id=item_id,
                                        local_type="campaign_row", local_id=f"{campaign.id}:{row.id}",
                                        last_synced_at=utcnow(), sync_state="ok"))
+                # One per-row import entry: the native row-versions UI reads
+                # per-row audit (entity workbench_row, id "cid:rid"); without
+                # it an imported row would show no history at all. The
+                # run-level lab.datalab_migrate_campaigns entry still exists.
+                snap = {"status": row.status, "planned_params": row.planned_params,
+                        "actual_params": row.actual_params, "measurements": row.measurements,
+                        "note": row.note, "tags": row.tags}
+                hash_chain.append(session, actor=actor, action="workbench_row.import",
+                                  entity_type="workbench_row", entity_id=f"{campaign.id}:{row.id}",
+                                  after=snap,
+                                  detail={"campaign_id": campaign.id, "row_id": row.id, "snapshot": snap,
+                                          "datalab_refcode": row.refcode,
+                                          "datalab_version_count": version_info["version_count"],
+                                          "datalab_version_ids": version_info["version_ids"],
+                                          "migrated_from": "datalab"})
         report["rows"] += moved
         if moved or (prune_missing and len(new_refs) != len(refs)):
             report["campaigns"] += 1
