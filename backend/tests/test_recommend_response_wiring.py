@@ -160,17 +160,18 @@ class _FakeTracker:
 def test_async_task_forwards_evidence_and_dispatches_kb_ingest(monkeypatch):
     from app.api.formulations import RecommendFormulationsResponse
     from app.worker import tasks as wt
+    from app.worker.tasks import research as wt_research
 
     evidence = [_ev("kb:9")]
     resp = RecommendFormulationsResponse(
         formulas=[], engine="llm", scored=[], grounded_evidence=evidence, recommend_id="r-1"
     )
     monkeypatch.setattr("app.api.formulations.recommend_formulations", lambda body: resp)
-    monkeypatch.setattr(wt, "ThinkingTracker", _FakeTracker)
-    monkeypatch.setattr(wt, "persist_result", lambda *a, **k: None)
-    monkeypatch.setattr(wt, "_persist_terminal", lambda *a, **k: None)
+    monkeypatch.setattr(wt_research, "ThinkingTracker", _FakeTracker)
+    monkeypatch.setattr(wt_research, "persist_result", lambda *a, **k: None)
+    monkeypatch.setattr(wt_research, "_persist_terminal", lambda *a, **k: None)
     ingested: list = []
-    monkeypatch.setattr(wt, "dispatch_kb_ingest", lambda ev, **k: ingested.append(ev) or "kb-1")
+    monkeypatch.setattr(wt_research, "dispatch_kb_ingest", lambda ev, **k: ingested.append(ev) or "kb-1")
 
     res = wt.run_recommend_task.apply(
         args=({"requirement": {"domain": "anticorrosion_coating"}, "n": 2, "sources": []},),

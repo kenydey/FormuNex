@@ -102,8 +102,15 @@ def submit(
     that race to a thread that already ran the job to ``partial``.
     """
     from .tasks import accepted_response
+    from ..worker.task_kinds import is_known_kind
 
     import uuid
+
+    # Stage 4 / SR-053: the publish side checks the task-kind table, so a
+    # typo'd kind fails here with 400 instead of becoming a 202 the client
+    # polls forever (and that no recovery handler will ever replay).
+    if not is_known_kind(kind):
+        raise HTTPException(status_code=400, detail=f"未知任务类型：{kind}")
 
     task_id = str(uuid.uuid4())
     response = accepted_response(task_id, kind, outbox_id=outbox_id, owner_id=owner_id)

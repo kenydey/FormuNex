@@ -156,7 +156,7 @@ def test_a_manual_sweep_runs_the_radar_task_and_reports_what_it_found(client, mo
         return "kb-task-7"
 
     monkeypatch.setattr("app.services.literature.iter_search", fake_iter)
-    monkeypatch.setattr("app.worker.tasks.dispatch_kb_ingest", fake_dispatch)
+    monkeypatch.setattr("app.worker.tasks.search.dispatch_kb_ingest", fake_dispatch)
 
     res = client.post("/api/search/topic-sweep", json={"query": "  镁合金 无铬钝化 ", "project_id": "p1", "total_limit": 40})
     assert res.status_code == 202, res.text

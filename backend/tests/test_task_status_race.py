@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.schemas import TaskState
+from app.domain.schemas import TaskState, TaskStatus
 from app.services import _fsutil
 from app.worker import task_progress, tasks
 
@@ -146,5 +146,5 @@ def test_the_progress_files_are_written_through_the_atomic_helper(task_dir, monk
         "atomic-1", task_progress.TaskProgressEvent(status=task_progress.TaskProgressStatus.RUNNING), kind="k"
     )
     task_progress._file_write_result("atomic-1", {"a": 1})
-    tasks._persist_task("atomic-1", tasks.TaskStatus(task_id="atomic-1", kind="k", state=TaskState.pending))
+    tasks._persist_task("atomic-1", TaskStatus(task_id="atomic-1", kind="k", state=TaskState.pending))
     assert sorted(seen) == ["atomic-1.json", "atomic-1.meta.json", "atomic-1.result.json"]

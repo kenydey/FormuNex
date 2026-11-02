@@ -35,6 +35,7 @@ _INSIGHTS = [{"component": "KH-550", "cas_no": "919-30-2", "substitutes": ["KH-5
 
 def _run(monkeypatch, payload: dict):
     from app.worker import tasks as wt
+    from app.worker.tasks import research as wt_research
 
     seen: dict = {}
 
@@ -44,10 +45,10 @@ def _run(monkeypatch, payload: dict):
                           "recommend_id": "r1", "relation_insights": _INSIGHTS if body.relation_insight else []})
 
     monkeypatch.setattr("app.api.formulations.recommend_formulations", fake_recommend)
-    monkeypatch.setattr(wt, "ThinkingTracker", _FakeTracker)
-    monkeypatch.setattr(wt, "dispatch_kb_ingest", lambda *a, **k: None)
-    monkeypatch.setattr(wt, "persist_result", lambda *a, **k: None)
-    monkeypatch.setattr(wt, "_persist_terminal", lambda *a, **k: None)
+    monkeypatch.setattr(wt_research, "ThinkingTracker", _FakeTracker)
+    monkeypatch.setattr(wt_research, "dispatch_kb_ingest", lambda *a, **k: None)
+    monkeypatch.setattr(wt_research, "persist_result", lambda *a, **k: None)
+    monkeypatch.setattr(wt_research, "_persist_terminal", lambda *a, **k: None)
     out = wt.run_recommend_task.apply(args=(payload,), task_id="task-ri").get()
     return out, seen
 

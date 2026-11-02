@@ -34,6 +34,7 @@ class _FakeResp:
 
 def _run_task(monkeypatch, resp_payload: dict):
     from app.worker import tasks as wt
+    from app.worker.tasks import research as wt_research
 
     captured: dict = {}
 
@@ -43,12 +44,12 @@ def _run_task(monkeypatch, resp_payload: dict):
     monkeypatch.setattr(
         "app.api.formulations.recommend_formulations", fake_recommend
     )
-    monkeypatch.setattr(wt, "ThinkingTracker", _FakeTracker)
-    monkeypatch.setattr(wt, "dispatch_kb_ingest", lambda *a, **k: "kb-task-1")
+    monkeypatch.setattr(wt_research, "ThinkingTracker", _FakeTracker)
+    monkeypatch.setattr(wt_research, "dispatch_kb_ingest", lambda *a, **k: "kb-task-1")
     monkeypatch.setattr(
-        wt, "persist_result", lambda task_id, result, failed=False: captured.update(result=result, failed=failed)
+        wt_research, "persist_result", lambda task_id, result, failed=False: captured.update(result=result, failed=failed)
     )
-    monkeypatch.setattr(wt, "_persist_terminal", lambda *a, **k: None)
+    monkeypatch.setattr(wt_research, "_persist_terminal", lambda *a, **k: None)
 
     fake_self = types.SimpleNamespace(request=types.SimpleNamespace(id="task-1"))
     # celery bind=True 任务：用 apply 走 eager 路径，request 上下文自动就绪。

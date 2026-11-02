@@ -31,7 +31,7 @@ def test_topic_sweep_searches_and_dispatches(monkeypatch):
         return "kb-task-1"
 
     monkeypatch.setattr("app.services.literature.iter_search", fake_iter)
-    monkeypatch.setattr("app.worker.tasks.dispatch_kb_ingest", fake_dispatch)
+    monkeypatch.setattr("app.worker.tasks.search.dispatch_kb_ingest", fake_dispatch)
 
     res = run_topic_sweep.run(  # 直接调任务函数体(eager=false 后 delay 不同步)
         {"query": "镁合金 无铬钝化", "project_id": "1d10717c", "total_limit": 50}

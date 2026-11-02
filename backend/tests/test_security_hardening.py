@@ -248,7 +248,7 @@ def test_a_task_id_that_is_not_a_plain_token_is_not_written_or_read(tmp_path, mo
     from app.worker import tasks as T
 
     task_dir = tmp_path / "tasks"
-    monkeypatch.setattr(T, "_task_persist_dir", lambda: task_dir)
+    monkeypatch.setattr("app.worker.tasks._common._task_persist_dir", lambda: task_dir)
     status = TaskStatus(task_id="x", kind="k", state=TaskState.completed)
     for bad in ("../ESCAPED", "a/b", "a\\b", "", "x" * 65, "ok id"):
         T._persist_task(bad, status)

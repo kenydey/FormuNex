@@ -114,7 +114,7 @@ def test_the_upload_route_cannot_leave_a_task_that_ended_at_once_stuck_at_queued
         finally:
             worker_done.set()
 
-    monkeypatch.setattr(tasks, "_safe_file_ingest", safe_then_signal)
+    monkeypatch.setattr("app.worker.tasks.kb._safe_file_ingest", safe_then_signal)
 
     real_register = tasks.TaskManager.register_celery_task
     real_load = tasks.load_persisted_task
@@ -125,11 +125,11 @@ def test_the_upload_route_cannot_leave_a_task_that_ended_at_once_stuck_at_queued
         if len(calls) == 1:  # dispatch_file_ingest's own registration, before the thread starts
             return real_register(self, task_id, kind, owner_id)
         assert worker_done.wait(30), "the worker never finished"
-        monkeypatch.setattr(tasks, "load_persisted_task", lambda tid: None)  # the terminal snapshot cannot be read
+        monkeypatch.setattr("app.worker.tasks._common.load_persisted_task", lambda tid: None)  # the terminal snapshot cannot be read
         try:
             return real_register(self, task_id, kind, owner_id)
         finally:
-            monkeypatch.setattr(tasks, "load_persisted_task", real_load)
+            monkeypatch.setattr("app.worker.tasks._common.load_persisted_task", real_load)
 
     monkeypatch.setattr(tasks.TaskManager, "register_celery_task", second_registration_after_the_worker)
     client = TestClient(app)

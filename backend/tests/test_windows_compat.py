@@ -64,7 +64,7 @@ def test_the_task_directory_defaults_to_the_platform_temp_dir(monkeypatch):
     expected = Path(tempfile.gettempdir()) / "formunex_tasks"
     assert tech_report._task_persist_dir() == expected
     assert task_progress._task_dir() == expected
-    assert tasks._task_persist_dir() == expected
+    assert tasks._common._task_persist_dir() == expected
     monkeypatch.setenv("FORMUNEX_TASK_DIR", "/somewhere/else")
     assert task_progress._task_dir() == Path("/somewhere/else")
 
