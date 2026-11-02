@@ -135,11 +135,12 @@ def test_a_healthy_image_passes_every_check(run_smoke):
 
 
 def test_the_container_boots_the_way_a_first_run_does(run_smoke):
-    """No volume, no Redis, no Datalab: tasks run in-process and the ledger is the local one."""
+    """No volume, no Redis, no ELN: tasks run in-process and the ledger is the local one."""
     _, calls = run_smoke()
     boot = next(c for c in calls if c.startswith("docker run -d"))
-    for setting in ("FORMUNEX_CELERY_EAGER=true", "FORMUNEX_DATALAB_REQUIRED=false", "FORMUNEX_API_AUTH_ENABLED=false"):
+    for setting in ("FORMUNEX_CELERY_EAGER=true", "FORMUNEX_API_AUTH_ENABLED=false"):
         assert setting in boot
+    assert "DATALAB" not in boot, "the retired Datalab switch must not leak into first-run boot"
     assert " -v " not in boot and "--volume" not in boot, "a mounted data directory would hide the missing-directory failure"
 
 

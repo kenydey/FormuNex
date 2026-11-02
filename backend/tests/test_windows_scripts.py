@@ -209,13 +209,15 @@ def test_the_dev_launcher_pins_an_absolute_sqlite_url():
     assert "sqlite:///./" not in text, "relative sqlite URL is CWD-dependent"
 
 
-def test_dev_launcher_degrades_when_the_eln_is_unreachable():
-    """Product compose runs datalab + REQUIRED=true; a Windows dev box without an ELN
-    must still start, so the launcher probes first and falls back to auto/sqlite."""
+def test_dev_launcher_needs_no_eln():
+    """Datalab removal batch 5: the ledger is always native, so the launcher
+    sets native backends and must not probe, require, or fall back from any ELN."""
     text = START.read_text(encoding="utf-8")
-    assert "Resolve-ElnMode" in text
-    assert "$env:FORMUNEX_DATALAB_REQUIRED = 'false'" in text
-    assert "-RequireEln" in text, "strict ELN mode stays available for product runs"
+    assert "$env:FORMUNEX_CAMPAIGN_BACKEND = 'native'" in text
+    assert "$env:FORMUNEX_EXPERIMENT_BACKEND = 'native'" in text
+    assert "DATALAB_REQUIRED" not in text
+    assert "DATALAB_API_URL" not in text
+    assert "-RequireEln" not in text
 
 
 def test_install_bat_forwards_arguments_and_the_exit_code():
