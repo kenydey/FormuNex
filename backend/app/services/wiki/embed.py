@@ -14,7 +14,6 @@ from typing import Any
 
 from ...config import get_settings
 from ...db.models import SourceDocument
-from ...db.wiki_store import get_wiki_store
 from ...domain.schemas import Evidence
 from .schema import parse_front_matter
 
@@ -82,6 +81,8 @@ def embed_wiki_page(path: str) -> dict[str, Any]:
     rel = (path or "").replace("\\", "/").lstrip("/")
     if not rel:
         return {"ok": False, "error": "empty_path"}
+
+    from ...db.wiki_store import get_wiki_store
 
     store = get_wiki_store()
     row = store.get_by_path(rel)
@@ -238,6 +239,8 @@ def rebuild_all_wiki_embeds() -> dict[str, Any]:
         return {"ok": False, "reason": "wiki_disabled", "indexed": 0}
     if not settings.wiki_embed_enabled:
         return {"ok": False, "reason": "wiki_embed_disabled", "indexed": 0}
+
+    from ...db.wiki_store import get_wiki_store
 
     store = get_wiki_store()
     pages = store.list_pages(limit=500)

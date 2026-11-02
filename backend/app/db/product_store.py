@@ -23,6 +23,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from ..services import chemtools
 from ..services.errors import degrade_return
 from .models import KBProduct
 from .db_common import escape_like
@@ -133,8 +134,6 @@ class ProductStore:
     def _resolve_structure(trade: str, grade: str, generic: str) -> tuple[str | None, str | None]:
         """Network half of structure linking: 牌号 → (CAS, SMILES). No DB access."""
         try:
-            from ..services import chemtools
-
             queries = [f"{trade} {grade}".strip(), generic.strip()]
             cas = smiles = None
             for q in queries:
@@ -158,8 +157,6 @@ class ProductStore:
         if not pending:
             return
         try:
-            from ..services import chemtools
-
             if not chemtools.gateway_enabled():
                 return
         except Exception as exc:

@@ -9,6 +9,8 @@ from typing import Any
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..domain.schemas import SourceGuideSchema
+from ..services.patent_ids import patent_id_aliases
+from ..services.provenance import RESERVED_SOURCE_FIELDS
 from .models import SourceDocument
 from .session_utils import commit_session
 
@@ -206,8 +208,6 @@ class SourceStore:
         ``kb_ingest._fetch_one`` inspect ``ingest_status`` themselves). Pass
         ``include_failed=False`` for a plain "already have it?" check.
         """
-        from ..services.patent_ids import patent_id_aliases
-
         keys: list[str] = []
         seen: set[str] = set()
         for raw in origin_urls or []:
@@ -383,8 +383,6 @@ class SourceStore:
         Only real ``SourceDocument`` columns are applied; unknown names raise
         ``ValueError``. Returns False when the row is missing.
         """
-        from ..services.provenance import RESERVED_SOURCE_FIELDS
-
         bad = RESERVED_SOURCE_FIELDS.intersection(fields)
         if bad:
             logger.warning(

@@ -15,7 +15,8 @@ from .session_utils import commit_session
 logger = logging.getLogger(__name__)
 
 # P2 (0042): L1 去重索引键 —— kb_dedup 顶层只依赖标准库，无循环导入。
-from ..services.kb_dedup import chunk_dedup_key as _chunk_dedup_key
+from ..domain.pure import chunk_dedup_key as _chunk_dedup_key
+from ..services.kb_ann import vector_to_blob
 
 
 def _utcnow() -> datetime:
@@ -138,8 +139,6 @@ class ChunkStore:
             emb_blob = None
             if emb_list:
                 try:
-                    from ..services.kb_ann import vector_to_blob
-
                     emb_blob = vector_to_blob(list(emb_list))
                 except Exception:  # noqa: BLE001
                     emb_blob = None

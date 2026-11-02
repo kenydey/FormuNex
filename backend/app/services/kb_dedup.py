@@ -31,14 +31,13 @@ pre-embedding, while L2 needs the row vectors.
 from __future__ import annotations
 
 import contextvars
-import hashlib
 import logging
-import re
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from ..domain.pure import chunk_dedup_key as chunk_dedup_key
+from ..domain.pure import normalize_text as normalize_text
 
-_WS_RE = re.compile(r"\s+")
+logger = logging.getLogger(__name__)
 
 # Side channel for callers that must tell "every chunk already exists under
 # another source" apart from a genuine zero-chunk failure (both make
@@ -62,25 +61,6 @@ def all_chunks_were_duplicates() -> bool:
 # v27 P2-21: L2 语料归一化矩阵缓存 —— (generation, lang, audit_cap) →
 # (chunk_ids, 归一化矩阵)。generation 由 chunk 写入时 bump；进程内有效。
 _L2_MAT_CACHE: dict[tuple, tuple[list[str], object]] = {}
-
-
-def normalize_text(text: str | None) -> str:
-    """Canonical form for the L1 exact-dup key."""
-    return _WS_RE.sub(" ", (text or "").strip().lower())
-
-
-def chunk_dedup_key(text: str | None, heading_path: str | None, page_no: Any) -> str:
-    """L1 dedup key: normalized text + provenance.
-
-    Same-document chunks may share identical text across sections/pages
-    (different ``heading_path`` / ``page_no``) — those are legitimate and
-    must be kept. Only text+provenance-identical rows under a *different*
-    source count as duplicates.
-    """
-    canon = "\x1f".join(
-        [normalize_text(text), normalize_text(heading_path), str(page_no or "")]
-    )
-    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
 def dedup_key_for_row(row: dict) -> str:

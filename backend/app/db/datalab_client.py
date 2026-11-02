@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from ..domain.schemas import DatalabDeleteResponse, DatalabItemEnvelope, DatalabSampleResponse
 from ..services.http_safe import make_client, make_async_client
+from ..services.runtime_secrets import effective_setting
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,6 @@ def datalab_headers() -> dict[str, str]:
     no token is configured so older deployments keep working unauthenticated.
     """
     from ..config import get_settings
-    from ..services.runtime_secrets import effective_setting
 
     token = str(effective_setting(get_settings(), "datalab_api_token") or "")
     return {"DATALAB-API-KEY": token} if token else {}

@@ -14,6 +14,8 @@ import contextlib
 import logging
 from collections.abc import Iterator
 
+from ..services import redis_breaker
+
 logger = logging.getLogger(__name__)
 
 _LOCK_KEY = "formunex:sqlite_write"
@@ -29,7 +31,6 @@ def sqlite_write_lock(
     rather than stalling callers for five minutes.
     """
     from ..redis_compat import client_kwargs
-    from ..services import redis_breaker
 
     if not redis_url or redis_breaker.is_open():
         yield

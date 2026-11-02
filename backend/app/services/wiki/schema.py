@@ -4,8 +4,10 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+
+from ...domain.pure import content_hash as content_hash
+from ...domain.pure import wiki_root_from_db_url as wiki_root_from_db_url
 
 _SAFE_KEY = re.compile(r"[^a-zA-Z0-9._\u4e00-\u9fff-]+")
 
@@ -109,29 +111,7 @@ def chemical_entity_id(*, cas: str | None = None, smiles: str | None = None) -> 
     return "chem:unknown"
 
 
-def wiki_root_from_db_url(db_url: str) -> Path:
-    """Derive the Wiki directory from the database URL.
 
-    ``sqlite:///./data/formunex.db`` → ``./data/wiki``
-
-    For a server database (``postgresql://user:pw@host:5432/db``) the URL is not
-    a filesystem path, so there is nothing to derive: fall back to the default
-    ``data/wiki``. The previous version only stripped the ``sqlite:///`` prefix
-    and fed the rest to ``Path()``, which silently created a directory literally
-    named ``postgresql:`` and buried every Wiki page under it.
-    """
-    raw = (db_url or "").strip()
-    if not raw.startswith("sqlite"):
-        return Path("data") / "wiki"
-    raw = raw.replace("sqlite:///", "").strip()
-    if not raw or raw == ":memory:":
-        return Path("data") / "wiki"
-    parent = Path(raw).expanduser().resolve().parent
-    return parent / "wiki"
-
-
-def content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
 def dump_page(

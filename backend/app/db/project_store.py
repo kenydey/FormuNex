@@ -17,6 +17,7 @@ from ..domain.project_workspace import (
     workspace_from_legacy,
 )
 from ..domain.project_workspace import LegacySnapshotPayload
+from ..services.intent import parse_intent
 from .models import ProjectRow
 from .session_utils import commit_session
 
@@ -190,8 +191,6 @@ class ProjectStore:
         if not title or not title.strip():
             return None
         try:
-            from ..services.intent import parse_intent
-
             parsed = parse_intent(title.strip())
             if parsed is not None and parsed.requirement is not None:
                 return parsed.requirement

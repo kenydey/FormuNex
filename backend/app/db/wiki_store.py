@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from .models import WikiPage
 from .session_utils import commit_session
 from ..config import get_settings
-from ..services.wiki.schema import content_hash, wiki_root_from_db_url
+from ..domain.pure import content_hash, wiki_root_from_db_url
+from ..services.wiki.embed import embed_wiki_page
+from ..services.wiki.fts import index_page
 
 logger = logging.getLogger(__name__)
 
@@ -150,8 +152,6 @@ class WikiStore:
 
         # Best-effort FTS sync (never breaks compile)
         try:
-            from ..services.wiki.fts import index_page
-
             index_page(
                 self._session_factory,
                 path=rel,
@@ -165,8 +165,6 @@ class WikiStore:
             logger.debug("wiki FTS sync skipped: %s", exc)
         # Best-effort Phase-3 embed into document_chunks (flag-gated)
         try:
-            from ..services.wiki.embed import embed_wiki_page
-
             embed_wiki_page(rel)
         except Exception as exc:  # noqa: BLE001
             logger.debug("wiki embed sync skipped: %s", exc)
