@@ -39,7 +39,7 @@ def _events(body: str) -> list[dict]:
 
 
 def _stub_pipeline(monkeypatch):
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
     import app.services.chat_claims as cc_mod
     import app.services.llm as llm_mod
 
@@ -63,7 +63,7 @@ def _stub_pipeline(monkeypatch):
 
 
 def test_finalize_evidence_fields_runs_off_the_event_loop(monkeypatch, client):
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
 
     _stub_pipeline(monkeypatch)
     seen: dict = {}
@@ -99,7 +99,7 @@ def test_finalize_evidence_fields_runs_off_the_event_loop(monkeypatch, client):
 def test_a_failing_finalize_does_not_break_the_stream_contract(monkeypatch, client):
     """Behaviour stays what it was: the helper's own try/except decides (here it
     raises, as an unexpected bug would) — the stream must still end in an event."""
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
 
     _stub_pipeline(monkeypatch)
 

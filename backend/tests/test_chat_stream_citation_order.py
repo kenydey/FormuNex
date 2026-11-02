@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.api import chat as chat_api
+from app.services import chat_orchestration as chat_orch
 from app.domain.schemas import Evidence
 
 
@@ -68,7 +69,7 @@ def test_stream_plan_relevant_matches_prompt_order(monkeypatch):
     reranked = [srcs[2], srcs[0], srcs[1]]  # BM25 重排：C,A,B
 
     monkeypatch.setattr(
-        chat_api,
+        chat_orch,
         "_augment_with_kb",
         lambda q, s, **kw: (list(s) + list(srcs), len(srcs), None, None),
     )
@@ -95,7 +96,7 @@ def test_stream_plan_relevant_matches_prompt_order(monkeypatch):
 
     monkeypatch.setattr(text2sql, "hybrid_answer", lambda *a, **kw: {})
 
-    plan = chat_api._stream_answer_plan(_req(), _settings())
+    plan = chat_orch._stream_answer_plan(_req(), _settings())
 
     # prompt 的 [^n] 按 relevant（重排后）编号
     assert [e.identifier for e in plan["relevant"]] == ["kb:C", "kb:A", "kb:B"]
@@ -116,7 +117,7 @@ def test_stream_plan_relevant_matches_prompt_order(monkeypatch):
 
 def test_stream_plan_empty_sources_no_crash(monkeypatch):
     monkeypatch.setattr(
-        chat_api, "_augment_with_kb", lambda q, s, **kw: ([], 0, None, None)
+        chat_orch, "_augment_with_kb", lambda q, s, **kw: ([], 0, None, None)
     )
     import app.services.rag as rag
 
@@ -141,6 +142,6 @@ def test_stream_plan_empty_sources_no_crash(monkeypatch):
 
     monkeypatch.setattr(text2sql, "hybrid_answer", lambda *a, **kw: {})
 
-    plan = chat_api._stream_answer_plan(_req(), _settings())
+    plan = chat_orch._stream_answer_plan(_req(), _settings())
     assert plan["relevant"] == []
     assert plan["relevant"][:8] == []

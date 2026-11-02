@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import chat as chat_api
+from app.services import chat_orchestration as chat_orch
 from app.config import get_settings
 from app.main import app
 
@@ -71,7 +72,7 @@ def test_the_streaming_plan_uses_the_owner_bound_on_the_request(monkeypatch):
     from app.domain.schemas import Evidence
 
     ev = Evidence(source="kb", identifier="kb:A", title="文献A", snippet="摘要内容用于测试。", relevance=0.9)
-    monkeypatch.setattr(chat_api, "_augment_with_kb", lambda q, s, **kw: (list(s) + [ev], 1, None, None))
+    monkeypatch.setattr(chat_orch, "_augment_with_kb", lambda q, s, **kw: (list(s) + [ev], 1, None, None))
 
     class Store:
         def ingest(self, sources): ...
@@ -93,8 +94,8 @@ def test_the_streaming_plan_uses_the_owner_bound_on_the_request(monkeypatch):
 
     req = chat_api.ChatRequestValidated(question="水性环氧底漆的盐雾性能如何？", sources=[], project_id="p1")
     req._owner_id = "alice"
-    chat_api._stream_answer_plan(req, settings)
-    chat_api._stream_answer_plan(chat_api.ChatRequestValidated(question="q", sources=[]), settings)  # an internal call: no identity
+    chat_orch._stream_answer_plan(req, settings)
+    chat_orch._stream_answer_plan(chat_api.ChatRequestValidated(question="q", sources=[]), settings)  # an internal call: no identity
     assert [c["owner_id"] for c in calls] == ["alice", None]
 
 

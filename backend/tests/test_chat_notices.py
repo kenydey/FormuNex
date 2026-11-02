@@ -10,7 +10,7 @@ numeric check 跳过、BM25-only 退化时，响应必须携带可见提示位�
 """
 import pytest
 
-from app.api.chat import _apply_answer_gates, _retrieval_degradation_notices
+from app.services.chat_orchestration import _apply_answer_gates, _retrieval_degradation_notices
 from app.config import get_settings
 from app.domain.chat_schemas import ChatResponse
 from app.domain.schemas import Evidence

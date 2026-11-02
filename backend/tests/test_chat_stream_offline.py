@@ -94,11 +94,11 @@ def test_no_key_and_no_sources_abstains_rather_than_erroring(keyless):
 
 
 def test_a_failure_in_the_offline_pipeline_is_reported_as_an_error_event(keyless, monkeypatch):
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
 
-    def boom(req):
+    def boom(req, caller_id=None):
         raise HTTPException(status_code=500, detail="问答处理失败")
 
-    monkeypatch.setattr(chat_mod, "chat", boom)
+    monkeypatch.setattr(chat_mod, "run_chat", boom)
     events = _ask(keyless)
     assert events[-1] == {"type": "error", "message": "问答处理失败"}

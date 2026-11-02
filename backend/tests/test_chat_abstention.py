@@ -6,7 +6,7 @@ Includes patent-tag golden cases (claim_no/example_no stitched siblings).
 """
 import pytest
 
-from app.api.chat import _ABSTAIN_TEMPLATE, _apply_answer_gates
+from app.services.chat_orchestration import _ABSTAIN_TEMPLATE, _apply_answer_gates
 from app.config import get_settings
 from app.domain.schemas import Evidence
 from app.pipeline.claim_checker import verify_claim_offline

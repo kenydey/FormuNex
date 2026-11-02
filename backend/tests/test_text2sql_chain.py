@@ -276,7 +276,7 @@ def test_no_retrieved_passage_means_no_kb_evidence_in_the_data_sources():
 
 
 def test_chat_keeps_an_empty_data_sources_list_empty():
-    from app.api.chat import _answer_data_sources
+    from app.services.chat_orchestration import _answer_data_sources
 
     assert _answer_data_sources({"data_sources": []}, [object()]) == []  # the hook said "nothing": do not claim grounding
     assert _answer_data_sources({"data_sources": ["structured_sql"]}, []) == ["structured_sql"]

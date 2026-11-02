@@ -53,7 +53,7 @@ class FakeChunk:
 
 
 def test_stream_emits_tokens_then_done(monkeypatch, client):
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
     import app.services.llm as llm_mod
     import app.services.chat_claims as cc_mod
 
@@ -114,7 +114,7 @@ def test_stream_emits_tokens_then_done(monkeypatch, client):
 
 
 def test_stream_error_when_llm_fails(monkeypatch, client):
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
     import app.services.llm as llm_mod
     import app.services.chat_claims as cc_mod
 
@@ -205,7 +205,7 @@ def _chart_plan(req, settings):
 
 def test_chart_vlm_hook_zero_overhead_when_disabled(monkeypatch, client):
     """默认关闭时零开销：answer_chart_question 不被调用，走正常文本流。"""
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
     import app.services.llm as llm_mod
     import app.services.page_thumbnails as thumbs_mod
 
@@ -234,7 +234,7 @@ def test_chart_vlm_hook_zero_overhead_when_disabled(monkeypatch, client):
 
 def test_chart_vlm_hook_answers_chart_question(monkeypatch, client):
     """开启时图表问题走 VLM 路径：phase=chart_vlm，单 token，done 带 chart_vlm。"""
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
     import app.services.llm as llm_mod
     import app.services.page_thumbnails as thumbs_mod
     from app.services.page_thumbnails import ChartVLMResult
@@ -279,7 +279,7 @@ def test_chart_vlm_hook_answers_chart_question(monkeypatch, client):
 
 def test_chart_vlm_hook_falls_through_on_none(monkeypatch, client):
     """VLM 返回 None（无缩略图/失败）时回退正常文本流。"""
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
     import app.services.llm as llm_mod
     import app.services.page_thumbnails as thumbs_mod
 

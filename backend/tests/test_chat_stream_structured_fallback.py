@@ -44,7 +44,7 @@ def _plan(req, settings):
 
 
 def test_a_failed_structured_generation_falls_back_to_the_markdown_stream(monkeypatch, client):
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
     import app.services.chat_chem_tools as tools_mod
     import app.services.chat_claims as claims_mod
     import app.services.chat_structured as structured_mod

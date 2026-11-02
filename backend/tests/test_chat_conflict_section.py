@@ -1,5 +1,5 @@
 """P2-3: conflicting verdict surfaced in the answer + raw_verdict field."""
-from app.api.chat import _apply_answer_gates
+from app.services.chat_orchestration import _apply_answer_gates
 from app.config import get_settings
 from app.domain.schemas import Evidence
 from app.pipeline.claim_checker import ClaimVerdict, VerifiedClaim

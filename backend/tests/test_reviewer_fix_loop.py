@@ -244,7 +244,7 @@ def test_finalize_evidence_fields_returns_rebound_citations(monkeypatch):
 
     回归：旧 5 元组丢弃重绑结果，流式答案与引用卡片脱钩。
     """
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
 
     old_citations = [{"title": "old1"}, {"title": "old2"}]
     new_citations = [{"title": "newA"}]
@@ -287,7 +287,7 @@ def test_finalize_evidence_fields_returns_rebound_citations(monkeypatch):
 
 def test_finalize_evidence_fields_empty_rebind_not_dropped(monkeypatch):
     """v13-1: 重绑结果为空列表时也不得回退到旧表（is not None）。"""
-    import app.api.chat as chat_mod
+    import app.services.chat_orchestration as chat_mod
     import app.services.evidence_synthesis as es
 
     old_citations = [{"title": "old1"}]

@@ -29,19 +29,17 @@ SERVICE_PACKAGES = ("app.services", "app.db", "app.pipeline", "app.agents")
 
 # "package.module.function" (as ``services.chat_clarify.apply_assumption_to_structured``) → why it is safe
 ALLOWED: dict[str, str] = {
-    "services.chat_clarify.apply_assumption_to_structured": "pure model copy, no I/O",
-    "services.rag.active_rag_backend": "settings lookup and availability flags, no I/O",
     "db.campaign_store.get_campaign_store": "cached singleton; only the first call per process can probe DataLab (≤ 2 s)",
     "services.http_safe.make_async_client": "constructs a client (shared TLS context), sends nothing",
     "services.errors.log_handled_exception": "writes one log line",
     "services.redis_breaker.refuse_if_open": "a monotonic-clock comparison; raises or returns, no I/O",
     "services.redis_breaker.note_failure": "an isinstance check and one float assignment, no I/O",
     "services.redis_breaker.was_refused": "reads one attribute of an exception, no I/O",
-    # v16 P2-1: chat.py structured fix-loop 的 _repair_summary 仅在
-    # asyncio.to_thread(run_fix_loop) 内被调用，不在 event loop 上阻塞。
-    "services.llm.answer_question": "called only inside asyncio.to_thread(run_fix_loop) in chat.py structured path",
-    # reviewer 坐标对齐：列表过滤 + 字典映射 + 正则替换，无 I/O、无网络、无磁盘，微秒级 CPU。
-    "services.citation_coords.reviewer_view": "pure in-memory list filter, dict build and regex remap, no I/O",
+    # stage 4 / SR-021: the thin chat_stream wrapper only does settings reads
+    # (get_settings / effective_setting / base-url resolution) and builds the
+    # lazy event generator; heavy work inside the generator stays offloaded
+    # via asyncio.to_thread exactly as before the move.
+    "services.chat_orchestration.stream_chat_events": "settings reads + lazy generator creation, no I/O",
 }
 
 

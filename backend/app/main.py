@@ -41,6 +41,7 @@ from .api import doe_designs as doe_designs_router
 from .api import identity as identity_router
 from .api import lab as lab_router
 from .api import plm as plm_router
+from .api import plm_ws as plm_ws_router
 from .api import ops as ops_router
 from .api import session as session_router
 from .api import ip_analysis as ip_router
@@ -340,7 +341,7 @@ app.include_router(chat_router.router, prefix="/api")
 app.include_router(kb_router.router, prefix="/api")
 app.include_router(pageindex_router.router, prefix="/api")
 app.include_router(plm_router.router, prefix="/api")
-app.include_router(plm_router.ws_router)  # /ws/formulations/{id}/compliance (no /api prefix)
+app.include_router(plm_ws_router.ws_router)  # /ws/formulations/{id}/compliance (no /api prefix)
 app.include_router(identity_router.router, prefix="/api")
 app.include_router(doe_designs_router.router, prefix="/api")
 app.include_router(cockpit_router.router, prefix="/api")

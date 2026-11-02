@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import chat as chat_api
+from app.services import chat_orchestration as chat_orch
 from app.db.source_store import get_source_store
 from app.domain.schemas import Evidence
 from app.main import app
@@ -36,14 +37,14 @@ def two_docs():
 
 def test_no_refs_leaves_sources_untouched():
     src = [_ev("kb:x#c0"), _ev("u1", "patent")]
-    assert chat_api._apply_ref_docs("q", src, [], k=6) == (src, 0)
-    assert chat_api._apply_ref_docs("q", src, None, k=6) == (src, 0)
+    assert chat_orch._apply_ref_docs("q", src, [], k=6) == (src, 0)
+    assert chat_orch._apply_ref_docs("q", src, None, k=6) == (src, 0)
 
 
 def test_refs_go_first_and_other_kb_chunks_are_dropped(two_docs):
     a, b = two_docs
     sources = [_ev(f"kb:{b}#c0"), _ev("CN123456B", "patent"), _ev("wiki:page-1", "wiki")]
-    out, added = chat_api._apply_ref_docs("zinc primer salt spray", sources, [a], k=6)
+    out, added = chat_orch._apply_ref_docs("zinc primer salt spray", sources, [a], k=6)
     ids = [e.identifier for e in out]
     assert added >= 1 and ids[0].startswith(f"kb:{a}#c")
     assert not any(i.startswith(f"kb:{b}") for i in ids), "KB chunks of unreferenced documents are dropped"
@@ -52,38 +53,38 @@ def test_refs_go_first_and_other_kb_chunks_are_dropped(two_docs):
 
 def test_every_referenced_document_contributes(two_docs):
     a, b = two_docs
-    out, added = chat_api._apply_ref_docs("zinc primer salt spray", [], [a, b], k=6)
-    srcs = {chat_api._kb_source_of(e) for e in out}
+    out, added = chat_orch._apply_ref_docs("zinc primer salt spray", [], [a, b], k=6)
+    srcs = {chat_orch._kb_source_of(e) for e in out}
     assert {a, b} <= srcs and added == len(out)
 
 
 def test_ref_chunks_already_retrieved_are_not_duplicated(two_docs):
     a, _b = two_docs
-    out, _ = chat_api._apply_ref_docs("zinc", [_ev(f"kb:{a}#c0")], [a], k=6)
+    out, _ = chat_orch._apply_ref_docs("zinc", [_ev(f"kb:{a}#c0")], [a], k=6)
     assert [e.identifier for e in out].count(f"kb:{a}#c0") == 1
 
 
 def test_unknown_refs_and_errors_fail_open(monkeypatch):
     src = [_ev("kb:other#c0")]
-    assert chat_api._apply_ref_docs("q", src, [str(uuid.uuid4())], k=6) == (src, 0)
+    assert chat_orch._apply_ref_docs("q", src, [str(uuid.uuid4())], k=6) == (src, 0)
 
     def boom():
         raise RuntimeError("db down")
 
     monkeypatch.setattr("app.db.chunk_store.get_chunk_store", boom)
-    assert chat_api._apply_ref_docs("q", src, ["abc"], k=6) == (src, 0)
+    assert chat_orch._apply_ref_docs("q", src, ["abc"], k=6) == (src, 0)
 
 
 @pytest.fixture()
 def spy(monkeypatch):
     calls: list[list[str]] = []
-    real = chat_api._apply_ref_docs
+    real = chat_orch._apply_ref_docs
 
     def _spy(question, sources, ref_doc_ids, *, k):
         calls.append(list(ref_doc_ids or []))
         return real(question, sources, ref_doc_ids, k=k)
 
-    monkeypatch.setattr(chat_api, "_apply_ref_docs", _spy)
+    monkeypatch.setattr(chat_orch, "_apply_ref_docs", _spy)
     return calls
 
 
@@ -116,7 +117,7 @@ def test_stream_answer_plan_applies_ref_doc_ids(spy, two_docs):
     a, _ = two_docs
     req = chat_api.ChatRequestValidated(**BODY, ref_doc_ids=[a])
     try:
-        chat_api._stream_answer_plan(req, get_settings())
+        chat_orch._stream_answer_plan(req, get_settings())
     except Exception:  # noqa: BLE001 - later stages may need an LLM; retrieval ran first
         pass
     assert [a] in spy

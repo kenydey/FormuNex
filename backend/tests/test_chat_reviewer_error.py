@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import app.api.chat as chat_mod
+import app.services.chat_orchestration as chat_mod
 from app.services.evidence_reviewer import ReviewerModelError
 
 

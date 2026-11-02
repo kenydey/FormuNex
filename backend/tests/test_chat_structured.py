@@ -76,7 +76,7 @@ def test_structured_fallback(monkeypatch):
         lambda *a, **k: (None, "fail"),
     )
     monkeypatch.setattr(
-        "app.api.chat.answer_question",
+        "app.services.chat_orchestration.answer_question",
         lambda *a, **k: ("markdown 答案", [ev]),
     )
     resp = _client().post(

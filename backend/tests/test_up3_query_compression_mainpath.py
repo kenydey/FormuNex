@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.api import chat as chat_api
+from app.services import chat_orchestration as chat_orch
 from app.domain.schemas import Evidence
 
 
@@ -61,7 +62,7 @@ def _base_mocks(monkeypatch):
     srcs = [_ev("kb:A", "文献A"), _ev("kb:B", "文献B"), _ev("kb:C", "文献C")]
     reranked = [srcs[2], srcs[0], srcs[1]]
     monkeypatch.setattr(
-        chat_api, "_augment_with_kb", lambda q, s, **kw: (list(s) + list(srcs), len(srcs), None, None)
+        chat_orch, "_augment_with_kb", lambda q, s, **kw: (list(s) + list(srcs), len(srcs), None, None)
     )
     import app.services.rag as rag
 
@@ -87,10 +88,10 @@ def test_stream_compression_reorders_plan_relevant(monkeypatch):
     srcs = _base_mocks(monkeypatch)
 
     monkeypatch.setattr(
-        chat_api, "compress_evidence", lambda q, s, token_budget=3000: [srcs[1], srcs[2], srcs[0]]
+        chat_orch, "compress_evidence", lambda q, s, token_budget=3000: [srcs[1], srcs[2], srcs[0]]
     )
     # chat.py 用模块级 import：打补丁需作用到 chat_api 命名空间。
-    plan = chat_api._stream_answer_plan(_req(), _settings())
+    plan = chat_orch._stream_answer_plan(_req(), _settings())
     assert [e.identifier for e in plan["relevant"]] == ["kb:B", "kb:C", "kb:A"]
 
 
@@ -100,8 +101,8 @@ def test_stream_compression_fail_open(monkeypatch):
     def _boom(q, s, token_budget=3000):
         raise RuntimeError("compress down")
 
-    monkeypatch.setattr(chat_api, "compress_evidence", _boom)
-    plan = chat_api._stream_answer_plan(_req(), _settings())
+    monkeypatch.setattr(chat_orch, "compress_evidence", _boom)
+    plan = chat_orch._stream_answer_plan(_req(), _settings())
     # fail-open：保持压缩前的 BM25 顺序
     assert [e.identifier for e in plan["relevant"]] == ["kb:C", "kb:A", "kb:B"]
 
@@ -142,11 +143,11 @@ def test_stream_compression_uses_token_budget_not_char_budget(monkeypatch):
         seen["token_budget"] = token_budget
         return list(s)
 
-    monkeypatch.setattr(chat_api, "compress_evidence", _capture)
+    monkeypatch.setattr(chat_orch, "compress_evidence", _capture)
     settings = _settings()
     settings.query_compress_token_budget = 500
     settings.chat_context_max_chars = 12000
-    chat_api._stream_answer_plan(_req(), settings)
+    chat_orch._stream_answer_plan(_req(), settings)
     assert seen["token_budget"] == 500
 
 

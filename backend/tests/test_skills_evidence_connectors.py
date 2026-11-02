@@ -118,12 +118,12 @@ def test_chat_accepts_mode_and_skills(tmp_path, monkeypatch):
         snippet="silane coupling agent 10.1000", relevance=0.9,
     )
     monkeypatch.setattr(
-        "app.api.chat.answer_question",
+        "app.services.chat_orchestration.answer_question",
         lambda *a, **k: ("ok with 10.1000/test", [_ev]),
     )
-    monkeypatch.setattr("app.api.chat._augment_with_kb", lambda *a, **k: ([], 0, None, None))
-    monkeypatch.setattr("app.api.chat.detect_clarification", lambda *a, **k: None)
-    monkeypatch.setattr("app.api.chat.build_sourced_claims", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.chat_orchestration._augment_with_kb", lambda *a, **k: ([], 0, None, None))
+    monkeypatch.setattr("app.services.chat_orchestration.detect_clarification", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.chat_orchestration.build_sourced_claims", lambda *a, **k: None)
     monkeypatch.setattr(
         "app.services.evidence_synthesis.try_paperqa_answer",
         lambda *a, **k: None,
