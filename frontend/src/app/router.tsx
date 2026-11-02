@@ -3,7 +3,9 @@ import { Navigate, createBrowserRouter, useLocation } from "react-router-dom";
 import { useSession } from "./session";
 import { Shell } from "./Shell";
 import { PageSpin } from "@/shared/PageSpin";
+import { Forbidden } from "@/shared/feedback";
 import { TabRedirect } from "@/shared/hubTabs";
+import { canAccessRoute, routePermissionFor } from "./routePermissions";
 import LoginPage from "@/features/auth/LoginPage";
 import { MODULES } from "./modules";
 import { needsSetup, useDesktop } from "@/desktop/runtime";
@@ -23,12 +25,30 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Stage 4 / SR-056: route-level permission interception. Runs inside
+ * RequireAuth (login already established), consults the single
+ * routePermissions table, and renders a bare <Forbidden> for direct URL
+ * visits without the permission. Page-level <Forbidden> checks stay as
+ * defense in depth; redirects are guarded again after they land.
+ */
+function RequirePermission({ children }: { children: ReactNode }) {
+  const { can } = useSession();
+  const location = useLocation();
+  if (!canAccessRoute(location.pathname, can)) {
+    const perm = routePermissionFor(location.pathname);
+    const label = perm?.permission ?? (perm?.permissions ?? []).join(" / ");
+    return <Forbidden permission={label} />;
+  }
+  return <>{children}</>;
+}
+
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
   { path: "/setup", element: <Suspense fallback={<PageSpin />}>{L(() => import("@/features/desktop/SetupPage"))}</Suspense> },
   {
     path: "/",
-    element: <RequireAuth><Shell /></RequireAuth>,
+    element: <RequireAuth><RequirePermission><Shell /></RequirePermission></RequireAuth>,
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: "dashboard", element: L(() => import("@/features/dashboard/DashboardPage")) },

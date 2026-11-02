@@ -18,7 +18,9 @@ const EXPECTED: Group[] = [
     path: "/data",
     zh: "资料检索",
     leaves: [
-      { path: "/knowledge/search", zh: "检索" },
+      // Stage 4 / SR-056: derives knowledge.read from the unified table
+      // (previously nav showed it to everyone while the page gated it).
+      { path: "/knowledge/search", zh: "检索", permission: "knowledge.read" },
       { path: "/knowledge/sources", zh: "知识源与目录树" },
       { path: "/knowledge/chat", zh: "知识问答" },
       { path: "/knowledge/reviews", zh: "检索证据审计" },
@@ -74,7 +76,9 @@ const EXPECTED: Group[] = [
       { path: "/plm/formula-mappings", zh: "配方数据库映射" },
       { path: "/plm/label-designer", zh: "标签设计器" },
       { path: "/plm/regulatory", zh: "法规助手" },
-      { path: "/plm/regulatory/review-items", zh: "法规复核队列" },
+      // Stage 4 / SR-056: derives regulatory.read from the unified table
+      // (previously nav showed it to everyone while the page gated it).
+      { path: "/plm/regulatory/review-items", zh: "法规复核队列", permission: "regulatory.read" },
     ],
   },
   {
@@ -259,6 +263,11 @@ describe("nav (8-group IA, scheme §2)", () => {
         // W1-6/D2: settings gate widened from admin.llm to admin.llm OR admin.connectors (nothing dropped, one added).
         expect(item.permission).toBeUndefined();
         expect(item.permissions).toEqual(["admin.llm", "admin.connectors"]);
+      } else if (old.path === "/knowledge/search") {
+        // Stage 4 / SR-056: search leaf now derives knowledge.read from
+        // the unified table; the page already gated it, nav just hid nothing.
+        expect(item.permission).toBe("knowledge.read");
+        expect(item.permissions).toBeUndefined();
       } else if (old.path === "/admin/org-dashboard") {
         // Stage 0 / SR-005: dashboard gate added (formulation.read; nothing dropped, paths unchanged).
         expect(item.permission).toBeUndefined();

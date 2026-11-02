@@ -4,6 +4,7 @@ import {
 } from "@ant-design/icons";
 import type { ReactNode } from "react";
 import { MODULES, type NavGroup } from "./modules";
+import { routePermissionFor } from "./routePermissions";
 
 export interface NavItem {
   /** Group parents use `path` only as a grouping key — there is no matching index route in router.tsx. */
@@ -12,8 +13,13 @@ export interface NavItem {
   zh: string;
   icon?: ReactNode;
   children?: NavItem[];
+  /**
+   * Stage 4 / SR-056: DERIVED, not declared — NAV construction copies
+   * these from routePermissions.ts, the single source. Never hand-write
+   * a permission on a nav literal; add it to the table instead.
+   */
   permission?: string;
-  /** Any-of gate (W1-6/D2): visible when the user holds any listed permission. */
+  /** Any-of gate (W1-6/D2): visible when the user holds any listed permission. Derived, see above. */
   permissions?: string[];
   /** Shown only when this returns true (e.g. desktop-only pages). */
   when?: () => boolean;
@@ -75,18 +81,27 @@ const BASE_NAV: NavItem[] = [
   ] },
   { path: "/admin", key: "nav.admin", zh: "系统管理", icon: <SettingOutlined />, order: 7,
     desc: "用户、公司、审计与系统设置", children: [
-    { path: "/admin/users", key: "nav.admin.users", zh: "用户与角色", permission: "admin.users", order: 1, desc: "用户账号与角色权限" },
-    { path: "/admin/companies", key: "nav.admin.companies", zh: "公司配置", permission: "admin.companies", order: 2, desc: "公司信息、Logo 与模板" },
-    { path: "/admin/audit", key: "nav.admin.audit", zh: "审计日志", permission: "audit.read", order: 4, desc: "审计链与操作日志" },
+    { path: "/admin/users", key: "nav.admin.users", zh: "用户与角色", order: 1, desc: "用户账号与角色权限" },
+    { path: "/admin/companies", key: "nav.admin.companies", zh: "公司配置", order: 2, desc: "公司信息、Logo 与模板" },
+    { path: "/admin/audit", key: "nav.admin.audit", zh: "审计日志", order: 4, desc: "审计链与操作日志" },
   ] },
 ];
 
 /** Base navigation plus the pages each feature module adds to a group (app/modules.ts). Groups and children are sorted by explicit `order`. */
 const byOrder = (a: NavItem, b: NavItem) => a.order - b.order;
 
+/**
+ * Stage 4 / SR-056: leaf permissions are derived from routePermissions.ts
+ * (the single source) at construction time. A leaf is therefore visible
+ * exactly when the router guard would allow it; hand-written permission
+ * fields on nav literals are ignored by construction.
+ */
 export const NAV: NavItem[] = BASE_NAV.map((g) => ({
   ...g,
-  children: g.children && [...g.children, ...MODULES.flatMap((m) => m.nav[g.path as NavGroup] ?? [])].sort(byOrder),
+  children: g.children && [...g.children, ...MODULES.flatMap((m) => m.nav[g.path as NavGroup] ?? [])].sort(byOrder).map((l) => {
+    const perm = routePermissionFor(l.path);
+    return { ...l, permission: perm?.permission, permissions: perm?.permissions };
+  }),
 })).sort(byOrder);
 
 /** Navigation after permission/when filtering (presentation only; no permission change). Groups left with zero visible children are hidden. */
