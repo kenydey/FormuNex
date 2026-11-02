@@ -1399,6 +1399,10 @@ def _serialize_extras(res: ParseResult) -> str:
                     for b in ((res.structured.blocks or []) if res.structured is not None else [])
                 ],
                 "formulas": [[latex, page_no] for latex, page_no in (res.formulas or [])],
+                # Stage 5 / SR-086: bookmarks ride the same cache. Without
+                # them a resumed run loses every shard's bookmarks and only
+                # the whole-document re-read (flag on) masks the loss.
+                "bookmarks": [[t, l, p] for t, l, p in (res.bookmarks or [])],
             },
             ensure_ascii=False,
         )
@@ -1408,9 +1412,15 @@ def _serialize_extras(res: ParseResult) -> str:
 
 
 def _restore_extras(
-    extras_json: str, tables: list, blocks: list, formulas: list
+    extras_json: str, tables: list, blocks: list, formulas: list, bookmarks: list | None = None
 ) -> None:
-    """把缓存的 enrichment 恢复并入合并列表；失败静默（fail-open）。"""
+    """把缓存的 enrichment 恢复并入合并列表；失败静默（fail-open）。
+
+    Stage 5 / SR-086: bookmarks 与 tables/blocks/formulas 一起恢复
+    （JSON 往返把 tuple 变成 list，这里还原为 tuple，与 fresh 解析
+    的 res.bookmarks 类型一致）。旧缓存无 "bookmarks" 键时按空处理；
+    单条畸形书签只跳过该条，不丢整批 enrichment。
+    """
     if not extras_json:
         return
     try:
@@ -1426,6 +1436,13 @@ def _restore_extras(
             blocks.append(StructuredBlock(**d))
         for latex, page_no in data.get("formulas") or []:
             formulas.append((latex, page_no))
+        if bookmarks is not None:
+            for entry in data.get("bookmarks") or []:
+                try:
+                    title, level, page = entry
+                    bookmarks.append((title, int(level), int(page)))
+                except Exception:  # noqa: BLE001 - skip one bad bookmark
+                    continue
     except Exception as exc:  # noqa: BLE001 - fail-open cache
         logger.warning("pdf sharded: extras restore failed (fail-open): %s", exc)
 
@@ -1557,7 +1574,7 @@ def _parse_pdf_sharded(
                         cached = entry[1]
                         _emit(cached["markdown"])
                         shard_parsers.append(cached["parser"])
-                        _restore_extras(cached.get("extras_json") or "", tables, blocks, formulas)
+                        _restore_extras(cached.get("extras_json") or "", tables, blocks, formulas, bookmarks)
                     else:
                         _, start, end, fut = entry
                         _merge_result(idx, start, end, fut.result())

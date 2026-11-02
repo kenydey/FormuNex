@@ -441,6 +441,18 @@ def _scanned_without_cloud(content: bytes) -> str | None:
     page's RapidOCR output by its CJK ratio, so the extra cost is one page of
     RapidOCR (~12 s) against a whole-document saving on English scans. RapidOCR
     stays the backstop when Tesseract is absent or cannot read the document.
+
+    Stage 5 / SR-092 (same-source confirmation, no parallelization): the
+    vote pages and the body pages raster from the same source — the same
+    PDF bytes through the same pdf_local.page_as_png renderer, at the
+    same default DPI (rapidocr_dpi defaults to 120; the Tesseract body
+    path hardcodes 120; the RapidOCR body path reads rapidocr_dpi).
+    The vote's language judgment therefore transfers to the body pages.
+    Pages still OCR serially, deliberately: RapidOCR runs as a process
+    singleton whose creation — not inference — is locked, and both body
+    loops stream one PNG at a time to bound peak memory. Parallelizing
+    the page loops needs a proven thread-safe engine first, so it stays
+    a separate decision rather than a forced change here.
     """
     from . import rapidocr_local, tesseract_local
 
