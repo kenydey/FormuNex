@@ -416,6 +416,16 @@ def search_substances(q: str = Query(..., min_length=1, max_length=200), limit: 
         return reg_agent.lookup_substance(session, q, limit=limit)
 
 
+@router.get("/substances/count")
+def count_substances(q: str = Query(..., min_length=1, max_length=200)) -> dict[str, int]:
+    """Stage 5 / SR-100: total matches for the lookup filter, so the
+    substances page can say when its 100-row window truncates results."""
+    from ..agents import regulatory as reg_agent
+
+    with _session() as session:
+        return {"total": reg_agent.count_substances(session, q)}
+
+
 class ToxRecordIn(BaseModel):
     endpoint: str = "LD50"
     route: str = "oral"

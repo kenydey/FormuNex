@@ -130,8 +130,10 @@ export default function DocumentPage() {
         {other && <Link to={`/plm/documents/${d.id}/proofread`}><Button>{t("doc.proofread", "中英并排校对")}</Button></Link>}
         {d.has_pdf && <Button onClick={() => void download(`/api/plm/documents/${d.id}/file/pdf`, `${d.doc_type}-${d.lang}${dlSuffix}-v${d.version_no}.pdf`)}>PDF</Button>}
         {d.has_docx && <Button onClick={() => void download(`/api/plm/documents/${d.id}/file/docx`, `${d.doc_type}-${d.lang}${dlSuffix}-v${d.version_no}.docx`)}>Word</Button>}
-        {d.status === "draft" && can(perm, pid) && <Button type="primary" disabled={d.missing.length > 0 || d.created_by === me?.id} onClick={() => void approve()}>
-          {d.doc_type === "coa" ? t("doc.issue_coa", "签发 COA") : t("doc.approve", "审核通过")}</Button>}
+        {d.status === "draft" && can(perm, pid) && <Tooltip title={!d.created_by ? t("doc.no_creator", "无编制人归属，需先确认编制人") : undefined}>
+          <span><Button type="primary" disabled={d.missing.length > 0 || d.created_by === me?.id || !d.created_by} onClick={() => void approve()}>
+            {d.doc_type === "coa" ? t("doc.issue_coa", "签发 COA") : t("doc.approve", "审核通过")}</Button></span>
+        </Tooltip>}
       </Space>}>
       {d && d.missing.length > 0 && <Alert type="error" showIcon style={{ marginBottom: 8 }} message={t("doc.missing", "缺项：{{m}}", { m: d.missing.join("、") })} />}
       {d && d.warnings.length > 0 && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={t("doc.warnings_title", "提示")} description={d.warnings.map((w, i) => <div key={i}>{w}</div>)} />}

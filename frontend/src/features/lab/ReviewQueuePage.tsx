@@ -10,6 +10,13 @@ import { useUi } from "@/app/store";
 import { ErrorAlert, Forbidden, errorText } from "@/shared/feedback";
 import type { Measurement } from "./types";
 
+/** Stage 5 / SR-074: after a bulk review, only the succeeded rows leave
+ * the selection — the failed rows stay selected so the operator can
+ * find and redo exactly those, instead of re-hunting them. */
+export function keepFailedSelection(selected: string[], failedIds: Set<string>): string[] {
+  return selected.filter((id) => failedIds.has(id));
+}
+
 /** 测量复核 (方案 §5.3.1): a second person accepts or rejects each value; only reviewed values are used. */
 export default function ReviewQueuePage() {
   const { t } = useTranslation();
@@ -22,19 +29,21 @@ export default function ReviewQueuePage() {
     queryFn: () => call<Measurement[]>("GET", `/api/lab/review-queue${projectId ? `?project_id=${projectId}` : ""}`) });
   const review = useMutation({
     mutationFn: async ({ ids, decision, reason }: { ids: string[]; decision: "accept" | "reject"; reason?: string }) => {
-      const errors: string[] = [];
+      const failed: { id: string; taskNo?: string; error: string }[] = [];
+      const byId = new Map((q.data ?? []).map((m) => [m.id, m]));
       for (const id of ids) {
         try {
           await call("POST", `/api/lab/measurements/${id}/review`, { decision, reason: reason ?? "" });
         } catch (e) {
-          errors.push(errorText(e));
+          failed.push({ id, taskNo: byId.get(id)?.task_no, error: errorText(e) });
         }
       }
-      return errors;
+      return failed;
     },
-    onSuccess: (errors) => {
-      errors.forEach((e) => message.error(e));
-      setSelected([]);
+    onSuccess: (failed) => {
+      failed.forEach((f) => message.error(
+        t("review.failed_row", "任务单 {{no}} 复核失败：{{e}}", { no: f.taskNo ?? f.id, e: f.error })));
+      setSelected((prev) => keepFailedSelection(prev, new Set(failed.map((f) => f.id))));
       void qc.invalidateQueries({ queryKey: ["lab"] });
     },
   });
@@ -52,7 +61,16 @@ export default function ReviewQueuePage() {
             <Button danger disabled={!selected.length} onClick={() => {
               let reason = "";
               modal.confirm({ title: t("review.reject", "驳回所选"), content: <Input.TextArea onChange={(e) => { reason = e.target.value; }} placeholder={t("review.reason", "驳回理由（必填）")} />,
-                onOk: () => review.mutateAsync({ ids: selected, decision: "reject", reason }) });
+                onOk: () => {
+                  // SR-074: the backend rejects an empty reason, so check
+                  // here — rejecting keeps the modal open instead of
+                  // failing every selected row server-side.
+                  if (!reason.trim()) {
+                    message.error(t("review.reason_required", "请填写驳回理由"));
+                    return Promise.reject(new Error("reason required"));
+                  }
+                  return review.mutateAsync({ ids: selected, decision: "reject", reason });
+                } });
             }}>{t("review.reject", "驳回所选")}</Button>
           </Space>,
         ]}

@@ -41,18 +41,39 @@ def _classification_dicts(rows: list[SubstanceClassificationRow]) -> list[dict[s
              "is_minimum": r.is_minimum, "locked": r.locked_at is not None} for r in effective(rows)]
 
 
-def lookup_substance(session: Session, query: str, limit: int = 10) -> list[dict[str, Any]]:
-    """Substance classifications + sources (same query logic as GET /api/plm/substances)."""
+def _substance_filter(query: str):
+    """Stage 5 / SR-100: the lookup filter, shared by the list and the
+    count so the page's total can never disagree with its rows."""
     q = (query or "").strip()
     if not q:
-        return []
+        return None
     norm = cas_mod.normalize(q)
     if norm:
-        stmt = select(SubstanceRow).where(SubstanceRow.cas_no == norm).limit(limit)
+        return SubstanceRow.cas_no == norm
+    like = f"%{q}%"
+    return or_(SubstanceRow.name_zh.like(like), SubstanceRow.name_en.ilike(like))
+
+
+def count_substances(session: Session, query: str) -> int:
+    """Total matches for the lookup filter, without the row payload."""
+    from sqlalchemy import func
+
+    cond = _substance_filter(query)
+    if cond is None:
+        return 0
+    return session.execute(select(func.count()).select_from(SubstanceRow).where(cond)).scalar_one()
+
+
+def lookup_substance(session: Session, query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Substance classifications + sources (same query logic as GET /api/plm/substances)."""
+    cond = _substance_filter(query)
+    if cond is None:
+        return []
+    if cas_mod.normalize((query or "").strip()):
+        stmt = select(SubstanceRow).where(cond).limit(limit)
     else:
-        like = f"%{q}%"
         stmt = (select(SubstanceRow)
-                .where(or_(SubstanceRow.name_zh.like(like), SubstanceRow.name_en.ilike(like)))
+                .where(cond)
                 .order_by(SubstanceRow.hazardous_catalog_no.is_(None), SubstanceRow.name_zh)
                 .limit(limit))
     subs = session.execute(stmt).scalars().all()

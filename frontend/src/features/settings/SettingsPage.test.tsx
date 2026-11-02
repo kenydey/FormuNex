@@ -75,11 +75,16 @@ describe("SettingsPage", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
-  it("opens for a connectors-only user (W1-6/D2 OR gate)", async () => {
+  it("opens the shell but forbids non-connectors tabs for a connectors-only user (SR-098)", () => {
+    // The W1-6/D2 OR gate still opens the settings shell, but SR-098
+    // adds the admin.llm second gate per tab: a connectors-only user
+    // meets Forbidden on the model tab instead of a form whose every
+    // save would 403, and no settings API is called for that tab.
     perms = ["admin.connectors"];
     renderAt("/admin/settings/model");
-    expect(await screen.findByText("文本模型 · Text")).toBeInTheDocument();
-    expect(screen.queryByText("403")).not.toBeInTheDocument();
+    expect(screen.getByText("设置中心")).toBeInTheDocument();
+    expect(screen.getByText("403")).toBeInTheDocument();
+    expect(call).not.toHaveBeenCalled();
   });
 });
 

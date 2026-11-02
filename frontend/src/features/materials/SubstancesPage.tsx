@@ -18,10 +18,21 @@ export default function SubstancesPage() {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
   const res = useQuery({ queryKey: ["substances", q], enabled: !!q, queryFn: () => call<Substance[]>("GET", `/api/plm/substances?q=${encodeURIComponent(q)}&limit=100`) });
+  // SR-100: the total rides the count endpoint (same filter) — without
+  // it the 100-row window truncated silently and a missing substance
+  // looked like an absent record.
+  const total = useQuery({ queryKey: ["substances", "count", q], enabled: !!q,
+    queryFn: () => call<{ total: number }>("GET", `/api/plm/substances/count?q=${encodeURIComponent(q)}`) });
+  const shown = res.data?.length ?? 0;
+  const truncated = total.data !== undefined && total.data.total > shown;
   return (
     <PageContainer subTitle={t("substances.sub", "《危险化学品目录》分类、GBZ 2.1 限值、管控标识；分类来源优先级：人工锁定 > 供应商 SDS > 目录 > PubChem > 推断")}>
       <Input.Search size="large" enterButton placeholder={t("substances.search", "CAS 号或中英文名称")} onSearch={setQ} style={{ marginBottom: 16 }} />
       <ErrorAlert error={res.error} />
+      {total.data !== undefined && <div style={{ marginBottom: 16 }}>
+        {t("substances.total", "共 {{n}} 条", { n: total.data.total })}
+        {truncated && t("substances.truncated", "，仅显示前 {{n}} 条，请细化查询", { n: shown })}
+      </div>}
       <ProTable<Substance> rowKey="id" search={false} options={false} loading={res.isFetching} dataSource={res.data}
         columns={[
           { title: "CAS", dataIndex: "cas_no", width: 120 },

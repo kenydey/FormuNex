@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { degradedReasons, infraState, UNREACHABLE_HEALTH, type InfraIssue } from "./logic";
 import type { PlatformHealth } from "./types";
 
@@ -44,6 +45,7 @@ export function InfraHealthBanner() {
 /** Offline / degraded mode: no LLM key, or the online-retrieval libraries missing (offline fallbacks still run). */
 export function DegradedBanner() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const navigate = useNavigate();
   const [dismissed, setDismissed] = useState(false);
   const settings = useQuery({ queryKey: ["shell", "llm-settings"], retry: false, staleTime: 300_000,
@@ -56,7 +58,10 @@ export function DegradedBanner() {
   return <Alert banner closable type="warning" data-testid="degraded-banner" onClose={() => setDismissed(true)}
     message={<Space wrap><b>{t("shell.degraded.title", "离线降级模式")}</b>{text.join(" · ")}
       {t("shell.degraded.desc", "—— 深度研究、在线检索、跨源交叉验证等功能以离线兜底运行。")}</Space>}
-    action={<Button size="small" onClick={() => navigate(reasons.includes("llm_key") ? SETTINGS_MODEL_PATH : SETTINGS_DEPS_PATH)}>
+    // SR-101: the button must be admin.llm-gated (not the settings
+    // page's anyOf gate) — otherwise an ordinary user lands on the
+    // settings Forbidden page exactly when they need help.
+    action={can("admin.llm") ? <Button size="small" onClick={() => navigate(reasons.includes("llm_key") ? SETTINGS_MODEL_PATH : SETTINGS_DEPS_PATH)}>
       {reasons.includes("llm_key") ? t("shell.degraded.go_model", "去配置大模型") : t("shell.degraded.go_deps", "去安装依赖")}
-    </Button>} />;
+    </Button> : undefined} />;
 }

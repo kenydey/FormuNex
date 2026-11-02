@@ -168,6 +168,16 @@ def test_substance_search_and_ruleset(api):
     assert rs["version"] == "gb30000-2013.v1" and rs["parameters"]["aquatic"]["limit_pct"] == 25.0
 
 
+def test_substance_count_matches_search(api):
+    """Stage 5 / SR-100: the count endpoint shares the search filter —
+    total agrees with the list, and truncation is detectable."""
+    assert api.get("/api/plm/substances/count", params={"q": "50-00-0"}).json() == {"total": 1}
+    assert api.get("/api/plm/substances/count", params={"q": "二甲"}).json() == {"total": 1}
+    assert api.get("/api/plm/substances/count", params={"q": "不存在的物质xyz"}).json() == {"total": 0}
+    one = api.get("/api/plm/substances", params={"q": "二甲", "limit": 1}).json()
+    assert len(one) == 1 and api.get("/api/plm/substances/count", params={"q": "二甲"}).json() == {"total": 1}
+
+
 def test_validation(api):
     assert api.post("/api/plm/ghs/classify", json={"components": []}).status_code == 422
     assert api.post("/api/plm/ghs/classify", json={"components": [{"pct": 120}]}).status_code == 422

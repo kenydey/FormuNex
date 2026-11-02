@@ -55,15 +55,25 @@ function safeJson(text: string): unknown {
   }
 }
 
+/** Stage 5 / SR-076: downloads used to throw the browser's default status
+ * text on failure, losing the server's reason (e.g. a withdrawn package
+ * no longer served). Parse the error body exactly like call() does. */
+async function throwDownloadError(res: Response): Promise<never> {
+  const text = await res.text();
+  const data = text ? safeJson(text) : undefined;
+  throw new ApiError(res.status, (data as { detail?: unknown })?.detail ?? data ?? res.statusText,
+    res.headers.get("x-formunex-task-id"));
+}
+
 /** Download a protected file (PDF / Word / ZIP) as a blob URL. */
 export async function fetchBlobUrl(path: string): Promise<string> {
   const res = await authFetch(path);
-  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  if (!res.ok) await throwDownloadError(res);
   return URL.createObjectURL(await res.blob());
 }
 
 export async function download(path: string, filename: string): Promise<void> {
   const res = await authFetch(path);
-  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  if (!res.ok) await throwDownloadError(res);
   await saveBlob(await res.blob(), filename);
 }
