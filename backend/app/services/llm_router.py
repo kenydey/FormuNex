@@ -14,7 +14,7 @@ Exact compositions are trade secrets. Every LLM call is classified:
 - ``public`` — everything else. May use the configured external provider.
 
 The classifier accepts a structured payload (``dict`` with an ``ingredients``
-list) or a raw prompt string (the ``_call_llm`` entry point only sees text,
+list) or a raw prompt string (the ``call_llm`` entry point only sees text,
 so exact percentages are detected with a formulation-context regex).
 """
 from __future__ import annotations

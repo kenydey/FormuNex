@@ -129,9 +129,9 @@ def _item_id(run_id: str, statement: str, idx: int) -> str:
 
 def _checklist_path(run_id: str):
     """``data/reviews/runs/{run_id}.checklist.json`` — same dir as the run."""
-    from .reviewer_fix_loop import _run_path
+    from .reviewer_fix_loop import run_path as review_run_path
 
-    run_path = _run_path(run_id)
+    run_path = review_run_path(run_id)
     return run_path.with_name(run_path.stem + ".checklist.json")
 
 

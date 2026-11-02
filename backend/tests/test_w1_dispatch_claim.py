@@ -60,7 +60,7 @@ def test_producer_timeout_503_claims_the_same_id(monkeypatch, non_eager):
     monkeypatch.setattr(_dispatch_kernel, "broker_reachable", lambda: True)
 
     def _boom(task, payload, task_id=None):
-        raise _dispatch._DispatchTimeout("task.delay > 10.0s")
+        raise _dispatch.DispatchTimeout("task.delay > 10.0s")
 
     monkeypatch.setattr(_dispatch_kernel, "_delay_with_timeout", _boom)
     payload = {"query": "w1-10-claim-timeout", "source_types": []}

@@ -217,9 +217,9 @@ def enrich_catalog(limit: int = Query(default=20, ge=1, le=100)) -> EnrichCatalo
     ``remaining`` reaches 0. Curated values win: only blank fields are filled (same rule as the startup backfill).
     """
     _require_store()
-    from ..services.compounds import _pubchempy_available, enrich_materials
+    from ..services.compounds import pubchempy_available, enrich_materials
 
-    if not _pubchempy_available():
+    if not pubchempy_available():
         return EnrichCatalogResponse(enriched=0, scanned=0, remaining=0, available=False)
     pending = {
         name: spec

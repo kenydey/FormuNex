@@ -1,6 +1,6 @@
 """Tests for P1-19 reviewer 独立小模型 (W5-2).
 
-- llm._call_llm / complete_json 支持 per-caller model 覆盖；model=None 走全局配置（向后兼容）
+- llm.call_llm / complete_json 支持 per-caller model 覆盖；model=None 走全局配置（向后兼容）
 - evidence_reviewer.review_answer_llm 传入 settings.evidence_reviewer_model
 - new_review_run 的 run dict 记录 model 标签
 - 配置了小模型时调用失败 → 抛 ReviewerModelError（不静默回退）
@@ -17,7 +17,7 @@ from app.services import reviewer_fix_loop as rfl
 
 
 # ---------------------------------------------------------------------------
-# llm.complete_json / _call_llm 的 model 透传
+# llm.complete_json / call_llm 的 model 透传
 # ---------------------------------------------------------------------------
 
 
@@ -28,7 +28,7 @@ def test_complete_json_passes_model_to_call_llm(monkeypatch: pytest.MonkeyPatch)
         calls["model"] = model
         return '{"status": "pass"}'
 
-    monkeypatch.setattr(llm_mod, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(llm_mod, "call_llm", fake_call_llm)
     res = llm_mod.complete_json('{"x": 1}', model="mini-reviewer")
     assert calls["model"] == "mini-reviewer"
     assert res == {"status": "pass"}
@@ -41,13 +41,13 @@ def test_complete_json_model_none_keeps_default(monkeypatch: pytest.MonkeyPatch)
         calls["model"] = model
         return '{"status": "pass"}'
 
-    monkeypatch.setattr(llm_mod, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(llm_mod, "call_llm", fake_call_llm)
     llm_mod.complete_json('{"x": 1}')
     assert calls["model"] is None, "model 未传时必须为 None（走全局配置）"
 
 
 def test_call_llm_model_override_bypasses_global(monkeypatch: pytest.MonkeyPatch):
-    """_call_llm(model=...) 传入 provider 层，不取全局 llm_model。"""
+    """call_llm(model=...) 传入 provider 层，不取全局 llm_model。"""
     captured: dict = {}
 
     class _Settings:
@@ -66,7 +66,7 @@ def test_call_llm_model_override_bypasses_global(monkeypatch: pytest.MonkeyPatch
         return "ok"
 
     monkeypatch.setattr(llm_mod, "_complete_openai_compatible", fake_openai)
-    llm_mod._call_llm("hi", model="mini-reviewer")
+    llm_mod.call_llm("hi", model="mini-reviewer")
     assert captured["model"] == "mini-reviewer"
 
 
@@ -89,7 +89,7 @@ def test_call_llm_model_none_uses_global(monkeypatch: pytest.MonkeyPatch):
         return "ok"
 
     monkeypatch.setattr(llm_mod, "_complete_openai_compatible", fake_openai)
-    llm_mod._call_llm("hi")
+    llm_mod.call_llm("hi")
     assert captured["model"] == "global-main-model"
 
 

@@ -585,11 +585,11 @@ def _extract_web_text(html: str) -> str:
 def _fetch_landing_text(landing_url: str, timeout: float) -> str | None:
     """HTML fallback for literature: GET a landing/PMC page → body text.
 
-    SSRF-guarded via _is_safe_url (same manual-redirect loop as _fetch_web_text).
+    SSRF-guarded via is_safe_url (same manual-redirect loop as _fetch_web_text).
     """
-    from .ingestion import _is_safe_url
+    from .ingestion import is_safe_url
 
-    if not _is_safe_url(landing_url):
+    if not is_safe_url(landing_url):
         return None
     current_url = landing_url
     try:
@@ -602,7 +602,7 @@ def _fetch_landing_text(landing_url: str, timeout: float) -> str | None:
                     if not location:
                         break
                     current_url = str(httpx.URL(current_url).join(location))
-                    if not _is_safe_url(current_url):
+                    if not is_safe_url(current_url):
                         return None
                     continue
                 break
@@ -626,12 +626,12 @@ def _fetch_landing_text(landing_url: str, timeout: float) -> str | None:
 
 
 def _fetch_web_text(ev: Evidence, timeout: float) -> str | None:
-    from .ingestion import _is_safe_url
+    from .ingestion import is_safe_url
 
     url = (ev.identifier or "").strip()
-    if not _is_safe_url(url):
+    if not is_safe_url(url):
         return None
-    # follow_redirects=False + manual loop: re-check _is_safe_url on every
+    # follow_redirects=False + manual loop: re-check is_safe_url on every
     # redirect target so an SSRF cannot pivot to an internal host via a 3xx.
     current_url = url
     try:
@@ -646,7 +646,7 @@ def _fetch_web_text(ev: Evidence, timeout: float) -> str | None:
                     if not location:
                         break
                     current_url = str(httpx.URL(current_url).join(location))
-                    if not _is_safe_url(current_url):
+                    if not is_safe_url(current_url):
                         logger.warning("web fulltext redirect blocked (SSRF guard): %s", current_url)
                         return None
                     continue

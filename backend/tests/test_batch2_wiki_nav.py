@@ -337,7 +337,7 @@ def test_coverage_stats_and_stale_rebuild(stores):
 def test_ocr_grid_reconstruction_and_search(tmp_path, monkeypatch):
     import app.services.table_contract as tc
 
-    monkeypatch.setattr(tc, "_tables_path", lambda key: tmp_path / f"{key}.json")
+    monkeypatch.setattr(tc, "tables_path", lambda key: tmp_path / f"{key}.json")
     sid = "ocr-doc-1"
     chunks = [
         SimpleNamespace(

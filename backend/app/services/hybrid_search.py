@@ -797,7 +797,7 @@ def _retry_with_rewritten_query(query: str, top_k: int, alpha: float,
             "只输出改写后的查询，不要解释：\n" + (query or "")
         )
         rewritten = _llm._call_with_deadline(
-            lambda: _llm._call_llm(prompt), 15.0,
+            lambda: _llm.call_llm(prompt), 15.0,
         )
         if not rewritten:
             return []

@@ -86,7 +86,8 @@ def _reviewer_notices(reviewer) -> list[str]:
 
 
 
-def _clamp_relevance(value: float) -> float:
+def clamp_relevance(value: float) -> float:
+    """Clamp a relevance score to [0, 1] (stage 4 / SR-054 public API; routes reuse it)."""
     try:
         n = float(value)
     except (TypeError, ValueError):
@@ -97,7 +98,8 @@ def _clamp_relevance(value: float) -> float:
 
 
 
-def _sanitize_evidence(ev: Evidence) -> Evidence:
+def sanitize_evidence(ev: Evidence) -> Evidence:
+    """Normalise one evidence item's identifier/title/snippet (stage 4 / SR-054 public API)."""
     identifier = (ev.identifier or ev.title or "source").strip() or "source"
     title = (ev.title or identifier).strip() or identifier
     snippet = (ev.snippet or "").strip()
@@ -107,7 +109,7 @@ def _sanitize_evidence(ev: Evidence) -> Evidence:
             "identifier": identifier,
             "title": title,
             "snippet": snippet or title,
-            "relevance": _clamp_relevance(ev.relevance),
+            "relevance": clamp_relevance(ev.relevance),
         }
     )
 
@@ -563,7 +565,7 @@ def _with_deep_evidence(req: ChatRequest, query: str, sources: list) -> tuple[li
         for d in result.documents:
             doc = store.get(d.source_id)
             titles[d.source_id] = (doc.title if doc else "") or d.source_id
-        deep = [_sanitize_evidence(ev) for ev in navigation_evidence(result.documents, titles=titles)]
+        deep = [sanitize_evidence(ev) for ev in navigation_evidence(result.documents, titles=titles)]
     except Exception as exc:  # noqa: BLE001 — fail-open, but say so
         log_handled_exception(logger, exc, "chat deep mode: PageIndex retrieval failed")
         return sources, [{"code": "deep_mode_failed", "message": "深度检索失败，已按普通检索回答"}]
@@ -606,7 +608,7 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             retrieval_query = f"{struct_ctx} {retrieval_query}".strip()
             rewritten_query = rewritten_query or retrieval_query
 
-        sources = [_sanitize_evidence(ev) for ev in req.sources]
+        sources = [sanitize_evidence(ev) for ev in req.sources]
         sources, req._deep_notices = _with_deep_evidence(req, retrieval_query, sources)
         sources, kb_used, entity_resolution, kg_stats = _augment_with_kb(
             retrieval_query,
@@ -631,7 +633,7 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
                 settings=settings,
             )
             if extra:
-                sources = sources + [_sanitize_evidence(e) for e in extra]
+                sources = sources + [sanitize_evidence(e) for e in extra]
         except Exception as exc:  # noqa: BLE001
             logger.debug("connector enrich skipped: %s", exc)
         _mark("kb_augment")
@@ -895,7 +897,7 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
 
         return ChatResponse(
             answer=answer,
-            citations=[_sanitize_evidence(c) for c in citations],
+            citations=[sanitize_evidence(c) for c in citations],
             rag_backend=active_rag_backend(),
             kb_chunks_used=kb_used,
             entity_resolution=entity_resolution,
@@ -959,7 +961,7 @@ def _stream_answer_plan(req: "ChatRequest", settings):
         retrieval_query = f"{struct_ctx} {retrieval_query}".strip()
         rewritten_query = rewritten_query or retrieval_query
 
-    sources = [_sanitize_evidence(ev) for ev in req.sources]
+    sources = [sanitize_evidence(ev) for ev in req.sources]
     sources, req._deep_notices = _with_deep_evidence(req, retrieval_query, sources)
     sources, kb_used, entity_resolution, kg_stats = _augment_with_kb(
         retrieval_query,
@@ -980,7 +982,7 @@ def _stream_answer_plan(req: "ChatRequest", settings):
             settings=settings,
         )
         if extra:
-            sources = sources + [_sanitize_evidence(e) for e in extra]
+            sources = sources + [sanitize_evidence(e) for e in extra]
     except Exception as exc:  # noqa: BLE001
         logger.debug("stream connector enrich skipped: %s", exc)
 
@@ -1400,7 +1402,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                         {
                             "type": "done",
                             "answer": answer,
-                            "citations": [_sanitize_evidence(c) for c in citations],
+                            "citations": [sanitize_evidence(c) for c in citations],
                             "rag_backend": "paperqa",
                             "kb_chunks_used": kb_used,
                             "data_sources": plan.get("data_sources"),
@@ -1587,7 +1589,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                         {
                             "type": "done",
                             "answer": answer,
-                            "citations": [_sanitize_evidence(c) for c in citations],
+                            "citations": [sanitize_evidence(c) for c in citations],
                             "rag_backend": active_rag_backend(),
                             "kb_chunks_used": kb_used,
                             "data_sources": plan.get("data_sources"),
@@ -1717,7 +1719,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                         answer = (result_holder.get("text") or "".join(parts)).strip()
                         yield _sse({"type": "phase", "phase": "claims"})
                         cites = [
-                            _sanitize_evidence(c)
+                            sanitize_evidence(c)
                             for c in plan["relevant"]
                         ]
                         # v16: chem-tools 路径接入 reviewer+fix-loop+DOI（与主 token 流对齐）。
@@ -1793,7 +1795,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                     tools_used = result_holder.get("tools_used") or tools_used
                     yield _sse({"type": "phase", "phase": "claims"})
                     cites = [
-                        _sanitize_evidence(c)
+                        sanitize_evidence(c)
                         for c in plan["relevant"]
                     ]
                     claims, sources_audit = None, None
@@ -1851,7 +1853,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                         pass  # loop 已关(客户端断开)
 
                 try:
-                    from ..services.llm import _OPENAI_COMPAT_PROVIDERS, _call_llm
+                    from ..services.llm import _OPENAI_COMPAT_PROVIDERS, call_llm
 
                     if (provider or "").strip().lower() not in _OPENAI_COMPAT_PROVIDERS:
                         # anthropic / gemini have no OpenAI-compatible endpoint
@@ -1859,7 +1861,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                         # through the OpenAI SDK sent the Anthropic key to
                         # api.openai.com. Use the provider-aware blocking call
                         # and emit the answer as a single delta.
-                        text = _call_llm(prompt, 2048, disable_thinking=True)
+                        text = call_llm(prompt, 2048, disable_thinking=True)
                         if not text:
                             raise RuntimeError("LLM 未返回内容")
                         on_delta(text)
@@ -1930,7 +1932,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                 answer = result_holder.get("text") or ""
 
             citations = [
-                _sanitize_evidence(c) for c in plan["relevant"]
+                sanitize_evidence(c) for c in plan["relevant"]
             ]
             # v13-1: 取回重绑后的 citations，后续 claims/gates/done 用新表。
             answer, doi_results, reviewer, reviewer_fix, citation_expand, citations = (

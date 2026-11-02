@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from app.services.literature_screening import ScreeningValidationError
 
 from app.services import literature_manifest as lm
 from app.services import literature_screening as ls
@@ -51,24 +51,27 @@ def _seed_labeled(pid: str = "pe"):
 
 def test_evaluate_invalid_year_min_maps_400(tmp_data):
     _seed_labeled()
-    with pytest.raises(HTTPException) as ei:
+    # Service raises a domain error; the route layer maps ValueError -> 400.
+    with pytest.raises(ScreeningValidationError) as ei:
         ls.evaluate_screening(
             "pe",
             {"include_keywords": ["epoxy"], "year_min": "not-a-year"},
             settings=_S(),
         )
-    assert ei.value.status_code == 400
+    assert isinstance(ei.value, ValueError)
+    assert "年份非法" in str(ei.value)
 
 
 def test_evaluate_invalid_year_max_maps_400(tmp_data):
     _seed_labeled()
-    with pytest.raises(HTTPException) as ei:
+    with pytest.raises(ScreeningValidationError) as ei:
         ls.evaluate_screening(
             "pe",
             {"include_keywords": ["epoxy"], "year_max": "20xx"},
             settings=_S(),
         )
-    assert ei.value.status_code == 400
+    assert isinstance(ei.value, ValueError)
+    assert "年份非法" in str(ei.value)
 
 
 def test_evaluate_valid_year_string_still_works(tmp_data):

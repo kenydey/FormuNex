@@ -372,7 +372,7 @@ def get_source_tables(source_id: str):
 
     tables: list[dict] = []
     try:
-        path = _tc._tables_path(source_id)
+        path = _tc.tables_path(source_id)
         if path.exists():
             payload = json.loads(path.read_text(encoding="utf-8"))
             raw = payload.get("tables", [])
@@ -492,7 +492,7 @@ def _read_property_sets(source_id: str) -> dict[str, dict[str, Any]]:
 
         from ..services import table_contract
 
-        path = table_contract._tables_path(source_id)  # noqa: SLF001
+        path = table_contract.tables_path(source_id)
         if not path.exists():
             return {}
         payload = json.loads(path.read_text(encoding="utf-8"))

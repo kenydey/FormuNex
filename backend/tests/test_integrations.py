@@ -107,7 +107,7 @@ def test_optional_probes_safe_without_libs():
 # ── PubChem enrichment (pubchempy absent → no-op) ───────────────────────────────
 
 def test_enrich_materials_noop_without_pubchempy():
-    if compounds._pubchempy_available():
+    if compounds.pubchempy_available():
         return  # skip when the lib is actually installed
     sample = {"Mystery solvent": {"role": "solvent", "smiles": None, "molar_mass": None}}
     assert compounds.enrich_materials(sample) == 0
@@ -396,7 +396,7 @@ def test_loop_iterate_endpoint():
 def test_complete_json_helper_safe_without_llm():
     from app.services.llm import complete_json
 
-    # No API key in CI → _call_llm returns None → complete_json returns None
+    # No API key in CI → call_llm returns None → complete_json returns None
     result = complete_json('Return {"x": 1}')
     assert result is None or isinstance(result, dict)
 

@@ -111,7 +111,7 @@ def test_gate_never_calls_the_llm(monkeypatch):
         raise AssertionError("feasibility gate must not call the LLM")
 
     monkeypatch.setattr(llm_service, "complete_json", _boom)
-    monkeypatch.setattr(llm_service, "_call_llm", _boom)
+    monkeypatch.setattr(llm_service, "call_llm", _boom)
 
     # A genome that *does* produce issues — the path that would trigger it.
     genome_is_feasible(_waterborne_genome("Desmodur BL 3175"), _waterborne_req())

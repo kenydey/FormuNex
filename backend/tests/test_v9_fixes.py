@@ -169,7 +169,7 @@ def _mock_download(monkeypatch, body: bytes, content_type: str):
 
     import app.services.ingestion as ing
 
-    monkeypatch.setattr(ing, "_is_safe_url", lambda url: True)
+    monkeypatch.setattr(ing, "is_safe_url", lambda url: True)
 
     def fake_send(self, request, **kwargs):
         return _FakeStreamResp(body, content_type)

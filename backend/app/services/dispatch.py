@@ -238,7 +238,7 @@ def dispatch_task_kernel(
 
     try:
         _delay_with_timeout(task, payload, task_id=task_id)
-    except _DispatchTimeout as exc:
+    except DispatchTimeout as exc:
         # 2026-09-05: uvicorn 进程内 celery producer 首建曾无限卡(所有 submit
         # 端点挂起→前端 502)。预热(lifespan)已把首建移出请求路径; 此处兜底
         # 超时, 宁可明确 503 也不让请求无限挂。
@@ -289,8 +289,12 @@ def _submit_eager_background(
     return task_id
 
 
-class _DispatchTimeout(Exception):
-    pass
+class DispatchTimeout(Exception):
+    """Producer publish exceeded its timeout (stage 4 / SR-054 public API).
+
+    Raised by the dispatch kernel; the HTTP adapter maps it to a 503
+    carrying the task id. Tests construct it from the adapter module.
+    """
 
 
 def _delay_with_timeout(task, payload: dict, task_id: str | None = None, timeout_s: float = 10.0):
@@ -315,6 +319,6 @@ def _delay_with_timeout(task, payload: dict, task_id: str | None = None, timeout
         try:
             return fut.result(timeout=timeout_s)
         except FuturesTimeout:
-            raise _DispatchTimeout("task.delay > {}s".format(timeout_s)) from None
+            raise DispatchTimeout("task.delay > {}s".format(timeout_s)) from None
     finally:
         pool.shutdown(wait=False)  # 卡死线程不等待(超时兜底必须立即返回)

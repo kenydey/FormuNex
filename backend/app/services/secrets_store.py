@@ -111,7 +111,7 @@ def mark_ui_managed(keys) -> None:
     _UI_MANAGED_KEYS.update(keys)
 
 
-def _mask(value: str | None) -> str:
+def mask(value: str | None) -> str:
     """Enough of a secret to recognise it, never enough to help guess it: the last four characters, and nothing at all
     for anything of 16 characters or fewer (a 12-character key would otherwise show two thirds of itself)."""
     if not value:
@@ -346,7 +346,7 @@ def list_secret_status(settings: Settings | None = None) -> list[dict]:
                 "group": group,
                 "set": bool(val),
                 # An address or an e-mail is not a secret: show it, so the user can see what is configured.
-                "masked": (str(val) if val else "") if attr in NON_SECRET_ATTRS else _mask(str(val) if val else None),
+                "masked": (str(val) if val else "") if attr in NON_SECRET_ATTRS else mask(str(val) if val else None),
                 "secret": attr not in NON_SECRET_ATTRS,
             }
         )

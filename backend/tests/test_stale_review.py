@@ -59,7 +59,7 @@ def test_artifact_unchanged_not_stale(tmp_data):
 
 def test_corrupt_run_file_unverified(tmp_data):
     run = rfl.new_review_run(scope={"question": "q", "answer": "a"})
-    path = rfl._run_path(run["run_id"])
+    path = rfl.run_path(run["run_id"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not valid json", encoding="utf-8")
 

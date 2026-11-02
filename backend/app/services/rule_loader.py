@@ -28,7 +28,8 @@ _PKG_RULES_DIR = Path(__file__).resolve().parent.parent / "resources" / "rules"
 # 兜底默认(1:1 迁移自改造前的硬编码常量——见各消费模块 git 历史)。
 # 注意: acid_stability 兜底仅是 TOML 缺失时的最后防线; _RESIN_ROLES 等
 # 检查策略常量仍留在消费代码(属逻辑非数据)。
-_FALLBACKS: dict[str, dict] = {
+# Stage 4 / SR-054: public API (routes list the available tables from it).
+FALLBACKS: dict[str, dict] = {
     "acid_stability": {
         "strong_alkali": {
             "exact": ["Sodium metasilicate", "Sodium tripolyphosphate"],
@@ -83,7 +84,8 @@ _FALLBACKS: dict[str, dict] = {
 }
 
 
-def _rules_dir() -> Path:
+def rules_dir() -> Path:
+    """Directory holding the TOML rule tables (stage 4 / SR-054 public API)."""
     over = os.environ.get(_RULES_DIR_ENV)
     if over:
         p = Path(over)
@@ -104,10 +106,10 @@ _LAST_LOAD: dict[str, dict] = {}
 @functools.lru_cache(maxsize=16)
 def load_rules(kind: str) -> dict:
     """Load one rule table (TOML) with built-in fallback on any failure."""
-    fallback = _FALLBACKS.get(kind)
+    fallback = FALLBACKS.get(kind)
     if fallback is None:
-        raise KeyError(f"未知规则表: {kind!r} (可用: {sorted(_FALLBACKS)})")
-    path = _rules_dir() / f"{kind}.toml"
+        raise KeyError(f"未知规则表: {kind!r} (可用: {sorted(FALLBACKS)})")
+    path = rules_dir() / f"{kind}.toml"
     try:
         with path.open("rb") as fh:
             data = tomllib.load(fh)
@@ -159,11 +161,11 @@ def rules_status() -> dict[str, dict]:
     guess about what a load would find.
     """
     out: dict[str, dict] = {}
-    for kind in sorted(_FALLBACKS):
+    for kind in sorted(FALLBACKS):
         entry = _LAST_LOAD.get(kind)
         out[kind] = dict(entry) if entry else {
             "source": "not_loaded",
-            "path": str(_rules_dir() / f"{kind}.toml"),
+            "path": str(rules_dir() / f"{kind}.toml"),
             "mtime": None,
             "error": None,
         }

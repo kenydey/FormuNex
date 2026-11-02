@@ -397,14 +397,14 @@ def list_remote_models(
         }
 
 
-def _provider_default_base_url(provider: str) -> str | None:
+def provider_default_base_url(provider: str) -> str | None:
     """Return the catalog default base URL for OpenAI-compatible providers."""
     return _PROVIDER_INDEX.get(provider, {}).get("base_url")
 
 
 def _resolve_openai_base_url(provider: str, override: str | None) -> str | None:
     """Pick the effective base URL and normalise empty strings."""
-    url = (override or "").strip() or _provider_default_base_url(provider)
+    url = (override or "").strip() or provider_default_base_url(provider)
     return url or None
 
 
@@ -823,7 +823,7 @@ def _complete_gemini(prompt: str, api_key: str, model: str) -> str | None:
         return None
 
 
-def _call_llm(
+def call_llm(
     prompt: str,
     max_tokens: int | None = None,
     *,
@@ -904,7 +904,7 @@ def complete_json(prompt: str, *, model: str | None = None) -> dict | None:
         metadata={"kind": "json", "model": model or "default",
                   "sensitivity": _sensitivity, "provider": str(_provider)},
     ) as span:
-        raw = _call_llm(prompt, model=model)
+        raw = call_llm(prompt, model=model)
         if not raw:
             span["error"] = "empty_llm_response"
             return None
@@ -1858,7 +1858,7 @@ def synthesize_research(
     mechanism = MECHANISMS[req.domain]
 
     prompt = _evidence_prompt(req, evidence, recommended)
-    result = _call_llm(prompt)
+    result = call_llm(prompt)
     if result:
         return mechanism, result
 
@@ -1998,12 +1998,12 @@ def answer_question(
     #    (中英混杂 "Let's examine…"), 2048 预算被草稿耗尽 → 正式答案被截断,
     #    前端表现为"答非所问/报错"。关闭后直接输出干净答案(实测 6s vs 154s)。
     answer = _call_with_deadline(
-        lambda: _call_llm(prompt, max_tokens=2048, disable_thinking=True), 45.0
+        lambda: call_llm(prompt, max_tokens=2048, disable_thinking=True), 45.0
     )
     if _looks_like_draft(answer):
         log.warning("answer_question: LLM 输出疑似推理草稿(%d 字符), 重试一次", len(answer or ""))
         retry = _call_with_deadline(
-            lambda: _call_llm(prompt, max_tokens=2048, disable_thinking=True), 45.0
+            lambda: call_llm(prompt, max_tokens=2048, disable_thinking=True), 45.0
         )
         answer = retry or answer
     if not answer:

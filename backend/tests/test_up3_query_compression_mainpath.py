@@ -113,7 +113,7 @@ def test_answer_question_compression_keeps_citation_order(monkeypatch):
     srcs = [_ev("kb:A", "文献A"), _ev("kb:B", "文献B")]
 
     monkeypatch.setattr(llm_mod, "compress_evidence", lambda q, s, token_budget=3000: [srcs[1], srcs[0]])
-    monkeypatch.setattr(llm_mod, "_call_llm", lambda prompt, **kw: "答案[^1][^2]")
+    monkeypatch.setattr(llm_mod, "call_llm", lambda prompt, **kw: "答案[^1][^2]")
     monkeypatch.setattr(llm_mod, "_paperqa_available", lambda: False)
     monkeypatch.setattr(
         "app.services.llm.get_settings",

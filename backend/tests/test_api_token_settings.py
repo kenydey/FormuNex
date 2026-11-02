@@ -95,7 +95,7 @@ def test_newline_in_token_is_rejected(client):
 
 
 def test_short_token_masks_fully(client):
-    # ≤16 字符的掩码不透露任何字符（与 secrets_store._mask 口径一致）。
+    # ≤16 字符的掩码不透露任何字符（与 secrets_store.mask 口径一致）。
     client.post("/api/settings/api-token", json={"token": "short-token-123"})
     r = client.get("/api/settings/api-token")
     assert r.json()["masked"] == "••••"

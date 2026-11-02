@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from ..config import get_settings
 from ..services.parse_profiles import apply_profile, current_profile, probe_availability, PROFILE_NAMES
-from ..services.llm import _provider_default_base_url, list_remote_models, providers_with_cache, test_connection
+from ..services.llm import provider_default_base_url, list_remote_models, providers_with_cache, test_connection
 from ..services.llm_roles import CUSTOM_PROVIDER, VISION, normalize_base_url, resolve_role
 from ..services.vision_extract import probe_vision, vision_available
 from ..services.runtime_secrets import effective_setting, get_runtime_secrets
@@ -21,7 +21,7 @@ router = APIRouter()
 
 # Known LLM provider hostnames (and their API subdomains). A user-supplied
 # base_url whose host matches one of these is always accepted; otherwise the
-# URL must at least pass the SSRF safety check (_is_safe_url).
+# URL must at least pass the SSRF safety check (is_safe_url).
 _KNOWN_LLM_HOSTS: frozenset[str] = frozenset({
     "anthropic.com",
     "api.anthropic.com",
@@ -63,9 +63,9 @@ def _validate_base_url(url: str | None) -> None:
         raise HTTPException(status_code=422, detail="base_url is missing a hostname")
     if any(host == h or host.endswith(f".{h}") for h in _KNOWN_LLM_HOSTS):
         return
-    from ..services.ingestion import _is_safe_url
+    from ..services.ingestion import is_safe_url
 
-    if not _is_safe_url(url):
+    if not is_safe_url(url):
         raise HTTPException(
             status_code=422,
             detail="base_url hostname is not a recognised LLM provider and is not a safe public address",
@@ -151,9 +151,9 @@ def _apply_llm_update(update: LLMSettingsUpdate) -> None:
         rs.set("llm_model", update.model)
     if provider_changed and update.base_url is None:
         new_provider = update.provider or current_provider
-        rs.set("llm_base_url", _provider_default_base_url(str(new_provider)))
+        rs.set("llm_base_url", provider_default_base_url(str(new_provider)))
     if update.base_url is not None:
-        rs.set("llm_base_url", update.base_url.strip() or _provider_default_base_url(
+        rs.set("llm_base_url", update.base_url.strip() or provider_default_base_url(
             str(update.provider or current_provider)
         ))
 
@@ -200,7 +200,7 @@ def _apply_vision_update(update: VisionSettingsUpdate) -> None:
     if update.model is not None:
         rs.set("vision_model", update.model.strip())
     if provider_changed and update.base_url is None:
-        rs.set("vision_base_url", _provider_default_base_url(str(update.provider or "")))
+        rs.set("vision_base_url", provider_default_base_url(str(update.provider or "")))
     if update.base_url is not None:
         rs.set("vision_base_url", update.base_url.strip() or None)
     if update.api_key is not None:
@@ -310,11 +310,11 @@ class ApiTokenUpdate(BaseModel):
 def _api_token_status() -> dict:
     """平台 bearer token（FORMUNEX_API_TOKEN）状态——只返回掩码，绝不回显完整值。"""
     from ..services.runtime_secrets import effective_setting
-    from ..services.secrets_store import _mask
+    from ..services.secrets_store import mask
 
     settings = get_settings()
     value = str(effective_setting(settings, "api_token") or "").strip()
-    return {"set": bool(value), "masked": _mask(value), "auth_enabled": bool(settings.api_auth_enabled)}
+    return {"set": bool(value), "masked": mask(value), "auth_enabled": bool(settings.api_auth_enabled)}
 
 
 @router.get("/settings/api-token")

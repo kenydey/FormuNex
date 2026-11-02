@@ -84,7 +84,7 @@ def persist_workbench_lab_ledger(
             upserted += 1
 
     if project_id and upserted:
-        _link_campaign_to_project(project_id, campaign_id)
+        link_campaign_to_project(project_id, campaign_id)
 
     logger.info(
         "workbench_lab_ledger: campaign=%s project=%s upserted=%d skipped=%d",
@@ -102,7 +102,7 @@ def persist_workbench_lab_ledger(
     }
 
 
-def _link_campaign_to_project(project_id: str, campaign_id: int) -> None:
+def link_campaign_to_project(project_id: str, campaign_id: int) -> None:
     """Best-effort: stamp ``workspace.workbench_campaign_id`` for dossier hydrate."""
     try:
         from ..db.project_store import get_project_store

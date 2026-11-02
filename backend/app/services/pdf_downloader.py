@@ -325,9 +325,9 @@ def _pdf_url_from_landing(html: str) -> str | None:
     if host != _PDF_HOST:
         logger.warning("citation_pdf_url host rejected (expected %s): %s", _PDF_HOST, host)
         return None
-    from .ingestion import _is_safe_url
+    from .ingestion import is_safe_url
 
-    if not _is_safe_url(url):
+    if not is_safe_url(url):
         logger.warning("citation_pdf_url blocked by SSRF guard: %s", url[:200])
         return None
     return url
@@ -363,7 +363,7 @@ def fetch_pdf_ex(url: str, timeout: float = 20.0) -> tuple[bytes | None, str]:
     refusing the request (403) from a real timeout instead of lumping both
     into one misleading "download timed out".
 
-    SSRF: initial URL and every redirect hop are checked with ``_is_safe_url``
+    SSRF: initial URL and every redirect hop are checked with ``is_safe_url``
     (same manual-redirect loop as web fulltext). Auto ``follow_redirects`` is
     off so a malicious OA 302 cannot pivot to an internal host.
 
@@ -371,9 +371,9 @@ def fetch_pdf_ex(url: str, timeout: float = 20.0) -> tuple[bytes | None, str]:
     short blocklist (``kb_403_blocklist_ttl_s``), and exponential-backoff
     retry on timeout / 5xx (``kb_pdf_retry_attempts`` total attempts).
     """
-    from .ingestion import _is_safe_url
+    from .ingestion import is_safe_url
 
-    if not _is_safe_url(url):
+    if not is_safe_url(url):
         logger.warning("pdf fetch blocked by SSRF guard: %s", (url or "")[:200])
         return None, "ssrf"
     # D-5: PDF 预检 —— HEAD 检查 Content-Length/Content-Type，超大或非 PDF 提前跳过
@@ -431,7 +431,7 @@ def fetch_pdf_ex(url: str, timeout: float = 20.0) -> tuple[bytes | None, str]:
                         if not location:
                             break
                         current_url = str(httpx.URL(current_url).join(location))
-                        if not _is_safe_url(current_url):
+                        if not is_safe_url(current_url):
                             logger.warning(
                                 "pdf redirect blocked by SSRF guard: %s", current_url[:200]
                             )

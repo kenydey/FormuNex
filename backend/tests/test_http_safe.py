@@ -127,7 +127,7 @@ def test_nat64_wrapped_public_address_is_allowed():
 
 def test_ingestion_keeps_the_policy_it_delegates_to_http_safe():
     """One policy, two names: the underscore aliases are what callers and tests patch."""
-    assert ingestion._is_safe_url is http_safe.is_safe_url
+    assert ingestion.is_safe_url is http_safe.is_safe_url
     assert ingestion._is_blocked_ip is http_safe.is_blocked_ip
 
 

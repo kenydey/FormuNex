@@ -17,7 +17,25 @@ from ..domain.project_workspace import (
     record_contract_change,
 )
 from ..services import project_exports as exports_svc
+from ..services.project_exports import (
+    ProjectExportError,
+    ProjectExportNotFoundError,
+    ProjectExportTooLargeError,
+    ProjectExportValidationError,
+)
 from ._uploads import read_upload_capped
+
+# Stage 4 / SR-054: the service layer raises domain errors only; this
+# table is the route layer's uniform mapping to HTTP statuses.
+_EXPORT_HTTP_STATUS = {
+    ProjectExportNotFoundError: 404,
+    ProjectExportValidationError: 400,
+    ProjectExportTooLargeError: 413,
+}
+
+
+def _map_export_error(exc: ProjectExportError) -> HTTPException:
+    return HTTPException(status_code=_EXPORT_HTTP_STATUS[type(exc)], detail=str(exc))
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -200,6 +218,10 @@ def migrate_local(req: MigrateLocalRequest) -> list[ProjectSummary]:
 
 @router.get("/{project_id}/exports", response_model=list[ExportFileOut])
 def list_project_exports(project_id: str) -> list[ExportFileOut]:
+    try:
+        files = exports_svc.list_exports(project_id)
+    except ProjectExportError as exc:
+        raise _map_export_error(exc) from exc
     return [
         ExportFileOut(
             name=f.name,
@@ -207,14 +229,17 @@ def list_project_exports(project_id: str) -> list[ExportFileOut]:
             updated_at=f.updated_at,
             content_type=f.content_type,
         )
-        for f in exports_svc.list_exports(project_id)
+        for f in files
     ]
 
 
 @router.post("/{project_id}/exports", response_model=ExportFileOut)
 def save_project_export(project_id: str, body: ExportTextBody) -> ExportFileOut:
     """Save UTF-8 text (CSV / JSON / Markdown) into the project export shelf."""
-    info = exports_svc.save_export_bytes(project_id, body.filename, body.content.encode("utf-8"))
+    try:
+        info = exports_svc.save_export_bytes(project_id, body.filename, body.content.encode("utf-8"))
+    except ProjectExportError as exc:
+        raise _map_export_error(exc) from exc
     return ExportFileOut(
         name=info.name,
         size=info.size,
@@ -232,7 +257,10 @@ async def upload_project_export(
     """Multipart binary upload (PDF / XLSX) into the project export shelf."""
     name = filename or file.filename or "export.bin"
     raw = await read_upload_capped(file, name, limit=exports_svc.MAX_EXPORT_BYTES)
-    info = await run_in_threadpool(exports_svc.save_export_bytes, project_id, name, raw)
+    try:
+        info = await run_in_threadpool(exports_svc.save_export_bytes, project_id, name, raw)
+    except ProjectExportError as exc:
+        raise _map_export_error(exc) from exc
     return ExportFileOut(
         name=info.name,
         size=info.size,
@@ -243,7 +271,10 @@ async def upload_project_export(
 
 @router.get("/{project_id}/exports/{filename}")
 def download_project_export(project_id: str, filename: str) -> FileResponse:
-    path = exports_svc.resolve_export_path(project_id, filename)
+    try:
+        path = exports_svc.resolve_export_path(project_id, filename)
+    except ProjectExportError as exc:
+        raise _map_export_error(exc) from exc
     return FileResponse(
         path,
         filename=path.name,
@@ -253,5 +284,8 @@ def download_project_export(project_id: str, filename: str) -> FileResponse:
 
 @router.delete("/{project_id}/exports/{filename}")
 def delete_project_export(project_id: str, filename: str) -> dict:
-    exports_svc.delete_export(project_id, filename)
+    try:
+        exports_svc.delete_export(project_id, filename)
+    except ProjectExportError as exc:
+        raise _map_export_error(exc) from exc
     return {"ok": True, "filename": filename}

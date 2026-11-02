@@ -32,7 +32,7 @@ def translate_query_zh_to_en(query: str, *, timeout_s: float = 15.0) -> str | No
         from . import llm as _llm
 
         raw = _llm._call_with_deadline(
-            lambda: _llm._call_llm(_TRANSLATE_PROMPT.format(query=q)),
+            lambda: _llm.call_llm(_TRANSLATE_PROMPT.format(query=q)),
             timeout_s,
         )
     except Exception:

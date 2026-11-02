@@ -499,9 +499,9 @@ async def create_workbench_campaign(
     )
     if payload.project_id:
         try:
-            from ..services.workbench_training import _link_campaign_to_project
+            from ..services.workbench_training import link_campaign_to_project
 
-            _link_campaign_to_project(str(payload.project_id), int(campaign.id))
+            link_campaign_to_project(str(payload.project_id), int(campaign.id))
         except Exception:
             pass
     rows = await store.list_rows(campaign.id)

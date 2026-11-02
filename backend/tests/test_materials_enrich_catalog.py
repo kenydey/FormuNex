@@ -34,7 +34,7 @@ def client(tmp_path, monkeypatch):
 
 
 def test_a_batch_is_looked_up_filled_and_persisted(client, monkeypatch):
-    monkeypatch.setattr(compounds, "_pubchempy_available", lambda: True)
+    monkeypatch.setattr(compounds, "pubchempy_available", lambda: True)
     calls: list[str] = []
 
     def fake_lookup(name: str):
@@ -59,7 +59,7 @@ def test_a_batch_is_looked_up_filled_and_persisted(client, monkeypatch):
 
 
 def test_without_pubchempy_it_says_so_instead_of_pretending(client, monkeypatch):
-    monkeypatch.setattr(compounds, "_pubchempy_available", lambda: False)
+    monkeypatch.setattr(compounds, "pubchempy_available", lambda: False)
     body = client.post("/api/materials/enrich").json()
     assert body == {"enriched": 0, "scanned": 0, "remaining": 0, "available": False}
 

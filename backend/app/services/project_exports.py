@@ -6,13 +6,31 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import HTTPException
-
 from ..config import get_settings
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
 MAX_EXPORT_BYTES = _MAX_BYTES
+
+
+class ProjectExportError(ValueError):
+    """Base for project-export failures (stage 4 / SR-054).
+
+    Services raise these, never HTTPException: the route layer maps each
+    subclass to its HTTP status (see api/projects.py).
+    """
+
+
+class ProjectExportNotFoundError(ProjectExportError):
+    """Project or export file not found (maps to HTTP 404)."""
+
+
+class ProjectExportValidationError(ProjectExportError):
+    """Bad project id, filename, symlink or path escape (maps to HTTP 400)."""
+
+
+class ProjectExportTooLargeError(ProjectExportError):
+    """File exceeds MAX_EXPORT_BYTES (maps to HTTP 413)."""
 
 
 @dataclass(frozen=True)
@@ -33,22 +51,18 @@ def _db_parent() -> Path:
 
 def exports_dir(project_id: str) -> Path:
     if not project_id or "/" in project_id or "\\" in project_id or ".." in project_id:
-        raise HTTPException(status_code=400, detail="invalid project_id")
+        raise ProjectExportValidationError("invalid project_id")
     return _db_parent() / "project_exports" / project_id
 
 
 def sanitize_filename(name: str) -> str:
     raw = (name or "").strip()
     if not raw or "/" in raw or "\\" in raw or ".." in raw:
-        raise HTTPException(
-            status_code=400,
-            detail="filename must be 1–128 chars: letters, digits, ._- (no path)",
-        )
+        raise ProjectExportValidationError(
+            "filename must be 1–128 chars: letters, digits, ._- (no path)")
     if not _SAFE_NAME.match(raw):
-        raise HTTPException(
-            status_code=400,
-            detail="filename must be 1–128 chars: letters, digits, ._- (no path)",
-        )
+        raise ProjectExportValidationError(
+            "filename must be 1–128 chars: letters, digits, ._- (no path)")
     return raw
 
 
@@ -73,7 +87,7 @@ def ensure_project_exists(project_id: str) -> None:
     from ..db.project_store import get_project_store
 
     if get_project_store().get(project_id) is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise ProjectExportNotFoundError("Project not found")
 
 
 def list_exports(project_id: str) -> list[ExportFileInfo]:
@@ -87,7 +101,7 @@ def list_exports(project_id: str) -> list[ExportFileInfo]:
             continue
         try:
             name = sanitize_filename(p.name)
-        except HTTPException:
+        except ProjectExportValidationError:
             continue
         st = p.stat()
         out.append(
@@ -105,13 +119,13 @@ def save_export_bytes(project_id: str, filename: str, data: bytes) -> ExportFile
     ensure_project_exists(project_id)
     name = sanitize_filename(filename)
     if len(data) > _MAX_BYTES:
-        raise HTTPException(status_code=413, detail=f"file exceeds {_MAX_BYTES} bytes")
+        raise ProjectExportTooLargeError(f"file exceeds {_MAX_BYTES} bytes")
     root = exports_dir(project_id)
     root.mkdir(parents=True, exist_ok=True)
     path = root / name
     # Refuse symlink escape
     if path.is_symlink():
-        raise HTTPException(status_code=400, detail="refusing symlink target")
+        raise ProjectExportValidationError("refusing symlink target")
     path.write_bytes(data)
     st = path.stat()
     return ExportFileInfo(
@@ -128,9 +142,9 @@ def resolve_export_path(project_id: str, filename: str) -> Path:
     root = exports_dir(project_id).resolve()
     path = (root / name).resolve()
     if root not in path.parents and path != root:
-        raise HTTPException(status_code=400, detail="path escape blocked")
+        raise ProjectExportValidationError("path escape blocked")
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="export not found")
+        raise ProjectExportNotFoundError("export not found")
     return path
 
 

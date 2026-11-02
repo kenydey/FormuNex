@@ -92,8 +92,8 @@ def test_chat_orchestration_exports():
         "_augment_with_kb",
         "_stream_answer_plan",
         "_apply_ref_docs",
-        "_sanitize_evidence",
-        "_clamp_relevance",
+        "sanitize_evidence",
+        "clamp_relevance",
         "_finalize_evidence_fields",
         "_sse",
     ):

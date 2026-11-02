@@ -37,7 +37,7 @@ def _fresh(monkeypatch, tmp_path):
     # test_ingest_ssrf.py — here we only test cache/blocklist/retry.
     import app.services.ingestion as ingestion_mod
 
-    monkeypatch.setattr(ingestion_mod, "_is_safe_url", lambda url: True)
+    monkeypatch.setattr(ingestion_mod, "is_safe_url", lambda url: True)
     pd._host_403_until.clear()
     yield
     get_settings.cache_clear()

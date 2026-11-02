@@ -85,8 +85,8 @@ def list_review_runs(
     if not (project_id or "").strip():
         raise HTTPException(status_code=400, detail="project_id is required")
     limit = max(1, min(int(limit or 50), _LIST_LIMIT_MAX))
-    # _run_path 是 service 内部路径构造；复用它避免重复实现 sanitize 规则。
-    runs_dir = reviewer_fix_loop._run_path("probe").parent  # noqa: SLF001
+    # run_path 是公开的路径构造；复用它避免重复实现 sanitize 规则。
+    runs_dir = reviewer_fix_loop.run_path("probe").parent
     items: list[dict] = []
     if runs_dir.is_dir():
         paths = sorted(
@@ -175,7 +175,7 @@ def rerun_review(run_id: str, body: RerunRequest) -> dict:
         try:
             from ..services import llm as _llm
 
-            out = _llm._call_llm(  # noqa: SLF001
+            out = _llm.call_llm(
                 f"{question}\n\n{auditor_hint}\n\n请输出修订后的完整回答：",
                 max_tokens=2048,
             )

@@ -1470,6 +1470,11 @@ def screening_evaluate_endpoint(body: ScreeningEvaluateRequest) -> dict:
         )
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        # Stage 4 / SR-054: the service raises ScreeningValidationError
+        # (a ValueError) instead of HTTPException; map it here, as the
+        # sibling screening endpoints already do.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.patch("/literature/items/{item_id}")

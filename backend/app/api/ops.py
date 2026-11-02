@@ -148,9 +148,9 @@ def rules_status_endpoint() -> dict:
     triggered: tables never loaded since start (or since the last
     reload) report ``not_loaded``.
     """
-    from ..services.rule_loader import _rules_dir, rules_status
+    from ..services.rule_loader import rules_dir, rules_status
 
-    return {"rules_dir": str(_rules_dir()), "tables": rules_status()}
+    return {"rules_dir": str(rules_dir()), "tables": rules_status()}
 
 
 @router.post("/rules/reload")
@@ -165,12 +165,12 @@ def rules_reload_endpoint() -> dict:
     through the same cache, so the next call in any of them sees the
     new tables without a process restart.
     """
-    from ..services.rule_loader import _FALLBACKS, _rules_dir, load_rules, reload_rules, rules_status
+    from ..services.rule_loader import FALLBACKS, rules_dir, load_rules, reload_rules, rules_status
 
     reload_rules()
-    for kind in sorted(_FALLBACKS):
+    for kind in sorted(FALLBACKS):
         load_rules(kind)
-    return {"reloaded": True, "rules_dir": str(_rules_dir()), "tables": rules_status()}
+    return {"reloaded": True, "rules_dir": str(rules_dir()), "tables": rules_status()}
 
 
 @router.get("/kb-health")

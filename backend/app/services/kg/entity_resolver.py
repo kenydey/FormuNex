@@ -51,7 +51,7 @@ def _llm_intent_mode(query: str) -> str | None:
     try:
         from .. import llm as _llm
 
-        raw = _llm._call_with_deadline(lambda: _llm._call_llm(prompt), 3.0)
+        raw = _llm._call_with_deadline(lambda: _llm.call_llm(prompt), 3.0)
         if not raw:
             return None
         import json

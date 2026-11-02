@@ -14,7 +14,7 @@ def _clean_rules_cache():
 
 
 def _rules_default(kind: str) -> dict:
-    return rule_loader._FALLBACKS[kind]
+    return rule_loader.FALLBACKS[kind]
 
 
 # ── 默认配置 == 迁移前硬编码(锚定, 防漂移) ────────────────────────────────

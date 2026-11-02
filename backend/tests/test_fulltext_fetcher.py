@@ -157,7 +157,7 @@ def test_max_docs_cap(monkeypatch):
 def test_web_fetch_uses_trafilatura_fallback_chain(monkeypatch):
     _enable(monkeypatch)
     # `.example` TLD often resolves to reserved/blocked IPs under SSRF DNS checks.
-    monkeypatch.setattr("app.services.ingestion._is_safe_url", lambda url: True)
+    monkeypatch.setattr("app.services.ingestion.is_safe_url", lambda url: True)
 
     class FakeResponse:
         status_code = 200

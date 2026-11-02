@@ -145,9 +145,9 @@ def test_the_env_file_is_private_and_concurrent_saves_keep_every_key(env_file):
 
 
 def test_a_secret_is_masked_to_its_last_four_characters_at_most():
-    assert ss._mask("abcdefghijkl") == "••••"  # 12 chars: nothing
-    assert ss._mask("a" * 20 + "WXYZ") == "••••WXYZ"
-    assert ss._mask(None) == ""
+    assert ss.mask("abcdefghijkl") == "••••"  # 12 chars: nothing
+    assert ss.mask("a" * 20 + "WXYZ") == "••••WXYZ"
+    assert ss.mask(None) == ""
 
 
 # ── downloads ────────────────────────────────────────────────────────────────────────────────────────────────────────

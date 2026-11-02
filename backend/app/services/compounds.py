@@ -39,7 +39,8 @@ def _cache_set(key: str, data: dict[str, Any]) -> None:
     _LOOKUP_CACHE[key.lower().strip()] = (time.time(), data)
 
 
-def _pubchempy_available() -> bool:
+def pubchempy_available() -> bool:
+    """Whether the optional pubchempy dependency is installed (stage 4 / SR-054 public API)."""
     try:
         import pubchempy  # noqa: F401
 
@@ -203,7 +204,7 @@ def enrich_materials(materials: dict[str, dict]) -> int:
     Returns the number of materials updated. No-op (returns 0) when pubchempy
     is unavailable. Only blank fields are touched — curated values win.
     """
-    if not _pubchempy_available():
+    if not pubchempy_available():
         return 0
     updated = 0
     for name, spec in materials.items():

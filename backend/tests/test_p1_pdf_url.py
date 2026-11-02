@@ -55,7 +55,7 @@ def _mock_pdf_download(monkeypatch, body: bytes, content_type: str = "applicatio
     import app.services.ingestion as ing
 
     # 沙箱无 DNS：跳过 SSRF 安全检查（被测的是解析路由，不是 URL 校验）
-    monkeypatch.setattr(ing, "_is_safe_url", lambda url: True)
+    monkeypatch.setattr(ing, "is_safe_url", lambda url: True)
 
     calls: dict = {}
 

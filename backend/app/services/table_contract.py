@@ -697,7 +697,8 @@ def _tables_root() -> Path:
     return base.resolve()
 
 
-def _tables_path(key: str) -> Path:
+def tables_path(key: str) -> Path:
+    """Tables file for one source (stage 4 / SR-054 public API; routes reuse it)."""
     safe = re.sub(r"[^\w.\-]", "_", key)[:80] or "anon"
     return _tables_root() / f"{safe}.json"
 
@@ -717,7 +718,7 @@ def save_tables(
     if not source_id:
         return None
     try:
-        path = _tables_path(source_id)
+        path = tables_path(source_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "source_id": source_id,
@@ -737,7 +738,7 @@ def save_tables(
 def load_tables(source_id: str) -> list[TableAsset]:
     """Load assets for a source id (or content-hash key). Empty on any error."""
     try:
-        path = _tables_path(source_id)
+        path = tables_path(source_id)
         if not path.exists():
             return []
         payload = json.loads(read_text_with_retry(path))
@@ -887,7 +888,7 @@ def load_property_sets(source_id: str) -> list[dict]:
     ``"property_sets"`` key. Never raises.
     """
     try:
-        path = _tables_path(source_id)
+        path = tables_path(source_id)
         if not path.exists():
             return []
         payload = json.loads(read_text_with_retry(path))

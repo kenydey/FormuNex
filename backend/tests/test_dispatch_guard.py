@@ -177,7 +177,7 @@ def test_dispatch_timeout_detail_does_not_blame_redis(
 
     monkeypatch.setattr(tasks.run_recommend_task, "delay", hang)
     monkeypatch.setattr(_dispatch_kernel, "_delay_with_timeout", lambda *a, **k: (_ for _ in ()).throw(
-        _dispatch._DispatchTimeout("task.delay > 10.0s")
+        _dispatch.DispatchTimeout("task.delay > 10.0s")
     ))
 
     response = client.post("/api/research/recommend", json=REQUIREMENT)

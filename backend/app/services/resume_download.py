@@ -48,8 +48,8 @@ def download_resumable(url: str, *, timeout: float = 30.0,
     try:
         from .http_safe import ssrf_safe_client
         from .pdf_downloader import _HEADERS
-        from .ingestion import _is_safe_url
-        if not _is_safe_url(url):
+        from .ingestion import is_safe_url
+        if not is_safe_url(url):
             return None
     except Exception:
         return None

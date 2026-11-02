@@ -10,8 +10,8 @@ from pydantic import PrivateAttr, field_validator
 from ..domain.chat_schemas import ChatRequest, ChatResponse, ChatTurn
 from ..domain.schemas import Evidence
 from ..services.chat_orchestration import (
-    _clamp_relevance,
-    _sanitize_evidence,
+    clamp_relevance,
+    sanitize_evidence,
     run_chat,
     stream_chat_events,
 )
@@ -46,13 +46,13 @@ class ChatRequestValidated(ChatRequest):
         dropped = 0
         for item in raw:
             if isinstance(item, Evidence):
-                out.append(_sanitize_evidence(item).model_dump())
+                out.append(sanitize_evidence(item).model_dump())
             elif isinstance(item, dict):
                 data = dict(item)
                 if "relevance" in data:
-                    data["relevance"] = _clamp_relevance(data.get("relevance", 0.5))
+                    data["relevance"] = clamp_relevance(data.get("relevance", 0.5))
                 try:
-                    out.append(_sanitize_evidence(Evidence.model_validate(data)).model_dump())
+                    out.append(sanitize_evidence(Evidence.model_validate(data)).model_dump())
                 except Exception:
                     dropped += 1
                     continue

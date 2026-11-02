@@ -60,7 +60,7 @@ def test_list_filter_and_order(api_client):
 
     base = 1_700_000_000.0
     for i, r in enumerate((r1, r2, r3)):
-        p = svc._run_path(r["run_id"])
+        p = svc.run_path(r["run_id"])
         os.utime(p, (base + i, base + i))
 
     # F-2 fail-closed：无 project_id 的列表请求直接 400，不再返回全项目数据

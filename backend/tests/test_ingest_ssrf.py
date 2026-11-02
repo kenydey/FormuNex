@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import app
-from app.services.ingestion import _is_safe_url
+from app.services.ingestion import is_safe_url
 
 
 @pytest.fixture(autouse=True)
@@ -35,11 +35,11 @@ client = TestClient(app)
     ],
 )
 def test_is_safe_url_blocks_private_and_loopback(url: str):
-    assert _is_safe_url(url) is False
+    assert is_safe_url(url) is False
 
 
 def test_is_safe_url_allows_public_https():
-    assert _is_safe_url("https://example.com/article") is True
+    assert is_safe_url("https://example.com/article") is True
 
 
 @pytest.mark.parametrize(

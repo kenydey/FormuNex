@@ -212,7 +212,7 @@ class DeepResearchEngine:
         report = None
         if merged:
             try:
-                report = llm._call_llm(_cross_validate_prompt(topic, kb_answer, merged))
+                report = llm.call_llm(_cross_validate_prompt(topic, kb_answer, merged))
             except Exception:
                 report = None
         if report:

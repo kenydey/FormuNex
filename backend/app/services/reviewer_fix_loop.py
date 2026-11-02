@@ -210,7 +210,8 @@ def _record_scope(run: dict[str, Any], scope: dict[str, Any] | None) -> dict[str
 _REVIEW_RUN_OUTCOMES = {"pass", "flagged", "null"}
 
 
-def _run_path(run_id: str) -> Path:
+def run_path(run_id: str) -> Path:
+    """Review-run file for one run id (stage 4 / SR-054 public API; routes reuse it)."""
     safe = re.sub(r"[^\w.\-]+", "_", run_id)[:80] or "anon"
     return _data_root() / "reviews" / "runs" / f"{safe}.json"
 
@@ -248,7 +249,7 @@ def new_review_run(
 
 
 def save_review_run(run: dict[str, Any]) -> None:
-    path = _run_path(str(run.get("run_id") or "anon"))
+    path = run_path(str(run.get("run_id") or "anon"))
     path.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
         path.write_text(
@@ -271,7 +272,7 @@ def load_review_run(
 
     只读，不回写文件；永不抛错（fail-open）。
     """
-    path = _run_path(run_id)
+    path = run_path(run_id)
     if not path.is_file():
         return None
     try:

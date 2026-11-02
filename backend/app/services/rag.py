@@ -533,7 +533,7 @@ def hyde_expand(query: str, domain: str | None = None) -> str:
         f"研究主题：\n<user_query>{query}</user_query>"
     )
     try:
-        hint = _llm._call_llm(prompt)
+        hint = _llm.call_llm(prompt)
     except Exception:
         hint = None
     return f"{query}\n\n{hint}" if hint else query

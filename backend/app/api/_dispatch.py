@@ -10,7 +10,7 @@ id-first ordering, eager pool, producer timeout). This module only:
 Kept for backward compatibility (same names, same signatures): API modules
 import :func:`submit` from here, ``ops``/``main`` read
 :func:`broker_reachable` / :func:`broker_probe_failure_count` from here,
-and tests construct :class:`_DispatchTimeout` from here. New code — and all
+and tests construct :class:`DispatchTimeout` from here. New code — and all
 service-layer callers — must import from :mod:`app.services.dispatch`
 instead; services importing this module is the layering violation SR-020
 exists to remove.
@@ -21,7 +21,7 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from ..services.dispatch import (
-    _DispatchTimeout,
+    DispatchTimeout,
     broker_probe_failure_count,
     broker_reachable,
     dispatch_task_kernel,
@@ -30,7 +30,7 @@ from ..services.dispatch import (
 
 __all__ = [
     "DispatchUnavailable",
-    "_DispatchTimeout",
+    "DispatchTimeout",
     "broker_probe_failure_count",
     "broker_reachable",
     "dispatch_task",

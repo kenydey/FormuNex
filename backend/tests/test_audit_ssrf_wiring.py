@@ -125,5 +125,5 @@ def test_public_addresses_stay_allowed(addr):
 
 
 def test_literal_cgnat_url_is_rejected():
-    assert ingestion._is_safe_url("http://100.100.100.200/latest/meta-data/") is False
-    assert ingestion._is_safe_url("http://100.64.0.1:8080/") is False
+    assert ingestion.is_safe_url("http://100.100.100.200/latest/meta-data/") is False
+    assert ingestion.is_safe_url("http://100.64.0.1:8080/") is False

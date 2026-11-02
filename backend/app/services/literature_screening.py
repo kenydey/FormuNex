@@ -11,9 +11,15 @@ from typing import Any, Callable
 from . import literature_manifest as lm
 from . import screening_presets as _presets
 
-from fastapi import HTTPException
-
 logger = logging.getLogger(__name__)
+
+
+class ScreeningValidationError(ValueError):
+    """Invalid screening input (stage 4 / SR-054).
+
+    Services raise this, never HTTPException: the route layer maps it to
+    HTTP 400 (see api/wiki.py, mirroring the sibling screening endpoints).
+    """
 
 # P0-4：输入证据不足（缺 title 或缺 snippet/abstract）时的 decision 模型标记
 INSUFFICIENT_EVIDENCE_MODEL = "insufficient-evidence"
@@ -558,9 +564,7 @@ def evaluate_screening(
         year_min = _to_int_year(criteria.get("year_min"), "year_min")
         year_max = _to_int_year(criteria.get("year_max"), "year_max")
     except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=400, detail=f"screening 年份非法：{exc}"
-        ) from exc
+        raise ScreeningValidationError(f"screening 年份非法：{exc}") from exc
 
     def _predict(
         item: dict[str, Any],

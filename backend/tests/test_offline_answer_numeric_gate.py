@@ -19,7 +19,7 @@ def _evidence(snippet: str = SNIPPET) -> Evidence:
 
 
 def test_the_offline_quote_cites_its_source_and_passes_the_numeric_gate(monkeypatch):
-    monkeypatch.setattr(llm, "_call_llm", lambda *a, **k: None)
+    monkeypatch.setattr(llm, "call_llm", lambda *a, **k: None)
     answer, relevant = llm.answer_question("磷酸锌含量对盐雾的影响", [_evidence()])
     assert answer.endswith("[^1]")
     assert SNIPPET in answer
@@ -27,7 +27,7 @@ def test_the_offline_quote_cites_its_source_and_passes_the_numeric_gate(monkeypa
 
 
 def test_the_ellipsis_only_appears_when_the_quote_was_actually_cut(monkeypatch):
-    monkeypatch.setattr(llm, "_call_llm", lambda *a, **k: None)
+    monkeypatch.setattr(llm, "call_llm", lambda *a, **k: None)
     short, _ = llm.answer_question("磷酸锌含量对盐雾的影响", [_evidence()])
     assert "…" not in short
     long_snippet = "磷酸锌盐雾" + "实验数据" * 100
@@ -36,6 +36,6 @@ def test_the_ellipsis_only_appears_when_the_quote_was_actually_cut(monkeypatch):
 
 
 def test_without_any_evidence_there_is_nothing_to_cite(monkeypatch):
-    monkeypatch.setattr(llm, "_call_llm", lambda *a, **k: None)
+    monkeypatch.setattr(llm, "call_llm", lambda *a, **k: None)
     answer, relevant = llm.answer_question("完全无关的问题 quantum", [])
     assert "[^" not in answer and not relevant

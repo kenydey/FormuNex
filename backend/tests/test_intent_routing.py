@@ -43,7 +43,7 @@ def test_llm_intent_mode_parses(monkeypatch):
     def fake_call_llm(prompt):
         return json.dumps({"mode": "enumerative"}, ensure_ascii=False)
 
-    monkeypatch.setattr("app.services.llm._call_llm", fake_call_llm)
+    monkeypatch.setattr("app.services.llm.call_llm", fake_call_llm)
     assert _llm_intent_mode("这个领域近三年的研究进展综述有哪些值得看") == "enumerative"
 
 
@@ -51,7 +51,7 @@ def test_llm_intent_mode_fence_stripped(monkeypatch):
     def fake_call_llm(prompt):
         return "```json\n{\"mode\": \"hybrid\"}\n```"
 
-    monkeypatch.setattr("app.services.llm._call_llm", fake_call_llm)
+    monkeypatch.setattr("app.services.llm.call_llm", fake_call_llm)
     assert _llm_intent_mode("含 zinc phosphate 的体系怎么提升耐盐雾同时降成本") == "hybrid"
 
 
@@ -62,7 +62,7 @@ def test_llm_intent_mode_timeout_returns_none(monkeypatch):
     def slow_call_llm(prompt):
         time.sleep(30)
 
-    monkeypatch.setattr("app.services.llm._call_llm", slow_call_llm)
+    monkeypatch.setattr("app.services.llm.call_llm", slow_call_llm)
     from app.services import llm as _llm_mod
 
     calls = []
@@ -87,7 +87,7 @@ def test_llm_intent_mode_bad_json_and_short_query(monkeypatch):
     def fake_call_llm(prompt):
         return "not json at all"
 
-    monkeypatch.setattr("app.services.llm._call_llm", fake_call_llm)
+    monkeypatch.setattr("app.services.llm.call_llm", fake_call_llm)
     assert _llm_intent_mode("盘点近三年自沉积涂料耐蚀改性综述有哪些方向") is None
     # 短查询不触发 LLM
     assert _llm_intent_mode("有哪些") is None

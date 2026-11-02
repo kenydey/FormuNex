@@ -503,9 +503,9 @@ def _ingest_image(
 
 
 # The address policy lives in ``http_safe`` (so the pinned transport and this pre-flight cannot
-# drift apart); the underscore names stay because callers and tests patch them here.
+# drift apart). ``is_safe_url`` is re-exported here as public service API
+# (stage 4 / SR-054); ``_is_blocked_ip`` stays an alias because tests patch it here.
 _is_blocked_ip = is_blocked_ip
-_is_safe_url = is_safe_url
 
 
 def _html_to_text(html: str) -> str:
@@ -517,7 +517,7 @@ def _html_to_text(html: str) -> str:
 
 def ingest_url(url: str, *, persist: bool = True) -> IngestOutcome:
     """Fetch a web page and convert to Evidence chunks."""
-    if not _is_safe_url(url):
+    if not is_safe_url(url):
         raise ValueError("URL must be a public http(s) address")
 
     # Content-filter blocklist: skip marketplace / junk hosts before download.
@@ -540,7 +540,7 @@ def ingest_url(url: str, *, persist: bool = True) -> IngestOutcome:
     import httpx
 
     # follow_redirects=False + manual loop: every redirect target is re-checked
-    # with _is_safe_url so an SSRF cannot pivot to an internal host via a 3xx. The client
+    # with is_safe_url so an SSRF cannot pivot to an internal host via a 3xx. The client
     # itself connects only to the addresses it resolved and judged (ssrf_safe_client), so a
     # name that resolves differently for the check and for the connection gets nowhere.
     current_url = url
@@ -562,7 +562,7 @@ def ingest_url(url: str, *, persist: bool = True) -> IngestOutcome:
                 if not location:
                     break
                 current_url = str(httpx.URL(current_url).join(location))
-                if not _is_safe_url(current_url):
+                if not is_safe_url(current_url):
                     raise ValueError(f"Redirect target not allowed: {current_url}")
             assert resp is not None
             # v7 解析-5: 4 跳耗尽仍是重定向 → 明确报错，不解析 3xx 空体。
