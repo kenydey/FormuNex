@@ -1,0 +1,21 @@
+# Checker — verify structures against the scheme
+# Role: answer yes / no / unsure per question. No live call yet: this
+# file documents the questionnaire the deterministic scorer mirrors.
+# Instructions:
+# - Is the reaction scheme drawn completely? (drawn)
+# - Are all reactants and products present? (complete)
+# - Are all structures drawn correctly? (structures)
+# - Are the reaction conditions complete? (conditions)
+# - Are all labels resolved to structures? (resolved)
+# - Are there duplicate products? (duplicate)
+# - Is stereochemistry drawn where expected? (stereo_drawn)
+# - Is a counterion missing? (counterion_missing)
+# - Pre-filled condition SMILES are copied verbatim: never regenerate,
+#   abbreviate, reorder, or add/remove [H] on them. The only exception is
+#   adding or removing an ion charge (e.g. [Na+] vs [Na]).
+# - A checker failure degrades to the deterministic score; it never
+#   raises a score.
+# Field values for this task:
+<INSERT_HERE>
+# Output: a JSON object {"answers": {"drawn": "yes", ...}} with one answer
+# per key above. No prose outside the JSON object.

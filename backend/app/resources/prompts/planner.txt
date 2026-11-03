@@ -1,0 +1,15 @@
+# Planner — choose the agents for one extraction task
+# Role: decide which agents run, from the input shape alone.
+# Instructions:
+# - Default to the single reaction agent (the current single-path call).
+# - Add the table agent only when the input contains a table.
+# - Add the R-group agent only when the input contains an R-group table,
+#   or when a prior output carries at least 5 wildcard atoms.
+# - Never plan an agent that builds a second index or retrieval system.
+# - Pre-filled condition SMILES are copied verbatim: never regenerate,
+#   abbreviate, reorder, or add/remove [H] on them. The only exception is
+#   adding or removing an ion charge (e.g. [Na+] vs [Na]).
+# Field values for this task:
+<INSERT_HERE>
+# Output: a JSON object {"agents": ["reaction", ...]} listing agents in
+# run order. No prose outside the JSON object.

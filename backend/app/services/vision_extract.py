@@ -27,6 +27,7 @@ from ..config import get_settings, source_checkout_mode
 from ..domain.multimodal_schemas import VisionTableExtraction
 from .chem_extract import resolve_side_label
 from .errors import degrade_return
+from .rgroup import apply_rgroup_to_reaction
 from .kg.prompts import build_multimodal_table_prompt
 from .llm_roles import CUSTOM_PROVIDER, VISION, RoleConfig, is_warming, resolve_role
 from .runtime_secrets import effective_setting
@@ -766,6 +767,7 @@ def extract_reaction_image(
     filename: str = "reaction.png",
     *,
     label_to_smiles: dict | None = None,
+    rgroup_mapping: dict | None = None,
 ) -> tuple[VisionReactionExtraction | None, str | None]:
     """Reaction scheme → structured reaction JSON via the configured vision LLM.
 
@@ -794,6 +796,21 @@ def extract_reaction_image(
                         resolved = resolve_side_label(side.label, label_to_smiles)
                         if resolved:
                             side.smiles = resolved
+        # B2 (opt-in): R-group substitution BEFORE the RDKit gate, so
+        # substituted SMILES are still verified and canonicalised there.
+        # Fallback tracked by INDEX: merge/inherit copy reactions, but all
+        # steps preserve order and count, so indices survive.
+        rgroup_fallback_indices: set[int] = set()
+        if rgroup_mapping:
+            substituted: list[VisionReaction] = []
+            for idx, r in enumerate(extraction.reactions):
+                new_rxn, _report, fallback = apply_rgroup_to_reaction(
+                    r, rgroup_mapping, chem=_resolve_chem()
+                )
+                if fallback:
+                    rgroup_fallback_indices.add(idx)
+                substituted.append(new_rxn)
+            extraction.reactions = substituted
         extraction.reactions = [_verify_reaction(r) for r in extraction.reactions]
         # A4 step 2: footnote merge, then cross-row condition inheritance.
         extraction.reactions = merge_footnotes(extraction.reactions, extraction.footnotes)
@@ -801,6 +818,14 @@ def extract_reaction_image(
         # A2 stratification runs after the RDKit gate; the 0.3 cap is never
         # raised back up by feature scores (see compute_reaction_confidence).
         extraction.reactions = [apply_confidence_features(r) for r in extraction.reactions]
+        # B2: string-fallback substitutions (no RDKit) are marked low
+        # confidence after scoring, so the flag survives the A2 overwrite.
+        for idx in rgroup_fallback_indices:
+            r = extraction.reactions[idx]
+            if "rgroup_string_fallback" not in (r.confidence_flags or []):
+                r.confidence_flags = list(r.confidence_flags or []) + [
+                    "rgroup_string_fallback"
+                ]
         extraction.confidence_summary = build_confidence_summary(extraction.reactions)
         return extraction, None
     except Exception as exc:
