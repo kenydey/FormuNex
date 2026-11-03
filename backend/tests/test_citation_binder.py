@@ -250,9 +250,21 @@ def test_binder_no_citations_in_answer():
 
 
 def test_binder_empty_anchors():
-    """bind_citations handles empty anchor list gracefully."""
+    """bind_citations handles empty anchor list gracefully.
+
+    2.1 behavior change (approved sub-scheme): with zero anchors, the
+    body marker [^1] is an unregistered handle, so strict fail-closed
+    rendering removes it instead of leaving a dangling marker.
+    """
     answer = "This answer has [^1] but no anchors to map to."
     binding = bind_citations(answer, [])
-    assert binding["answer"] == "This answer has [^1] but no anchors to map to."
+    assert binding["answer"] == "This answer has  but no anchors to map to."
+    assert "[^1]" not in binding["answer"]
     assert binding["footnotes"] == ""
     assert binding["used_citations"] == []
+    assert binding["references"] == []
+    assert binding["stats"] == {
+        "total_anchors": 0,
+        "used": 0,
+        "dropped_out_of_range": 1,
+    }

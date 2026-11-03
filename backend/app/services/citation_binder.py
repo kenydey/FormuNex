@@ -38,6 +38,72 @@ class CitationBinding(TypedDict):
     used_citations: list[tuple[int, CitationAnchor]]
     """(index, anchor) pairs for every citation referenced in the answer."""
 
+    references: list[dict]
+    """2.1: machine-readable verified references, one per used citation.
+
+    Each item carries ``index`` (1-based), ``chunk_id``, ``source_id``,
+    ``page``, ``paragraph``, ``offset_start``, ``offset_end`` and, when
+    present, ``locator`` (``CitationLocator.to_dict()``). Only citations
+    that survived fail-closed validation appear here.
+    """
+
+    stats: dict
+    """2.1: binding counters — ``total_anchors``, ``used`` and
+    ``dropped_out_of_range`` (body markers removed by fail-closed strip)."""
+
+
+# ── Request-scoped handle registry ──────────────────────────────────────────
+
+
+class CitationHandleRegistry:
+    """Request-scoped citation handle registry (2.1, WeKnora modelcontext parity).
+
+    One instance per answer; never persisted, never shared across requests.
+    The ``[^n]`` numbers the model sees are the handles: handle ``n`` maps
+    to ``anchors[n - 1]``. The model never sees real chunk IDs, and only
+    handles registered for this request can resolve — anything else is
+    dropped fail-closed at render time.
+
+    ``kind`` distinguishes evidence handles (citable) from navigation-only
+    handles (jump targets, never citable). No FormuNex caller emits
+    navigation handles yet; the field is reserved so a future frontend
+    jump-target feature does not need a registry redesign.
+    """
+
+    def __init__(self, anchors: list[CitationAnchor]) -> None:
+        self._anchors = list(anchors)
+        self._kinds = ["evidence"] * len(anchors)
+        self.used: set[int] = set()
+        self.dropped_out_of_range = 0
+
+    def __len__(self) -> int:
+        return len(self._anchors)
+
+    def resolve(self, n: int) -> CitationAnchor | None:
+        """Return the anchor for handle ``n`` (1-based), or None if unknown."""
+        if 1 <= n <= len(self._anchors):
+            return self._anchors[n - 1]
+        return None
+
+    def mark_used(self, n: int) -> bool:
+        """Record handle ``n`` as used; return False when it is unknown."""
+        if self.resolve(n) is None:
+            return False
+        self.used.add(n)
+        return True
+
+    def mark_navigation(self, n: int) -> bool:
+        """Demote handle ``n`` to navigation-only; False when unknown."""
+        if self.resolve(n) is None:
+            return False
+        self._kinds[n - 1] = "navigation"
+        self.used.discard(n)
+        return True
+
+    def is_evidence(self, n: int) -> bool:
+        """True only for registered, evidence-kind handles."""
+        return self.resolve(n) is not None and self._kinds[n - 1] == "evidence"
+
 
 # ── Formatting ────────────────────────────────────────────────────────────────
 
@@ -267,6 +333,8 @@ def strip_existing_footnotes(text: str) -> str:
 def bind_citations(
     answer: str,
     anchors: list[CitationAnchor],
+    *,
+    strict: bool = True,
 ) -> CitationBinding:
     """Post-process an LLM answer: extract used citations + append footnotes.
 
@@ -276,24 +344,69 @@ def bind_citations(
         Raw LLM answer that (should) contain ``[^n]`` markers.
     anchors : list[CitationAnchor]
         Ordered citation anchors (index 0 → ``[^1]``).
+    strict : bool
+        2.1 fail-closed rendering (default True). When True, body markers
+        whose handle is not registered for this request are removed from
+        the answer and counted in ``stats["dropped_out_of_range"]``; only
+        surviving markers feed ``used_citations``/``references``/footnotes.
+        When False, legacy behavior is kept (unknown markers left in place).
 
     Returns
     -------
     CitationBinding
-        Contains the cleaned answer, footnotes section, and list of
-        (index, anchor) pairs for each cited reference.
+        Contains the cleaned answer, footnotes section, list of
+        (index, anchor) pairs for each cited reference, the machine-readable
+        ``references`` payload, and ``stats`` counters.
     """
-    used_indices = extract_citation_indices(answer)
+    registry = CitationHandleRegistry(anchors)
+
+    # Strip any footnotes the LLM might have generated itself, BEFORE
+    # extracting markers: a footnote-definition line must not itself count
+    # as a citation claim.
+    clean_answer = strip_existing_footnotes(answer)
+
+    if strict:
+        def _fail_closed(match: re.Match[str]) -> str:
+            n = int(match.group(1))
+            if registry.resolve(n) is None:
+                registry.dropped_out_of_range += 1
+                return ""
+            registry.mark_used(n)
+            return match.group(0)
+
+        clean_answer = _CITATION_REF_RE.sub(_fail_closed, clean_answer)
+
+    used_indices = extract_citation_indices(clean_answer)
     used_pairs: list[tuple[int, CitationAnchor]] = []
     for n in used_indices:
         idx = n - 1
         if 0 <= idx < len(anchors):
             used_pairs.append((n, anchors[idx]))
 
-    # Strip any footnotes the LLM might have generated itself.
-    clean_answer = strip_existing_footnotes(answer)
-
     footnotes = build_footnotes_section(anchors, used_indices)
+
+    references: list[dict] = []
+    for n, a in used_pairs:
+        ref: dict = {
+            "index": n,
+            "chunk_id": a.chunk_id,
+            "source_id": a.source_id,
+            "page": a.page,
+            "paragraph": a.paragraph,
+            "offset_start": a.offset_start,
+            "offset_end": a.offset_end,
+        }
+        if a.locator is not None:
+            loc = a.locator.to_dict()
+            if loc:
+                ref["locator"] = loc
+        references.append(ref)
+
+    stats = {
+        "total_anchors": len(anchors),
+        "used": len(used_pairs),
+        "dropped_out_of_range": registry.dropped_out_of_range,
+    }
 
     # W2-6 (P1-2): link the claim (answer text) to its evidence sources.
     # Fail-open: provenance must never break citation binding.
@@ -312,20 +425,25 @@ def bind_citations(
         answer=clean_answer,
         footnotes=footnotes,
         used_citations=used_pairs,
+        references=references,
+        stats=stats,
     )
 
 
 def format_answer_with_citations(
     answer: str,
     anchors: list[CitationAnchor],
+    *,
+    strict: bool = True,
 ) -> str:
     """Convenience: return answer + footnotes as a single markdown string."""
-    binding = bind_citations(answer, anchors)
+    binding = bind_citations(answer, anchors, strict=strict)
     return f"{binding['answer']}\n{binding['footnotes']}"
 
 
 __all__ = [
     "CitationBinding",
+    "CitationHandleRegistry",
     "build_citation_prompt",
     "build_footnotes_section",
     "format_citation_list",
