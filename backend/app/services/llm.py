@@ -24,6 +24,9 @@ from .query_aware_compression import (
 )
 import json
 import logging
+import os
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -456,6 +459,90 @@ class LLMConfigError(Exception):
     """Missing SDK or invalid configuration — do not retry."""
 
 
+class LLMNonRetryableError(Exception):
+    """Upstream answered with a known non-retryable error (e.g. a 4xx other
+    than 429, or a 500 outside the gateway retry set) — do not retry.
+    Distinct from LLMConfigError: the request was well-formed, the endpoint
+    just refuses it, so retrying cannot change the outcome."""
+
+
+# Upstream statuses worth one retry (gateway 502/503/504 + rate-limit 429).
+# Everything else known (other 4xx, 500) is non-retryable; unknown errors stay
+# retryable (fail-open: keep the historical behaviour for unclassifiable
+# SDK failures). Single decision point for all retried providers (A1).
+_RETRYABLE_UPSTREAM_STATUS = frozenset({429, 502, 503, 504})
+_STATUS_RE = re.compile(r"\b(4\d\d|5\d\d)\b")
+
+
+def _upstream_status_code(exc: Exception) -> int | None:
+    """Extract an HTTP status from an SDK/transport exception, if any."""
+    for attr in ("status_code", "status", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int) and 100 <= value <= 599:
+            return value
+    response = getattr(exc, "response", None)
+    value = getattr(response, "status_code", None)
+    if isinstance(value, int) and 100 <= value <= 599:
+        return value
+    match = _STATUS_RE.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _classify_upstream_error(exc: Exception) -> Exception:
+    """Map a raw SDK/transport exception to one LLM error type (A1).
+
+    Timeouts, connection errors, 429, gateway 502/503/504, and
+    unclassifiable errors → LLMTransientError (retried by _LLM_RETRY).
+    Known 4xx other than 429, and 500 → LLMNonRetryableError (never
+    retried). Auth is classified before this by _is_auth_error.
+    """
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return LLMTransientError(str(exc))
+    status = _upstream_status_code(exc)
+    if status is None or status in _RETRYABLE_UPSTREAM_STATUS:
+        return LLMTransientError(str(exc))
+    return LLMNonRetryableError(f"Upstream non-retryable status {status}: {exc}")
+
+
+_UNPAIRED_BACKSLASH_RE = re.compile(r"\\(?![\"\\/bfnrtu])")
+
+
+def loads_lenient(text: str) -> Any:
+    """Parse JSON, repairing lone backslashes only if plain parsing fails.
+
+    Model-written SMILES often contains bare backslashes (e.g. ``C=C(\\[2*])``)
+    that are illegal JSON escapes and would otherwise discard the whole
+    reply. The success path is plain ``json.loads`` — behaviour is unchanged
+    when the input is already valid.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    repaired = _UNPAIRED_BACKSLASH_RE.sub(r"\\\\", text)
+    return json.loads(repaired)
+
+
+def dump_unparsable(text: str, *, tag: str) -> str | None:
+    """Persist an unparsable LLM reply for offline reproduction (fail-open).
+
+    Only the reply text is stored — never prompts, keys, or other context.
+    Returns the file path, or None if persisting failed. The directory
+    (``backend/data/llm_unparsable/``) is covered by the repo ``data/``
+    gitignore rule, so dumps never pollute ``git status``.
+    """
+    safe_tag = re.sub(r"[^A-Za-z0-9_-]", "_", tag)[:40] or "llm"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    try:
+        root = Path(__file__).resolve().parent.parent / "data" / "llm_unparsable"
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / f"{stamp}-{safe_tag}-{os.getpid()}.txt"
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+    except OSError:
+        return None
+
+
 # ── Low-level completion helpers ─────────────────────────────────────────────
 
 def _llm_timeout_seconds() -> float:
@@ -500,13 +587,13 @@ def _anthropic_request(prompt: str, api_key: str, model: str, max_tokens: int) -
         if not text:
             raise LLMValidationError("Anthropic API 返回空响应")
         return text
-    except LLMConfigError:
+    except (LLMConfigError, LLMTransientError, LLMNonRetryableError):
         raise
     except Exception as exc:
         reraise_if_fatal(exc)
         if _is_auth_error(exc):
             raise LLMConfigError(str(exc)) from exc
-        raise LLMTransientError(str(exc)) from exc
+        raise _classify_upstream_error(exc) from exc
 
 
 @_LLM_RETRY
@@ -517,7 +604,7 @@ def _complete_anthropic_raw(prompt: str, api_key: str, model: str, max_tokens: i
 def _complete_anthropic(prompt: str, api_key: str, model: str, max_tokens: int) -> str | None:
     try:
         return _complete_anthropic_raw(prompt, api_key, model, max_tokens)
-    except (LLMConfigError, LLMTransientError):
+    except (LLMConfigError, LLMTransientError, LLMNonRetryableError):
         return None
 
 
@@ -570,13 +657,13 @@ def _openai_compatible_request(
         if not text:
             raise LLMTransientError("API 返回空响应")
         return text
-    except LLMConfigError:
+    except (LLMConfigError, LLMTransientError, LLMNonRetryableError):
         raise
     except Exception as exc:
         reraise_if_fatal(exc)
         if _is_auth_error(exc):
             raise LLMConfigError(str(exc)) from exc
-        raise LLMTransientError(str(exc)) from exc
+        raise _classify_upstream_error(exc) from exc
 
 
 @_LLM_RETRY
@@ -642,13 +729,13 @@ def _openai_compatible_stream(
         if not text:
             raise LLMTransientError("API 流式返回空响应")
         return text
-    except LLMConfigError:
+    except (LLMConfigError, LLMTransientError, LLMNonRetryableError):
         raise
     except Exception as exc:
         reraise_if_fatal(exc)
         if _is_auth_error(exc):
             raise LLMConfigError(str(exc)) from exc
-        raise LLMTransientError(str(exc)) from exc
+        raise _classify_upstream_error(exc) from exc
 
 
 def _merge_tool_call_deltas(acc: dict[int, dict], delta_tool_calls: list | None) -> dict[int, dict]:
@@ -785,7 +872,7 @@ def _complete_openai_compatible_detail(
         return text, None
     except LLMConfigError as exc:
         return None, str(exc)
-    except LLMTransientError as exc:
+    except (LLMTransientError, LLMNonRetryableError) as exc:
         return None, str(exc)
 
 
@@ -802,13 +889,13 @@ def _gemini_request(prompt: str, api_key: str, model: str) -> str:
         if not text:
             raise LLMTransientError("Gemini API 返回空响应")
         return text
-    except LLMConfigError:
+    except (LLMConfigError, LLMTransientError, LLMNonRetryableError):
         raise
     except Exception as exc:
         reraise_if_fatal(exc)
         if _is_auth_error(exc):
             raise LLMConfigError(str(exc)) from exc
-        raise LLMTransientError(str(exc)) from exc
+        raise _classify_upstream_error(exc) from exc
 
 
 @_LLM_RETRY
@@ -819,7 +906,7 @@ def _complete_gemini_raw(prompt: str, api_key: str, model: str) -> str:
 def _complete_gemini(prompt: str, api_key: str, model: str) -> str | None:
     try:
         return _complete_gemini_raw(prompt, api_key, model)
-    except (LLMConfigError, LLMTransientError):
+    except (LLMConfigError, LLMTransientError, LLMNonRetryableError):
         return None
 
 
@@ -890,8 +977,6 @@ def complete_json(prompt: str, *, model: str | None = None) -> dict | None:
     P1 #26: optional Langfuse generation span (fail-open).
     P1-19: ``model`` 覆盖全局 llm_model（reviewer 小模型用）；None → 全局配置。
     """
-    import json
-
     from .llm_router import classify_payload
     from .llm_trace import trace_generation
 
@@ -916,15 +1001,16 @@ def complete_json(prompt: str, *, model: str | None = None) -> dict | None:
                 text = text[4:]
             text = text.strip()
         try:
-            data = json.loads(text)
-            if isinstance(data, dict):
-                span["output"] = data
-                return data
-            span["error"] = "json_not_object"
-            return None
+            data = loads_lenient(text)
         except Exception as exc:
+            dump_unparsable(text, tag="complete_json")
             span["error"] = str(exc)
             return degrade_return(log, exc, "operation failed", None)
+        if isinstance(data, dict):
+            span["output"] = data
+            return data
+        span["error"] = "json_not_object"
+        return None
 
 
 def _strip_json_fences(text: str) -> str:
@@ -945,9 +1031,11 @@ def _validate_structured(raw: str | None, model_type: type[TModel]) -> TModel:
     if not raw:
         raise LLMValidationError("Empty LLM response")
     try:
-        import json
-
-        data = json.loads(_strip_json_fences(raw))
+        data = loads_lenient(_strip_json_fences(raw))
+    except Exception as exc:
+        dump_unparsable(raw, tag="structured")
+        raise LLMValidationError(f"JSON validation failed: {exc}") from exc
+    try:
         return model_type.model_validate(data)
     except LLMValidationError:
         raise
@@ -1036,7 +1124,7 @@ def _openai_structured_request(
             raise LLMConfigError(str(exc)) from exc
         if _is_structured_unsupported(exc):
             raise LLMStructuredUnsupported(str(exc)) from exc
-        raise LLMTransientError(str(exc)) from exc
+        raise _classify_upstream_error(exc) from exc
 
 
 def _openai_prompt_structured_request(
@@ -1090,7 +1178,7 @@ def _openai_prompt_structured_request(
         reraise_if_fatal(exc)
         if _is_auth_error(exc):
             raise LLMConfigError(str(exc)) from exc
-        raise LLMTransientError(str(exc)) from exc
+        raise _classify_upstream_error(exc) from exc
 
 
 def _invoke_structured_once(
@@ -1180,6 +1268,10 @@ def complete_structured(
     schema = model_type.model_json_schema()
     base_url = _resolve_openai_base_url(provider, effective_setting(settings, "llm_base_url"))
 
+    # A1-4 对照结论：本重试是同 prompt 重发（无错误反馈、无工具续跑），
+    # 与 ChemEAGLE final_json_call 的“提醒再问”不等价；但再叠一层终局循环
+    # 会与本重试相乘，故不叠加——若将来要错误反馈重问，须替换本重试次数，
+    # 而不是在其上再加循环。
     structured_retry = tenacity_retry(
         stop=stop_after_attempt(3 if retry else 1),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -1206,7 +1298,7 @@ def complete_structured(
 
     try:
         return _run(), None
-    except LLMConfigError as exc:
+    except (LLMConfigError, LLMNonRetryableError) as exc:
         return None, str(exc)
     except (LLMTransientError, LLMValidationError) as exc:
         log.warning("Structured LLM failed after retries: %s", exc)

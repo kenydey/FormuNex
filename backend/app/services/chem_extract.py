@@ -365,10 +365,140 @@ def extract_products(text: str) -> list[dict]:
     return out
 
 
+# ── compound labels: coref linking + OCR confusable repair (A3) ─────────────
+# OpenChemIE coref + ChemEAGLE guards, as pure rules. Label linking NEVER
+# rewrites body text: OCR repair is only tried as a lookup variant when
+# matching a candidate token against a KNOWN label map.
+
+_LABEL_RE = re.compile(r"\b\d+[a-zA-Z]{0,2}\b")
+# A bare number is a compound label only after one of these words.
+_LABEL_CONTEXT_OK = frozenset(
+    {"compound", "intermediate", "derivative", "analogue", "analog", "product"}
+)
+# A number after one of these words is document structure, not a compound.
+_PROSE_PRECEDING = frozenset({
+    "step", "table", "figure", "fig", "scheme", "page", "section", "chapter",
+    "part", "run", "sample", "test", "batch", "method", "claim", "patent",
+    "equation", "grade", "model", "version", "no", "number", "example",
+    "examples", "ref", "refs", "eq",
+})
+# OCR digit→letter confusions, tried as lookup variants only.
+_OCR_CONFUSABLES = {"1": "l", "0": "o", "5": "s", "9": "g"}
+_MAX_LABEL_LINKS = 20
+
+
+def _preceding_word(text: str, start: int) -> str:
+    words = re.findall(r"[A-Za-z]+", text[:start])
+    return words[-1].lower() if words else ""
+
+
+def is_label_like(token: str, *, preceding_word: str = "") -> bool:
+    """Is ``token`` shaped like a compound number (``3a`` / ``12b``)?
+
+    Letter-suffixed tokens pass unless preceded by a prose-reference word
+    (``Table 3a`` is a table, not a compound). Bare digits pass only after
+    an explicit compound keyword (``compound 12``); anything else (years,
+    quantities, ``step 4``) is rejected — this is the guard that stops
+    ``4`` or ``Product A`` from being parsed as a compound name.
+    """
+    if not token or not _LABEL_RE.fullmatch(token):
+        return False
+    prev = (preceding_word or "").lower()
+    if prev in _PROSE_PRECEDING:
+        return False
+    if re.search(r"[a-zA-Z]", token):
+        return True
+    return prev in _LABEL_CONTEXT_OK
+
+
+def repair_ocr_confusables(token: str) -> str:
+    """Full OCR repair (all confusable digits → letters). Fallback only —
+    prefer _repair_candidates, whose single-position variants preserve real
+    digits (``129`` → ``12g`` for an OCR'd ``12g``; full repair would give
+    the wrong ``l2g``)."""
+    return "".join(_OCR_CONFUSABLES.get(ch, ch) for ch in token)
+
+
+def _repair_candidates(token: str) -> list[str]:
+    """Lookup variants in order: exact, one single-position repair each,
+    then full repair. Deduplicated, order-preserving."""
+    candidates = [token]
+    for i, ch in enumerate(token):
+        if ch in _OCR_CONFUSABLES:
+            candidates.append(token[:i] + _OCR_CONFUSABLES[ch] + token[i + 1:])
+    full = repair_ocr_confusables(token)
+    if full != token:
+        candidates.append(full)
+    seen: set[str] = set()
+    out: list[str] = []
+    for cand in candidates:
+        if cand not in seen:
+            seen.add(cand)
+            out.append(cand)
+    return out
+
+
+def link_labels(text: str, label_to_smiles: dict) -> list[dict]:
+    """Link compound-number mentions in ``text`` to identified structures.
+
+    Each hit is ``{label (as written), canonical_label (map key), smiles,
+    start, end}``. A hit requires the (possibly OCR-repaired) candidate to
+    be label-like AND present in the map — repair alone never creates a
+    link to an unknown label. Runs after the CAS / formula / SMILES
+    validations: it resolves mentions, it does not validate structures.
+    """
+    if not text or not label_to_smiles:
+        return []
+    out: list[dict] = []
+    for m in _LABEL_RE.finditer(text):
+        prev = _preceding_word(text, m.start())
+        for cand in _repair_candidates(m.group(0)):
+            if cand in label_to_smiles and is_label_like(cand, preceding_word=prev):
+                out.append({
+                    "label": m.group(0),
+                    "canonical_label": cand,
+                    "smiles": label_to_smiles[cand],
+                    "start": m.start(),
+                    "end": m.end(),
+                })
+                break
+        if len(out) >= _MAX_LABEL_LINKS:
+            break
+    return out
+
+
+def resolve_side_label(label: str, label_to_smiles: dict) -> str | None:
+    """Resolve one reaction-scheme side label to SMILES (or None).
+
+    Scheme context: the whole label may itself be a compound number
+    (``12``), or contain one (``compound 3a``). Prose-like labels
+    (``Product A``, ``step 4`` as a whole label) never resolve. The caller
+    still runs the result through the RDKit gate — resolution never
+    bypasses verification.
+    """
+    if not label or not label_to_smiles:
+        return None
+    text = label.strip()
+    tokens: list[str] = []
+    if _LABEL_RE.fullmatch(text):
+        tokens.append(text)
+    for m in _LABEL_RE.finditer(text):
+        if m.group(0) not in tokens:
+            tokens.append(m.group(0))
+    for token in tokens:
+        # Bare digits resolve only when the whole label IS the number.
+        if not re.search(r"[a-zA-Z]", token) and text != token:
+            continue
+        for cand in _repair_candidates(token):
+            if cand in label_to_smiles and _LABEL_RE.fullmatch(cand):
+                return label_to_smiles[cand]
+    return None
+
+
 # ── aggregate entry point ────────────────────────────────────────────────────
 
 
-def extract_entities(text: str) -> dict | None:
+def extract_entities(text: str, *, label_to_smiles: dict | None = None) -> dict | None:
     """All entity families for one chunk → compact meta dict (None if empty)."""
     try:
         chem: list[dict] = []
@@ -393,6 +523,12 @@ def extract_entities(text: str) -> dict | None:
             meta["chem"] = chem[: _MAX_CHEM_PER_CHUNK + 5]
         if products:
             meta["products"] = products
+        # A3: label linking is opt-in (None → previous behaviour) and runs
+        # after the validated families above.
+        if label_to_smiles:
+            links = link_labels(text, label_to_smiles)
+            if links:
+                meta["label_links"] = links
         return meta or None
     except Exception as exc:
         return degrade_return(logger, exc, "chem_extract failed", None)

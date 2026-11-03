@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings, source_checkout_mode
 from ..domain.multimodal_schemas import VisionTableExtraction
+from .chem_extract import resolve_side_label
 from .errors import degrade_return
 from .kg.prompts import build_multimodal_table_prompt
 from .llm_roles import CUSTOM_PROVIDER, VISION, RoleConfig, is_warming, resolve_role
@@ -87,11 +88,38 @@ class VisionReaction(BaseModel):
     products: list[VisionReactionSide] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reaction_smiles: str = ""  # assembled locally from VERIFIED sides only, never from the model
+    # A2 deterministic confidence stratification (additive; never raises the
+    # gated `confidence` above). None until apply_confidence_features runs.
+    confidence_score: float | None = None
+    confidence_level: str | None = None  # high / medium / low
+    confidence_flags: list[str] = Field(default_factory=list)
+    confidence_features: dict = Field(default_factory=dict)
+    confidence_checker_note: str | None = None
+    # A4: optimisation-table entry id; outcome sentinels (never silently
+    # dropped: a no-reaction / other entry stays in the output, distinct
+    # from "nothing extracted"); per-reaction notes + applied footnote keys.
+    entry: str = ""
+    no_reaction: bool = False
+    other_entry: bool = False
+    notes: str = ""
+    applied_footnotes: list[str] = Field(default_factory=list)
+
+
+class VisionFootnote(BaseModel):
+    """One table/footnote entry. ``entry`` scopes it: empty means the note
+    is document-level; a non-empty value means it belongs ONLY to the
+    reaction with that entry id (never applied globally)."""
+
+    key: str = ""
+    text: str = ""
+    entry: str = ""
 
 
 class VisionReactionExtraction(BaseModel):
     reactions: list[VisionReaction] = Field(default_factory=list)
     notes: str = ""
+    footnotes: list[VisionFootnote] = Field(default_factory=list)
+    confidence_summary: dict = Field(default_factory=dict)
 
 
 # Reaction prompt lives in a text file (MERMaid borrowing: prompts as plain
@@ -101,12 +129,15 @@ _REACTION_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "resources" / "prompts" / "vision_reaction.txt"
 )
 _REACTION_PROMPT_FALLBACK = """你是化学反应图结构化专家。分析图片中的化学反应方案图，只输出一个 JSON 对象（无 markdown 围栏），字段：
-- reactions: [{reactants: [{smiles, label}], conditions: [{role, text}], products: [{smiles, label}], confidence: 0-1}]
+- reactions: [{entry, reactants: [{smiles, label}], conditions: [{role, text}], products: [{smiles, label}], confidence: 0-1, no_reaction, other_entry, notes}]
+- footnotes: [{key, text, entry}]（表注/脚注原文；entry 为该注所属的条目号，通用注留空）
 - notes: 无法识别的内容说明
 规则：
 - role 只能是 reagent / catalyst / solvent / temperature / time / yield / other；
 - 每个分子只给 SMILES，不确定的结构给低 confidence，绝不编造；无法识别的分子用空 smiles 并在 label 里写原文；
 - 反应物、产物为空数组时表示图中没有对应方；conditions 为空数组时表示图中没有标出条件；
+- 表注处理：条件文字里引用表注时用 [key] 形式标注（如 [a]），并在 footnotes 里给出 key 与原文；缩写定义（如 SiT2 = Si(CH3)2）写进 footnotes，不要直接展开到条件里；
+- 防丢规则：无反应的条目不得丢弃，输出 reactants/products 为空、no_reaction=true 的条目，并在 notes 里写 N.R.（只用 N.R. 这一个哨兵，不要写 NR）；“其他”类条目输出 other_entry=true 的条目；
 - 只输出 JSON，不要解释。"""
 
 
@@ -160,8 +191,581 @@ def _verify_reaction(reaction: VisionReaction) -> VisionReaction:
     return reaction
 
 
+# ── A2: deterministic confidence features (ChemEAGLE §4, LLM checker excluded)
+# ─────────────────────────────────────────────────────────────────────────────
+# Pure, model-free stratification of a VLM reaction claim. Runs AFTER the
+# _verify_reaction RDKit gate: the 0.3 cap is a hard gate and the feature
+# score is capped at 0.3 whenever the gate fired — features never raise a
+# gated reaction back up. Score weights below are an initial, documented
+# heuristic (not a calibrated model): ChemEAGLE's joblib calibrations are
+# explicitly NOT used as production thresholds (plan A2); recalibrate on a
+# FormuNex eval set before treating the score as calibrated.
+_METAL_SYMBOLS = frozenset({
+    "Li", "Be", "Na", "Mg", "Al", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn",
+    "Fe", "Co", "Ni", "Cu", "Zn", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc",
+    "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Cs", "Ba", "La", "Hf", "Ta",
+    "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi",
+})
+_HALOGEN_SYMBOLS = frozenset({"F", "Cl", "Br", "I"})
+_YIELD_RE = re.compile(r"\d\s*%")
+_SELECTIVE_RE = re.compile(r"\b(ee|dr|er|cis|trans|syn|anti)\b", re.IGNORECASE)
+
+# LLM checker questionnaire (text only; the live call is NOT implemented —
+# the switch stays off. answers map: yes / no / unsure per key).
+CHECKER_QUESTIONS = [
+    {"key": "drawn", "question": "Is the reaction scheme drawn completely?"},
+    {"key": "complete", "question": "Are all reactants and products present?"},
+    {"key": "structures", "question": "Are all structures drawn correctly?"},
+    {"key": "conditions", "question": "Are the reaction conditions complete?"},
+    {"key": "resolved", "question": "Are all labels resolved to structures?"},
+    {"key": "duplicate", "question": "Are there duplicate products?"},
+    {"key": "stereo_drawn", "question": "Is stereochemistry drawn where expected?"},
+    {"key": "counterion_missing", "question": "Is a counterion missing?"},
+]
+_CHECKER_PENALTIES = {
+    ("drawn", "no"): ("checker_drawn_no", 0.10),
+    ("complete", "no"): ("checker_complete_no", 0.10),
+    ("structures", "no"): ("checker_structures_no", 0.10),
+    ("conditions", "no"): ("checker_conditions_no", 0.05),
+    ("resolved", "no"): ("checker_resolved_no", 0.05),
+    ("duplicate", "yes"): ("checker_duplicate_yes", 0.10),
+    ("stereo_drawn", "no"): ("checker_stereo_no", 0.05),
+    ("counterion_missing", "yes"): ("checker_counterion_missing", 0.05),
+}
+
+
+def reaction_count_features(reaction: VisionReaction) -> dict:
+    """Counts + text features. No RDKit, no model calls."""
+    sides = list(reaction.reactants) + list(reaction.products)
+    with_smiles = [s for s in sides if (s.smiles or "").strip()]
+    condition_text = " ".join(c.text or "" for c in reaction.conditions)
+    return {
+        "n_reactants": len(reaction.reactants),
+        "n_products": len(reaction.products),
+        "n_conditions": len(reaction.conditions),
+        "n_missing_smiles": sum(1 for s in sides if not (s.smiles or "").strip()),
+        "n_star_sides": sum(1 for s in with_smiles if "*" in s.smiles),
+        "n_sides_with_smiles": len(with_smiles),
+        "yield_mentioned": bool(
+            any(c.role == "yield" for c in reaction.conditions)
+            or _YIELD_RE.search(condition_text)
+        ),
+        "selective_text_mentioned": bool(_SELECTIVE_RE.search(condition_text)),
+    }
+
+
+def _mol_atoms(mol):
+    try:
+        return list(mol.GetAtoms())
+    except Exception:
+        return []
+
+
+def _mol_charge(mol) -> int:
+    try:
+        return int(mol.GetFormalCharge())
+    except Exception:
+        return 0
+
+
+def _mol_heavy(mol) -> int:
+    try:
+        return int(mol.GetNumHeavyAtoms())
+    except Exception:
+        return sum(1 for a in _mol_atoms(mol) if a.GetSymbol() != "H")
+
+
+def reaction_mol_features(reaction: VisionReaction, chem) -> dict:
+    """RDKit-gated per-molecule features. ``chem`` is None when RDKit is
+    unavailable — the caller then flags rdkit_unavailable and scores from
+    counts only. ``chem`` needs MolFromSmiles + FindMolChiralCenters."""
+    sides = list(reaction.reactants) + list(reaction.products)
+    feats: dict = {
+        "n_invalid_smiles": 0,
+        "n_multi_fragment_sides": 0,
+        "n_nonzero_charge_sides": 0,
+        "charged_main_chain": False,
+        "n_metal_product_sides": 0,
+        "duplicate_products": False,
+        "product_reactant_overlap": False,
+        "reactant_heavy_atoms": 0,
+        "product_heavy_atoms": 0,
+        "product_rings": 0,
+        "product_heteroatoms": 0,
+        "heavy_atom_balance": 0,
+        "n_assigned_chiral": 0,
+        "n_unassigned_chiral": 0,
+        "n_small_free_fragments": 0,
+        "cation_adjacent_neutral_halogen": False,
+    }
+    if chem is None:
+        return feats
+    parsed: dict[str, object] = {}
+
+    def _parse(smi: str):
+        if smi not in parsed:
+            try:
+                parsed[smi] = chem.MolFromSmiles(smi)
+            except Exception:
+                parsed[smi] = None
+        return parsed[smi]
+
+    def _side_mol_features(side, is_product: bool):
+        smi = (side.smiles or "").strip()
+        if not smi:
+            return
+        mol = _parse(smi)
+        if mol is None:
+            feats["n_invalid_smiles"] += 1
+            return
+        feats["reactant_heavy_atoms" if not is_product else "product_heavy_atoms"] += _mol_heavy(mol)
+        if _mol_charge(mol) != 0:
+            feats["n_nonzero_charge_sides"] += 1
+        fragments = [f for f in smi.split(".") if f]
+        if len(fragments) > 1:
+            feats["n_multi_fragment_sides"] += 1
+        frag_mols = [(f, _parse(f)) for f in fragments]
+        frag_mols = [(f, m) for f, m in frag_mols if m is not None]
+        if frag_mols:
+            largest_idx = max(range(len(frag_mols)), key=lambda i: _mol_heavy(frag_mols[i][1]))
+            if _mol_charge(frag_mols[largest_idx][1]) != 0:
+                feats["charged_main_chain"] = True
+            for i, (f, m) in enumerate(frag_mols):
+                if i == largest_idx:
+                    continue
+                carbons = sum(1 for a in _mol_atoms(m) if a.GetSymbol() == "C")
+                if carbons <= 3 or f.strip() == "*":
+                    feats["n_small_free_fragments"] += 1
+        atoms = _mol_atoms(mol)
+        symbols = [a.GetSymbol() for a in atoms]
+        if is_product:
+            try:
+                feats["product_rings"] += int(mol.GetRingInfo().NumRings())
+            except Exception:
+                pass
+            feats["product_heteroatoms"] += sum(1 for s in symbols if s not in ("C", "H"))
+            if any(s in _METAL_SYMBOLS for s in symbols):
+                feats["n_metal_product_sides"] += 1
+            for a in atoms:
+                try:
+                    if a.GetFormalCharge() > 0:
+                        for nb in a.GetNeighbors():
+                            if nb.GetSymbol() in _HALOGEN_SYMBOLS and nb.GetFormalCharge() == 0:
+                                feats["cation_adjacent_neutral_halogen"] = True
+                except Exception:
+                    continue
+        try:
+            centers = chem.FindMolChiralCenters(mol, includeUnassigned=True)
+        except Exception:
+            centers = []
+        for _, kind in centers or []:
+            if kind == "?":
+                feats["n_unassigned_chiral"] += 1
+            else:
+                feats["n_assigned_chiral"] += 1
+
+    for side in reaction.reactants:
+        _side_mol_features(side, is_product=False)
+    for side in reaction.products:
+        _side_mol_features(side, is_product=True)
+    reactant_set = {(s.smiles or "").strip() for s in reaction.reactants if (s.smiles or "").strip()}
+    product_list = [(s.smiles or "").strip() for s in reaction.products if (s.smiles or "").strip()]
+    feats["duplicate_products"] = len(product_list) != len(set(product_list))
+    feats["product_reactant_overlap"] = bool(reactant_set & set(product_list))
+    feats["heavy_atom_balance"] = feats["product_heavy_atoms"] - feats["reactant_heavy_atoms"]
+    return feats
+
+
+def _level_for(score: float) -> str:
+    if score >= 0.85:
+        return "high"
+    if score >= 0.5:
+        return "medium"
+    return "low"
+
+
+def apply_checker_answers(score: float, flags: list[str], answers: dict | None):
+    """Convert checker answers (yes/no/unsure per question key) into score
+    adjustments + flags. ``None`` means the checker is off: no change.
+    A checker failure must degrade to the deterministic score — callers
+    achieve that by passing None (or catching and passing None)."""
+    if not answers:
+        return round(max(0.0, min(1.0, score)), 3), list(flags), None
+    notes: list[str] = []
+    for (key, value), (flag, penalty) in _CHECKER_PENALTIES.items():
+        if answers.get(key) == value:
+            flags.append(flag)
+            score -= penalty
+            notes.append(f"checker: {key}={value}")
+    score = round(max(0.0, min(1.0, score)), 3)
+    return score, flags, ("; ".join(notes) if notes else None)
+
+
+def compute_reaction_confidence(
+    reaction: VisionReaction,
+    *,
+    chem=None,
+    reference_smiles: set[str] | None = None,
+    checker_answers: dict | None = None,
+) -> dict:
+    """Deterministic confidence stratification for one verified reaction.
+
+    ``chem``: RDKit Chem module or None (features degrade to counts only).
+    ``reference_smiles``: SMILES from an INDEPENDENT path (e.g. MolScribe
+    structures for the same figure). Agreement with an independent path is a
+    bonus here — this deliberately differs from ChemEAGLE's frac_copied
+    penalty, which measures copying WITHIN one pipeline (no independent
+    evidence). With no reference the agreement feature is absent, not zero.
+    """
+    counts = reaction_count_features(reaction)
+    sides = list(reaction.reactants) + list(reaction.products)
+    gate_fired = any((s.smiles or "").strip() and not s.verified for s in sides)
+    mol_feats = reaction_mol_features(reaction, chem)
+    features = {**counts, **mol_feats}
+    flags: list[str] = []
+    if chem is None:
+        flags.append("rdkit_unavailable")
+
+    score = 1.0
+    if not sides:
+        flags.append("empty_reaction")
+        score = 0.0
+    else:
+        if counts["n_missing_smiles"]:
+            flags.append("missing_smiles")
+            score -= 0.10 * min(counts["n_missing_smiles"], 3)
+        if mol_feats["n_invalid_smiles"]:
+            flags.append("invalid_smiles")
+            score -= 0.20 * min(mol_feats["n_invalid_smiles"], 2)
+        if counts["n_star_sides"]:
+            flags.append("star_sides")
+            score -= 0.10 * min(counts["n_star_sides"], 2)
+        if mol_feats["n_multi_fragment_sides"]:
+            flags.append("multi_fragment_sides")
+            score -= 0.05 * min(mol_feats["n_multi_fragment_sides"], 3)
+        if mol_feats["n_nonzero_charge_sides"]:
+            flags.append("nonzero_charge_sides")
+            score -= 0.10
+        if mol_feats["charged_main_chain"]:
+            flags.append("charged_main_chain")
+            score -= 0.10
+        if mol_feats["n_metal_product_sides"]:
+            flags.append("metal_product_sides")
+            score -= 0.05 * min(mol_feats["n_metal_product_sides"], 2)
+        if mol_feats["duplicate_products"]:
+            flags.append("duplicate_products")
+            score -= 0.15
+        if mol_feats["product_reactant_overlap"]:
+            flags.append("product_reactant_overlap")
+            score -= 0.10
+        # heavy_atom_balance is recorded as a feature only: substitutions
+        # legitimately raise product heavy counts (Cl replaces H), so its
+        # sign alone is not a quality signal without stoichiometry.
+        if mol_feats["n_unassigned_chiral"]:
+            flags.append("unassigned_chiral")
+            score -= 0.05 * min(mol_feats["n_unassigned_chiral"], 2)
+        if mol_feats["n_small_free_fragments"]:
+            flags.append("small_free_fragments")
+            score -= 0.05 * min(mol_feats["n_small_free_fragments"], 2)
+        if mol_feats["cation_adjacent_neutral_halogen"]:
+            flags.append("cation_adjacent_neutral_halogen")
+            score -= 0.05
+        if counts["yield_mentioned"]:
+            flags.append("yield_mentioned")
+            score += 0.05
+        if counts["selective_text_mentioned"]:
+            flags.append("selective_text_mentioned")
+        if counts["n_sides_with_smiles"] == 0 and sides:
+            flags.append("no_structures")
+            score = min(score, 0.3)
+        if reference_smiles is not None:
+            with_smiles = [(s.smiles or "").strip() for s in sides if (s.smiles or "").strip()]
+            if with_smiles:
+                matched = sum(1 for smi in with_smiles if smi in reference_smiles)
+                frac = matched / len(with_smiles)
+                features["reference_agreement"] = round(frac, 3)
+                products = [(s.smiles or "").strip() for s in reaction.products if (s.smiles or "").strip()]
+                features["reference_all_products_matched"] = bool(products) and all(
+                    smi in reference_smiles for smi in products
+                )
+                features["reference_all_matched"] = matched == len(with_smiles)
+                if frac >= 0.99:
+                    flags.append("reference_agreement_full")
+                    score += 0.10
+                elif frac >= 0.5:
+                    flags.append("reference_agreement_partial")
+                    score += 0.05
+                else:
+                    flags.append("reference_agreement_low")
+                    score -= 0.05
+        if gate_fired:
+            flags.append("gate_capped_0.3")
+            score = min(score, 0.3)
+    score = round(max(0.0, min(1.0, score)), 3)
+    score, flags, note = apply_checker_answers(score, flags, checker_answers)
+    return {
+        "score": score,
+        "level": _level_for(score),
+        "flags": flags,
+        "features": features,
+        "checker_note": note,
+    }
+
+
+def _resolve_chem():
+    try:
+        from rdkit import Chem  # type: ignore
+
+        return Chem
+    except Exception:
+        return None
+
+
+def apply_confidence_features(
+    reaction: VisionReaction,
+    *,
+    reference_smiles: set[str] | None = None,
+    checker_answers: dict | None = None,
+) -> VisionReaction:
+    """Attach A2 stratification fields to a reaction AFTER _verify_reaction.
+
+    Never raises: on any internal error the fields stay empty and the gated
+    confidence is untouched (fail-open; the gate is the source of truth).
+    """
+    # A4: a no-reaction / other entry is a valid negative result, not a
+    # failed extraction — it is not scored, only flagged.
+    if reaction.no_reaction or reaction.other_entry:
+        reaction.confidence_score = None
+        reaction.confidence_level = None
+        reaction.confidence_flags = [
+            "no_reaction_entry" if reaction.no_reaction else "other_entry"
+        ]
+        reaction.confidence_features = {}
+        reaction.confidence_checker_note = None
+        return reaction
+    try:
+        detail = compute_reaction_confidence(
+            reaction,
+            chem=_resolve_chem(),
+            reference_smiles=reference_smiles,
+            checker_answers=checker_answers,
+        )
+        reaction.confidence_score = detail["score"]
+        reaction.confidence_level = detail["level"]
+        reaction.confidence_flags = detail["flags"]
+        reaction.confidence_features = detail["features"]
+        reaction.confidence_checker_note = detail["checker_note"]
+    except Exception:
+        pass
+    return reaction
+
+
+def build_confidence_summary(reactions: list[VisionReaction]) -> dict:
+    """Per-extraction summary: level counts, low-score indices, warnings.
+    (Plan's template list is omitted: VisionReaction has no template.)"""
+    levels = [r.confidence_level for r in reactions if r.confidence_level]
+    warnings: list[str] = []
+    if any("rdkit_unavailable" in (r.confidence_flags or []) for r in reactions):
+        warnings.append("rdkit_unavailable: some reactions scored without mol features")
+    if any("gate_capped_0.3" in (r.confidence_flags or []) for r in reactions):
+        warnings.append("gate_capped_0.3: some reactions capped by the RDKit gate")
+    return {
+        "n_high": levels.count("high"),
+        "n_medium": levels.count("medium"),
+        "n_low": levels.count("low"),
+        "low_indices": [i for i, r in enumerate(reactions) if r.confidence_level == "low"],
+        "warnings": warnings,
+        "outcomes": {
+            "reactions": sum(
+                1 for r in reactions if not r.no_reaction and not r.other_entry
+            ),
+            "no_reaction": sum(1 for r in reactions if r.no_reaction),
+            "other": sum(1 for r in reactions if r.other_entry),
+        },
+    }
+
+
+# ── A4: two-step conditions + footnote merge + no-drop rules (MERMaid) ───────
+# Step 1 reads the main reaction; step 2 is this deterministic merge — no
+# second LLM call (A-batch zero-resource constraint). Footnotes never leak
+# across entries, and N.R. / other entries are never silently dropped.
+NO_REACTION_SENTINEL = "N.R."
+_NO_REACTION_TEXT_RE = re.compile(r"\bN\.R\.?\b|\bNR\b|no reaction|无反应", re.IGNORECASE)
+_FOOTNOTE_DEF_RE = re.compile(r"^\s*([A-Za-z0-9()\[\]]+)\s*=\s*(.+?)\s*$")
+# Explicit "same as above" markers. Bare dashes are deliberately NOT markers:
+# a dash cell means "same" in some tables and "none" in others.
+_INHERIT_MARKERS = frozenset({"同前", "同上", "same", "same as above", "ditto", "同前所述"})
+
+
+def normalize_outcome(reaction: VisionReaction) -> VisionReaction:
+    """Unify textual no-reaction markers to the single sentinel (boolean).
+
+    MERMaid mixed N.R. / NR sentinels; FormuNex keeps one: no_reaction=True
+    plus NO_REACTION_SENTINEL in text. Only fires for side-less reactions
+    whose notes actually say so — a reaction with sides is never rewritten.
+    """
+    if (
+        not reaction.reactants
+        and not reaction.products
+        and not reaction.no_reaction
+        and _NO_REACTION_TEXT_RE.search(reaction.notes or "")
+    ):
+        reaction.no_reaction = True
+    return reaction
+
+
+def _footnote_marker_re(key: str):
+    return re.compile(r"\[" + re.escape(key) + r"\]|\(" + re.escape(key) + r"\)")
+
+
+def merge_footnotes(
+    reactions: list[VisionReaction], footnotes: list[VisionFootnote]
+) -> list[VisionReaction]:
+    """Apply footnote corrections to reaction conditions (step 2).
+
+    Two mechanisms, both entry-scoped (a footnote with entry E applies
+    only to the reaction with entry E; document-level footnotes apply
+    wherever they are referenced):
+    - abbreviation expansion: a footnote of the form ``ABBR = EXPANSION``
+      replaces ABBR (word-bounded) in condition text;
+    - marker notes: a condition citing ``[key]`` / ``(key)`` records the
+      footnote key in applied_footnotes and appends its text to the
+      reaction notes (original condition text is preserved).
+    """
+    if not footnotes:
+        return list(reactions)
+    out: list[VisionReaction] = []
+    for rxn in reactions:
+        applied = list(rxn.applied_footnotes)
+        note_lines: list[str] = []
+        new_conditions: list[VisionReactionCondition] = []
+        for cond in rxn.conditions:
+            original = cond.text or ""
+            text = original
+            for fn in footnotes:
+                if fn.entry and fn.entry != (rxn.entry or ""):
+                    continue
+                definition = _FOOTNOTE_DEF_RE.match(fn.text or "")
+                if definition:
+                    abbr, expansion = definition.group(1), definition.group(2)
+                    bounded = re.compile(
+                        r"(?<![A-Za-z0-9])" + re.escape(abbr) + r"(?![A-Za-z0-9])"
+                    )
+                    if bounded.search(text):
+                        text = bounded.sub(expansion, text)
+                        if fn.key and fn.key not in applied:
+                            applied.append(fn.key)
+                if fn.key and _footnote_marker_re(fn.key).search(original):
+                    if fn.key not in applied:
+                        applied.append(fn.key)
+                    note_lines.append(f"Footnote {fn.key}: {fn.text}")
+            new_conditions.append(
+                cond.model_copy(update={"text": text}) if text != original else cond
+            )
+        notes = rxn.notes
+        if note_lines:
+            notes = (notes + "\n" if notes else "") + "\n".join(note_lines)
+        out.append(rxn.model_copy(update={
+            "conditions": new_conditions,
+            "applied_footnotes": applied,
+            "notes": notes,
+        }))
+    return out
+
+
+def apply_condition_inheritance(
+    reactions: list[VisionReaction],
+) -> list[VisionReaction]:
+    """Optimisation-table inherit / replace semantics (rule table, not
+    model free play). A condition whose text is an explicit inherit marker
+    takes the previous row's same-role condition; any other value replaces;
+    an absent role stays absent (absence is not inheritance). First-row
+    markers have no previous row and are kept verbatim."""
+    out: list[VisionReaction] = []
+    prev_by_role: dict[str, VisionReactionCondition] = {}
+    for rxn in reactions:
+        new_conditions: list[VisionReactionCondition] = []
+        for cond in rxn.conditions:
+            if (cond.text or "").strip().lower() in _INHERIT_MARKERS and cond.role in prev_by_role:
+                new_conditions.append(prev_by_role[cond.role])
+            else:
+                new_conditions.append(cond)
+        for cond in new_conditions:
+            prev_by_role[cond.role] = cond
+        out.append(
+            rxn.model_copy(update={"conditions": new_conditions})
+            if new_conditions != rxn.conditions
+            else rxn
+        )
+    return out
+
+
+# Optimisation-run field table (plan-enumerated fields only; the plan cites
+# 22 MERMaid fields but enumerates these — no further fields invented).
+# Adding a field = adding a row (B5 field-table prompt assembly preview).
+OPTIMIZATION_RUN_FIELDS = [
+    {"key": "entry", "label": "Entry"},
+    {"key": "reactant_refs", "label": "Reactant refs"},
+    {"key": "catalyst", "label": "Catalyst"},
+    {"key": "ligand", "label": "Ligand"},
+    {"key": "electrode", "label": "Electrode"},
+    {"key": "current", "label": "Current"},
+    {"key": "electrolyte", "label": "Electrolyte"},
+    {"key": "solvent", "label": "Solvent"},
+    {"key": "duration", "label": "Duration"},
+    {"key": "atmosphere", "label": "Atmosphere"},
+    {"key": "temperature", "label": "Temperature"},
+    {"key": "yield", "label": "Yield"},
+    {"key": "yield_type", "label": "Yield type"},
+    {"key": "ee_er", "label": "ee/er"},
+    {"key": "footnotes", "label": "Footnotes"},
+]
+
+
+def optimization_run_to_reaction(
+    run: dict, *, label_to_smiles: dict | None = None
+) -> VisionReaction:
+    """One optimisation-table row → VisionReaction.
+
+    Reactants are INDEX REFERENCES (not repeated SMILES): resolved through
+    the A3 label map when available, otherwise kept as label-only sides
+    (never dropped). Each present scalar field becomes a condition whose
+    role is the field key; ``footnotes`` is not a condition — pass it to
+    merge_footnotes separately. Products are the run target and are filled
+    by the caller, not by the row.
+    """
+    reactants: list[VisionReactionSide] = []
+    for ref in run.get("reactant_refs", []) or []:
+        ref_text = str(ref)
+        smiles = (
+            resolve_side_label(ref_text, label_to_smiles)
+            if label_to_smiles
+            else None
+        )
+        reactants.append(VisionReactionSide(smiles=smiles or "", label=ref_text))
+    conditions: list[VisionReactionCondition] = []
+    for field in OPTIMIZATION_RUN_FIELDS:
+        key = field["key"]
+        if key in ("entry", "reactant_refs", "footnotes"):
+            continue
+        value = run.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        conditions.append(VisionReactionCondition(role=key, text=str(value)))
+    return VisionReaction(
+        entry=str(run.get("entry", "") or ""),
+        reactants=reactants,
+        conditions=conditions,
+        products=[],
+        confidence=0.5,
+    )
+
+
 def extract_reaction_image(
-    content: bytes, filename: str = "reaction.png"
+    content: bytes,
+    filename: str = "reaction.png",
+    *,
+    label_to_smiles: dict | None = None,
 ) -> tuple[VisionReactionExtraction | None, str | None]:
     """Reaction scheme → structured reaction JSON via the configured vision LLM.
 
@@ -178,7 +782,26 @@ def extract_reaction_image(
         raw = _call_vision(cfg, prompt, content, filename)
         data = json.loads(_strip_json_fences(raw))
         extraction = VisionReactionExtraction.model_validate(data)
+        # A4: unify textual no-reaction markers to the single sentinel.
+        extraction.reactions = [normalize_outcome(r) for r in extraction.reactions]
+        # A3 (opt-in): resolve empty-SMILES sides from a known label map
+        # BEFORE the RDKit gate, so resolved SMILES are still verified and
+        # canonicalised by _verify_reaction rather than trusted blindly.
+        if label_to_smiles:
+            for r in extraction.reactions:
+                for side in list(r.reactants) + list(r.products):
+                    if not (side.smiles or "").strip():
+                        resolved = resolve_side_label(side.label, label_to_smiles)
+                        if resolved:
+                            side.smiles = resolved
         extraction.reactions = [_verify_reaction(r) for r in extraction.reactions]
+        # A4 step 2: footnote merge, then cross-row condition inheritance.
+        extraction.reactions = merge_footnotes(extraction.reactions, extraction.footnotes)
+        extraction.reactions = apply_condition_inheritance(extraction.reactions)
+        # A2 stratification runs after the RDKit gate; the 0.3 cap is never
+        # raised back up by feature scores (see compute_reaction_confidence).
+        extraction.reactions = [apply_confidence_features(r) for r in extraction.reactions]
+        extraction.confidence_summary = build_confidence_summary(extraction.reactions)
         return extraction, None
     except Exception as exc:
         return None, degrade_return(logger, exc, "vision reaction extraction failed", _failure_hint(exc))
