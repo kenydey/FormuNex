@@ -245,7 +245,12 @@ def test_assignment_hungarian_optimal(monkeypatch):
 
 
 def test_assignment_greedy_fallback(monkeypatch):
+    # Block BOTH entries: in a full run another test may already have
+    # imported scipy.optimize, and the cached submodule would satisfy
+    # `from scipy.optimize import ...` even with sys.modules["scipy"] = None
+    # (that is exactly how this test failed on CI while passing standalone).
     monkeypatch.setitem(sys.modules, "scipy", None)
+    monkeypatch.setitem(sys.modules, "scipy.optimize", None)
     pred, gt = _adversarial_figure()
     result = ev.score_figure(pred, gt, chem=None)
     assert result["hard"]["tp"] == 1
