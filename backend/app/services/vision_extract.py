@@ -18,6 +18,7 @@ import base64
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -64,6 +65,123 @@ class VisionExtraction(BaseModel):
     markdown: str = ""
     molecules: list[VisionMolecule] = Field(default_factory=list)
     notes: str = ""
+
+
+class VisionReactionSide(BaseModel):
+    """One molecule on one side of a reaction scheme (borrowed shape:
+    ChemEAGLE/OpenChemIE reactants/conditions/products JSON)."""
+
+    smiles: str = ""
+    label: str = ""
+    verified: bool = False  # RDKit-parsed + canonicalized (see _verify_reaction)
+
+
+class VisionReactionCondition(BaseModel):
+    role: str = ""  # reagent / catalyst / solvent / temperature / time / yield / other
+    text: str = ""
+
+
+class VisionReaction(BaseModel):
+    reactants: list[VisionReactionSide] = Field(default_factory=list)
+    conditions: list[VisionReactionCondition] = Field(default_factory=list)
+    products: list[VisionReactionSide] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    reaction_smiles: str = ""  # assembled locally from VERIFIED sides only, never from the model
+
+
+class VisionReactionExtraction(BaseModel):
+    reactions: list[VisionReaction] = Field(default_factory=list)
+    notes: str = ""
+
+
+# Reaction prompt lives in a text file (MERMaid borrowing: prompts as plain
+# text, editable without touching code); the inline copy is only a fallback
+# so a missing file degrades to the same prompt instead of failing.
+_REACTION_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "resources" / "prompts" / "vision_reaction.txt"
+)
+_REACTION_PROMPT_FALLBACK = """你是化学反应图结构化专家。分析图片中的化学反应方案图，只输出一个 JSON 对象（无 markdown 围栏），字段：
+- reactions: [{reactants: [{smiles, label}], conditions: [{role, text}], products: [{smiles, label}], confidence: 0-1}]
+- notes: 无法识别的内容说明
+规则：
+- role 只能是 reagent / catalyst / solvent / temperature / time / yield / other；
+- 每个分子只给 SMILES，不确定的结构给低 confidence，绝不编造；无法识别的分子用空 smiles 并在 label 里写原文；
+- 反应物、产物为空数组时表示图中没有对应方；conditions 为空数组时表示图中没有标出条件；
+- 只输出 JSON，不要解释。"""
+
+
+def _reaction_prompt() -> str:
+    try:
+        text = _REACTION_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        text = ""
+    return text or _REACTION_PROMPT_FALLBACK
+
+
+def _verify_reaction(reaction: VisionReaction) -> VisionReaction:
+    """RDKit gate + reaction-SMILES assembly for one VLM reaction claim.
+
+    Mirrors _verify_molecules: a side whose SMILES fails RDKit is kept as a
+    claim (label preserved) but marked unverified, excluded from the assembled
+    reaction SMILES, and caps the reaction confidence at 0.3. Without RDKit
+    installed every side stays unverified and no reaction SMILES is assembled
+    — an unverified claim must never look like a verified one.
+    """
+    try:
+        from rdkit import Chem, RDLogger  # type: ignore
+
+        RDLogger.DisableLog("rdApp.*")
+        rdkit_ok = True
+    except Exception:
+        rdkit_ok = False
+
+    def _verify_side(side: VisionReactionSide) -> VisionReactionSide:
+        smi = (side.smiles or "").strip()
+        if not smi:
+            return side
+        if rdkit_ok:
+            try:
+                parsed = Chem.MolFromSmiles(smi)
+            except Exception:
+                parsed = None
+            if parsed is not None:
+                side.smiles = Chem.MolToSmiles(parsed)
+                side.verified = True
+                return side
+        return side
+
+    reaction.reactants = [_verify_side(s) for s in reaction.reactants]
+    reaction.products = [_verify_side(s) for s in reaction.products]
+    if any(not s.verified for s in reaction.reactants + reaction.products if s.smiles):
+        reaction.confidence = min(reaction.confidence, 0.3)
+    left = " + ".join(s.smiles for s in reaction.reactants if s.verified)
+    right = " + ".join(s.smiles for s in reaction.products if s.verified)
+    reaction.reaction_smiles = f"{left}>>{right}" if (left or right) else ""
+    return reaction
+
+
+def extract_reaction_image(
+    content: bytes, filename: str = "reaction.png"
+) -> tuple[VisionReactionExtraction | None, str | None]:
+    """Reaction scheme → structured reaction JSON via the configured vision LLM.
+
+    Unlike extract_image (molecules + LaTeX), this returns reactions with
+    roles: reactants / conditions[{role, text}] / products, plus a locally
+    assembled reaction SMILES. Never raises — degrades to (None, hint).
+    """
+    ok, hint = vision_available()
+    if not ok:
+        return None, hint
+    cfg = resolve_role(VISION)
+    prompt = f"{_reaction_prompt()}\n\n文件名：{filename}"
+    try:
+        raw = _call_vision(cfg, prompt, content, filename)
+        data = json.loads(_strip_json_fences(raw))
+        extraction = VisionReactionExtraction.model_validate(data)
+        extraction.reactions = [_verify_reaction(r) for r in extraction.reactions]
+        return extraction, None
+    except Exception as exc:
+        return None, degrade_return(logger, exc, "vision reaction extraction failed", _failure_hint(exc))
 
 
 # DeepSeek ships a vision model (`deepseek-v4-flash-vision-exp`) but its text
