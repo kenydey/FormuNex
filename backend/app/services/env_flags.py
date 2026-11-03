@@ -218,6 +218,26 @@ FLAG_REGISTRY: tuple[EnvFlag, ...] = (
             "命中 chunk 携带 patent_tags（claim_no/example_no）时，把同专利的兄弟 chunk "
             "并入上下文；零 LLM 成本。",
             "retrieval"),
+    EnvFlag("kb_merge_enabled", "证据合并（2.3）",
+            "问答时对短证据做同文档邻块扩展、扩展后再合并去重；默认关闭，"
+            "先在固定查询集上跑开关对比再开。",
+            "retrieval", maturity="beta"),
+    EnvFlag("kb_rerank_enabled", "重排策略层（2.2）",
+            "融合与质量门之后加阈值过滤、降级重试、显式范围保底与 MMR 去冗余；"
+            "阈值按融合的理论上限归一化，默认阈值 0.02。",
+            "retrieval", maturity="beta"),
+    EnvFlag("kb_image_inherit_enabled", "图像证据继承（2.4）",
+            "去重丢弃某份拷贝时，保留方继承丢弃方的图像证据引用；"
+            "kept_by 非空项在 top-k 截断中受保护。",
+            "retrieval", maturity="beta"),
+    EnvFlag("kg_relation_weight_enabled", "图谱关系权重（2.5）",
+            "查询时按 PMI + 强度算关系权重并参与关系 / 替代物排序；"
+            "默认关闭，先在固定实体集上跑开关对比再开。",
+            "kb", maturity="beta"),
+    EnvFlag("kb_protected_spans_enabled", "受保护 span（2.6）",
+            "切分时反应式 / SMILES 独立行保持一体、超长硬切段共享 "
+            "parent_key；默认关闭，先在样本集上跑边界 diff 报告再开。",
+            "kb", maturity="beta"),
     EnvFlag("kb_dedup_exact_enabled", "精确去重（L1）",
             "入库时按（文本+provenance）键去重，默认开启。",
             "kb"),

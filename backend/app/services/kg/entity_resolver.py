@@ -173,6 +173,16 @@ def resolve_query(query: str, *, settings: Settings | None = None) -> EntityReso
                 if row and row.kind == "chemical":
                     chemicals.append(_to_chemical(row))
 
+    # 2.5 有界种子：expanded_entity_ids 加上限 kg_seed_max（默认 50，
+    # 取 relations limit 同量级，不取 WeKnora 的 200）；查询命中在前、
+    # 一跳扩展在后，截断丢的是扩展尾部，不是查询命中。
+    try:
+        seed_max = int(getattr(settings, "kg_seed_max", 50) or 50)
+    except (TypeError, ValueError):
+        seed_max = 50
+    if seed_max > 0:
+        expanded_ids = expanded_ids[:seed_max]
+
     trade_only = bool(trade_products) and not chemicals
     interpretation = f"mode={mode}; entities={len(expanded_ids)}"
     if trade_only:

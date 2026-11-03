@@ -108,6 +108,66 @@ class Chunk:
     # Block kind: text | table | formula | figure | code. Heuristic on
     # markdown for the text chain; layout parsers overwrite it.
     block_type: str = "text"
+    # WeKnora 第一批 2.6：硬切父子键。超长原子块被硬切成的各段共享
+    # 同一键，值为硬切前原子块在原文中的偏移区间 "start-end"；
+    # None = 非硬切段（旧调用路径默认值）。第一阶段只存在于 Chunk
+    # 与 dict 透传层，不进 DB 列、不进 dedup_key（另案决定）。
+    parent_key: str | None = None
+
+
+# ── WeKnora 第一批 2.6：受保护 span 注册表 ──────────────────────────────
+# 已有项（fence / math / html_table / md_table）仍走 _split_blocks 现有
+# 状态机，此处只登记新增项的判定；登记的目的是让保护清单显式化、可测试。
+# 保守优先，宁漏勿错：只保护独立行（整行即反应式 / SMILES），不保护
+# 行内片段。
+
+_ARROW_RE = re.compile(r"<=>|->|=>|→")
+_CHEM_TOKEN_RE = re.compile(r"[A-Za-z0-9()\[\]+]{2,}")
+_SMILES_CHARSET = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789[]()=#:/\\@+-.%")
+
+
+def _is_reaction_line(line: str) -> bool:
+    """含反应箭头且箭头两侧均有化学 token（长度 ≥ 2）的独立行。
+
+    纯文本箭头（如“流程 → 下一步”）两侧无化学 token 形态 → 不保护。
+    """
+    m = _ARROW_RE.search(line)
+    if not m:
+        return False
+    left, right = line[: m.start()], line[m.end():]
+    return bool(_CHEM_TOKEN_RE.search(left)) and bool(_CHEM_TOKEN_RE.search(right))
+
+
+def _is_smiles_like(line: str, min_len: int = 20) -> bool:
+    """SMILES 形态的独立行：单 token（无空白）、长度 ≥ min_len、
+    字符集基本落在 SMILES 字符集内、含环闭合数字或分支括号。
+
+    排除：含 "://" 的 URL（字符集会误判）、含空白的普通句子、
+    短 token（NaCl / H2O 本来就不会被切断）。
+    """
+    s = line.strip()
+    if not s or " " in s or "\t" in s or "://" in s:
+        return False
+    if len(s) < min_len:
+        return False
+    if any(ch not in _SMILES_CHARSET for ch in s):
+        return False
+    return any(ch.isdigit() for ch in s) or ("(" in s and ")" in s)
+
+
+def _is_protected_line(line: str, smiles_min_len: int = 20) -> bool:
+    try:
+        return _is_reaction_line(line) or _is_smiles_like(line, smiles_min_len)
+    except Exception:  # noqa: BLE001 - 匹配异常时该行按普通文本处理
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "protected-span match failed for line %r", line[:80], exc_info=True
+        )
+        return False
+
+
+PROTECTED_SPANS: tuple[str, ...] = ("reaction_line", "smiles_like")
 
 
 # ── legacy plain-text splitter (moved verbatim from ingestion) ───────────────
@@ -267,8 +327,15 @@ def _math_selfclosed(stripped: str) -> bool:
     )
 
 
-def _split_blocks(body: str) -> list[str]:
-    """Split a section body into blocks; tables, fences and math stay atomic."""
+def _split_blocks(
+    body: str, *, protected_spans: bool = False, smiles_min_len: int = 20
+) -> list[str]:
+    """Split a section body into blocks; tables, fences and math stay atomic.
+
+    2.6：protected_spans=True 时，反应式 / SMILES 独立行在文本模式下
+    先 flush 当前文本块、再作为独立原子块（与 _math_selfclosed 同构）；
+    默认 False 时行为与旧版逐行一致。
+    """
     lines = body.split("\n")
     blocks: list[str] = []
     current: list[str] = []
@@ -369,6 +436,12 @@ def _split_blocks(body: str) -> list[str]:
             flush()
             mode = "table"
             current.append(line)
+            continue
+        # 2.6：受保护独立行（反应式 / SMILES）——先 flush 当前文本块，
+        # 再把该行作为独立原子块；不进入 table / fence / math 状态机。
+        if protected_spans and stripped and _is_protected_line(stripped, smiles_min_len):
+            flush()
+            blocks.append(stripped)
             continue
         if not stripped and current:
             flush()
@@ -486,12 +559,32 @@ def chunk_markdown(
     md: str, *, max_chars: int = 1600, overlap: int = 200,
     bookmarks: list[tuple[str, int, int]] | None = None,
     example_aware: bool = False,
+    protected_spans: bool | None = None,
+    smiles_min_len: int | None = None,
 ) -> list[Chunk]:
     """Structure-aware chunking; degrades to the plain splitter for non-Markdown.
 
     PageIndex 借鉴 A2: ``bookmarks`` 为 [(title, level, page_1based)] 时，
     page-wise 分支中 heading_path 为空的 chunk 按页查表补充。
+
+    2.6：protected_spans=None 时读 settings.kb_protected_spans_enabled
+    （默认关）；显式传 True / False 时覆盖配置。smiles_min_len 同理
+    （默认 kb_protected_smiles_min_len=20）。
     """
+    if protected_spans is None or smiles_min_len is None:
+        try:
+            from ..config import get_settings
+
+            _s = get_settings()
+            if protected_spans is None:
+                protected_spans = bool(_s.kb_protected_spans_enabled)
+            if smiles_min_len is None:
+                smiles_min_len = int(_s.kb_protected_smiles_min_len or 20)
+        except Exception:  # noqa: BLE001 - fail-open: 旧行为
+            if protected_spans is None:
+                protected_spans = False
+            if smiles_min_len is None:
+                smiles_min_len = 20
     md = (md or "").strip()
     if not md:
         return []
@@ -643,7 +736,10 @@ def chunk_markdown(
         # PageIndex 借鉴 A5: 跨页跟踪 —— current 累积期间遇到的最末页码
         current_page_end = page
         current_para = para_counter
-        for block in _split_blocks(body):
+        for block in _split_blocks(
+            body, protected_spans=bool(protected_spans),
+            smiles_min_len=int(smiles_min_len),
+        ):
             # 推进 body_cursor（markers 也占原文位置）
             bpos, body_cursor = _locate_block(body, block, body_cursor)
             m = PAGE_MARKER_RE.match(block)
@@ -779,6 +875,9 @@ def chunk_markdown(
             if len(block) > max_chars:
                 # v13-4: block 基址用真实位置（bpos），不再 char_pos 合成。
                 block_base = seg_base + (bpos if bpos != -1 else body_cursor)
+                # 2.6：硬切父子键 = 硬切前原子块在原文中的偏移区间，
+                # 各段共享同一键（保护 ≠ 不限长，超长保护行仍硬切）。
+                _parent_key = f"{block_base}-{block_base + len(block)}"
                 for c, off in chunk_plain_text_with_offsets(
                     block, max_chars=max_chars, overlap=overlap
                 ):
@@ -788,6 +887,7 @@ def chunk_markdown(
                         offset_start=block_base + off,
                         offset_end=block_base + off + len(c),
                         block_type=pending_block or _classify_block_type(c),
+                        parent_key=_parent_key,
                     ))
                 pending_block = None
                 para_counter += 1

@@ -31,7 +31,10 @@ from app.services.env_flags import FLAG_REGISTRY, EnvFlag, validate_flag_registr
 
 APP = Path(__file__).resolve().parent.parent / "app"
 
-# Frozen 2026-11-02: update deliberately, together with FLAG_REGISTRY.
+# Frozen 2026-11-02; extended 2026-11-03 with the five WeKnora batch-1
+# flags (kb_image_inherit_enabled, kb_merge_enabled,
+# kb_protected_spans_enabled, kb_rerank_enabled,
+# kg_relation_weight_enabled): update deliberately, together with FLAG_REGISTRY.
 REGISTRY_SNAPSHOT = frozenset([
     "agent_bus_enabled", "agent_memory_enabled", "auto_adopt_next_doe_on_loop",
     "auto_audit_enabled", "auto_loop_on_sync", "auto_retrain", "celery_eager",
@@ -50,14 +53,17 @@ REGISTRY_SNAPSHOT = frozenset([
     "external_substitutes", "frozen_corpus_required_for_export",
     "fulltext_enrich", "gpu_enabled", "kb_ann_enabled",
     "kb_children_retrieval_enabled", "kb_dedup_exact_enabled",
-    "kb_hybrid_entity_boost", "kb_ingest_auto", "kb_ingest_patent_exempt",
+    "kb_hybrid_entity_boost", "kb_image_inherit_enabled",
+    "kb_ingest_auto", "kb_ingest_patent_exempt", "kb_merge_enabled",
     "kb_near_dedup_enabled", "kb_patent_stitch_enabled",
-    "kb_recommend_rerank_enabled", "kb_recommend_use_hybrid",
-    "kb_relevance_shadow", "kb_search_deny_enabled", "kb_v2_enabled",
+    "kb_protected_spans_enabled", "kb_recommend_rerank_enabled",
+    "kb_recommend_use_hybrid", "kb_relevance_shadow", "kb_rerank_enabled",
+    "kb_search_deny_enabled", "kb_v2_enabled",
     "kg_chat_entity_refs_on_evidence", "kg_contradiction_demote", "kg_enabled",
     "kg_entities_on_ingest", "kg_llm_product_hint", "kg_llm_relation_extract",
     "kg_measured_feedback_enabled", "kg_multimodal_fusion_enabled",
-    "kg_relation_extract_enabled", "kg_relations_on_ingest", "langfuse_enabled",
+    "kg_relation_extract_enabled", "kg_relation_weight_enabled",
+    "kg_relations_on_ingest", "langfuse_enabled",
     "literature_library_enabled", "literature_manifest_enabled",
     "literature_oa_enrich_enabled", "literature_screening_enabled",
     "literature_screening_required_for_export", "loop_convergence_enabled",
@@ -132,7 +138,7 @@ def test_registry_validation_rejects_synthetic_mismatches():
 
 
 def test_registry_snapshot():
-    assert len(REGISTRY_SNAPSHOT) == 128
+    assert len(REGISTRY_SNAPSHOT) == 133
     assert {f.attr for f in FLAG_REGISTRY} == REGISTRY_SNAPSHOT
 
 

@@ -65,6 +65,16 @@ class Evidence(BaseModel):
     # W2-2 (P1-7): two-stage search→read — whether the full text is already
     # persisted locally (read stage can skip the download). None = unknown.
     has_fulltext: bool | None = None
+    # WeKnora 第一批 2.3：合并进本条的证据 identifier 列表（邻块扩展的
+    # 邻块与被合并的连续 chunk 均记于此，引用锚点仍是本条 identifier）。
+    merged_from: list[str] = Field(default_factory=list)
+    # WeKnora 第一批 2.4 Phase A：图像证据载体。只放可追溯的引用
+    # （figure / image 块 chunk 的 identifier），不放图像字节与外部 URL。
+    image_refs: list[str] = Field(default_factory=list)
+    image_vector_match: bool = False
+    # 非分数原因被保留的标记（如 "image_vector"、"patent_stitch"），
+    # 供 top-k 截断保护（TopKKeepingKept）用。
+    kept_by: str | None = None
     # W4-6 (P0-19): citation count + publication year for age-normalized
     # ranking (new papers not drowned by old ones). None = unknown.
     cited_by: int | None = None

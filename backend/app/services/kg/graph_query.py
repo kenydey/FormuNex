@@ -23,8 +23,64 @@ def _entity_display_name(entity_id: str, cache: dict[str, str]) -> str:
     name = (row.canonical_name if row else entity_id) or entity_id
     if row and row.zh_name:
         name = f"{row.zh_name} ({name})"
+    # 2.5 投影截断：展示名超 120 字符时截断（取 heading_path 列宽先例，
+    # 不取 WeKnora 的 513）；只影响展示字段，不影响 entity_id 与查询。
+    name = name[:120]
     cache[entity_id] = name
     return name
+
+
+def _weight_config() -> tuple[bool, float, float, float]:
+    """2.5 权重开关与系数（系数和校验在 relation_weight 内双重把关，
+    防止 settings 被直接改写绕过 config 校验）。"""
+    try:
+        from ...config import get_settings
+
+        settings = get_settings()
+        return (
+            bool(settings.kg_relation_weight_enabled),
+            float(settings.kg_relation_pmi_weight),
+            float(settings.kg_relation_strength_weight),
+            float(settings.kg_relation_decay),
+        )
+    except Exception:  # noqa: BLE001 - fail-open: weight off
+        return False, 0.6, 0.4, 0.5
+
+
+def _pair_weights_for_views(views: list[KGRelationView]) -> dict[tuple[str, str], float]:
+    """对一组视图批量算权重。mention 统计缺失 / 异常时回落 confidence。"""
+    from .relation_weight import compute_pair_weights, mention_chunks
+
+    pairs: list[tuple[str, str, float]] = []
+    for v in views:
+        confs = [float(e.confidence) for e in v.evidence if e.confidence is not None]
+        conf = sum(confs) / len(confs) if confs else float(v.confidence or 0.5)
+        pairs.append((v.source_entity_id, v.target_entity_id, conf))
+    try:
+        store = get_entity_store()
+        ids = sorted({e for a, b, _ in pairs for e in (a, b)})
+        rows, _total, _trunc = store.fetch_mentions_for_entities(ids, scan_limit=500)
+        entity_chunks, total_chunks = mention_chunks(rows)
+        return compute_pair_weights(pairs, entity_chunks, total_chunks)
+    except Exception:  # noqa: BLE001 - per-relation fallback below
+        import logging as _logging
+
+        _logging.getLogger(__name__).debug(
+            "relation weight fallback to confidence", exc_info=True
+        )
+        return {(a, b): max(0.0, min(1.0, conf)) for a, b, conf in pairs}
+
+
+def _annotate_views(views: list[KGRelationView]) -> list[KGRelationView]:
+    enabled, _p, _s, _d = _weight_config()
+    if not enabled:
+        return views
+    weights = _pair_weights_for_views(views)
+    out = []
+    for v in views:
+        w = weights.get((v.source_entity_id, v.target_entity_id))
+        out.append(v.model_copy(update={"weight": w}))
+    return out
 
 
 def link_to_view(link: KGEntityLink, *, name_cache: dict[str, str] | None = None) -> KGRelationView:
@@ -78,6 +134,11 @@ def get_entity_relations(
         wanted = extraction_method.strip().lower()
         views = [v for v in views if (v.extraction_method or "").lower() == wanted or any((e.extraction_method or "").lower() == wanted for e in v.evidence)]
         views = views[:limit]
+    # 2.5：取数逻辑不动，取后按 weight 降序稳定排序（同分保原序）。
+    enabled, _p, _s, _d = _weight_config()
+    if enabled:
+        views = _annotate_views(views)
+        views.sort(key=lambda v: -(v.weight if v.weight is not None else v.confidence))
     return views
 
 
@@ -129,6 +190,37 @@ def find_path(
                 )
                 new_path = path + [step]
                 if neighbor == dst_entity_id:
+                    # 2.5：BFS 首达语义不变，只在返回的每步上标注 weight
+                    # （第 i 跳按位置衰减：step 1 不衰减、step 2 ×decay……），
+                    # 不参与“找不找得到”的判定。
+                    enabled, _p, _s, decay = _weight_config()
+                    if enabled:
+                        from .relation_weight import decayed_weight
+
+                        weights = _pair_weights_for_views(
+                            [s.relation for s in new_path]
+                        )
+                        annotated = []
+                        for i, s in enumerate(new_path, start=1):
+                            rel = s.relation
+                            w = weights.get(
+                                (rel.source_entity_id, rel.target_entity_id),
+                                float(rel.confidence or 0.5),
+                            )
+                            annotated.append(
+                                s.model_copy(
+                                    update={
+                                        "relation": rel.model_copy(
+                                            update={
+                                                "weight": decayed_weight(
+                                                    w, hops=i, decay=decay
+                                                )
+                                            }
+                                        )
+                                    }
+                                )
+                            )
+                        new_path = annotated
                     return KGPathResponse(
                         src_entity_id=src_entity_id,
                         dst_entity_id=dst_entity_id,
@@ -256,7 +348,37 @@ def discover_substitutes(
                 if len(candidates) >= limit:
                     break
 
-    candidates.sort(key=lambda c: (-c.confidence, c.hops))
+    # 2.5：候选权重 = 末跳关系权重经 hops 衰减；排序在原有 measured /
+    # 矛盾分层内加入 weight（不取代这两层语义，只在层内以 weight 优先）。
+    _w_enabled, _p, _s, _decay = _weight_config()
+    if _w_enabled:
+        from .relation_weight import decayed_weight
+
+        rel_views = []
+        for c in candidates:
+            rel = c.path[-1].relation if c.path else None
+            rel_views.append(rel)
+        weights = _pair_weights_for_views([r for r in rel_views if r is not None])
+        annotated = []
+        for c, rel in zip(candidates, rel_views):
+            if rel is None:
+                annotated.append(c)
+                continue
+            w = weights.get(
+                (rel.source_entity_id, rel.target_entity_id),
+                float(rel.confidence or 0.5),
+            )
+            annotated.append(
+                c.model_copy(
+                    update={"weight": decayed_weight(w, hops=c.hops, decay=_decay)}
+                )
+            )
+        candidates = annotated
+
+    def _wkey(c) -> float:
+        return -(c.weight if c.weight is not None else c.confidence)
+
+    candidates.sort(key=lambda c: (_wkey(c), -c.confidence, c.hops))
     # measured 优先：实测边涉及的实体前置
     _measured: set[str] = set()
     try:
@@ -265,7 +387,7 @@ def discover_substitutes(
                 _measured.add(link.src_entity_id)
                 _measured.add(link.dst_entity_id)
         if _measured:
-            candidates.sort(key=lambda c: (0 if c.entity_id in _measured else 1, -c.confidence, c.hops))
+            candidates.sort(key=lambda c: (0 if c.entity_id in _measured else 1, _wkey(c), -c.confidence, c.hops))
     except Exception:
         pass
     # v10: 矛盾候选置后（被实测反驳的替代物排在末尾），除非实测明确好
@@ -274,6 +396,7 @@ def discover_substitutes(
             key=lambda c: (
                 1 if c.contradiction_flag else 0,
                 0 if c.entity_id in _measured else 1,
+                _wkey(c),
                 -c.confidence,
                 c.hops,
             )

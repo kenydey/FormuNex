@@ -43,6 +43,9 @@ class KGRelationView(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     is_valid: bool = True
     extraction_method: str = "rule"
+    # WeKnora 第一批 2.5：查询时算的关系权重（0–1，PMI + 强度）；
+    # 开关关或计算回落时为 None（回落时调用方填 confidence，见 graph_query）。
+    weight: float | None = None
 
 
 class KGChemicalEntity(BaseModel):
@@ -105,6 +108,9 @@ class KGSubstituteCandidate(BaseModel):
     relation_type: RelationType = RelationType.SUBSTITUTES
     confidence: float = 0.5
     hops: int = 1
+    # WeKnora 第一批 2.5：候选权重 = 末跳关系权重经 hops 衰减；
+    # 开关关时为 None。
+    weight: float | None = None
     path: list[KGPathStep] = Field(default_factory=list)
     contradiction_flag: bool = False     # v10: 该候选被实测反驳
     contradiction_detail: str = ""       # 冲突类型简述，供前端徽标

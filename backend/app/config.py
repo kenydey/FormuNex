@@ -689,6 +689,16 @@ class Settings(BaseSettings):
     kg_relation_extract_enabled: bool = False
     kg_llm_relation_extract: bool = False
     kg_relation_min_confidence: float = 0.55
+    # WeKnora 第一批 2.5 A 线：查询时关系权重（PMI + 强度），默认关：
+    # 权重改变排序，先在固定实体集上跑开关对比再开。两系数之和须为 1，
+    # 校验见 _validate_relation_weight_coefficients（不为 1 则 warning +
+    # 回默认值）。kg_seed_max 是 resolve_query 的 expanded_entity_ids
+    # 上限（取 relations limit 同量级，不取 WeKnora 的 200）。
+    kg_relation_weight_enabled: bool = False
+    kg_relation_pmi_weight: float = 0.6
+    kg_relation_strength_weight: float = 0.4
+    kg_relation_decay: float = 0.5
+    kg_seed_max: int = 50
     kg_multimodal_fusion_enabled: bool = False
     # KG → recommendation ranking weights (second priority). Soft constraints:
     # an INHIBITS relation between skeleton materials multiplies the
@@ -796,6 +806,23 @@ class Settings(BaseSettings):
     # context (Claims<->Examples stitching, zero LLM cost).
     kb_patent_stitch_enabled: bool = True
     kb_patent_stitch_max_siblings: int = 2
+    # WeKnora 第一批 2.3：查询时证据合并（邻块扩展 + 再去重）。
+    # 默认关：改动送 LLM 的上下文文本，先在固定查询集上跑开关对比再开。
+    kb_merge_enabled: bool = False
+    kb_merge_short_chars: int = 400
+    kb_merge_max_chars: int = 4000
+    kb_merge_overlap_chars: int = 500
+    # WeKnora 第一批 2.4 Phase A：图像证据继承（纯规则层，默认开；
+    # 关即回旧去重，载体字段仍填但不再继承）。
+    # 注：Phase B（vision 上下文送图）的占位字段 kb_max_context_images
+    # 已于 2026-11-03 删除——接线守卫禁止无读取方的字段，Phase B 落地
+    # 时随真正的读取方一起加回。
+    kb_image_inherit_enabled: bool = True
+    # WeKnora 第一批 2.6：受保护 span（反应式 / SMILES 独立行）与硬切
+    # parent_key。默认关：切分边界变化影响新入库 chunk 的分布，
+    # 先在样本集上跑边界 diff 报告再开；切分尺寸 1600/200 不动。
+    kb_protected_spans_enabled: bool = False
+    kb_protected_smiles_min_len: int = 20
     # KB near-duplicate dedup at ingest (2026-10-01): two layers applied to
     # chunk rows after embedding, before ChunkStore.replace_for_source[_in].
     # L1 exact (normalized-text sha256) is zero-false-positive → default ON.
@@ -1005,6 +1032,20 @@ class Settings(BaseSettings):
     kb_recommend_top_k: int = 4
     # 探针 ↔ 推荐 ↔ 会话 BM25FAISSStore 共享：BM25 权重 α（默认 0.85）。
     kb_hybrid_alpha: float = 0.85
+    # WeKnora 第一批 2.2：重排策略层总开关与参数（阈值作用于按理论上限
+    # 归一化后的 combined 分数，与 weighted / RRF 融合尺度无关；降级地板
+    # 是下限，不是把阈值改低——不放宽门禁）。
+    # 注意：默认阈值不用 WeKnora 的 0.2——FormuNex 的 weighted 融合是
+    # alpha 加权的，单通道命中会被压到 (1-alpha) 量级（默认 alpha 0.95
+    # 时纯 cosine 命中最高仅 0.05）；0.2 会把这类命中全部滤空（集成测试
+    # 实证）。0.02 低于单通道上限、高于噪声（约 0.005），是按本融合校准
+    # 的起点，生产调优仍需评测集 A/B。
+    kb_rerank_enabled: bool = True
+    kb_rerank_threshold: float = 0.02
+    kb_rerank_degrade_factor: float = 0.7
+    kb_rerank_degrade_floor: float = 0.3
+    kb_mmr_lambda: float = 0.7
+    kb_rerank_max_candidates: int = 200
     # PageIndex（方案 §5.1.1）：入库时从标题层级 / 表题 / 实施例标记构建文档目录树
     # （不调用 LLM），检索第二阶段在长文档上沿目录树做跨章节寻址。
     pageindex_enabled: bool = True
@@ -1210,6 +1251,28 @@ class Settings(BaseSettings):
                     "backend was removed (its migration tool went with it); "
                     "use the native default"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_relation_weight_coefficients(self) -> "Settings":
+        # 2.5：系数和不为 1 时 warning + 回默认值（不静默归一化，
+        # 避免配置笔误被悄悄改写成另一组权重）。
+        import logging as _logging
+
+        try:
+            total = float(self.kg_relation_pmi_weight) + float(
+                self.kg_relation_strength_weight
+            )
+        except (TypeError, ValueError):
+            total = 0.0
+        if abs(total - 1.0) > 1e-9:
+            _logging.getLogger(__name__).warning(
+                "kg_relation_pmi_weight + kg_relation_strength_weight = %r "
+                "(expected 1); falling back to 0.6/0.4",
+                total,
+            )
+            object.__setattr__(self, "kg_relation_pmi_weight", 0.6)
+            object.__setattr__(self, "kg_relation_strength_weight", 0.4)
         return self
 
     @model_validator(mode="after")

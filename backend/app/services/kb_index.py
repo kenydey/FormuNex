@@ -600,6 +600,10 @@ def prepare_chunk_rows(
                     "offset_end": c.offset_end,
                     "bbox": c.bbox,
                     "block_type": c.block_type,
+                    # 2.6 第一阶段：parent_key 只透传到 dict 层，
+                    # chunk_store 忽略未知键（不持久化、不报错），
+                    # 加 DB 列与进 dedup_key 另案决定。
+                    "parent_key": c.parent_key,
                     "meta": {"patent_tags": tags} if tags else None,
                 }
             )
@@ -1079,11 +1083,16 @@ def _chunk_to_evidence(chunk, source_meta: dict, score: float) -> Evidence:
     # Batch 2 (Q3=A): wiki evidence carries its compile source / original link
     # in url; the wiki label itself is source="wiki" (see is_wiki_evidence).
     wiki_url = meta.get("origin_url") if meta.get("source_kind") == "wiki" else None
+    # WeKnora 第一批 2.4 Phase A：唯一载体填充点。figure / image 块
+    # 的 identifier 即图像证据引用；其余类型保持默认值。
+    _is_image_block = getattr(chunk, "block_type", None) in ("figure", "image")
     return Evidence(
         source=meta.get("source_kind") or "kb",
         identifier=f"kb:{chunk.source_id}#c{chunk.ord}",
         title=title[:200],
         snippet=chunk_snippet(chunk.text),
+        image_refs=[f"kb:{chunk.source_id}#c{chunk.ord}"] if _is_image_block else [],
+        image_vector_match=bool(_is_image_block),
         # P2-1: 去掉 relevance 下限钳制（0.05 遗留自 RRF 时代，weighted 下抹平尾部区分度）
         relevance=max(0.0, min(1.0, round(score, 4))),
         page=int(page) if page is not None else None,
@@ -1387,11 +1396,27 @@ def rerank_evidence(query: str, evidence: list) -> list:
                 rerank_meta.get("reason"),
             )
         head_keys = {e.identifier or e.title for e in head}
-        tail = [
-            e
-            for e in evidence[batch:]
-            if (e.identifier or e.title) not in head_keys
-        ]
+        head_by_key = {}
+        for idx, e in enumerate(head):
+            head_by_key.setdefault(e.identifier or e.title, idx)
+        tail = []
+        # WeKnora 第一批 2.4：tail 按 head_keys 过滤时，被滤掉的 tail 项
+        # 若为图像证据，对 head 中同 key 的保留方继承；无对应保留方时
+        # 不复活（不凭空加回，避免 top-k 被继承规则撑大）。
+        inherit_on = bool(getattr(settings, "kb_image_inherit_enabled", True))
+        for e in evidence[batch:]:
+            key = e.identifier or e.title
+            if key not in head_keys:
+                tail.append(e)
+                continue
+            if inherit_on and key in head_by_key:
+                try:
+                    from .evidence_merge import inherit_image_evidence
+
+                    idx = head_by_key[key]
+                    head[idx] = inherit_image_evidence(head[idx], e)
+                except Exception:  # noqa: BLE001 - inherit failure never drops evidence
+                    logger.debug("rerank image inherit failed", exc_info=True)
         return head + tail
     except Exception as exc:
         return degrade_return(logger, exc, "kb rerank failed", list(evidence))
@@ -1706,6 +1731,48 @@ def retrieve_evidence(
             ),
             meta=meta,
         )
+    # WeKnora 第一批 2.3：问答门面的证据合并（stitch 之后，使 sibling
+    # 也进合并去重；search_chunks_hybrid 内部不接，避免扩散到
+    # recommend / research fuse 等非问答路径）。
+    if settings.kb_merge_enabled:
+        try:
+            from .evidence_merge import merge_evidence
+
+            _by_source: dict[str, dict[int, object]] = {}
+
+            def _neighbour_lookup(source_id: str, ord_no: int):
+                # spike 已确认：get_by_source 按 ord 排序返回；每源只查一次
+                # （源内 chunk 数有 kb_max_chunks_per_source 上限，可控）。
+                if source_id not in _by_source:
+                    try:
+                        from ..db.chunk_store import get_chunk_store
+
+                        rows = get_chunk_store().get_by_source(source_id)
+                        _by_source[source_id] = {int(r.ord): r for r in rows}
+                    except Exception:  # noqa: BLE001 - fail-open: that side is skipped
+                        _by_source[source_id] = {}
+                        return None
+                row = _by_source[source_id].get(int(ord_no))
+                if row is None:
+                    return None
+                # 2.4：第三元标明邻块是否为 figure / image 块，
+                # 扩展方据此继承邻块的图像引用。
+                return (
+                    chunk_snippet(row.text),
+                    f"kb:{source_id}#c{int(ord_no)}",
+                    getattr(row, "block_type", None) in ("figure", "image"),
+                )
+
+            evidence = merge_evidence(
+                evidence,
+                neighbour_lookup=_neighbour_lookup,
+                short_chars=int(settings.kb_merge_short_chars or 400),
+                max_chars=int(settings.kb_merge_max_chars or 4000),
+                overlap_chars=int(settings.kb_merge_overlap_chars or 500),
+                inherit_images=bool(getattr(settings, "kb_image_inherit_enabled", True)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            evidence = degrade_return(logger, exc, "kb evidence merge failed", evidence)
     return evidence
 
 

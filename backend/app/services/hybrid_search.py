@@ -369,6 +369,95 @@ def apply_wiki_weight(
     return out
 
 
+def apply_rerank_policy(
+    order: list[int],
+    combined: Any,
+    chunks: list,
+    *,
+    threshold: float = 0.2,
+    degrade_factor: float = 0.7,
+    degrade_floor: float = 0.3,
+    mmr_lambda: float = 0.7,
+    max_candidates: int = 200,
+    top_k: int = 10,
+    explicit_scope: bool = False,
+    scale: float = 1.0,
+) -> list[int]:
+    """WeKnora 第一批 2.2：纯分数重排策略层（阈值 + 降级 + 保底 + MMR）。
+
+    纯函数：不读 settings、不碰 DB。``order`` 须已按 combined 降序排好
+    （门禁之后）；返回的是 ``order`` 的子集 / 重排，不改任何分数口径。
+
+    关键：阈值作用于**按融合的理论上限归一化后**的 combined——
+    weighted 融合的理论上限约 1（BM25 已按最大值归一化、cosine 在 0–1），
+    RRF 融合的理论上限是 2 / (rrf_k + 1)（k=60 时约 0.0328，调用方
+    以 ``scale`` 传入）。阈值直接作用于原始值会在 RRF 路径下清空一切；
+    而除以 batch 最大值则会让最高分恒为 1.0，使降级与保底永远触发不了，
+    因此不用 batch 最大值归一化。
+    """
+    if not order or top_k <= 0:
+        return []
+    if not scale or scale <= 0:
+        scale = 1.0
+    norm = {i: float(combined[i]) / scale for i in order}
+    if max(norm.values()) <= 0.0:
+        return list(order)
+
+    def _filter(thr: float) -> list[int]:
+        return [i for i in order if norm[i] >= thr]
+
+    kept = _filter(threshold)
+    # 降级重试：逐级乘 degrade_factor，直到地板为止（最多 10 级防浮点死循环）。
+    thr = threshold
+    for _ in range(10):
+        if kept or thr <= degrade_floor:
+            break
+        thr = max(thr * degrade_factor, degrade_floor)
+        kept = _filter(thr)
+    if not kept and explicit_scope:
+        kept = [max(order, key=lambda i: norm[i])]
+    if not kept:
+        return []
+
+    pool = kept[: max(1, int(max_candidates))]
+    if len(pool) <= 1:
+        return pool
+
+    def _tokens(text: str) -> set[str]:
+        try:
+            return {t for t in _tokenize(text or "") if t}
+        except Exception:  # noqa: BLE001 - fail-open: tokenize failure = no overlap
+            return set()
+
+    token_sets = {i: _tokens(getattr(chunks[i], "text", "") or "") for i in pool}
+    selected: list[int] = []
+    remaining = list(pool)
+    while remaining and len(selected) < top_k:
+        best_i: int | None = None
+        best_val = float("-inf")
+        for i in remaining:
+            if selected:
+                sim = max(
+                    (
+                        len(token_sets[i] & token_sets[j])
+                        / len(token_sets[i] | token_sets[j])
+                        if (token_sets[i] | token_sets[j])
+                        else 0.0
+                    )
+                    for j in selected
+                )
+            else:
+                sim = 0.0
+            val = mmr_lambda * norm[i] - (1.0 - mmr_lambda) * sim
+            if val > best_val:
+                best_val = val
+                best_i = i
+        assert best_i is not None
+        selected.append(best_i)
+        remaining.remove(best_i)
+    return selected
+
+
 def hybrid_search_scored(
     query: str,
     top_k: int = 10,
@@ -376,6 +465,7 @@ def hybrid_search_scored(
     *,
     project_id: str | None = None,
     include_global: bool = True,
+    explicit_scope: bool = False,
 ) -> list[ScoredChunk]:
     """BM25 + vector hybrid retrieval with bm25/cosine/hybrid scores retained.
 
@@ -654,6 +744,7 @@ def hybrid_search_scored(
         order = [i for i in range(n) if float(combined[i]) > 0.0]
         order.sort(key=lambda i: float(combined[i]), reverse=True)
 
+        from_fallback = False
         if not order:
             # v7: fallback 按 token 交集大小排序（此前按全≤0 的 combined 排，无意义）。
             qtoks = set(_tokenize(query))
@@ -661,12 +752,35 @@ def hybrid_search_scored(
             _overlap = [(ov, i) for ov, i in _overlap if ov > 0]
             _overlap.sort(reverse=True)
             order = [i for _, i in _overlap]
+            from_fallback = True
 
         # Corpus quality gate (blocked origin_url / garbage / wiki) — shared by
         # Hub retrieval probe and recommend hybrid fuse. Fills top_k after drops.
         from .kb_retrieval_gate import gate_chunk_indices
 
         order = gate_chunk_indices(chunks, order, top_k=top_k)
+
+        # WeKnora 第一批 2.2：重排策略层。v7 fallback 路径旁路（不把已降级
+        # 路径再降级一遍）；策略层异常 fail-open 回门禁后原 order。
+        if getattr(settings, "kb_rerank_enabled", True) and not from_fallback:
+            try:
+                # RRF 理论上限 2 / (k + 1)，k=60；weighted 理论上限约 1。
+                _scale = (2.0 / 61.0) if fusion == "rrf" else 1.0
+                order = apply_rerank_policy(
+                    order,
+                    combined,
+                    chunks,
+                    threshold=float(settings.kb_rerank_threshold),
+                    degrade_factor=float(settings.kb_rerank_degrade_factor),
+                    degrade_floor=float(settings.kb_rerank_degrade_floor),
+                    mmr_lambda=float(settings.kb_mmr_lambda),
+                    max_candidates=int(settings.kb_rerank_max_candidates),
+                    top_k=top_k,
+                    explicit_scope=bool(explicit_scope),
+                    scale=_scale,
+                )
+            except Exception:  # noqa: BLE001 - fail-open: policy never blocks retrieval
+                logger.debug("hybrid rerank policy skipped (fail-open)", exc_info=True)
 
         return [
             ScoredChunk(

@@ -489,6 +489,27 @@ def close() -> None:
 
 # ---- Relationship helpers ----
 
+# WeKnora 第一批 2.5 B 线：Cypher 关系类型白名单。Neo4j Python 驱动
+# 不支持关系类型参数化，唯一正确做法是白名单后才拼进查询；白名单外
+# 一律拒绝、绝不拼进查询（安全项，不随功能开关回滚）。
+# 清单 = SQLite 实体图谱的语义 + 结构类型（大小写两种形态，调用方
+# 既有小写 link_type、也有大写材料图谱类型）+ 材料图谱已用类型。
+from ..db.entity_store import EXTRACTED_LINK_TYPES as _EXTRACTED_LINK_TYPES
+
+NEO4J_REL_TYPE_ALLOWLIST: frozenset = frozenset(
+    set(_EXTRACTED_LINK_TYPES)
+    | {t.upper() for t in _EXTRACTED_LINK_TYPES}
+    | {"INHIBITS", "SYNERGIZES"}
+)
+
+
+def _check_rel_type(rel_type: str) -> bool:
+    if rel_type in NEO4J_REL_TYPE_ALLOWLIST:
+        return True
+    logger.warning("neo4j rel_type rejected (not in allowlist): %r", rel_type)
+    return False
+
+
 def upsert_relationship(
     src_uid: str,
     dst_uid: str,
@@ -497,10 +518,15 @@ def upsert_relationship(
     confidence: Optional[float] = None,
     evidence: Optional[str] = None,
     extraction_method: Optional[str] = None,
+    weight: Optional[float] = None,
 ) -> bool:
     """Create or update a relationship between two entities by their uid.
     rel_type should be like 'INHIBITS', 'SYNERGIZES', etc.
+    weight is the Neo4j-side stored weight (defaults to confidence when
+    omitted); it is NOT the SQLite query-time PMI weight (2.5 A 线).
     """
+    if not _check_rel_type(rel_type):
+        return False
     drv = _get_driver()
     if drv is None:
         return False
@@ -513,6 +539,7 @@ def upsert_relationship(
                 SET r.confidence = $confidence,
                     r.evidence = $evidence,
                     r.extraction_method = $extraction_method,
+                    r.weight = $weight,
                     r.updated_at = datetime()
                 """.replace("REL_TYPE", rel_type),
                 src_uid=src_uid,
@@ -520,6 +547,7 @@ def upsert_relationship(
                 confidence=confidence,
                 evidence=evidence,
                 extraction_method=extraction_method,
+                weight=confidence if weight is None else weight,
             )
         return True
     except Exception as e:
@@ -532,7 +560,10 @@ def get_relation_by_name(
     dst_name: str,
     rel_type: str,
 ) -> Optional[Dict[str, Any]]:
-    """Return a dict with keys confidence, evidence, extraction_method if relation exists."""
+    """Return a dict with keys confidence, evidence, extraction_method, weight
+    if relation exists (weight is None for legacy relations without it)."""
+    if not _check_rel_type(rel_type):
+        return None
     drv = _get_driver()
     if drv is None:
         return None
@@ -541,16 +572,21 @@ def get_relation_by_name(
             row = s.run(
                 """
                 MATCH (a:Compound {name: $src_name})-[r:REL_TYPE]->(b:Compound {name: $dst_name})
-                RETURN r.confidence AS confidence, r.evidence AS evidence, r.extraction_method AS extraction_method
+                RETURN r.confidence AS confidence, r.evidence AS evidence, r.extraction_method AS extraction_method, r.weight AS weight
                 """.replace("REL_TYPE", rel_type),
                 src_name=src_name,
                 dst_name=dst_name,
             ).single()
             if row:
+                try:
+                    w = row["weight"]
+                except Exception:  # noqa: BLE001 - legacy relation without weight
+                    w = None
                 return {
                     "confidence": row["confidence"],
                     "evidence": row["evidence"],
                     "extraction_method": row["extraction_method"],
+                    "weight": w,
                 }
             return None
     except Exception as e:

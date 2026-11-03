@@ -226,14 +226,30 @@ def _apply_caps(
     llm_cap: int,
     max_sources: int,
     trade_only: bool,
+    inherit_enabled: bool | None = None,
 ) -> tuple[list[tuple[Evidence, str]], int, bool]:
-    seen_id: set[str] = set()
+    # WeKnora 第一批 2.4：inherit_enabled=None 时读 settings（生产调用
+    # 不传参即走开关）；直接调用的测试可显式传 True / False。
+    if inherit_enabled is None:
+        try:
+            inherit_enabled = bool(get_settings().kb_image_inherit_enabled)
+        except Exception:  # noqa: BLE001 - fail-open: inherit off, caps unchanged
+            inherit_enabled = False
+    from ..evidence_merge import inherit_image_evidence
+
+    seen_id: dict[str, int] = {}
     deduped: list[tuple[float, Evidence, str]] = []
     for score, ev, cid in sorted(pool, key=lambda x: x[0], reverse=True):
         key = ev.identifier or cid
         if key in seen_id:
+            # 2.4：按 identifier 去重丢弃时，保留方继承丢弃方的图像证据
+            # （排序不变，继承发生在丢弃那一刻）。
+            if inherit_enabled:
+                idx = seen_id[key]
+                s0, kept, c0 = deduped[idx]
+                deduped[idx] = (s0, inherit_image_evidence(kept, ev), c0)
             continue
-        seen_id.add(key)
+        seen_id[key] = len(deduped)
         deduped.append((score, ev, cid))
 
     by_source: dict[str, list[tuple[float, Evidence, str]]] = defaultdict(list)
@@ -263,6 +279,24 @@ def _apply_caps(
                 del by_source[sid]
         if not progressed:
             break
+
+    # 2.4 TopKKeepingKept：kept_by 非空项不计入 llm_cap 的轮询截断——
+    # 轮询结束后，把剩余桶里 kept_by 非空的项 append 到 ranked 组之后；
+    # kept 组同样受 max_sources 约束（新源只有在名额内才进）。
+    if inherit_enabled:
+        leftovers = sorted(
+            (item for bucket in by_source.values() for item in bucket),
+            key=lambda x: x[0],
+            reverse=True,
+        )
+        for _score, ev, cid in leftovers:
+            if not getattr(ev, "kept_by", None):
+                continue
+            sid = ev.source or "local"
+            if sid not in sources_used and len(sources_used) >= max_sources:
+                continue
+            final.append((ev, cid))
+            sources_used.add(sid)
 
     return final, len(deduped), truncated
 
