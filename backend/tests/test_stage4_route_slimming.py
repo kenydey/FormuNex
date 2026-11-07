@@ -113,10 +113,18 @@ def test_route_line_caps():
     # the cap moves with it for the same reason.
     # 5-7 / SR-046 added the docx structure helper plus capped reads
     # (23 lines); the cap moves with it for the same reason.
+    # Deep-review fixes (2026-11-04, approved items only: P0-5 hazard
+    # validator, P1-C1 lock endpoint, owner pass-through) added 67 lines;
+    # cap raised 2031 -> 2098 on Cheng's 2026-11-05 decision.
+    # P3-A3 (same batch) added a 9-line docstring to plm_ws.py
+    # (WS ?token= exception); cap raised 191 -> 200 on Cheng's
+    # 2026-11-07 decision. Both caps were masked behind each other:
+    # the test stops at the first overrun, so plm_ws.py only surfaced
+    # once plm.py was back under its cap.
     caps = {
         "api/chat.py": 146,
-        "api/plm.py": 2031,
-        "api/plm_ws.py": 191,
+        "api/plm.py": 2098,
+        "api/plm_ws.py": 200,
     }
     for rel, cap in caps.items():
         n = len((ROOT / rel).read_text(encoding="utf-8").splitlines())
