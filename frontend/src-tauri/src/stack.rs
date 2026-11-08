@@ -153,10 +153,8 @@ pub fn backup(files: &StackFiles, docker: &Docker, label: &str) -> Result<Backup
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let suffix: String = label.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
     // P2-E19: two backups in the same second used to overwrite each other.
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
+    let nanos =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
     let name = if suffix.is_empty() {
         format!("formunex-{stamp}-{}-{nanos}.dump", std::process::id())
     } else {

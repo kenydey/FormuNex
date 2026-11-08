@@ -1,6 +1,5 @@
 import { message } from "antd";
 import { isDesktop } from "@/desktop/bridge";
-import { errorText } from "./feedback";
 
 /**
  * Save a file the user asked for. Browser: a download. Desktop: the native "Save as" dialog, then the bytes
@@ -27,6 +26,7 @@ export async function saveBlob(blob: Blob, filename: string): Promise<boolean> {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
     return true;
   } catch (e) {
+    const { errorText } = await import("./feedback");
     message.error(`保存失败：${errorText(e)}`);
     return false;
   }

@@ -162,8 +162,10 @@ where
 
 #[tauri::command]
 pub async fn stack_up(app: AppHandle) -> Result<()> {
-    streamed(app, true, |_, docker, emit| docker.run_streaming(&docker.compose_args(&["up", "-d", "--remove-orphans"]), emit))
-        .await
+    streamed(app, true, |_, docker, emit| {
+        docker.run_streaming(&docker.compose_args(&["up", "-d", "--remove-orphans"]), emit)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -178,8 +180,10 @@ pub async fn stack_restart(app: AppHandle) -> Result<()> {
 
 #[tauri::command]
 pub async fn stack_pull(app: AppHandle) -> Result<()> {
-    streamed(app, false, |_, docker, emit| docker.run_streaming(&docker.compose_args(&["pull", "--ignore-buildable"]), emit))
-        .await
+    streamed(app, false, |_, docker, emit| {
+        docker.run_streaming(&docker.compose_args(&["pull", "--ignore-buildable"]), emit)
+    })
+    .await
 }
 
 /// Offline install: `docker load -i formunex-images.tar` (方案 §2.2).

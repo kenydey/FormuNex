@@ -12,8 +12,7 @@ pub const ADMIN_PASSWORD: &str = "admin-password";
 /// P3-E12: a refresh entry must name a real http(s) origin — the old
 /// `starts_with("http")` also accepted `httpx://…` and `httpfoo`.
 fn allowed_read_key(key: &str) -> bool {
-    key.strip_prefix("refresh:")
-        .is_some_and(|base| base.starts_with("http://") || base.starts_with("https://"))
+    key.strip_prefix("refresh:").is_some_and(|base| base.starts_with("http://") || base.starts_with("https://"))
 }
 
 fn allowed_write_key(key: &str) -> bool {

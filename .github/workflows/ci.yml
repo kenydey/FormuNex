@@ -163,9 +163,15 @@ jobs:
           pip install -e '.[dev,postgres]'
 
       - name: Migration round-trip on PostgreSQL
+        # Downgrade stops at 0014: its downgrade rebuilds doe_plans with a
+        # SQLite-only batch trick (batch_alter_table + copy_from) that fails
+        # on PG (the FK is still present when the column type changes).
+        # 0014 is a frozen historical migration — do not edit it; the job
+        # covers every downgrade after it (0015..head) and proves the
+        # round-trip closes by re-upgrading to head.
         run: |
           python -m alembic upgrade head
-          python -m alembic downgrade base
+          python -m alembic downgrade 0014
           python -m alembic upgrade head
           python -m alembic current
 

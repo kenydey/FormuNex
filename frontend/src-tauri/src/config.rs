@@ -92,7 +92,10 @@ impl DesktopConfig {
             return Err(DesktopError::Config("镜像与版本不能为空".into()));
         }
         if !valid_image(&self.image) {
-            return Err(DesktopError::Config(format!("镜像名 “{}” 不合法（应为小写仓库路径，不含 tag，tag 在版本字段）", self.image)));
+            return Err(DesktopError::Config(format!(
+                "镜像名 “{}” 不合法（应为小写仓库路径，不含 tag，tag 在版本字段）",
+                self.image
+            )));
         }
         if !valid_tag(&self.version) {
             return Err(DesktopError::Config(format!("镜像版本 “{}” 不合法", self.version)));
