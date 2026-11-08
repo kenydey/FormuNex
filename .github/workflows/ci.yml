@@ -119,6 +119,56 @@ jobs:
         # No LLM cost; fails the build if rigor metrics regress.
         run: python scripts/rigor_gate.py
 
+  # P2-6: PostgreSQL is the deployment target (D-9) but no CI job ever ran
+  # migrations against it — the postgresql_where partial indexes, the 0058
+  # PG extension branch and the 0089 FK were SQLite-only verified. This job
+  # runs only the migration round-trip (upgrade head, downgrade base,
+  # upgrade head) against a real PG service: no test suite, so it stays fast
+  # and its failures point at migrations, not tests.
+  backend-pg-migration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: formunex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      FORMUNEX_DB_URL: postgresql://postgres:postgres@localhost:5432/formunex_ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e '.[dev,postgres]'
+
+      - name: Migration round-trip on PostgreSQL
+        run: |
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+          python -m alembic current
+
   # The installers prefer 3.11, then 3.12, then 3.13 - so a user who does not have 3.11 lands on a version this
   # repository only ever ran by hand (4440 tests pass on both as of round 4). Non-blocking, like the other jobs that
   # track what upstream wheels do: new Pythons break compiled dependencies before they break our code.

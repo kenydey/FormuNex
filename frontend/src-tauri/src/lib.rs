@@ -15,34 +15,28 @@ use tauri::{Emitter, Manager};
 pub const DEEP_LINK_EVENT: &str = "deep-link://open";
 
 /// `formunex://plm/packages/42?x=1` → `/plm/packages/42?x=1`; anything else → `None`.
+/// P3-E11: segments are folded by splitting (the old single-pass
+/// `replace("//", "/")` left `///` as `//`), an empty query adds no
+/// `?`, and the host is the first route segment — a port has no meaning
+/// in a route, so it is dropped, matching the TS side (`hostname`).
 pub fn deep_link_route(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     if parsed.scheme() != "formunex" {
         return None;
     }
-    let mut path = String::from("/");
+    let mut segments: Vec<&str> = Vec::new();
     if let Some(host) = parsed.host_str() {
-        path.push_str(host);
+        segments.push(host);
     }
-    path.push_str(parsed.path().trim_end_matches('/'));
-    let path = path.replace("//", "/");
+    segments.extend(parsed.path().split('/').filter(|s| !s.is_empty()));
+    let path = format!("/{}", segments.join("/"));
     if path.contains("..") {
         return None;
     }
-    Some(match parsed.query() {
+    Some(match parsed.query().filter(|q| !q.is_empty()) {
         Some(q) => format!("{path}?{q}"),
         None => path,
     })
-}
-
-fn updater_configured(app: &tauri::App) -> bool {
-    app.config()
-        .plugins
-        .0
-        .get("updater")
-        .and_then(|u| u.get("pubkey"))
-        .and_then(|k| k.as_str())
-        .is_some_and(|k| !k.trim().is_empty())
 }
 
 pub fn run() {
@@ -69,7 +63,7 @@ pub fn run() {
             let state = commands::AppState::new(app.handle())?;
             app.manage(state);
             // Signed shell updates only when a public key was configured at build time (tauri.conf / CI).
-            if updater_configured(app) {
+            if commands::updater_configured(app.handle()) {
                 app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             }
             #[cfg(any(windows, target_os = "linux"))]
@@ -99,6 +93,8 @@ pub fn run() {
             commands::keychain_get,
             commands::keychain_set,
             commands::keychain_delete,
+            commands::reset_config,
+            commands::updater_configured,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FormuNex");
@@ -117,5 +113,9 @@ mod tests {
         // dot segments are resolved by the URL parser and cannot climb out of the app routes
         assert_eq!(deep_link_route("formunex://a/../../etc").as_deref(), Some("/a/etc"));
         assert_eq!(deep_link_route("--flag"), None);
+        // P3-E11: repeated slashes fold, an empty query adds no "?".
+        assert_eq!(deep_link_route("formunex://plm///packages//42").as_deref(), Some("/plm/packages/42"));
+        assert_eq!(deep_link_route("formunex://dashboard?").as_deref(), Some("/dashboard"));
+        assert_eq!(deep_link_route("formunex://plm:8080/packages").as_deref(), Some("/plm/packages"));
     }
 }

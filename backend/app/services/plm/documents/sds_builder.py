@@ -107,7 +107,15 @@ class SdsContext:
 
 
 def _cls_name(hazard_class: str, lang: str) -> str:
-    return HAZARD_CLASS_EN.get(hazard_class, hazard_class) if lang == "en-US" else BY_CODE[hazard_class].names[0]
+    # P0 fix (2026-11-04 deep review): the Chinese path indexed BY_CODE
+    # directly and raised KeyError on an unknown class, crashing the whole
+    # SDS build, while the English path already fell back to the raw code.
+    # Unknown classes now print verbatim on both paths; the API layer
+    # (HazardIn validator) rejects them with 422 at entry.
+    if lang == "en-US":
+        return HAZARD_CLASS_EN.get(hazard_class, hazard_class)
+    entry = BY_CODE.get(hazard_class)
+    return entry.names[0] if entry is not None else hazard_class
 
 
 def _cat(category: str, lang: str) -> str:
@@ -142,6 +150,10 @@ def _has(cls: dict, hazard_class: str, categories: tuple[str, ...] | None = None
 def build_sds(ctx: SdsContext) -> dict:
     lang = ctx.lang
     cls = ctx.classification
+    # P1-C9: classification-basis wording follows the regulation, never a
+    # hardcoded GB citation on EU/US documents.
+    std_zh = "GB 30000 系列标准" if ctx.regulation == "CN" else ctx.regulation_standard
+    std_en = "GB 30000" if ctx.regulation == "CN" else ctx.regulation_standard
     nd = NO_DATA[lang]
     product_name = ctx.product.get("name_en" if lang == "en-US" else "name_zh") or ctx.product.get("name_zh")
     doc = DocumentContent(
@@ -149,7 +161,8 @@ def build_sds(ctx: SdsContext) -> dict:
         title=t(lang, "化学品安全技术说明书", "Safety Data Sheet"),
         header={"product_name": product_name, "product_code": ctx.product.get("code"),
                 "version": ctx.revision.get("version"), "revision_date": ctx.revision.get("date"),
-                "standard": "GB/T 16483-2008, GB/T 17519-2013"},
+                "standard": ("GB/T 16483-2008, GB/T 17519-2013" if ctx.regulation == "CN"
+                             else ctx.regulation_standard)},
         meta={"rule_set_version": cls.get("rule_set_version"), "inputs_hash": cls.get("inputs_hash"),
               "template_sections": [4, 5, 6, 7, 10, 13],
               # P1-1: rule-set version and substance-data version side by
@@ -185,7 +198,7 @@ def build_sds(ctx: SdsContext) -> dict:
                + (f"（{h['effect']}）" if h.get("effect") else "") for h in hazards], "computed")
     else:
         s.add("classification", t(lang, "GHS 危险性类别", "GHS classification"),
-              t(lang, "根据 GB 30000 系列标准，不分类", "Not classified according to GB 30000"), "computed")
+              t(lang, f"根据 {std_zh}，不分类", f"Not classified according to {std_en}"), "computed")
     s.add("pictograms", t(lang, "象形图", "Pictograms"), [p["code"] for p in cls.get("pictograms", [])], "computed")
     s.add("signal_word", t(lang, "信号词", "Signal word"),
           {"危险": t(lang, "危险", "Danger"), "警告": t(lang, "警告", "Warning")}.get(cls.get("signal_word") or "", "—"),
@@ -211,9 +224,9 @@ def build_sds(ctx: SdsContext) -> dict:
     rows = []
     for c in ctx.components:
         secret = bool(c.get("trade_secret"))
-        name = (c.get("generic_name") or c["name"]) if secret else c["name"]
+        name = (c.get("generic_name") or "—") if secret else c["name"]
         if secret and not c.get("generic_name"):
-            doc.warnings.append(f"商业机密组分 {c['name']} 未提供通用化学名，SDS 中暂用原名")
+            doc.warnings.append(f"商业机密组分 {c['name']} 未提供通用化学名，SDS 中以占位符表示（服务层生成路径应阻断并要求提供通用名）")
         rows.append([name, "—" if secret and c.get("withhold_cas") else (c.get("cas") or "—"),
                      disclose(c["pct"], trade_secret=secret, edges=ctx.band_edges),
                      "；".join(f"{_cls_name(h['hazard_class'], lang)} {_cat(h['category'], lang)}" for h in c["hazards"])])
@@ -317,12 +330,19 @@ def build_sds(ctx: SdsContext) -> dict:
     # 8 ------------------------------------------------------------------------------------------------
     s = S["exposure_controls"]
     oel_rows = []
-    for c in ctx.components:
-        lim = ctx.oel.get(c.get("cas") or "")
-        if lim:
-            oel_rows.append([c.get("generic_name") if c.get("trade_secret") else c["name"], c.get("cas") or "—",
-                             lim.get("mac") or "—", lim.get("pc_twa") or "—", lim.get("pc_stel") or "—"])
-    if oel_rows:
+    if ctx.regulation == "CN":
+        for c in ctx.components:
+            lim = ctx.oel.get(c.get("cas") or "")
+            if lim:
+                oel_rows.append([(c.get("generic_name") or "—") if c.get("trade_secret") else c["name"],
+                                 "—" if (c.get("trade_secret") and c.get("withhold_cas")) else (c.get("cas") or "—"),
+                                 lim.get("mac") or "—", lim.get("pc_twa") or "—", lim.get("pc_stel") or "—"])
+    if ctx.regulation != "CN":
+        # GBZ rows are China-jurisdiction data: never render them as another
+        # regulation's limits. Exact non-CN wording is pending EHS sign-off.
+        s.add("oel", t(lang, "职业接触限值", "Occupational exposure limits"),
+              t(lang, "无对应辖区职业接触限值数据。", "No occupational exposure limit data for this jurisdiction."), "computed")
+    elif oel_rows:
         s.table("oel", [t(lang, "组分", "Component"), "CAS No.", "MAC (mg/m³)", "PC-TWA (mg/m³)", "PC-STEL (mg/m³)"],
                 oel_rows, "computed")
         s.paragraphs.append(t(lang, "职业接触限值依据 GBZ 2.1-2019。", "Occupational exposure limits per GBZ 2.1-2019."))
@@ -357,7 +377,10 @@ def build_sds(ctx: SdsContext) -> dict:
         rows.append([t(lang, zh, en), shown, p.get("method") or "", p.get("source") or ("" if value is None else "manual")])
     s.table("properties", [t(lang, "项目", "Property"), t(lang, "数值", "Value"), t(lang, "方法", "Method"),
                            t(lang, "来源", "Source")], rows, "measured")
-    if not (ctx.properties.get("flash_point_c") or {}).get("value") and flammable:
+    # P3-C6: 闪点 0.0 ℃ 是合法值 —— 旧的 not ...get("value") 把它
+    # 当缺失报警告。缺失只认 value is None（空字符串沿用 §9 表格的
+    # nd 展示口径，不在此处报缺失）。
+    if (ctx.properties.get("flash_point_c") or {}).get("value") is None and flammable:
         doc.warnings.append("易燃液体分类结果存在，但第 9 节缺少闪点")
 
     # 10 -----------------------------------------------------------------------------------------------
@@ -374,7 +397,8 @@ def build_sds(ctx: SdsContext) -> dict:
 
     # 11 -----------------------------------------------------------------------------------------------
     s = S["toxicology"]
-    health = [h for h in hazards if BY_CODE[h["hazard_class"]].kind == "health"]
+    health = [h for h in hazards
+              if (entry := BY_CODE.get(h["hazard_class"])) is not None and entry.kind == "health"]
     for tr in cls.get("trace", []):
         if tr["hazard_class"].startswith("acute_tox_") and "ate_mix" in (tr.get("numbers") or {}):
             n = tr["numbers"]
@@ -401,8 +425,8 @@ def build_sds(ctx: SdsContext) -> dict:
           [f"{_cls_name(h['hazard_class'], lang)}，{_cat(h['category'], lang)}" for h in health]
           or t(lang, "根据组分数据计算，健康危害不分类。", "Not classified for health hazards (calculation method)."),
           "computed")
-    s.paragraphs.append(t(lang, "上述结果按 GB 30000 系列标准的混合物计算方法得出；未进行混合物整体毒理试验。",
-                          "Results derived with the GB 30000 calculation method; the mixture as a whole was not tested."))
+    s.paragraphs.append(t(lang, f"上述结果按 {std_zh}的混合物计算方法得出；未进行混合物整体毒理试验。",
+                          f"Results derived with the {std_en} calculation method; the mixture as a whole was not tested."))
 
     # 12 -----------------------------------------------------------------------------------------------
     s = S["ecology"]
@@ -471,6 +495,12 @@ def build_sds(ctx: SdsContext) -> dict:
         s.add("marine_pollutant", t(lang, "海洋污染物", "Marine pollutant"),
               t(lang, "是", "Yes") if tr.get("marine_pollutant") else t(lang, "否", "No"), "computed")
         doc.warnings.append("运输分类由系统推导，须由法规专员确认后发布（GB 6944 / GB 12268）")
+        # P2-C10: action-required transport notes (e.g. a single-substance
+        # entry whose class disagrees with the derived class) must surface
+        # as document warnings instead of being silently dropped.
+        for n in tr.get("notes", []):
+            if "不一致" in n or "需人工" in n:
+                doc.warnings.append(f"运输：{n}")
     else:
         s.add("un_number", t(lang, "联合国危险货物编号（UN 号）", "UN number"),
               t(lang, "不受危险货物运输法规管制", "Not regulated for transport"), "computed")

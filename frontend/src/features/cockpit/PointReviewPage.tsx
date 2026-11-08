@@ -80,7 +80,7 @@ export default function PointReviewPage() {
   const factorNames = Array.from(new Set(runs.flatMap((r) => Object.keys(r.natural ?? {}))));
 
   return (
-    <PageContainer subTitle={t("review.sub", "逐点采纳 / 修改因子 / 驳回；驳回的点保留记录但不进入有效点")}>
+    <PageContainer subTitle={t("review.sub_point", "逐点采纳 / 修改因子 / 驳回；驳回的点保留记录但不进入有效点")}>
       <ProCard bordered>
         <Space wrap>
           <Select allowClear style={{ width: 360 }} placeholder={t("review.plan", "DOE 计划")} value={planId} onChange={setPlanId}
@@ -101,7 +101,7 @@ export default function PointReviewPage() {
             { title: t("review.decision", "审核"), render: (_v: unknown, r: DoeRun) => (
               <Select style={{ width: 120 }} allowClear placeholder={t("review.pending", "待审核")}
                 value={edits[r.run_id]?.decision}
-                options={[{ value: "accept", label: t("review.accept", "采纳") }, { value: "modify", label: t("review.modify", "修改") }, { value: "reject", label: t("review.reject", "驳回") }]}
+                options={[{ value: "accept", label: t("review.accept_one", "采纳") }, { value: "modify", label: t("review.modify", "修改") }, { value: "reject", label: t("review.reject_one", "驳回") }]}
                 onChange={(v) => setEdits((e) => ({ ...e, [r.run_id]: { decision: v as Decision | undefined, note: e[r.run_id]?.note ?? "", factors: e[r.run_id]?.factors ?? { ...(r.natural ?? {}) } } }))} />
             ) },
             { title: t("review.modify_factors", "修改后因子（仅修改时）"), render: (_v: unknown, r: DoeRun) => {

@@ -306,6 +306,7 @@ def test_deepseek_text_model_is_rejected_with_vision_hint():
     try:
         ok, hint = vision_available()
         assert not ok
-        assert "deepseek-v4-flash-vision-exp" in hint
+        # P2-B2: the retired -exp name was replaced by the GA deepseek-flash name in the hint.
+        assert "deepseek-flash" in hint
     finally:
         rs.clear()

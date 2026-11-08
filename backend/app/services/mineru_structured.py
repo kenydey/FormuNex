@@ -134,6 +134,12 @@ def formula_gatekeeper(structured: MinerUStructured) -> GatekeeperReport:
                 continue
             if _FORMULA_INLINE_RE.search(b.text or ""):
                 catches += 1
+        # P1-B9 (explicit): regex_catches is count-only by design. These are
+        # *text* blocks MinerU did not mark as formulas, not empty-latex
+        # formula blocks — routing them through _llm_fix_formulas would set
+        # latex on blocks the `formulas` property never surfaces, i.e.
+        # wasted LLM calls with no effect. The count feeds gatekeeper_stats
+        # for operators to judge whether MFR coverage needs attention.
         if catches:
             report.regex_catches = catches
             _bump("regex_catch", catches)
@@ -169,6 +175,11 @@ def _llm_fix_formulas(
         return 0
     fixed = 0
     for b in empty:
+        # P1-B9: a formula block with no text at all gives the LLM nothing
+        # to normalise — skip it instead of burning a call on an empty
+        # prompt (it stays counted in empty_latex_blocks).
+        if not (b.text or "").strip():
+            continue
         prompt = (
             "下面是一段从化学文献/专利 PDF 中提取的公式区域文本，OCR 可能有乱码。"
             "请输出规范化的 LaTeX（行内公式）或 SMILES（分子式），只输出结果本身，"
@@ -247,6 +258,11 @@ _KIND_TO_BLOCK = {
 def _normalise_blocks(document) -> list[StructuredBlock]:
     blocks: list[StructuredBlock] = []
     for raw in document.blocks:
+        # P2-B10: page furniture is discarded by the hybrid path (_DISCARD)
+        # and must not re-enter here as prose — a footer repeated on every
+        # page would otherwise dilute every chunk it lands in.
+        if (raw.type or "").lower() in ("header", "footer", "page_number"):
+            continue
         kind = _KIND_TO_BLOCK.get((raw.type or "").lower(), "text")
         text = raw.text or ""
         latex = ""
@@ -453,22 +469,32 @@ def render_markdown(blocks: list[StructuredBlock]) -> str:
     out: list[str] = []
     last_page: int | None = None
     for b in blocks:
+        if b.kind == "table":
+            md_table = _html_table_to_markdown(b.html)
+            body = md_table or b.text
+            parts = ([f"表注：{b.caption}"] if b.caption else []) + (
+                [body] if body.strip() else []
+            )
+        elif b.kind == "formula":
+            body = b.latex or b.text
+            parts = [body] if body.strip() else []
+        elif b.kind in ("figure", "image"):
+            # P2-B10: the structured path runs no vision model, so say so
+            # on the marker — otherwise a downstream reader cannot tell a
+            # looked-at figure from an unlooked-at one.
+            parts = [f"[图：{b.caption or '见原文插图'}，未做视觉解析]"]
+        else:
+            parts = [b.text] if b.text.strip() else []
+        # P2-B10: an empty block emits no page/block markers either. The
+        # old code appended markers first and filtered only empty bodies,
+        # so empty blocks left marker-only lines in the output.
+        if not parts:
+            continue
         if b.page_no != last_page:
             out.append(page_marker(b.page_no or 1))
             last_page = b.page_no
         out.append(block_marker(b.kind))
-        if b.kind == "table":
-            md_table = _html_table_to_markdown(b.html)
-            body = md_table or b.text
-            if b.caption:
-                out.append(f"表注：{b.caption}")
-            out.append(body)
-        elif b.kind == "formula":
-            out.append(b.latex or b.text)
-        elif b.kind in ("figure", "image"):
-            out.append(f"[图：{b.caption or '见原文插图'}]")
-        else:
-            out.append(b.text)
+        out.extend(parts)
     return "\n\n".join(p for p in out if p.strip())
 
 

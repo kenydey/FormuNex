@@ -105,7 +105,11 @@ def red_line_hits(built: BuiltInputs, items: list[dict[str, Any]], red: RedLines
     hits: list[dict[str, Any]] = []
     by_cas: dict[str, float] = {}
     rows_by_cas: dict[str, set[int]] = {}
-    for comp, origin in zip(built.components, built.origins, strict=False):
+    # P3-C21: strict zip — build_components pads built.origins after
+    # every item, so the two lists are equal by construction; a length
+    # mismatch here means a broken BuiltInputs, and silently truncating
+    # would misattribute rows. Fail loud instead of truncating.
+    for comp, origin in zip(built.components, built.origins, strict=True):
         if comp.cas:
             by_cas[comp.cas] = by_cas.get(comp.cas, 0.0) + comp.pct
             rows_by_cas.setdefault(comp.cas, set()).add(origin)

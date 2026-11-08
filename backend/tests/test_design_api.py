@@ -36,7 +36,7 @@ def test_inverse_accepts_valid_body(monkeypatch):
         return JSONResponse(content={"task_id": "fake", "kind": kind}, status_code=202)
 
     monkeypatch.setattr("app.api.design.submit", fake_submit)
-    monkeypatch.setattr("app.api.design.enqueue_outbox", lambda op, payload: "outbox-1")
+    monkeypatch.setattr("app.api.design.enqueue_outbox", lambda op, payload, **kw: "outbox-1")
     r = client.post("/api/design/inverse", json=_body())
     assert r.status_code == 202
     assert captured["kind"] == "inverse_design"
@@ -75,7 +75,7 @@ def test_inverse_requires_requirement():
 
 def test_inverse_broker_down_503(monkeypatch):
     monkeypatch.setattr("app.services.dispatch.broker_reachable", lambda: False)
-    monkeypatch.setattr("app.api.design.enqueue_outbox", lambda op, payload: None)
+    monkeypatch.setattr("app.api.design.enqueue_outbox", lambda op, payload, **kw: None)
     r = client.post("/api/design/inverse", json=_body())
     assert r.status_code == 503
     assert "Redis" in r.text

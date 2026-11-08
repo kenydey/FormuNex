@@ -7,7 +7,7 @@ hazard-class wording to the stable codes the GHS engine uses, and rejects
 rows it cannot map rather than storing a wrong classification.
 
 Acute toxicity is special: Annex VI gives the class as "Acute Tox." and the
-route lives in the H-code (H30x oral, H31x dermal, H32x inhalation), so an
+route lives in the H-code (H30x oral, H31x dermal, H33x inhalation), so an
 Acute Tox. row without a routable H-code is rejected.
 """
 
@@ -55,7 +55,7 @@ CLP_CLASS_MAP: dict[str, str] = {
 _ACUTE_ROUTE_BY_H: dict[str, str] = {
     **{f"H30{i}": "acute_tox_oral" for i in (0, 1, 2)},
     **{f"H31{i}": "acute_tox_dermal" for i in (0, 1, 2)},
-    **{f"H32{i}": "acute_tox_inhal" for i in (0, 1, 2)},
+    **{f"H33{i}": "acute_tox_inhal" for i in (0, 1, 2)},
 }
 
 

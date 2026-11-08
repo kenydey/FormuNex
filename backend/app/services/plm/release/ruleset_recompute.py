@@ -63,8 +63,12 @@ def _summarize(result: dict[str, Any]) -> dict[str, Any]:
 
 def _citing_documents(session: Session, classification_id: str) -> list[dict[str, Any]]:
     """Documents whose stored meta cites this classification row."""
-    out = []
     rows = session.execute(select(RegulatoryDocumentRow)).scalars().all()
+    return _citing_from_rows(rows, classification_id)
+
+
+def _citing_from_rows(rows: list, classification_id: str) -> list[dict[str, Any]]:
+    out = []
     for d in rows:
         meta = (d.content or {}).get("meta") or {}
         if meta.get("classification_id") == classification_id:
@@ -85,6 +89,9 @@ def find_affected_products(session: Session, version: str) -> list[dict[str, Any
     rows = session.execute(
         select(ClassificationResultRow).where(ClassificationResultRow.rule_set_version != version)
     ).scalars().all()
+    # P2-C5: load the document table once and index it by classification_id
+    # instead of re-scanning it for every classification row.
+    all_docs = session.execute(select(RegulatoryDocumentRow)).scalars().all()
     by_product: dict[str, dict[str, Any]] = {}
     for row in rows:
         product_id, product_name, revision = None, None, None
@@ -104,7 +111,7 @@ def find_affected_products(session: Session, version: str) -> list[dict[str, Any
             "old_rule_set_version": row.rule_set_version,
             "inputs_hash": row.inputs_hash,
             "formulation_version_id": row.formulation_version_id,
-            "documents": _citing_documents(session, row.id),
+            "documents": _citing_from_rows(all_docs, row.id),
         })
     return list(by_product.values())
 

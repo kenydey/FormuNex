@@ -58,9 +58,13 @@ export function ExportShelf({ projectId }: { projectId: string | null }) {
           { title: t("research.shelf.updated", "更新时间"), dataIndex: "updated_at", width: 170, render: (_d, f) => dayjs(f.updated_at).format("YYYY-MM-DD HH:mm") },
           { title: t("common.actions", "操作"), valueType: "option", width: 140, render: (_d, f) => [
             <a key="d" onClick={() => void download(shelfPath(projectId, f.name), f.name).catch(onError)}>{t("research.shelf.download", "下载")}</a>,
-            <Popconfirm key="x" title={t("common.confirm_delete", "确定删除？")} onConfirm={() => remove.mutate(f.name)}>
-              {can("project.write") ? <a>{t("common.delete", "删除")}</a> : <a style={{ color: "rgba(0,0,0,0.25)", cursor: "not-allowed" }}>{t("common.delete", "删除")}</a>}
-            </Popconfirm>,
+            can("project.write") ? (
+              <Popconfirm key="x" title={t("common.confirm_delete", "确定删除？")} onConfirm={() => remove.mutate(f.name)}>
+                <a>{t("common.delete", "删除")}</a>
+              </Popconfirm>
+            ) : (
+              <span key="x" style={{ color: "rgba(0,0,0,0.25)", cursor: "not-allowed" }}>{t("common.delete", "删除")}</span>
+            ),
           ] },
         ]}
       />

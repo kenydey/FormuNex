@@ -51,6 +51,12 @@ def utcnow() -> datetime:
     """Naive UTC "now" — what ``datetime.utcnow()`` returned, without the deprecation — and *strictly
     increasing* within a process.
 
+    P3-A6 boundary: the guarantee is process-local (``_last`` is a process
+    global). Across workers / Celery processes the same coarse clock step
+    can still yield equal ``created_at`` values, so cross-process
+    ``ORDER BY created_at DESC`` ties are possible; do not rely on it for
+    cross-process ordering.
+
     Windows' wall clock advances in steps of ~15.6 ms, so two rows created inside one step used to get the
     same ``created_at``, and every ``ORDER BY created_at DESC`` ("newest first") then returned them in an
     arbitrary order: two rule versions saved back to back listed the older one first, and so would the

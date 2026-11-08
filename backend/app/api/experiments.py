@@ -754,14 +754,46 @@ async def _resolve_workbench_experiment_id(campaign_id: int, row_id: int) -> int
         return row.id if row is not None else None
 
 
+def _experiment_row(experiment_id: int):
+    """Native experiment row, or None when it has no row."""
+    from ..db.database import default_session_factory
+    from ..db.models import ExperimentRow
+
+    with default_session_factory()() as session:
+        return session.get(ExperimentRow, experiment_id)
+
+
+def _require_lab_attachment_access(request: Request, project_id: str | None) -> None:
+    """P1-A3 (2026-11-04 deep review): mirror lab.py's task-attachment
+    download guard. A personal JWT must hold lab.execute or lab.review
+    scoped to the experiment's project; the operator service key stays
+    exempt and auth-disabled dev keeps working (no token → no check)."""
+    from ..services.identity import tokens
+    from ._principal import _bearer, current_user
+
+    token = _bearer(request)
+    if token and tokens.looks_like_access_token(token):
+        user = current_user(request)
+        if not (user.principal.can("lab.execute", project_id)
+                or user.principal.can("lab.review", project_id)):
+            raise HTTPException(status_code=403, detail="缺少权限 lab.execute/lab.review")
+
+
 @router.get("/experiments/{experiment_id}/attachments",
             response_model=list[AttachmentResponse])
 def get_experiment_attachments(
     experiment_id: int,
+    request: Request,
 ) -> list[AttachmentResponse]:
     """List attachments (QC reports, spectra, images) linked to an experiment."""
     from ..db.measurement_store import get_measurement_store
 
+    # P1-A3: the list used to be ungated, so ids could be enumerated and
+    # then downloaded. Resolve the project first; unknown experiments 404.
+    row = _experiment_row(experiment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="实验不存在")
+    _require_lab_attachment_access(request, row.project_id or None)
     store = get_measurement_store()
     attachments = store.attachments_for(experiment_id)
     return [
@@ -836,11 +868,16 @@ async def upload_experiment_attachment(
 async def get_workbench_row_attachments(
     campaign_id: int,
     row_id: int,
+    request: Request,
 ) -> list[AttachmentResponse]:
     """List attachments for a workbench row, resolved via its training experiment."""
     experiment_id = await _resolve_workbench_experiment_id(campaign_id, row_id)
     if experiment_id is None:
         return []
+    # P1-A3 adjacent (report named only the native list): the workbench
+    # list had the same hole; same lab.execute/lab.review check.
+    row = _experiment_row(experiment_id)
+    _require_lab_attachment_access(request, (row.project_id or None) if row is not None else None)
     from ..db.measurement_store import get_measurement_store
 
     store = get_measurement_store()
@@ -1148,6 +1185,7 @@ async def download_workbench_row_attachment(
     campaign_id: int,
     row_id: int,
     attachment_id: str,
+    request: Request,
 ) -> Response:
     """P4: download an attachment's original file from the local mirror."""
     from ..db.measurement_store import get_measurement_store
@@ -1155,6 +1193,10 @@ async def download_workbench_row_attachment(
     experiment_id = await _resolve_workbench_experiment_id(campaign_id, row_id)
     if experiment_id is None:
         raise HTTPException(status_code=404, detail="该行无实验记录")
+    # P1-A3: guard before any file bytes are touched, so a 403 does not
+    # leak existence via 404-vs-403. Same lab.execute/lab.review rule.
+    row = _experiment_row(experiment_id)
+    _require_lab_attachment_access(request, (row.project_id or None) if row is not None else None)
     store = get_measurement_store()
     attachments = store.attachments_for(experiment_id)
     att = next((a for a in attachments if str(a.id) == attachment_id), None)
@@ -1369,6 +1411,49 @@ class ExperimentSearchResult(BaseModel):
     measurements: dict[str, Any]
 
 
+def _sqlite_search_stmt(q: str):
+    """SQLite-only ref scan: json_each/json_extract pre-filter (P-8).
+
+    Kept as a helper so the dialect test can compile it without a session.
+    """
+    je = func.json_each(Campaign.sample_refs).table_valued("key", "value")
+    tags_each = func.json_each(
+        func.json_extract(je.c.value, "$.tags")
+    ).table_valued("value")
+    tags_concat = (
+        select(func.group_concat(tags_each.c.value, " "))
+        .select_from(tags_each)
+        .scalar_subquery()
+    )
+    ref_text = func.lower(
+        func.coalesce(tags_concat, "")
+        + " "
+        + func.coalesce(func.json_extract(je.c.value, "$.note"), "")
+    )
+    stmt = (
+        select(Campaign.id, Campaign.name, je.c.value)
+        .select_from(Campaign)
+        .join(je, true())
+    )
+    if q:
+        stmt = stmt.where(func.instr(ref_text, q.lower()) > 0)
+    return stmt
+
+
+def _pg_search_stmt():
+    """PostgreSQL ref scan: plain per-campaign select, no JSON functions.
+
+    P1-D1: PostgreSQL has no json_each / group_concat / instr, so the
+    SQLite statement crashes there with `function does not exist`.
+    sample_refs is a plain JSON column (not JSONB), so even the
+    jsonb_array_elements equivalent would need a cast. The Python loop
+    below already applies the exact predicate, so on PG the SQL stays a
+    scan and the filter runs in Python — same results, no PG SQL dialect
+    roulette. (Campaign counts are small; the SQLite fast path is kept.)
+    """
+    return select(Campaign.id, Campaign.name, Campaign.sample_refs)
+
+
 @router.get("/experiments/search", response_model=list[ExperimentSearchResult])
 async def search_experiments(
     q: str = Query(default="", description="搜索关键词"),
@@ -1383,30 +1468,23 @@ async def search_experiments(
     results: list[ExperimentSearchResult] = []
     from ..db.database import default_session_factory
     with default_session_factory()() as session:
-        je = func.json_each(Campaign.sample_refs).table_valued("key", "value")
-        tags_each = func.json_each(
-            func.json_extract(je.c.value, "$.tags")
-        ).table_valued("value")
-        tags_concat = (
-            select(func.group_concat(tags_each.c.value, " "))
-            .select_from(tags_each)
-            .scalar_subquery()
-        )
-        ref_text = func.lower(
-            func.coalesce(tags_concat, "")
-            + " "
-            + func.coalesce(func.json_extract(je.c.value, "$.note"), "")
-        )
-        stmt = (
-            select(Campaign.id, Campaign.name, je.c.value)
-            .select_from(Campaign)
-            .join(je, true())
-        )
-        if q:
-            stmt = stmt.where(func.instr(ref_text, q.lower()) > 0)
-        for camp_id, camp_name, ref_json in session.execute(stmt):
+        if session.bind.dialect.name == "postgresql":
+            ref_rows = [
+                (camp_id, camp_name, ref)
+                for camp_id, camp_name, refs in session.execute(_pg_search_stmt())
+                for ref in (refs if isinstance(refs, list) else [])
+            ]
+        else:
+            ref_rows = session.execute(_sqlite_search_stmt(q))
+        for camp_id, camp_name, ref_json in ref_rows:
             try:
-                ref = json.loads(ref_json) if isinstance(ref_json, str) else {}
+                # SQLite yields ref JSON text; PG yields parsed objects.
+                if isinstance(ref_json, str):
+                    ref = json.loads(ref_json)
+                elif isinstance(ref_json, dict):
+                    ref = ref_json
+                else:
+                    continue
             except (TypeError, ValueError):
                 continue
             if not isinstance(ref, dict):

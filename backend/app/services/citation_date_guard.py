@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from ..clock import utcnow
 from typing import Any
 from urllib.parse import urlparse
 
@@ -133,7 +133,7 @@ def validate_llm_citation_dates(markdown: str) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     text = markdown or ""
     try:
-        current_year = date.today().year
+        current_year = utcnow().year  # P3-A6: UTC year, not server-local
         for m in _FOOTNOTE_DEF_RE.finditer(text):
             try:
                 n = int(m.group(1))
@@ -164,6 +164,6 @@ def future_pub_date_penalty(ev: Any) -> float:
         y = evidence_year(ev)
     except Exception:
         return 0.0
-    if y is not None and y > date.today().year:
+    if y is not None and y > utcnow().year:  # P3-A6: UTC year
         return FUTURE_DATE_PENALTY
     return 0.0

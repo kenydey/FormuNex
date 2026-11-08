@@ -12,11 +12,13 @@ import { ModeSelector } from "./ModeSelector";
 import type { ResearchResult } from "./types";
 import { useResearchTask } from "./useTask";
 import { groundingSources, useWorkspace } from "./workspace";
+import { useSession } from "@/app/session";
 
 /** AI formulation recommendation for the current project; results go to the project's leaderboard and can be adopted
  * into the formulation editor (legacy recommend flow + RecommendedFormulaTable + FormulationModeSelector). */
 export default function RecommendPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const navigate = useNavigate();
   const { projectId, project, ws, requirement, patch } = useWorkspace();
@@ -78,7 +80,7 @@ export default function RecommendPage() {
               <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("formulation.rec.query_ph", "补充检索关键词（可选，默认用需求摘要）")} />
               <Checkbox checked={preferCatalog} onChange={(e) => setPreferCatalog(e.target.checked)}>{t("formulation.rec.prefer_catalog", "优先使用材料库中的原料（软偏好，不做硬过滤）")}</Checkbox>
               <Space>
-                <Button type="primary" icon={<ThunderboltOutlined />} loading={task.busy} onClick={() => void run()}>{t("formulation.rec.run", "生成推荐")}</Button>
+                <Button type="primary" icon={<ThunderboltOutlined />} loading={task.busy} disabled={!can("project.write", projectId)} onClick={() => void run()}>{t("formulation.rec.run", "生成推荐")}</Button>
                 {task.busy && <Button icon={<StopOutlined />} onClick={() => void task.cancel()}>{t("formulation.rec.cancel", "取消")}</Button>}
               </Space>
             </Space>

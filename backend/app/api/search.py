@@ -7,7 +7,7 @@ POST /api/search/topic-sweep — One topic-radar sweep (search → topic filter 
      ``FORMUNEX_TOPIC_RADAR_*`` schedule.
 GET  /api/search/status — Per-source availability check (no network requests).
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from ..domain.schemas import Evidence, Requirement
@@ -147,7 +147,7 @@ def source_status() -> dict[str, SourceStatus]:
 
 
 @router.post("/search", deprecated=True)
-def search_sources(req: SearchRequest):
+def search_sources(req: SearchRequest, request: Request):
     """Legacy 一次性检索，现为 202 + 轮询（与 /search/stream 同款任务）。
 
     Stage 3 / SR-026: the inline iter_search held the connection for the
@@ -167,12 +167,14 @@ def search_sources(req: SearchRequest):
         "total_limit": req.total_limit,
         "per_source_cap": req.limit_per_source,
     }
+    from ..middleware.api_auth import request_owner
+    owner = request_owner(request)
     return submit(run_search_task, search_payload, "search",
-                  outbox_id=enqueue_outbox("search", search_payload))
+                  outbox_id=enqueue_outbox("search", search_payload, owner_id=owner), owner_id=owner)
 
 
 @router.post("/search/stream", status_code=202)
-def search_stream(req: SearchRequest) -> JSONResponse:
+def search_stream(req: SearchRequest, request: Request) -> JSONResponse:
     _assert_requirement_consistency(req.requirement)
     search_payload = {
         "query": req.query,
@@ -181,8 +183,10 @@ def search_stream(req: SearchRequest) -> JSONResponse:
         "total_limit": req.total_limit,
         "per_source_cap": req.limit_per_source,
     }
+    from ..middleware.api_auth import request_owner
+    owner = request_owner(request)
     return submit(run_search_task, search_payload, "search",
-                  outbox_id=enqueue_outbox("search", search_payload))
+                  outbox_id=enqueue_outbox("search", search_payload, owner_id=owner), owner_id=owner)
 
 
 class TopicSweepRequest(BaseModel):
@@ -195,7 +199,7 @@ class TopicSweepRequest(BaseModel):
 
 
 @router.post("/search/topic-sweep", status_code=202)
-def topic_sweep(req: TopicSweepRequest) -> JSONResponse:
+def topic_sweep(req: TopicSweepRequest, request: Request) -> JSONResponse:
     """Run one topic-radar sweep now: search, keep what matches the topic, fill the KB in the background.
 
     Returns the usual 202 task handle; ``GET /api/tasks/{id}`` reports ``found`` and the id of the
@@ -210,5 +214,7 @@ def topic_sweep(req: TopicSweepRequest) -> JSONResponse:
         "total_limit": req.total_limit,
         "per_source_cap": req.per_source_cap,
     }
+    from ..middleware.api_auth import request_owner
+    owner = request_owner(request)
     return submit(run_topic_sweep, sweep_payload, "topic_sweep",
-                  outbox_id=enqueue_outbox("topic_sweep", sweep_payload))
+                  outbox_id=enqueue_outbox("topic_sweep", sweep_payload, owner_id=owner), owner_id=owner)

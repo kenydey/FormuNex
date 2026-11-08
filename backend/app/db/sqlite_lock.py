@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from collections.abc import Iterator
 
 from ..services import redis_breaker
@@ -19,6 +20,8 @@ from ..services import redis_breaker
 logger = logging.getLogger(__name__)
 
 _LOCK_KEY = "formunex:sqlite_write"
+
+_BREAKER_LOG_AT = 0.0
 
 
 @contextlib.contextmanager
@@ -32,7 +35,22 @@ def sqlite_write_lock(
     """
     from ..redis_compat import client_kwargs
 
-    if not redis_url or redis_breaker.is_open():
+    if not redis_url:
+        yield
+        return
+    if redis_breaker.is_open():
+        # P3-A14: previously this whole branch was silent — every write
+        # in the breaker window ran unlocked with no trace. Log at most
+        # one line per breaker window (a timestamp race here can only
+        # duplicate a log line, never lose the lock semantics).
+        global _BREAKER_LOG_AT
+        now = time.monotonic()
+        if now - _BREAKER_LOG_AT >= redis_breaker.RETRY_AFTER_S:
+            _BREAKER_LOG_AT = now
+            logger.info(
+                "Redis breaker open — SQLite writes proceeding unlocked "
+                "(no cross-process lock for this window)"
+            )
         yield
         return
 
@@ -88,6 +106,25 @@ def sqlite_write_lock(
     finally:
         try:
             lock.release()
-        except Exception:
-            pass
+        except Exception as exc:
+            # P2-7: redis-py raises LockError when the lock token no
+            # longer matches — i.e. the lock EXPIRED mid-transaction
+            # (default 30 s) and another process may have written
+            # concurrently. That used to be swallowed silently, hiding
+            # exactly the mutual-exclusion loss this lock exists to
+            # prevent. It still must not raise (release runs in a
+            # finally around the caller's transaction), but it is now
+            # a warning with the timeout that was exceeded. Callers
+            # with known-long transactions should pass a larger
+            # timeout instead of relying on the default.
+            import redis as _redis
+
+            if isinstance(exc, _redis.exceptions.LockError):
+                logger.warning(
+                    "SQLite write lock expired before release (timeout=%.0fs) — "
+                    "the transaction ran unprotected for its tail",
+                    timeout,
+                )
+            else:
+                logger.debug("SQLite write lock release failed: %s", exc)
         _close_client()

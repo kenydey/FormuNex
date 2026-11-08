@@ -11,6 +11,7 @@ import { MeasuredMetricHitsBanner } from "@/features/workbench/panels";
 import type { MeasuredMetricHit } from "@/features/workbench/measuredHits";
 import { errorText } from "@/shared/feedback";
 import { exportFormulationPdf, fx, saveBlob, saveText, slug } from "./api";
+import { useSession } from "@/app/session";
 import { ExplainPanel } from "./ExplainPanel";
 import { IngredientTable } from "./IngredientTable";
 import { formulaToCsv, materialMapOf } from "./logic";
@@ -45,6 +46,7 @@ export interface CardProps {
 export function FormulaCard(p: CardProps) {
   const { form } = p;
   const { t, i18n } = useTranslation();
+  const { can } = useSession();
   const navigate = useNavigate();
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -144,7 +146,7 @@ export function FormulaCard(p: CardProps) {
             <Button size="small" icon={<SaveOutlined />} loading={p.saveBusy} type={p.isDoeBase ? "primary" : "default"} ghost={p.isDoeBase} onClick={p.onSaveDoe}>
               {p.isDoeBase ? t("formulation.card.doe_base", "DOE 基准") : t("formulation.card.save_doe", "保存为 DOE 基准")}</Button></Tooltip>}
           {p.recommendId && <Tooltip title={t("formulation.card.adopt_tip", "标记采纳该配方（推荐质量抽检埋点）")}>
-            <Button size="small" icon={<LikeOutlined />} loading={adopt.isPending} disabled={adopted} onClick={() => adopt.mutate()} data-testid="adopt-button">
+            <Button size="small" icon={<LikeOutlined />} loading={adopt.isPending} disabled={adopted || !can("formulation.write", p.projectId)} onClick={() => adopt.mutate()} data-testid="adopt-button">
               {adopted ? (validated ? t("formulation.card.validated", "已采纳 · 已验证") : t("formulation.card.adopted", "已采纳")) : t("formulation.card.adopt", "采纳")}</Button></Tooltip>}
           {p.onOpenEditor && <Button size="small" type="primary" onClick={p.onOpenEditor}>{t("formulation.card.to_editor", "采纳到编辑器")}</Button>}
           <Button size="small" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>{t("formulation.card.history", "修订历史")}</Button>

@@ -1,7 +1,7 @@
 """Project workspace CRUD — persistent sessions."""
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -270,7 +270,22 @@ async def upload_project_export(
 
 
 @router.get("/{project_id}/exports/{filename}")
-def download_project_export(project_id: str, filename: str) -> FileResponse:
+def download_project_export(project_id: str, filename: str, request: Request) -> FileResponse:
+    # P1-A4 (2026-11-04 deep review): the export download was ungated
+    # while the write side requires project.write, so any bearer holder
+    # could download any project's reports/CSVs/PDFs. Mirror the lab
+    # pattern: a personal JWT needs global-or-project-scoped
+    # project.write, or any project-scoped grant (project membership);
+    # service keys stay exempt, auth-disabled dev keeps working.
+    from ..services.identity import tokens
+    from ._principal import _bearer, current_user
+
+    token = _bearer(request)
+    if token and tokens.looks_like_access_token(token):
+        user = current_user(request)
+        if not (user.principal.can("project.write", project_id)
+                or project_id in user.principal.project_permissions):
+            raise HTTPException(status_code=403, detail="缺少权限 project.write")
     try:
         path = exports_svc.resolve_export_path(project_id, filename)
     except ProjectExportError as exc:

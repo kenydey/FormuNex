@@ -20,9 +20,12 @@ export function memoryWarning(memBytes: number | null): string | null {
   return gb + 0.25 < MIN_MEMORY_GB ? gb.toFixed(1) : null;
 }
 
-/** The stack is usable when the API answers /health and the required services run. */
+/** The stack is usable when the API answers /health with status ok
+ * and the required services run. P2-E18: `reachable` alone also covered
+ * `degraded` (HTTP 503 with a status body) — the wizard used to declare
+ * a half-broken stack ready. */
 export function stackReady(status: StackStatus | null): boolean {
-  if (!status?.health.reachable) return false;
+  if (!status?.health.reachable || status.health.status !== "ok") return false;
   const running = new Set(status.services.filter((s) => s.state === "running").map((s) => s.service));
   return REQUIRED_SERVICES.every((s) => running.has(s));
 }

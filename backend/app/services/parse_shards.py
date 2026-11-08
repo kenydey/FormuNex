@@ -48,11 +48,23 @@ def _engine():
     return default_engine()
 
 
-def get_shard(content_sha: str, shard_index: int) -> dict | None:
+def get_shard(
+    content_sha: str,
+    shard_index: int,
+    *,
+    parser: str | None = None,
+    page_start: int | None = None,
+    page_end: int | None = None,
+) -> dict | None:
     """A cached completed shard, or None on a miss or any DB error.
 
     A row whose parser version differs from ``PARSER_VERSION`` is a
     miss: it is never merged into a parse built by another format.
+
+    P1-B7: when the caller states what it expects — a parser name and/or
+    the page range — a row that disagrees is also a miss. A shard cached
+    under a different page window must never be merged into this window's
+    slot: page markers downstream would point at the wrong pages.
     """
     try:
         engine = _engine()
@@ -70,6 +82,12 @@ def get_shard(content_sha: str, shard_index: int) -> dict | None:
     if row is None:
         return None
     if row[5] != PARSER_VERSION:
+        return None
+    if parser is not None and row[2] != parser:
+        return None
+    if page_start is not None and row[0] != page_start:
+        return None
+    if page_end is not None and row[1] != page_end:
         return None
     return {
         "page_start": row[0],
@@ -95,7 +113,18 @@ def put_shard(
     The upsert is a DELETE-then-INSERT inside one transaction: it works
     identically on SQLite and PostgreSQL, where ``INSERT OR REPLACE``
     does not exist.
+
+    P1-B7: empty markdown is refused (False) — caching an empty shard
+    would let a later resume merge a hole as if the page had parsed.
     """
+    # P1-B7: refuse before touching the DB, so a failed shard cannot evict
+    # a good row for the same index.
+    if not (markdown or "").strip():
+        logger.warning(
+            "parse_shards: refusing to cache empty markdown (sha %s, shard %d)",
+            content_sha[:12], shard_index,
+        )
+        return False
     try:
         from ..clock import utcnow
 

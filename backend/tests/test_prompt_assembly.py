@@ -37,15 +37,35 @@ def test_assemble_raises_without_placeholder(monkeypatch):
 
 def test_verify_prefilled_smiles():
     original = {"solvent": "CCO", "catalyst": "[Na+]Cl", "ligand": ""}
-    # Verbatim copy passes; ion change passes; anything else -> None.
+    # Verbatim copy passes; charge-mark-only change passes; anything
+    # else -> None. (2026-11-04 scheme behavior change, P1-B11: the old
+    # substring check passed "in CCO at 80C" and "CCOCC" unflagged —
+    # the updated value must BE the SMILES, not prose containing it.)
     updated, flags = pa.verify_prefilled_smiles(
         original,
-        {"solvent": "in CCO at 80C", "catalyst": "[Na]Cl", "ligand": "PPh3"},
+        {"solvent": "CCO", "catalyst": "[Na]Cl", "ligand": "PPh3"},
     )
-    assert updated == {"solvent": "in CCO at 80C", "catalyst": "[Na]Cl", "ligand": "PPh3"}
+    assert updated == {"solvent": "CCO", "catalyst": "[Na]Cl", "ligand": "PPh3"}
     assert flags == []
+    # Prose wrapping, chain extension, whole-ion addition all flag.
+    updated, flags = pa.verify_prefilled_smiles(
+        original,
+        {"solvent": "in CCO at 80C", "catalyst": "[Na]Cl"},
+    )
+    assert updated["solvent"] == "None"
+    assert flags == ["prefilled_smiles_changed:solvent"]
     updated, flags = pa.verify_prefilled_smiles(
         original, {"solvent": "regenerated CCN", "catalyst": "[Na]Cl"}
+    )
+    assert updated["solvent"] == "None"
+    assert flags == ["prefilled_smiles_changed:solvent"]
+    updated, flags = pa.verify_prefilled_smiles(
+        original, {"solvent": "CCOCC", "catalyst": "[Na]Cl"}
+    )
+    assert updated["solvent"] == "None"
+    assert flags == ["prefilled_smiles_changed:solvent"]
+    updated, flags = pa.verify_prefilled_smiles(
+        original, {"solvent": "[Na+]CCO", "catalyst": "[Na]Cl"}
     )
     assert updated["solvent"] == "None"
     assert flags == ["prefilled_smiles_changed:solvent"]

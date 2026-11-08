@@ -134,7 +134,16 @@ class _WsAuthFailure(Exception):
 
 
 def _ws_token(websocket: WebSocket) -> str | None:
-    """Bearer <redacted> or ?token= — browsers cannot set headers on a WS handshake."""
+    """Bearer <redacted> or ?token= — browsers cannot set headers on a WS handshake.
+
+    P3-A3: the ``?token=`` form is a deliberate, documented exception to the
+    HTTP-side removal of query-string bearers (Stage 5 SR-081): a token in
+    the query string can land in browser history / proxy logs / Referer,
+    which is why HTTP rejects it. WS keeps it only because browsers cannot
+    set request headers on a handshake; the audit middleware deliberately
+    never logs query strings (see middleware/audit.py), so the token does
+    not leak into audit logs either. Prefer the Authorization header.
+    """
     query = websocket.query_params.get("token")
     if query and query.strip():
         return query.strip()

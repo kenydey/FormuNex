@@ -14,6 +14,7 @@ import { fx } from "./api";
 import { MeasurementTable } from "./ExperimentDetailPage";
 import { fmtValue, lineageTrend, planVsActual, specText, valueMeetsSpec } from "./logic";
 import { NoteModal, RowAttachments, RowLineage, RowVersions, TagList, TagModal, rowKey } from "./RowPanels";
+import { useSession } from "@/app/session";
 import type { ObjectiveSpec, WorkbenchRow } from "./types";
 
 const TABS = ["overview", "attachments", "versions", "lineage"] as const;
@@ -25,6 +26,7 @@ export default function WorkbenchRowPage() {
   const campaignId = Number(c);
   const rowId = Number(r);
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -64,8 +66,8 @@ export default function WorkbenchRowPage() {
         {row.refcode && <Tag>{row.refcode}</Tag>}
       </Space> : undefined}
       extra={row && <Space wrap>
-        <Button icon={<EditOutlined />} onClick={() => setNoteOpen(true)}>{t("formulation.row.note", "备注")}</Button>
-        <Button icon={<TagsOutlined />} onClick={() => setTagOpen(true)}>{t("formulation.row.tags", "标签")}</Button>
+        <Button icon={<EditOutlined />} disabled={!can("lab.execute")} onClick={() => setNoteOpen(true)}>{t("formulation.row.note", "备注")}</Button>
+        <Button icon={<TagsOutlined />} disabled={!can("lab.execute")} onClick={() => setTagOpen(true)}>{t("formulation.row.tags", "标签")}</Button>
         <Select style={{ width: 200 }} placeholder={t("formulation.row.compare_with", "与另一行对比…")} value={null}
           options={(campaign.data?.rows ?? []).filter((x) => x.id !== rowId).map((x) => ({ value: x.id, label: `#${x.id} ${x.item_id || ""}` }))}
           onChange={(b: number) => navigate(`/lab/experiments/workbench/${c}/diff?a=${rowId}&b=${b}`)} />

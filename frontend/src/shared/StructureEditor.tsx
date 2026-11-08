@@ -90,7 +90,7 @@ export function StructureEditorModal({
     try {
       setText((await ketcher.getSmiles()).trim());
     } catch {
-      setNotice(t("struct_editor.read_failed", "读取画布结构失败，请重试。", { msg: "" }));
+      setNotice(t("struct_editor.read_failed_plain", "读取画布结构失败，请重试。"));
     } finally {
       setBusy(false);
     }

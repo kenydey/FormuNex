@@ -92,30 +92,30 @@ export default function LoopPage() {
       <ProCard bordered>
         <Space wrap>
           <span>{t("workbench.campaign", "实验台账")}</span>
-          <Select style={{ width: 300 }} allowClear placeholder={t("workbench.campaign_none", "不绑定台账（仅用训练库）")} value={cid ?? undefined}
+          <Select style={{ width: 300 }} allowClear disabled={!can("project.write", projectId)} placeholder={t("workbench.campaign_none", "不绑定台账（仅用训练库）")} value={cid ?? undefined}
             onChange={(v) => { setPicked(v ?? null); patch.mutate({ workbench_campaign_id: v ?? null }); }}
             options={campaigns.items.map((c) => ({ value: c.id, label: `#${c.id} · ${c.name} · ${c.row_count}` }))} />
-          <Select style={{ width: 170 }} value={ws.optimize_engine || "auto"} onChange={(v) => patch.mutate({ optimize_engine: v })} data-testid="loop-optimize-engine"
+          <Select style={{ width: 170 }} value={ws.optimize_engine || "auto"} disabled={!can("project.write", projectId)} onChange={(v) => patch.mutate({ optimize_engine: v })} data-testid="loop-optimize-engine"
             options={[{ value: "auto", label: t("workbench.opt.auto", "寻优：自动") }, { value: "legacy", label: t("workbench.opt.legacy", "寻优：经典链") },
               { value: "baybe", label: baybe ? t("workbench.opt.baybe", "寻优：BayBE") : t("workbench.opt.baybe_na", "寻优：BayBE（未安装）"), disabled: !baybe }]} />
-          <Select style={{ width: 170 }} value={ws.loop_doe_engine || "auto"} onChange={(v) => patch.mutate({ loop_doe_engine: v })} data-testid="loop-doe-engine"
+          <Select style={{ width: 170 }} value={ws.loop_doe_engine || "auto"} disabled={!can("project.write", projectId)} onChange={(v) => patch.mutate({ loop_doe_engine: v })} data-testid="loop-doe-engine"
             options={[{ value: "auto", label: t("workbench.doe.auto", "DOE：自动") }, { value: "legacy", label: t("workbench.doe.legacy", "DOE：经典 EI") },
               { value: "baybe", label: baybe ? t("workbench.doe.baybe", "DOE：BayBE") : t("workbench.doe.baybe_na", "DOE：BayBE（未安装）"), disabled: !baybe }]} />
           {(ws.optimize_engine === "baybe" || ws.loop_doe_engine === "baybe") && !baybe && <Tag color="warning">{t("workbench.baybe_missing", "已选 BayBE 但未安装")}</Tag>}
         </Space>
         <Space wrap style={{ marginTop: 12 }}>
           <Tooltip title={t("workbench.auto_adopt_tip", "闭环成功后自动把 next_doe 写入台账（默认关）")}>
-            <Space><Switch checked={!!ws.auto_adopt_next_doe_on_loop} data-testid="loop-auto-adopt"
+            <Space><Switch checked={!!ws.auto_adopt_next_doe_on_loop} disabled={!can("project.write", projectId)} data-testid="loop-auto-adopt"
               onChange={(on) => confirmFlag("auto_adopt_next_doe_on_loop", on, t("workbench.auto_adopt_confirm", "闭环成功后会把 next_doe 写入实验台账（不可静默撤销）。\n建议仅在已审 campaign 上开启；与「自主」闭环独立。"))} />
               {t("workbench.auto_adopt", "自动采纳 DOE")}</Space>
           </Tooltip>
           {ws.auto_adopt_next_doe_on_loop && <Tag color="warning">{t("workbench.will_write", "将写入台账")}</Tag>}
           {typeof envAutoAdopt === "boolean" && <Tag>{t("workbench.env_default", "全局默认：{{v}}", { v: envAutoAdopt ? "on" : "off" })}</Tag>}
-          <Space><Switch checked={!!ws.auto_loop_on_sync}
+          <Space><Switch checked={!!ws.auto_loop_on_sync} disabled={!can("project.write", projectId)}
             onChange={(on) => confirmFlag("auto_loop_on_sync", on, t("workbench.autonomy_confirm", "台账保存 Completed 后将自动触发 optimize + 下一轮 DOE，未收敛时按上限自动继续。\n默认仍不自动采纳 DOE。"))} />
             {t("workbench.autonomy", "自主闭环")}</Space>
           {ws.auto_loop_on_sync && (
-            <Space>{t("workbench.max_rounds", "最多")}<InputNumber size="small" min={1} max={10} value={ws.auto_loop_max_rounds ?? 5}
+            <Space>{t("workbench.max_rounds", "最多")}<InputNumber size="small" min={1} max={10} disabled={!can("project.write", projectId)} value={ws.auto_loop_max_rounds ?? 5}
               onChange={(v) => patch.mutate({ auto_loop_max_rounds: Math.max(1, Math.min(10, Number(v ?? 5))) })} />
               {t("workbench.rounds_unit", "轮")}{run.running ? ` (${(ws.auto_loop_round ?? 0) + 1}/${ws.auto_loop_max_rounds ?? 5})` : ""}</Space>
           )}
@@ -127,7 +127,7 @@ export default function LoopPage() {
               : converged ? t("workbench.loop.converged", "已收敛") : t("workbench.run_loop", "迭代一轮闭环")}
           </Button>
           {run.running && <Button danger onClick={() => void cancelLoop()}>{t("workbench.cancel", "取消")}</Button>}
-          <Button data-testid="doe-cycle-pause" icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />} disabled={cid == null || run.running}
+          <Button data-testid="doe-cycle-pause" icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />} disabled={cid == null || run.running || !can("optimize.run", projectId)}
             loading={pause.isPending} onClick={() => pause.mutate()}
             title={cid == null ? t("workbench.pause_need", "请先选择实验台账") : undefined}>
             {paused ? t("workbench.resume", "恢复闭环") : t("workbench.pause", "暂停闭环")}
@@ -232,7 +232,7 @@ export default function LoopPage() {
         <ProCard bordered style={{ marginTop: 16 }} title={t("workbench.next_doe", "下一批推荐实验 · Next DOE")}
           subTitle={<Tag color="purple">{t("workbench.ai_point", "AI = 主动学习选点")}</Tag>}
           extra={<Space>
-            {pendingAdopt && <Button type="primary" disabled={!can("lab.execute", projectId)} loading={adopt.isPending} onClick={() => adopt.mutate()}>{t("workbench.adopt", "创建实验台账 →")}</Button>}
+            {pendingAdopt && <Button type="primary" disabled={!can("lab.execute", projectId) || !can("doe.write", projectId) || !can("project.write", projectId)} loading={adopt.isPending} onClick={() => adopt.mutate()}>{t("workbench.adopt", "创建实验台账 →")}</Button>}
             {!pendingAdopt && ws.workbench_campaign_id != null && <Link to={`/cockpit/workbench/${ws.workbench_campaign_id}`}>{t("workbench.open_ledger", "打开台账")}</Link>}
             {plan.plan_id && <Button icon={<DownloadOutlined />} onClick={() => void download(`/api/doe/${plan.plan_id}/export?format=csv`, `doe_${plan.plan_id}.csv`)}>
               {t("workbench.export_next", "导出下一批 DOE")}</Button>}

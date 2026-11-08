@@ -24,7 +24,7 @@ export function GateChecklist({ gate, revisionId, projectId, onChange, readOnly 
   const sign = useSignature();
   const waive = async (check: GateCheck, item: string) => {
     const s = await sign({
-      title: t("gate.waive", "豁免门禁项"), comment: "required", commentLabel: t("gate.waive_reason", "豁免理由"),
+      title: t("gate.waive_item", "豁免门禁项"), comment: "required", commentLabel: t("gate.waive_reason", "豁免理由"),
       meaning: t("gate.waive_meaning", "我确认豁免 {{code}} 中的这一项，并对此决定负责。", { code: check.code }),
     });
     if (!s) return;

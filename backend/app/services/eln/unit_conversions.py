@@ -30,18 +30,34 @@ _LINEAR: dict[str, dict[str, float]] = {
 }
 
 # Canonical aliases: the micro sign (U+00B5) and Greek mu (U+03BC) are
-# both seen in ELN exports; litres accept a lowercase l.
-_ALIASES = {"μ": "µ", "l": "L", "μg/L": "µg/L", "μL": "µL", "μm": "µm"}
+# both seen in ELN exports (folded first, so every μ form lands on µ);
+# litres accept a lowercase l; ASCII micro (u) and lowercase-litre
+# spellings fold to canonical units. P2-C19: ml/ul/ug/um and their /L
+# combinations were previously unconvertible.
+_ALIASES = {
+    "l": "L",
+    "µl": "µL",
+    "ml": "mL",
+    "ul": "µL",
+    "uL": "µL",
+    "ug": "µg",
+    "um": "µm",
+    "mg/l": "mg/L",
+    "g/l": "g/L",
+    "ug/l": "µg/L",
+    "ng/l": "ng/L",
+    "ug/L": "µg/L",
+}
 
 
 def normalize_unit(unit: str | None) -> str:
     """Strip whitespace and fold known aliases to canonical units."""
     if not unit:
         return ""
-    u = unit.strip()
+    u = unit.strip().replace("μ", "µ")
     if u in _ALIASES:
         return _ALIASES[u]
-    return u.replace("μ", "µ")
+    return u
 
 
 def _temperature(value: float, from_unit: str, to_unit: str) -> float | None:

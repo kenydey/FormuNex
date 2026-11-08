@@ -290,11 +290,15 @@ def test_unmarked_plain_text_unchanged():
 
 
 def test_page_marker_inside_code_fence_is_content():
+    # P2-B46 取代旧的 "fences are opaque"：fence 内的页 marker 仍是
+    # 边界——fence 在 marker 处拆开，marker 被消费（不进任何 chunk
+    # 文本），marker 后的 chunk 取 marker 的页码。
     md = "# 代码\n\n```\n<!-- page:9 -->\n```\n\n文字。"
     chunks = chunk_markdown(md)
-    fence = next(c for c in chunks if c.text.startswith("```"))
-    assert "<!-- page:9 -->" in fence.text  # fences are opaque
-    assert all(c.page_no != 9 for c in chunks)
+    assert all("page:9" not in c.text for c in chunks)
+    assert [c.text for c in chunks if c.text.startswith("```")] == ["```", "```"]
+    text_chunk = next(c for c in chunks if c.text == "文字。")
+    assert text_chunk.page_no == 9
 
 
 # ── page_no persistence through kb_index ─────────────────────────────────────

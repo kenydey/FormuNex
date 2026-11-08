@@ -265,8 +265,8 @@ def test_migrations_idempotent_on_fresh_db(
     assert "experiment_records" not in _table_names(tmp_db_url)
 
 
-def test_revision_chain_head_is_0092(tmp_db_url: str) -> None:
-    """The revision chain is linear with a single head (``0092_stage5_data_semantics``)."""
+def test_revision_chain_head_is_0096(tmp_db_url: str) -> None:
+    """The revision chain is linear with a single head (``0096``, moved from 0092 by deep-review batch 6)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -275,7 +275,7 @@ def test_revision_chain_head_is_0092(tmp_db_url: str) -> None:
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single head, got {heads}"
-    assert heads[0] == "0092"
+    assert heads[0] == "0096"
 
 
 def test_0090_allow_ttl_column_up_down(tmp_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:

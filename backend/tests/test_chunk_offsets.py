@@ -242,25 +242,24 @@ def test_anchor_columns_index_exists(tmp_path, monkeypatch):
 def test_overlap_chunk_offsets_are_true_positions():
     """P1-3：overlap 下 chunk 的 offset 必须是原文真实位置，不漂移。
 
-    4000 字符无分隔符文本，max_chars=1600, overlap=200：每个 chunk 的
-    offset_start/end 与 text.find(chunk) 一致；offset_end 不超文本长度。
+    4000 字符无分隔符文本，max_chars=1600, overlap=200：真实位置为
+    [0:1600)、[1400:3000)、[2800:4000)。P2-B49 后 offset 不再用
+    text.find 猜测——均匀文本（全是 'a'）下 find 必然命中更早的重叠
+    位置（第二 chunk 会 find 到 1），那正是旧实现要修的漂移。
     """
     from app.services.chunking import chunk_markdown
 
     text = "a" * 4000  # 无分隔符，强制走 overlap 分支
     chunks = chunk_markdown(text, max_chars=1600, overlap=200)
     assert len(chunks) > 1, "应产出多个 chunk"
-    cursor = 0
+    assert [(ch.offset_start, ch.offset_end) for ch in chunks] == [
+        (0, 1600),
+        (1400, 3000),
+        (2800, 4000),
+    ]
     for ch in chunks:
-        # 真实位置：从游标起 find
-        expected = text.find(ch.text, cursor)
-        assert expected != -1, f"chunk 不在原文中: {ch.text[:30]!r}"
-        assert ch.offset_start == expected, (
-            f"offset_start 漂移: 记 {ch.offset_start}，实际 {expected}"
-        )
-        assert ch.offset_end == expected + len(ch.text)
+        assert text[ch.offset_start:ch.offset_end] == ch.text
         assert ch.offset_end <= len(text)
-        cursor = expected + 1
     # 相邻 chunk 应有重叠（overlap 生效），而非首尾相接
     if len(chunks) >= 2:
         assert chunks[1].offset_start < chunks[0].offset_end, "应有 overlap"
@@ -302,14 +301,38 @@ def _assert_verbatim(md: str):
 
 
 def test_verbatim_caption_multi_blank_lines():
-    """v14-5 E: caption 与表格间多空行时拆开发射，仍 verbatim。"""
-    _assert_verbatim("# T\n\n表1 性能\n\n\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+    """v14-5 E → P1-B25：caption 与表格间多空行时直接发 atom chunk。
+
+    B25 取代旧的拆开发射：atom 文本为 caption + "\\n\\n" + table，span
+    取 caption 起、table 止（覆盖多余空行），故严格 verbatim 在此让位
+    于 gap-join：span 内的多余空行不在文本中。
+    """
+    from app.services.chunking import chunk_markdown
+
+    md = "# T\n\n表1 性能\n\n\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+    chunks = chunk_markdown(md)
+    assert len(chunks) == 1
+    atom = chunks[0]
+    assert atom.text == "表1 性能\n\n| a | b |\n|---|---|\n| 1 | 2 |"
+    assert atom.offset_start == md.index("表1")
+    assert atom.offset_end == md.index("| 1 | 2 |") + len("| 1 | 2 |")
 
 
 def test_verbatim_marker_between_caption_and_table():
-    """v14-5 I: marker 隔断 caption 与表格时拆开发射，不含 marker 文本。"""
+    """v14-5 I → P1-B25：marker 隔断 caption 与表格时直接发 atom chunk。
+
+    atom 文本仍不含 marker 文本（marker 被当作透明分隔消费），span
+    取 caption 起、table 止（覆盖 marker 行），严格 verbatim 在此让位。
+    """
+    from app.services.chunking import chunk_markdown
+
     md = "# T\n\n表1 性能\n\n<!-- page:2 -->\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
-    chunks = _assert_verbatim(md)
+    chunks = chunk_markdown(md)
+    assert len(chunks) == 1
+    atom = chunks[0]
+    assert atom.text == "表1 性能\n\n| a | b |\n|---|---|\n| 1 | 2 |"
+    assert atom.offset_start == md.index("表1")
+    assert atom.offset_end == md.index("| 1 | 2 |") + len("| 1 | 2 |")
     for ch in chunks:
         assert "page:2" not in ch.text, "chunk 不得含 marker 文本"
 

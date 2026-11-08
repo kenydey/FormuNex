@@ -51,6 +51,7 @@ const en: Record<string, string> = {
   "library.coll.no_snap": "No snapshots yet; click “Refresh” to take the first one",
   "library.coll.off": "Off",
   "library.coll.preset": "Screening preset (optional)",
+  "library.coll.preset_col": "Screening preset",
   "library.coll.query": "Query",
   "library.coll.refresh": "Refresh",
   "library.coll.refreshed": "Refreshed; snapshot taken",

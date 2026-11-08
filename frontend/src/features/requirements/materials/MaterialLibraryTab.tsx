@@ -168,16 +168,20 @@ export function MaterialLibraryTab({ onChanged }: { onChanged?: () => void }) {
           { title: t("requirements.mat.status", "状态"), dataIndex: "availability", width: 100,
             render: (_d, m) => (
               <Tooltip title={t("requirements.mat.cycle_tip", "点击切换 在库 → 受限 → 停产（驱动替代推荐）")}>
-                <Tag color={AVAIL_COLOR[m.availability ?? "in_stock"]} style={{ cursor: "pointer" }}
-                  onClick={() => !setAvailability.isPending && setAvailability.mutate(m)}>{availabilityLabel(t, m.availability)}</Tag>
+                <Tag color={AVAIL_COLOR[m.availability ?? "in_stock"]} style={{ cursor: can("knowledge.write") ? "pointer" : "default" }}
+                  onClick={() => can("knowledge.write") && !setAvailability.isPending && setAvailability.mutate(m)}>{availabilityLabel(t, m.availability)}</Tag>
               </Tooltip>
             ) },
           { title: t("common.actions", "操作"), valueType: "option", width: 130, fixed: "right",
             render: (_d, m) => [
               <a key="e" onClick={() => setEditing(m)}>{t("common.edit", "编辑")}</a>,
               m.archived
-                ? <a key="r" onClick={() => archive.mutate({ name: m.name, archived: false })}>{t("requirements.mat.restore", "恢复")}</a>
-                : <a key="a" onClick={() => archive.mutate({ name: m.name, archived: true })}>{t("requirements.mat.archive", "归档")}</a>,
+                ? (can("knowledge.write")
+                    ? <a key="r" onClick={() => archive.mutate({ name: m.name, archived: false })}>{t("requirements.mat.restore", "恢复")}</a>
+                    : <span key="r" style={{ color: "rgba(0,0,0,0.25)" }}>{t("requirements.mat.restore", "恢复")}</span>)
+                : (can("knowledge.write")
+                    ? <a key="a" onClick={() => archive.mutate({ name: m.name, archived: true })}>{t("requirements.mat.archive", "归档")}</a>
+                    : <span key="a" style={{ color: "rgba(0,0,0,0.25)" }}>{t("requirements.mat.archive", "归档")}</span>),
             ] },
         ]}
         locale={{ emptyText: t("requirements.mat.empty", "无匹配材料 — 点「新材料」录入，或在「结构搜索」中按结构发现候选") }}

@@ -8,7 +8,7 @@ import { NovicePath } from "./NovicePath";
 
 function LocationProbe() {
   const loc = useLocation();
-  return <div data-testid="probe">{loc.pathname}|{JSON.stringify(loc.state)}</div>;
+  return <div data-testid="probe">{loc.pathname}{loc.search}|{JSON.stringify(loc.state)}</div>;
 }
 
 function wrap() {
@@ -39,9 +39,18 @@ describe("NovicePath", () => {
     ]);
   });
 
-  it("a non-dashboard step navigates to the group's first leaf with the group-home state", () => {
+  it("a non-dashboard step navigates to the group's first leaf with the group-home query flag", () => {
     wrap();
     fireEvent.click(screen.getByTestId("novice-step-nav.data"));
-    expect(screen.getByTestId("probe").textContent).toBe("/knowledge/search|{\"groupHome\":true}");
+    expect(screen.getByTestId("probe").textContent).toBe("/knowledge/search?home=1|null");
+  });
+
+  it("the dashboard step, already on /dashboard, scrolls to top instead of navigating", () => {
+    const scrollTo = vi.fn();
+    window.scrollTo = scrollTo;
+    wrap();
+    fireEvent.click(screen.getByTestId("novice-step-nav.dashboard"));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
+    expect(document.querySelector("[data-testid='novice-path']")).not.toBeNull();
   });
 });

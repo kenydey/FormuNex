@@ -212,3 +212,60 @@ def test_api_404_and_409(api_client):
     # invalid body -> 422
     r = api_client.post("/api/session-plans", json={"session_id": "s3", "phases": []})
     assert r.status_code == 422
+
+
+def _client_for(user_id):
+    """Bare app with current_user overridden to the given id (mirrors the
+    api_client fixture, but per-user for cross-user checks)."""
+    from app.api._principal import CurrentUser, current_user
+    from app.services.identity.rbac import Principal
+
+    app = FastAPI()
+    app.include_router(plans_api.router)
+    app.dependency_overrides[current_user] = lambda: CurrentUser(
+        id=user_id, username=user_id, display_name=user_id, session_id="s",
+        principal=Principal(user_id, frozenset(), {}),
+    )
+    return TestClient(app)
+
+
+def test_submit_plan_persists_submitter(data_dir):
+    plan = svc.submit_plan("sess-1", _phases(), submitted_by="u1")
+    assert svc.get_plan(plan.plan_id).submitted_by == "u1"
+
+
+def test_api_submit_records_submitter_and_pending_lists_own(api_client):
+    r = api_client.post("/api/session-plans", json={"session_id": "s1", "phases": _phases()})
+    assert r.status_code == 200
+    pid = r.json()["plan_id"]
+    assert r.json()["submitted_by"] == "cheng"
+    r = api_client.get("/api/session-plans/pending")
+    assert r.status_code == 200
+    assert any(it["plan_id"] == pid for it in r.json()["items"])
+
+
+def test_api_cross_user_plan_forbidden(data_dir):
+    """P1-A5: another user's plan is not readable, not advancable, and
+    not enumerable via pending."""
+    owner = _client_for("cheng")
+    other = _client_for("other")
+    r = owner.post("/api/session-plans", json={"session_id": "s1", "phases": _phases()})
+    assert r.status_code == 200
+    pid = r.json()["plan_id"]
+    assert other.get(f"/api/session-plans/{pid}").status_code == 403
+    assert other.post(f"/api/session-plans/{pid}/advance",
+                      json={"phase_name": "design", "step_idx": 0}).status_code == 403
+    r = other.get("/api/session-plans/pending")
+    assert r.status_code == 200
+    assert all(it["plan_id"] != pid for it in r.json()["items"])
+
+
+def test_api_legacy_plan_without_submitter_stays_visible(data_dir):
+    """Plans written before owner tracking (submitted_by None) stay
+    listable and readable — grandfathered, not silently hidden."""
+    plan = svc.submit_plan("sess-legacy", _phases())
+    assert plan.submitted_by is None
+    other = _client_for("other")
+    r = other.get("/api/session-plans/pending")
+    assert any(it["plan_id"] == plan.plan_id for it in r.json()["items"])
+    assert other.get(f"/api/session-plans/{plan.plan_id}").status_code == 200

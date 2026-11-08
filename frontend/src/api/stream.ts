@@ -57,23 +57,29 @@ export async function readSse(res: Response, onData: (data: unknown) => void): P
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  const emit = (block: string) => {
+    const payload = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+    if (!payload) return; // heartbeat comments
+    try {
+      onData(JSON.parse(payload));
+    } catch {
+      // a malformed frame does not end the stream
+    }
+  };
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     let idx: number;
     while ((idx = buf.indexOf("\n\n")) >= 0) {
-      const block = buf.slice(0, idx);
+      emit(buf.slice(0, idx));
       buf = buf.slice(idx + 2);
-      const payload = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
-      if (!payload) continue; // heartbeat comments
-      try {
-        onData(JSON.parse(payload));
-      } catch {
-        // a malformed frame does not end the stream
-      }
     }
   }
+  // P2-E4: a final frame without its trailing blank line used to be
+  // dropped (the server's last event — sometimes the done event itself).
+  buf += decoder.decode();
+  if (buf.trim()) emit(buf);
 }
 
 async function errorOf(res: Response): Promise<ApiError> {
@@ -87,19 +93,24 @@ async function errorOf(res: Response): Promise<ApiError> {
   return new ApiError(res.status, detail);
 }
 
-/** POST a JSON body and stream the SSE answer. Rejects if the stream ends without a ``done`` / ``error`` event. */
+/** POST a JSON body and stream the SSE answer. Rejects if the stream ends without a ``done`` / ``error`` event,
+ * unless events already arrived and the connection closed cleanly (P2-E4: a server that closes after the last
+ * token without a done frame used to surface as an error on top of a complete answer). A dropped connection
+ * still rejects: readSse throws there instead of resolving. */
 export async function postSse<E extends { type?: string }>(path: string, body: unknown, onEvent: (ev: E) => void,
   signal?: AbortSignal): Promise<void> {
   const res = await authFetch(path, { method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify(body), signal });
   if (!res.ok) throw await errorOf(res);
   let terminated = false;
+  let seenAny = false;
   await readSse(res, (d) => {
     const ev = d as E;
+    seenAny = true;
     if (ev.type === "done" || ev.type === "error") terminated = true;
     onEvent(ev);
   });
-  if (!terminated && !signal?.aborted) throw new Error(i18n.t("task.stream_interrupted", "流式响应中断（未收到结束事件）"));
+  if (!terminated && !signal?.aborted && !seenAny) throw new Error(i18n.t("task.stream_interrupted", "流式响应中断（未收到结束事件）"));
 }
 
 const FROM_STATE: Record<TaskState, TaskProgressStatus> = {
@@ -109,7 +120,30 @@ const FROM_STATE: Record<TaskState, TaskProgressStatus> = {
 export async function getTask(taskId: string): Promise<TaskStatus> {
   const res = await authFetch(`/api/tasks/${encodeURIComponent(taskId)}`);
   if (!res.ok) throw await errorOf(res);
-  return (await res.json()) as TaskStatus;
+  try {
+    return (await res.json()) as TaskStatus;
+  } catch {
+    // P3-E2: a 200 with a non-JSON body (proxy error page) used to
+    // surface as a raw SyntaxError; wrap it like every other failure.
+    throw new ApiError(res.status, `HTTP ${res.status}`);
+  }
+}
+
+/** P2-E3: polling must survive transient failures (network blip, 502
+ * from a restarting worker): up to 3 attempts with backoff. A persistent
+ * failure still throws after the last attempt — it is not swallowed. */
+async function getTaskWithRetry(taskId: string, signal?: AbortSignal): Promise<TaskStatus> {
+  let last: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (signal?.aborted) throw new Error(i18n.t("task.wait_stopped", "已停止等待"));
+    try {
+      return await getTask(taskId);
+    } catch (e) {
+      last = e;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
+  throw last;
 }
 
 export async function cancelTask(taskId: string): Promise<void> {
@@ -148,7 +182,7 @@ export async function awaitTask(taskId: string, opts: { onEvent?: (ev: TaskProgr
   for (;;) {
     if (signal?.aborted) throw new Error(i18n.t("task.wait_stopped", "已停止等待"));
     if (Date.now() > deadline) throw new Error(i18n.t("task.timeout", "任务超时（{{s}} 秒），后台仍在运行", { s: Math.round(timeoutMs / 1000) }));
-    const s = await getTask(taskId);
+    const s = await getTaskWithRetry(taskId, signal);
     const ev: TaskProgressEvent = { status: FROM_STATE[s.state] ?? "FAILED", message: s.message, progress: s.progress,
       stage: s.stage, data: s.result ?? undefined, elapsed_ms: s.elapsed_ms };
     onEvent?.(ev);

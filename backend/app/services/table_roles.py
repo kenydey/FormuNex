@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import re
 
+from .chem_split import split_top_level
+
 # Normalised header -> role. Only the first group feeds A4 fields; the
 # second group is recognised vocabulary kept verbatim as roles.
 _HEADER_ROLES = {
@@ -55,7 +57,9 @@ _HEADER_ROLES = {
     "电解质": "electrolyte",
     "溶剂": "solvent",
     "温度": "temperature",
+    "反应温度": "temperature",
     "时间": "duration",
+    "反应时间": "duration",
     "气氛": "atmosphere",
     "产率": "yield",
     "结果": "yield",
@@ -84,12 +88,14 @@ def map_table_headers(headers: list[str]) -> dict[int, str]:
     """Map each column index to a role.
 
     Unmapped headers keep their normalised text as the role, so no column
-    is ever silently dropped.
+    is ever silently dropped. P2-B21: an empty normalised header gets a
+    positional placeholder role (``column_<idx>``) instead of the empty
+    string, so its cells do not all collapse under the ``''`` key.
     """
     roles: dict[int, str] = {}
     for idx, header in enumerate(headers or []):
         norm = _normalize_header(header)
-        roles[idx] = _HEADER_ROLES.get(norm, norm or (header or "").strip())
+        roles[idx] = _HEADER_ROLES.get(norm, norm or f"column_{idx}")
     return roles
 
 
@@ -97,9 +103,14 @@ def table_to_runs(table: dict) -> list[dict]:
     """One parsed table -> one optimisation-run dict per row.
 
     The entry comes from an entry column when present, else the 1-based
-    row number. Reactant-ref cells split on commas / semicolons. Empty
-    cells are skipped; unmapped columns stay in the dict under their
-    preserved role.
+    row number. Reactant-ref cells split with chem_split's top-level
+    splitter (P1-B16: paren-aware, so "poly(acrylic acid, sodium salt)"
+    stays one ref). Empty cells are skipped; unmapped columns stay in
+    the dict under their preserved role. P1-B15: a second column mapping
+    to the same scalar role never silently overwrites the first — the
+    first value is kept and the conflict is recorded under
+    ``role_conflicts``. P2-B22: cells wider than the header row land in
+    ``extra_cells`` instead of being dropped.
     """
     headers = table.get("headers", []) or []
     rows = table.get("rows", []) or []
@@ -108,16 +119,21 @@ def table_to_runs(table: dict) -> list[dict]:
     for row_idx, row in enumerate(rows):
         run: dict = {}
         for col_idx, cell in enumerate(row):
-            role = roles.get(col_idx)
-            if role is None:
-                continue
             text = (cell or "").strip()
             if not text:
                 continue
+            role = roles.get(col_idx)
+            if role is None:
+                run.setdefault("extra_cells", []).append(text)
+                continue
             if role == "reactant_refs":
-                refs = [p.strip() for p in re.split(r"[,;]", text) if p.strip()]
+                refs = [p.strip() for p in split_top_level(text) if p.strip()]
                 if refs:
                     run.setdefault(role, []).extend(refs)
+            elif role in run:
+                run.setdefault("role_conflicts", []).append(
+                    {"role": role, "kept": run[role], "dropped": text}
+                )
             else:
                 run[role] = text
         if "entry" not in run:

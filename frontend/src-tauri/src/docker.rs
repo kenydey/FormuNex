@@ -67,11 +67,25 @@ fn exe_name() -> &'static str {
     }
 }
 
+/// P3-E13: an explicit override must be executable, not merely a
+/// file — a text file at that path used to be accepted and then failed
+/// at the first docker invocation with a confusing error.
+#[cfg(unix)]
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
+}
+
 /// Find the docker executable: an explicit override, then PATH, then the usual install locations.
 pub fn find_docker(override_path: Option<&str>, path_var: Option<OsString>) -> Option<PathBuf> {
     if let Some(p) = override_path.filter(|p| !p.trim().is_empty()) {
         let p = PathBuf::from(p.trim());
-        return p.is_file().then_some(p);
+        return is_executable(&p).then_some(p);
     }
     if let Some(paths) = path_var {
         for dir in std::env::split_paths(&paths) {

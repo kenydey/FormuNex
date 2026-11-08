@@ -13,6 +13,8 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date, datetime
+
+from ....clock import utcnow
 from pathlib import Path
 from typing import Any
 
@@ -147,7 +149,12 @@ class RuleSetSignoff:
             try:
                 parsed = date.fromisoformat(str(self.signed_at)) if len(str(self.signed_at)) == 10 \
                     else datetime.fromisoformat(str(self.signed_at)).date()
-                if parsed > date.today():
+                # P3-A6: UTC date, not server-local date.today() — the
+                # naive-UTC convention (see app/clock.py). Residual edge:
+                # a signer in +08:00 dating early-morning local time can
+                # still read as future against UTC; fixing that needs
+                # the signer TZ, out of P3 scope.
+                if parsed > utcnow().date():
                     out.append(f"规则集签核日期 {self.signed_at} 在未来")
             except ValueError:
                 out.append(f"规则集签核日期 {self.signed_at!r} 不是合法的 ISO 日期")

@@ -9,6 +9,7 @@ import { EditableRows } from "@/shared/EditableRows";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { ProjectDetail } from "@/features/spec/types";
 import { DispatchButton } from "./DispatchButton";
+import { useSession } from "@/app/session";
 import "./grid.css";
 
 type Run = Record<string, unknown> & { _run?: number; _kind?: string; _compliance_ok?: boolean };
@@ -46,6 +47,7 @@ export default function DoeDesignerPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const projectId = useUi((s) => s.projectId);
+  const { can } = useSession();
   const project = useQuery({ queryKey: ["project", projectId], enabled: !!projectId, queryFn: () => call<ProjectDetail>("GET", `/api/projects/${projectId}`) });
   const spec = project.data?.workspace.spec_contract;
   // 补齐计划 2-9: 未确认的契约变更通知 —— 下游 DOE 须重新评估，确认后消失。
@@ -172,7 +174,7 @@ export default function DoeDesignerPage() {
             message={t("doe.contract_changed", "规格契约已变更（{{keys}}），请按新契约重新评估 DOE", {
               keys: [...new Set(pendingNotices.flatMap((n) => n.changed_keys))].join("、"),
             })}
-            action={<Button size="small" type="primary" loading={acknowledge.isPending} onClick={() => acknowledge.mutate()}>
+            action={<Button size="small" type="primary" loading={acknowledge.isPending} disabled={!can("project.write", projectId)} onClick={() => acknowledge.mutate()}>
               {t("doe.contract_ack_btn", "已知晓，重新评估")}
             </Button>} />
         )}
@@ -186,10 +188,10 @@ export default function DoeDesignerPage() {
               <Space style={{ marginTop: 12 }} wrap>
                 <span>{t("doe.interactions", "交互作用")}</span>
                 <Select mode="multiple" style={{ minWidth: 260 }} value={oaInter} onChange={setOaInter} options={pairOptions} />
-                <span>{t("doe.array", "指定正交表")}</span>
+                <span>{t("doe.array_pick", "指定正交表")}</span>
                 <Select allowClear style={{ width: 160 }} value={oaArray} onChange={setOaArray} placeholder={t("doe.auto", "自动选择")}
                   options={(arrays.data ?? []).map((a) => ({ value: a.name, label: `${a.name}（${a.runs} 次）` }))} />
-                <Button type="primary" loading={run.isPending} onClick={() => run.mutate("orthogonal")}>{t("doe.generate", "生成设计")}</Button>
+                <Button type="primary" loading={run.isPending} disabled={!can("doe.write", projectId)} onClick={() => run.mutate("orthogonal")}>{t("doe.generate", "生成设计")}</Button>
               </Space>
             </>
           ) },
@@ -210,7 +212,7 @@ export default function DoeDesignerPage() {
                 <Form.Item label={t("doe.n_runs", "试验次数")}><InputNumber min={2} max={200} value={mix.n} onChange={(v) => setMix({ ...mix, n: v ?? undefined })} placeholder={t("doe.auto", "自动选择")} /></Form.Item>
                 <Form.Item label={t("doe.screen", "合规预筛")}><Switch checked={mix.screen} onChange={(v) => setMix({ ...mix, screen: v })} /></Form.Item>
                 <Form.Item label={t("doe.drop", "剔除不合规点")}><Switch checked={mix.drop} onChange={(v) => setMix({ ...mix, drop: v })} /></Form.Item>
-                <Button type="primary" loading={run.isPending} onClick={() => run.mutate("mixture")}>{t("doe.generate", "生成设计")}</Button>
+                <Button type="primary" loading={run.isPending} disabled={!can("doe.write", projectId)} onClick={() => run.mutate("mixture")}>{t("doe.generate", "生成设计")}</Button>
               </Form>
             </>
           ) },
@@ -221,7 +223,7 @@ export default function DoeDesignerPage() {
                 <Select style={{ width: 200 }} value={dOrder} onChange={setDOrder} options={[
                   { value: "linear", label: t("doe.main", "主效应") }, { value: "interactions", label: t("doe.inter", "主效应 + 交互") }, { value: "quadratic", label: t("doe.quad", "二次响应面") }]} />
                 <InputNumber min={2} max={200} value={dN} onChange={(v) => setDN(v ?? undefined)} placeholder={t("doe.n_runs", "试验次数")} />
-                <Button type="primary" loading={run.isPending} onClick={() => run.mutate("doptimal")}>{t("doe.generate", "生成设计")}</Button>
+                <Button type="primary" loading={run.isPending} disabled={!can("doe.write", projectId)} onClick={() => run.mutate("doptimal")}>{t("doe.generate", "生成设计")}</Button>
               </Space>
             </>
           ) },

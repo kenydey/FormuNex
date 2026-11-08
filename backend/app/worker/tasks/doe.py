@@ -151,12 +151,51 @@ def _parse_optional_model(raw: Any, model_cls: type):
 
 
 
-def _persist_loop_history(campaign_id: int | None, report) -> None:
+def _loop_plan_id_for_task(task_id: str | None) -> str:
+    """P2-8 (2026-11-04 deep review): derive a loop plan's id from the
+    task id instead of minting a fresh UUID per run — doe_plan_store
+    .save is idempotent on plan_id, so a replay reuses the row instead
+    of stacking a duplicate plan. Fits String(36). Direct callers
+    without a task id keep the old UUID path."""
+    import uuid
+
+    if task_id:
+        return "loop-" + task_id.replace("-", "")[:31]
+    return uuid.uuid4().hex
+
+
+def _append_running_placeholder_if_needed(store, campaign_id: int) -> bool:
+    """P2-8: append the loop running placeholder only when the last
+    history entry is not already one. A replay used to append a second
+    running entry (the first one then stranded forever, since only the
+    last entry gets updated at the end). Best-effort: any store failure
+    just skips the placeholder. Returns True when appended."""
+    if not hasattr(store, "append_loop_history_sync"):
+        return False
+    hist = []
+    try:
+        camp = store.get_campaign_sync(campaign_id) if hasattr(store, "get_campaign_sync") else None
+        hist = list(getattr(camp, "loop_history", None) or [])
+    except Exception:  # noqa: BLE001 - placeholder is best-effort
+        hist = []
+    if hist and hist[-1].get("running"):
+        return False
+    try:
+        from datetime import UTC, datetime
+
+        store.append_loop_history_sync(
+            campaign_id,
+            {"running": True, "at": datetime.now(UTC).isoformat()},
+        )
+    except Exception:  # noqa: BLE001 - placeholder is best-effort
+        return False
+    return True
+
+
+def _persist_loop_history(campaign_id: int | None, report, task_id: str | None = None) -> None:
     if not campaign_id:
         return
     from datetime import UTC, datetime
-
-    import uuid
 
     from ...db.campaign_store import get_campaign_store
 
@@ -178,7 +217,7 @@ def _persist_loop_history(campaign_id: int | None, report) -> None:
             len(_hist) if (_hist and _hist[-1].get("running")) else len(_hist) + 1
         ) if campaign is not None else None
         if not getattr(next_doe, "plan_id", None):
-            next_doe.plan_id = uuid.uuid4().hex
+            next_doe.plan_id = _loop_plan_id_for_task(task_id)
         doe_plan_id = next_doe.plan_id
         try:
             from ...db import doe_plan_store
@@ -250,18 +289,16 @@ def run_loop_iterate_impl(task_id: str, payload: dict) -> dict:
         # req 构造在 try 内：payload 校验失败也要走失败持久化。
         # 任务开始先写 running 占位 entry，让 campaign_loop_status 能报"进行中"；
         # 结束时 _persist_loop_history 会原地更新它（不膨胀 rounds）。
+        # P2-8 (2026-11-04 deep review): placeholder is conditional now
+        # (see _append_running_placeholder_if_needed) — a replay used to
+        # append a second running entry and strand the first one.
         if campaign_id is not None:
             try:
-                from datetime import UTC, datetime
-
                 from ...db.campaign_store import get_campaign_store
 
-                _store = get_campaign_store()
-                if hasattr(_store, "append_loop_history_sync"):
-                    _store.append_loop_history_sync(
-                        int(campaign_id),
-                        {"running": True, "at": datetime.now(UTC).isoformat()},
-                    )
+                _append_running_placeholder_if_needed(
+                    get_campaign_store(), int(campaign_id)
+                )
             except Exception:  # noqa: BLE001
                 pass
 
@@ -292,9 +329,9 @@ def run_loop_iterate_impl(task_id: str, payload: dict) -> dict:
             budget_remaining=payload.get("budget_remaining"),
             seed=payload.get("seed"),
         )
-        # 先持久化（内部会给 next_doe.plan_id 赋新 UUID），再 dump，
+        # 先持久化（内部会给 next_doe.plan_id 赋值，任务 id 派生则重放幂等），再 dump，
         # 否则任务结果里的 plan_id 是旧值，前端无法关联该 DOE 计划。
-        _persist_loop_history(payload.get("workbench_campaign_id"), result)
+        _persist_loop_history(payload.get("workbench_campaign_id"), result, task_id=task_id)
         data = result.model_dump()
         persist_result(task_id, data, failed=False)
         _persist_terminal(task_id, "loop", data)
@@ -421,6 +458,8 @@ def run_doe_cycle_task(self, payload: dict) -> dict:
             seed=payload.get("seed"),
             # P1-1: 透传 campaign_id，生成的实验可关联到 workbench campaign
             workbench_campaign_id=campaign_id,
+            # P1-A7: 任务 id 透传给 persist 层做重放清理
+            task_id=task_id,
         )
 
         tracker.emit(

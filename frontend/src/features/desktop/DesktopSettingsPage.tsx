@@ -91,6 +91,7 @@ function StackCard() {
         })}>{t("desktop.stop", "停止")}</Button>
       </Space>}>
       <ErrorAlert error={status.error} />
+      {status.data?.services_error ? <Alert type="error" showIcon message={status.data.services_error} style={{ marginBottom: 8 }} /> : null}
       {s.error ? <Alert type="error" showIcon message={errorText(s.error)} style={{ marginBottom: 8 }} /> : null}
       {status.data && <ServicesTable status={status.data} />}
       <LogView lines={s.lines} />
@@ -142,6 +143,9 @@ function BackupCard() {
           void backups.refetch();
         } catch (e) {
           setError(e);
+          // P2-E19: the list may have changed even when this backup failed
+          // (e.g. prune removed old files before the failure surfaced).
+          void backups.refetch();
         } finally {
           setBusy(false);
         }
@@ -194,6 +198,12 @@ function ShellUpdateCard() {
   const check = async () => {
     setState({ checking: true });
     try {
+      // P3-E15: ask the shell whether an updater is configured instead
+      // of guessing from the plugin's error text.
+      if (!(await desktop.updaterConfigured())) {
+        setState({ note: t("desktop.updater_off", "本构建未配置更新源（需签名公钥），请从发布页下载新版本") });
+        return;
+      }
       const { check: checkUpdate } = await import("@tauri-apps/plugin-updater");
       const update = await checkUpdate();
       if (!update) {
@@ -212,10 +222,7 @@ function ShellUpdateCard() {
         },
       });
     } catch (e) {
-      const text = errorText(e);
-      setState(/not (allowed|found|initialized)|plugin/i.test(text)
-        ? { note: t("desktop.updater_off", "本构建未配置更新源（需签名公钥），请从发布页下载新版本") }
-        : { error: e });
+      setState({ error: e });
     }
   };
   return (

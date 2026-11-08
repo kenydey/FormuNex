@@ -483,3 +483,25 @@ def test_batch_revision_validation(api):
     assert client.post(f"/api/plm/products/{pid}/batches",
                        json={"batch_no": "B-3", "revision_id": rid}).status_code == 201
     assert client.post(f"/api/plm/products/{pid}/batches", json={"batch_no": "B-4"}).status_code == 201
+
+
+def test_sds_unknown_hazard_class_prints_verbatim_instead_of_crashing():
+    """P0 fix (2026-11-04 deep review): the Chinese path indexed BY_CODE
+    directly and raised KeyError on an unknown class, crashing the whole
+    SDS build; the English path already fell back to the raw code."""
+    from app.services.plm.documents.sds_builder import _cls_name
+
+    assert _cls_name("bogus_class", "zh-CN") == "bogus_class"
+    assert _cls_name("bogus_class", "en-US") == "bogus_class"
+
+
+def test_hazard_in_rejects_unknown_class_at_entry():
+    """P0 fix: unknown hazard_class is rejected with 422 at the API layer
+    instead of crashing the SDS builder downstream."""
+    from pydantic import ValidationError
+
+    from app.api.plm import HazardIn
+
+    with pytest.raises(ValidationError):
+        HazardIn(hazard_class="bogus_class", category="1")
+    assert HazardIn(hazard_class="skin_corrosion", category="1A").hazard_class == "skin_corrosion"

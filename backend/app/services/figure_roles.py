@@ -13,6 +13,8 @@ the skip cases. A caller may add an LLM pass on top of "other".
 """
 from __future__ import annotations
 
+import re
+
 ROLE_REACTION_SCHEME = "reaction_scheme"
 ROLE_SPECTRA = "spectra"
 ROLE_DATA_PLOT = "data_plot"
@@ -36,27 +38,45 @@ _SCHEME_WORDS = (
 
 
 def _has_word(text: str, words: tuple[str, ...]) -> bool:
+    """Whole-word (or whole-phrase) match, not substring.
+
+    P1-B17: plain ``in`` matched "curve" inside "curved" and let
+    generic plot words ("against") steal reaction schemes. The
+    lookarounds (instead of ``\\b``) also handle words ending in
+    punctuation ("vs.").
+    """
     lowered = text.lower()
-    return any(w in lowered for w in words)
+    return any(
+        re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", lowered) for w in words
+    )
+
+
+def _classify_one(text: str) -> str | None:
+    """One text's role, or None when no vocabulary matches.
+
+    P1-B17: explicit scheme vocabulary wins over generic plot/spectra
+    words — "Scheme 1: synthesis route, 1H NMR data shown" is a scheme,
+    not a spectrum, and "activity against bacteria" under a Scheme
+    caption is not a data plot.
+    """
+    if _has_word(text, _SCHEME_WORDS):
+        return ROLE_REACTION_SCHEME
+    if _has_word(text, _SPECTRA_WORDS):
+        return ROLE_SPECTRA
+    if _has_word(text, _PLOT_WORDS):
+        return ROLE_DATA_PLOT
+    return None
 
 
 def classify_figure(caption: str = "", citing_sentences: list[str] | None = None) -> str:
     """Caption rules, then citing-sentence rules, then "other"."""
-    caption = caption or ""
-    for text, source in ((caption, "caption"),):
-        if _has_word(text, _SPECTRA_WORDS):
-            return ROLE_SPECTRA
-        if _has_word(text, _PLOT_WORDS):
-            return ROLE_DATA_PLOT
-        if _has_word(text, _SCHEME_WORDS):
-            return ROLE_REACTION_SCHEME
+    role = _classify_one(caption or "")
+    if role is not None:
+        return role
     for sentence in citing_sentences or []:
-        if _has_word(sentence, _SPECTRA_WORDS):
-            return ROLE_SPECTRA
-        if _has_word(sentence, _PLOT_WORDS):
-            return ROLE_DATA_PLOT
-        if _has_word(sentence, _SCHEME_WORDS):
-            return ROLE_REACTION_SCHEME
+        role = _classify_one(sentence)
+        if role is not None:
+            return role
     return ROLE_OTHER
 
 

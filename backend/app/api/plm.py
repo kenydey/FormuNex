@@ -5,8 +5,8 @@ import logging
 import os
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel, Field, field_validator
 
 from ._principal import CurrentUser, current_user, optional_user
 
@@ -38,6 +38,19 @@ class HazardIn(BaseModel):
     ate_value: float | None = None
     ate_unit: str | None = None
     non_additive: bool = False
+
+    # P0 fix (2026-11-04 deep review): an unknown hazard_class used to
+    # pass validation and crash the SDS builder with KeyError (Chinese
+    # path). Reject it at entry with 422; the builder keeps a verbatim
+    # fallback for defense in depth.
+    @field_validator("hazard_class")
+    @classmethod
+    def _known_hazard_class(cls, v: str) -> str:
+        from ..services.plm.regulatory.hazard_classes import BY_CODE
+
+        if v not in BY_CODE:
+            raise ValueError(f"未知危害类别：{v}")
+        return v
 
 
 class ComponentIn(BaseModel):
@@ -228,6 +241,36 @@ def resolve_regulatory_review_item(item_id: str, body: ReviewResolveIn,
             row.detail = detail
         session.commit()
         return {"id": row.id, "kind": row.kind, "status": row.status}
+
+
+class SubstanceLockIn(BaseModel):
+    password: str
+    classifications: list[HazardIn] | None = None
+
+
+@router.post("/substances/{substance_id}/lock")
+def lock_substance_classification(substance_id: str, body: SubstanceLockIn,
+                                  user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+    """EHS locks a substance's manual classification (P1-C1): the production
+    path the release gate's key-component check waits for. Wrong password
+    commits first so the failed attempt (and lock-out counter) persists."""
+    user.require("regulatory.review")
+    from ..services.identity.accounts import AuthError
+    from ..services.plm.regulatory import lock as reg_lock
+
+    with _session() as session:
+        try:
+            result = reg_lock.lock_classification(
+                session, substance_id=substance_id, user_id=user.id, password=body.password,
+                classifications=[c.model_dump() for c in body.classifications]
+                if body.classifications is not None else None)
+        except AuthError as exc:
+            session.commit()
+            raise HTTPException(status_code=401, detail=f"电子签名身份验证失败：{exc}") from None
+        except reg_lock.LockError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        session.commit()
+        return result
 
 
 @router.post("/regulatory/updates/clp-stage")
@@ -589,7 +632,7 @@ async def import_supplier_sds(
 
 @router.post("/substances/{substance_id}/pubchem-enrich", status_code=202)
 def enrich_substance_pubchem(
-    substance_id: str, user: CurrentUser = Depends(current_user)
+    substance_id: str, request: Request, user: CurrentUser = Depends(current_user)
 ) -> Any:
     """Enqueue the PubChem GHS enrichment task (补齐计划 1-6) for one substance.
 
@@ -604,6 +647,8 @@ def enrich_substance_pubchem(
     from ..worker.tasks import run_pubchem_enrich_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
+
 
     with _session() as session:
         exists = session.execute(
@@ -611,8 +656,10 @@ def enrich_substance_pubchem(
         ).scalars().first()
     if not exists:
         raise HTTPException(status_code=404, detail=f"物质不存在：{substance_id}")
-    return submit(run_pubchem_enrich_task, {"substance_id": substance_id}, kind="pubchem_enrich",
-                  outbox_id=enqueue_outbox("pubchem_enrich", {"substance_id": substance_id}))
+    owner = request_owner(request)
+    payload = {"substance_id": substance_id}
+    return submit(run_pubchem_enrich_task, payload, kind="pubchem_enrich",
+                  outbox_id=enqueue_outbox("pubchem_enrich", payload, owner_id=owner), owner_id=owner)
 
 
 class RegulatoryAskIn(BaseModel):
@@ -885,7 +932,7 @@ def generate_document(revision_id: str, body: DocumentIn,
                     "payload": payload, "created_by": user.id if user else None,
                     "pdfa": body.pdfa, "regulations": regs}
     return submit(run_document_generate_task, task_payload, "document_generate",
-                  outbox_id=enqueue_outbox("document_generate", task_payload),
+                  outbox_id=enqueue_outbox("document_generate", task_payload, owner_id=user.id if user else None),
                   owner_id=user.id if user else None)
 
 
@@ -1433,6 +1480,26 @@ def update_revision_spec(revision_id: str, body: RevisionSpecIn, user: CurrentUs
         user.require("spec.write", session.get(ProductRow, rev.product_id).project_id)
         if rev.state not in ("draft", "candidate"):
             raise HTTPException(status_code=409, detail=f"修订版状态为 {rev.state}，规格已冻结")
+        # P2-C4 (spec-edit half): acceptance units cannot be cross-checked
+        # against method units here — no metric→method registry exists, and
+        # measured values are normalised to the method unit only at record
+        # time. The gate's conversion + fail-closed comparison is the
+        # operative control; this endpoint only rejects self-contradictory
+        # acceptance (same metric, conflicting units).
+        seen_units: dict[str, str] = {}
+        for a in (body.spec_snapshot.get("acceptance") or []):
+            if not isinstance(a, dict):
+                continue
+            unit = a.get("unit")
+            if unit is not None and not isinstance(unit, str):
+                raise HTTPException(status_code=422, detail="验收单位须为字符串")
+            metric = a.get("metric")
+            if metric and unit:
+                if metric in seen_units and seen_units[metric] != unit:
+                    raise HTTPException(
+                        status_code=422, detail=f"指标 {metric} 的验收单位冲突："
+                                                f"{seen_units[metric]} 与 {unit}")
+                seen_units[metric] = unit
         before = rev.spec_snapshot or {}
         rev.spec_snapshot = body.spec_snapshot
         hash_chain.append(session, actor=user.id, action="revision.spec", entity_type="product_revision",

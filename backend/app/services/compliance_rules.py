@@ -73,12 +73,23 @@ _ROHS_BY_CAS: dict[str, str] = {}
 _SVHC_BY_CAS: dict[str, str] = {}
 _ROHS_BY_NAME: dict[str, str] = {}
 _SVHC_BY_NAME: dict[str, str] = {}
+# P1-C12: RoHS Annex II limits — 0.1 wt% generally, 0.01 wt% for cadmium.
+# (The matched display label alone does not say which family it is, so
+# limits ride in parallel maps built from the same tuples.)
+_ROHS_LIMIT_BY_CAS: dict[str, float] = {}
+_ROHS_LIMIT_BY_NAME: dict[str, float] = {}
 
 
 def _build_index() -> None:
     for name, cas, display in _ROHS_LEAD + _ROHS_CADMIUM + _ROHS_MERCURY + _ROHS_CHROMIUM6:
         _ROHS_BY_CAS[cas] = display
         _ROHS_BY_NAME[name.lower()] = display
+    for name, cas, display in _ROHS_CADMIUM:
+        _ROHS_LIMIT_BY_CAS[cas] = 0.01
+        _ROHS_LIMIT_BY_NAME[name.lower()] = 0.01
+    for name, cas, display in _ROHS_LEAD + _ROHS_MERCURY + _ROHS_CHROMIUM6:
+        _ROHS_LIMIT_BY_CAS[cas] = 0.1
+        _ROHS_LIMIT_BY_NAME[name.lower()] = 0.1
     for name, cas, display in _SVHC:
         _SVHC_BY_CAS[cas] = display
         _SVHC_BY_NAME[name.lower()] = display
@@ -121,7 +132,9 @@ def check_compliance(form: Formulation) -> ComplianceResult:
     """
     reasons: list[str] = []
     rohs_hits: list[str] = []
+    rohs_below_limit: list[str] = []
     svhc_hits: list[str] = []
+    suspected: list[str] = []
 
     for ing in form.ingredients:
         if ing.weight_pct <= 0:
@@ -129,12 +142,31 @@ def check_compliance(form: Formulation) -> ComplianceResult:
 
         rohs = _match_ingredient(ing.name, ing.cas_no, _ROHS_BY_CAS, _ROHS_BY_NAME)
         if rohs:
+            # P1-C12: the old code flagged ANY RoHS match as infeasible,
+            # contradicting its own "0.1 wt% (Cd 0.01%)" header. Below the
+            # limit it is a warning, not a hard gate. Note the basis caveat:
+            # formulation content is compared here, while RoHS legally
+            # applies to homogeneous materials — that basis question is
+            # still with EHS (see deep-review §7.2).
+            limit = None
+            if ing.cas_no:
+                limit = _ROHS_LIMIT_BY_CAS.get(ing.cas_no.strip())
+            if limit is None:
+                limit = _ROHS_LIMIT_BY_NAME.get((ing.name or "").strip().lower(), 0.1)
             label = f"{ing.name}（{rohs}）"
-            if label not in rohs_hits:
-                rohs_hits.append(label)
-            reason = f"{ing.name}: 检出 RoHS 受限物质 {rohs}（含量超限风险）"
-            if reason not in reasons:
-                reasons.append(reason)
+            if ing.weight_pct >= limit:
+                if label not in rohs_hits:
+                    rohs_hits.append(label)
+                reason = f"{ing.name}: 检出 RoHS 受限物质 {rohs}（含量 {ing.weight_pct:g}% ≥ 限值 {limit:g}%）"
+                if reason not in reasons:
+                    reasons.append(reason)
+            else:
+                if label not in rohs_below_limit:
+                    rohs_below_limit.append(label)
+                reason = (f"{ing.name}: 检出 RoHS 受限物质 {rohs}，含量 {ing.weight_pct:g}% "
+                          f"低于限值 {limit:g}%（按配方含量计；均质材料口径待 EHS 确认），仅提示")
+                if reason not in reasons:
+                    reasons.append(reason)
             continue
 
         svhc = _match_ingredient(ing.name, ing.cas_no, _SVHC_BY_CAS, _SVHC_BY_NAME)
@@ -157,6 +189,32 @@ def check_compliance(form: Formulation) -> ComplianceResult:
             reason = f"{ing.name}: REACH SVHC 候选，商业化前需确认合规状态"
             if reason not in reasons:
                 reasons.append(reason)
+            continue
+
+        # P2-C14: no exact match — but the ingredient name EMBEDS a full
+        # curated restricted name ("Lead oxide dispersion", a no-CAS
+        # "Red lead primer"). That is a possible match, downgraded to
+        # warn: never a hard gate on a substring, never silently passed.
+        # A loose single-word stem rule (e.g. any "zinc…") is NOT applied
+        # here: it would false-positive on benign Zinc oxide and needs
+        # an EHS-approved stem list first.
+        lowered = (ing.name or "").strip().lower()
+        sus = None
+        for key, display in _ROHS_BY_NAME.items():
+            if key in lowered:
+                sus = f"疑似 RoHS 受限物质 {display}（名称含 {key}，未确证）"
+                break
+        if sus is None:
+            for key, display in _SVHC_BY_NAME.items():
+                if key in lowered:
+                    sus = f"疑似 REACH SVHC 候选 {display}（名称含 {key}，未确证）"
+                    break
+        if sus:
+            reason = f"{ing.name}: {sus}，请核对 CAS 后确认"
+            if reason not in reasons:
+                reasons.append(reason)
+            if sus not in suspected:
+                suspected.append(sus)
 
     if rohs_hits:
         return ComplianceResult(
@@ -166,7 +224,7 @@ def check_compliance(form: Formulation) -> ComplianceResult:
             rohs_hits=rohs_hits,
             svhc_hits=svhc_hits,
         )
-    if svhc_hits:
+    if svhc_hits or rohs_below_limit or suspected:
         return ComplianceResult(
             compliant=True,
             status="warn",

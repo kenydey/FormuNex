@@ -63,7 +63,7 @@ export function PreflightPanel({ projectId, kind, onKindChange }: { projectId: s
         <Segmented value={kind} onChange={(v) => onKindChange(v as PreflightKind)} options={PREFLIGHT_KINDS.map((k) => ({ value: k, label: labels[k] }))} />
         <Button onClick={() => void state.refetch()} loading={state.isFetching}>{t("research.pf.reload", "刷新")}</Button>
         {kind === "storm" && <Tooltip title={t("research.pf.review_tip", "按当前已生成的 STORM 长文重新跑引用 / 占位符 / 数值检查")}>
-          <Button loading={review.isPending} onClick={() => review.mutate()}>{t("research.pf.review", "重新预检")}</Button></Tooltip>}
+          <Button loading={review.isPending} disabled={!can("knowledge.read")} onClick={() => review.mutate()}>{t("research.pf.review", "重新预检")}</Button></Tooltip>}
         <Button type="primary" disabled={openBlocking > 0 || !s?.content_hash || !can("knowledge.write")} loading={finalize.isPending} onClick={() => finalize.mutate()}>
           {t("research.pf.finalize", "定稿")}</Button>
       </Space>

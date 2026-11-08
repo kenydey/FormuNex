@@ -113,7 +113,7 @@ export default function ProductDetailPage() {
       </Modal>
       <Modal open={!!qcBatch} width={760} title={t("plm.qc", "录入质检结果")} onCancel={() => setQcBatch(null)} confirmLoading={addQc.isPending} onOk={() => addQc.mutate()}>
         <EditableRows<QcRow> value={qcRows} onChange={setQcRows} newRow={() => ({ metric: "", value: null })} columns={[
-          { title: t("tasks.metric", "指标（与出厂指标一致）"), dataIndex: "metric" },
+          { title: t("tasks.metric_factory", "指标（与出厂指标一致）"), dataIndex: "metric" },
           { title: t("measure.value", "数值"), dataIndex: "value", valueType: "digit" },
           { title: t("spec.unit", "单位"), dataIndex: "unit" },
           { title: t("measure.method", "方法"), dataIndex: "test_method" },

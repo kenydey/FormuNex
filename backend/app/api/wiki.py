@@ -175,7 +175,7 @@ def list_flagged(
 
 
 @router.post("/lint/run")
-def run_lint_endpoint(body: WikiLintRunRequest | None = None) -> dict:
+def run_lint_endpoint(request: Request, body: WikiLintRunRequest | None = None) -> dict:
     """W4 ops: scan pages for stale/conflict/orphan/broken and persist flags.
 
     Stage 3 / SR-063: 202 + task_id, results via /api/tasks poll. The
@@ -186,15 +186,17 @@ def run_lint_endpoint(body: WikiLintRunRequest | None = None) -> dict:
     from ..worker.tasks import run_wiki_lint_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
 
     req = body or WikiLintRunRequest()
     payload = {"limit": req.limit, "detect_orphan": req.detect_orphan}
+    owner = request_owner(request)
     return submit(run_wiki_lint_task, payload, "wiki_lint_run",
-                  outbox_id=enqueue_outbox("wiki_lint_run", payload))
+                  outbox_id=enqueue_outbox("wiki_lint_run", payload, owner_id=owner), owner_id=owner)
 
 
 @router.post("/lint/sweep")
-def sweep_lint_endpoint(body: WikiLintSweepRequest | None = None) -> dict:
+def sweep_lint_endpoint(request: Request, body: WikiLintSweepRequest | None = None) -> dict:
     """S1: re-lint currently flagged pages so obsolete lint flags are cleared.
 
     Stage 3 / SR-063: same 202 + poll shape as /lint/run.
@@ -203,11 +205,13 @@ def sweep_lint_endpoint(body: WikiLintSweepRequest | None = None) -> dict:
     from ..worker.tasks import run_wiki_lint_sweep_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
 
     req = body or WikiLintSweepRequest()
     payload = {"limit": req.limit, "detect_orphan": req.detect_orphan}
+    owner = request_owner(request)
     return submit(run_wiki_lint_sweep_task, payload, "wiki_lint_sweep",
-                  outbox_id=enqueue_outbox("wiki_lint_sweep", payload))
+                  outbox_id=enqueue_outbox("wiki_lint_sweep", payload, owner_id=owner), owner_id=owner)
 
 
 @router.post("/lint/apply-broken")
@@ -627,7 +631,7 @@ def start_storm_report_endpoint(body: StormReportRequest, request: Request):
 
     from fastapi.responses import JSONResponse
 
-    from ..middleware.api_auth import get_current_owner
+    from ..middleware.api_auth import request_owner
     from ..worker.tasks import run_wiki_storm_report_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
@@ -658,8 +662,8 @@ def start_storm_report_endpoint(body: StormReportRequest, request: Request):
         run_wiki_storm_report_task,
         payload,
         "wiki_storm_report",
-        outbox_id=enqueue_outbox("wiki_storm_report", payload),
-        owner_id=get_current_owner(request),
+        outbox_id=enqueue_outbox("wiki_storm_report", payload, owner_id=request_owner(request)),
+        owner_id=request_owner(request),
     )
     content = _json.loads(resp.body)
     content["disclaimer"] = "draft_not_claims"

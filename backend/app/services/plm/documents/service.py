@@ -345,8 +345,12 @@ def _components(disclosure: list[dict], trade_secrets: dict[str, str] | None) ->
     out = []
     for d in disclosure:
         key = d.get("cas") if d.get("cas") in secrets else d["name"] if d["name"] in secrets else None
-        out.append({**d, "trade_secret": bool(key) or d.get("trade_secret", False),
-                    "generic_name": secrets.get(key) if key else None})
+        secret = bool(key) or d.get("trade_secret", False)
+        out.append({**d, "trade_secret": secret,
+                    "generic_name": secrets.get(key) if key else None,
+                    # P1-C8: a confidential ingredient hides its CAS unless
+                    # the caller explicitly opts out.
+                    "withhold_cas": d["withhold_cas"] if "withhold_cas" in d else secret})
     return out
 
 
@@ -424,6 +428,24 @@ def _template(session: Session, doc_type: str, lang: str) -> tuple[str | None, b
 # --------------------------------------------------------------------------- generation
 
 
+def _coa_results_with_qc_priority(qc_results: list, qualitative_results: list) -> tuple[list, list]:
+    """P3-C11: COA 同指标重复时 QC 结果优先，定性重复行丢弃并记警告。
+
+    旧组装把 qualitative_results 追加在 QC 行之后，而 coa_builder 的
+    by_metric 字典后者胜出 —— 定性行（数值为空）覆盖 QC 数值行后，
+    数值规格判 NO_DATA，整单悄悄变 INCOMPLETE。此处在组装层去重：
+    指标已在 QC 行出现时，定性行不进入 results；重复指标名由调用方
+    写入 content["validation"]["warnings"]（见下方 coa 分支）。
+    注：coa_builder 的 by_metric 后者胜出语义保留 —— 调用方有责任
+    先去重，本分支即履行该责任；直接调 build_coa 的外部调用方仍须
+    自行保证 results 内指标唯一。
+    """
+    seen = {r.metric for r in qc_results}
+    dups = [r.metric for r in qualitative_results if r.metric in seen]
+    out = list(qc_results) + [r for r in qualitative_results if r.metric not in seen]
+    return out, dups
+
+
 def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang: str, payload: dict,
                   regulation: str = DEFAULT_REGULATION) -> tuple[dict, dict]:
     """Return (content, extra row fields). ``regulation`` applies to SDS /
@@ -449,10 +471,16 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
                 if k in ("flash_point_c", "initial_boiling_point_c", "ph", "kinematic_viscosity_40c") and v is not None:
                     props.setdefault(k, {"value": v, "source": (payload.get("properties") or {}).get("sources", {}).get(k, "manual")})
             tox_eco = _tox_eco(session, cas)
+            components = _components(cls["disclosure"], payload.get("trade_secrets"))
+            # P1-C8: a confidential ingredient without a generic name must
+            # not leak its real name into the SDS — block generation (422).
+            for c in components:
+                if c.get("trade_secret") and not c.get("generic_name"):
+                    raise DocumentError(f"商业机密组分 {c['name']} 未提供通用化学名，无法生成 SDS：请提供通用名或取消机密标记")
             content = build_sds(SdsContext(
                 product=prod, company=company, classification=cls, statements=cls["statements"], properties=props,
                 data_release=_data_release(session, classification_id),
-                components=_components(cls["disclosure"], payload.get("trade_secrets")), oel=_oel(session, cas),
+                components=components, oel=_oel(session, cas),
                 tox_records=tox_eco["tox"], eco_records=tox_eco["eco"], eco_profiles=tox_eco["profiles"],
                 # Ingredient listings are China-jurisdiction data (hazard
                 # catalogue / IECSC); other regulations render their own
@@ -470,6 +498,7 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
                 label = {**label, "size_mm": layout["size_mm"]}  # the designed size is the printed size
             content = build_label(LabelContext(
                 product=prod, company=company, classification=cls, statements=cls["statements"],
+                regulation=regulation,
                 hazardous_ingredients=label.get("hazardous_ingredients") or [
                     d["name"] for d in cls["disclosure"] if not d.get("trade_secret")][:4],
                 container_volume_l=label.get("container_volume_l"),
@@ -519,18 +548,23 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
             raise DocumentError("COA 需要出厂规格（coa.specs、修订版 spec_snapshot.release_specs 或 TS 出厂检验指标）")
         qc = session.execute(select(BatchQcResultRow).where(BatchQcResultRow.batch_id == batch.id)).scalars().all()
         n = _next_version(session, rev.id, "coa", lang, batch.id)
+        _qc_items = [ResultItem(metric=r.metric, value=r.value, value_text=r.value_text or None,
+                                conforms=None, measurement_id=r.measurement_id) for r in qc]
+        _qual_items = [ResultItem(**r) for r in coa.get("qualitative_results") or []]
+        _coa_items, _coa_dups = _coa_results_with_qc_priority(_qc_items, _qual_items)
         content = build_coa(CoaContext(
             product=prod, company=company,
             batch={"batch_no": batch.batch_no, "produced_at": batch.produced_at and batch.produced_at.date().isoformat(),
                    "quantity_kg": batch.quantity_kg, "expiry": coa.get("expiry")},
             specs=[SpecItem(**s) for s in specs_raw],
-            results=[ResultItem(metric=r.metric, value=r.value, value_text=r.value_text or None,
-                                conforms=None, measurement_id=r.measurement_id) for r in qc]
-            + [ResultItem(**r) for r in coa.get("qualitative_results") or []],
+            results=_coa_items,
             coa_no = coa.get("coa_no") or generate_coa_number(
                 coa_number_rule(), product_code=product.code, batch_no=batch.batch_no, n=n,
                 date=(batch.produced_at.date().isoformat() if batch.produced_at else utcnow().date().isoformat())),
             lang=lang))
+        for _m in _coa_dups:
+            content.setdefault("validation", {}).setdefault("warnings", []).append(
+                f"COA 指标 {_m} 同时有 QC 结果与定性结果，已采用 QC 结果")
         extra["batch_id"] = batch.id
         # Store the verdicts back on the QC rows for traceability.
         verdicts = content["meta"]["verdicts"]
@@ -547,7 +581,8 @@ def build_content(session: Session, rev: ProductRevisionRow, doc_type: str, lang
 
 def generate_document(session: Session, revision_id: str, doc_type: str, *, lang: str = "zh-CN",
                       payload: dict | None = None, created_by: str | None = None,
-                      pdfa: bool = False, regulation: str = DEFAULT_REGULATION) -> RegulatoryDocumentRow:
+                      pdfa: bool = False, regulation: str = DEFAULT_REGULATION,
+                      generated_by_task_id: str | None = None) -> RegulatoryDocumentRow:
     if doc_type not in DOC_TYPES:
         raise DocumentError(f"未知文档类型 {doc_type}")
     if lang not in ("zh-CN", "en-US"):
@@ -562,6 +597,28 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
     rev = session.get(ProductRevisionRow, revision_id)
     if rev is None:
         raise DocumentError("产品修订版不存在")
+    # P1-A6 (2026-11-04 deep review): replay guard. A task replayed
+    # after its first run already committed re-enters here with the
+    # same task_id; returning the row it already wrote keeps the
+    # version count stable instead of appending a version the user
+    # never asked for. Runs BEFORE the withdrawn/frozen/under-review
+    # gates: a replay must return its own document even if the
+    # revision has since moved on. Version counts per
+    # (revision, doc, lang, regulation) are small, so a Python-side
+    # meta scan (no dialect-specific JSON SQL) is fine.
+    if generated_by_task_id:
+        prior_rows = session.execute(
+            select(RegulatoryDocumentRow).where(
+                RegulatoryDocumentRow.revision_id == rev.id,
+                RegulatoryDocumentRow.doc_type == doc_type,
+                RegulatoryDocumentRow.lang == lang,
+                RegulatoryDocumentRow.regulation == regulation,
+            )
+        ).scalars().all()
+        for row in prior_rows:
+            meta = (row.content or {}).get("meta") or {}
+            if meta.get("generated_by_task_id") == generated_by_task_id:
+                return row
     # W1-8: an archived product's released documents must not be served
     # as live documents by generating new versions against them.
     product = session.get(ProductRow, rev.product_id)
@@ -569,11 +626,19 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
         raise DocumentError("产品已归档，不能生成文档")
     if rev.frozen_at is not None and doc_type != "coa":
         raise DocumentError("修订版已冻结（已发布），只能生成新的修订版文档")
+    # P3-C4: frozen 守卫只认 frozen_at；历史已发布行若 frozen_at 为空
+    # 会漏网。正常发布路径都会置 frozen_at，故主路径不受影响；此处
+    # 按状态补一道门（COA 按惯例豁免：COA 按批次签发，可在发布后生成）。
+    if rev.state == "released" and doc_type != "coa":
+        raise DocumentError("修订版已发布，只能生成新的修订版文档")
     if rev.state == "under_review" and doc_type != "coa":
         raise DocumentError("修订版正在签批，签批结束（发布或驳回）前不能重新生成文档")
     payload = payload or {}
     content, extra = build_content(session, rev, doc_type, lang, payload, regulation=regulation)
     content["meta"]["regulation"] = regulation
+    # P1-A6: stamp the generating task so a replay can find this row.
+    if generated_by_task_id:
+        content["meta"]["generated_by_task_id"] = generated_by_task_id
     batch_id = extra.get("batch_id")
     prev = session.execute(
         select(RegulatoryDocumentRow).where(
@@ -610,10 +675,14 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
                 from ..render.label_layout import render_layout_pdf
 
                 pdf, info = render_layout_pdf(content, layout, content["meta"].get("variables"), pdfa=pdfa)
-                # The layout-element check is GB 15258-specific: only warn for CN labels.
-                if regulation == "CN" and info["missing_elements"]:
+                # P3-C5: 缺要素警告不再仅限 CN —— EU/US 版式标签缺要素
+                # 时此前静默。要素名称本身仍按法规口径：CN 称 GB 15258
+                # 要素，其余法规称版式要素（要素清单的辖区差异由 EHS 定，
+                # 此处只改警告口径，不改清单）。
+                if info["missing_elements"]:
+                    _elem_label = "GB 15258 要素" if regulation == "CN" else "版式要素"
                     content["validation"]["warnings"].append(
-                        "标签版式缺少 GB 15258 要素：" + "、".join(info["missing_elements"]))
+                        f"标签版式缺少{_elem_label}：" + "、".join(info["missing_elements"]))
             else:
                 pdf, info = render_label_pdf(content, pdfa=pdfa)
             if info.get("overflow"):
@@ -656,7 +725,8 @@ def generate_document(session: Session, revision_id: str, doc_type: str, *, lang
 
 def generate_documents(session: Session, revision_id: str, doc_type: str, *, lang: str = "zh-CN",
                        payload: dict | None = None, created_by: str | None = None,
-                       pdfa: bool = False, regulations: list[str] | None = None) -> list[RegulatoryDocumentRow]:
+                       pdfa: bool = False, regulations: list[str] | None = None,
+                       generated_by_task_id: str | None = None) -> list[RegulatoryDocumentRow]:
     """G2: one document version per selected regulation (SDS / label only).
 
     Each version classifies with its own regulation's rule set and stores
@@ -680,7 +750,8 @@ def generate_documents(session: Session, revision_id: str, doc_type: str, *, lan
     try:
         for r in regs:
             rows.append(generate_document(session, revision_id, doc_type, lang=lang, payload=payload,
-                                          created_by=created_by, pdfa=pdfa, regulation=r))
+                                          created_by=created_by, pdfa=pdfa, regulation=r,
+                                          generated_by_task_id=generated_by_task_id))
     except Exception:
         _cleanup_rendered_keys([k for row in rows for k in (row.rendered_pdf_key, row.rendered_docx_key)])
         raise

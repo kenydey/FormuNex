@@ -21,7 +21,10 @@ callbacks agree.
 """
 from __future__ import annotations
 
+import logging
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+logger = logging.getLogger(__name__)
 
 _URL_SCHEMES = {"redis", "rediss"}
 
@@ -34,7 +37,12 @@ def protocol() -> int:
         value = get_settings().redis_protocol
     except Exception:  # noqa: BLE001 - a client must still be buildable when settings are not
         return 2
-    return value if value in (2, 3) else 2
+    if value not in (2, 3):
+        # P3-A16: FORMUNEX_REDIS_PROTOCOL=5 used to fall back to 2 with no
+        # trace; the operator's intent (whatever it was) vanished silently.
+        logger.warning("FORMUNEX_REDIS_PROTOCOL=%r is not 2 or 3; using protocol 2", value)
+        return 2
+    return value
 
 
 def client_kwargs() -> dict[str, int]:
@@ -52,7 +60,17 @@ def with_protocol(url: str) -> str:
     if parts.scheme not in _URL_SCHEMES:
         return url
     query = parse_qsl(parts.query, keep_blank_values=True)
-    if any(key == "protocol" for key, _ in query):
-        return url
+    for key, val in query:
+        if key == "protocol":
+            # P3-A16: an explicit URL protocol wins (documented semantics),
+            # but a mismatch against the configured protocol used to pass
+            # silently — e.g. configured 2 with a URL saying 3 still sent
+            # HELLO 3 at an old server. Now it at least logs.
+            if val != str(protocol()):
+                logger.warning(
+                    "Redis URL names protocol=%s but FORMUNEX_REDIS_PROTOCOL "
+                    "configures %s; the URL value wins", val, protocol()
+                )
+            return url
     query.append(("protocol", str(protocol())))
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))

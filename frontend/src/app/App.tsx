@@ -31,7 +31,9 @@ export default function App() {
   const { theme, locale } = useUi();
   useEffect(() => {
     // Desktop: open formunex://… links in the running window.
-    void startDeepLinks((route) => void router.navigate(route));
+    let off: (() => void) | undefined;
+    void startDeepLinks((route) => void router.navigate(route)).then((fn) => { off = fn; });
+    return () => off?.();
   }, []);
   useEffect(() => {
     void i18n.changeLanguage(locale);

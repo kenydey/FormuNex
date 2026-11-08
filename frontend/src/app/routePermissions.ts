@@ -18,6 +18,12 @@
  * the review queue). Tab-scoped gates (e.g. lab.review on the
  * measurements review tab) are deliberately NOT here: the route itself
  * stays open and the tab keeps its own gate.
+ *
+ * One deliberate addition (deep-review P2-A/B1): /admin/desktop was an
+ * open route (nav only hid it behind isDesktop). There is no
+ * admin.desktop permission in the backend role set, and inventing one
+ * would lock out every role including sys_admin, so the route is gated
+ * on any admin-family permission instead.
  */
 export interface RoutePermission {
   /** Single permission required. */
@@ -31,6 +37,7 @@ export const ROUTE_PERMISSIONS: Record<string, RoutePermission> = {
   "/admin/companies": { permission: "admin.companies" },
   "/admin/audit": { permission: "audit.read" },
   "/admin/settings": { permissions: ["admin.llm", "admin.connectors"] },
+  "/admin/desktop": { permissions: ["admin.users", "admin.llm", "admin.connectors"] },
   "/admin/org-dashboard": { permissions: ["formulation.read"] },
   "/knowledge/search": { permission: "knowledge.read" },
   "/plm/regulatory/review-items": { permission: "regulatory.read" },

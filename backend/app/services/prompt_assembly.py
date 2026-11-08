@@ -9,6 +9,10 @@ in the prompt text itself, and by verify_prefilled_smiles after the call.
 """
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 import re
 from pathlib import Path
 
@@ -44,11 +48,28 @@ _BRACKET_RE = re.compile(r"\[([^\]]*)\]")
 
 
 def load_prompt(agent: str) -> str:
-    """Prompt text for one agent: file first, inline fallback second."""
-    path = PROMPTS_DIR / f"{agent}.txt"
+    """Prompt text for one agent: file first, inline fallback second.
+
+    P1-B13 (hardening; audit 2026-11-05: no caller in app/ passes
+    user input as ``agent`` — only assemble_prompt in this module
+    calls it, and assemble_prompt itself has no app/ caller — but a
+    traversal here would read arbitrary ``*.txt``). The resolved
+    path must stay inside PROMPTS_DIR.
+    """
+    root = PROMPTS_DIR.resolve()
+    path = (root / f"{agent}.txt").resolve()
+    if not path.is_relative_to(root):
+        raise ValueError(f"prompt agent escapes prompts dir: {agent!r}")
     if path.is_file():
         return path.read_text(encoding="utf-8")
     if agent in _FALLBACKS:
+        # P3-B26: a missing template used to fall back silently, so a
+        # caller could not tell "deliberate fallback" from "template file
+        # lost to drift". The fallback still applies, but now it logs.
+        logger.warning(
+            "prompt template for agent %r missing under %s; using inline fallback",
+            agent, root,
+        )
         return _FALLBACKS[agent]
     raise ValueError(f"unknown prompt agent: {agent!r}")
 
@@ -83,18 +104,28 @@ def verify_prefilled_smiles(
     """Post-call immutability check for pre-filled condition SMILES.
 
     A pre-filled value must reappear verbatim in the updated text, except
-    for ion add/remove (compared after stripping bracket charges). Any
-    other change — including a missing key — is replaced with "None" and
-    flagged ``prefilled_smiles_changed:<key>``. Keys without a pre-filled
+    for ion charge-mark changes (compared after stripping bracket
+    charges). Any other change — including a missing key, a non-string
+    candidate (LLM null/number/list), extending the chain, or adding a
+    whole ion — is replaced with "None" and flagged
+    ``prefilled_smiles_changed:<key>``. Keys without a pre-filled
     value pass through untouched.
+
+    P1-B11 (2026-11-04 scheme behavior change): the comparison is
+    full-string equality after charge stripping, NOT substring
+    containment — substring let the LLM extend the chain (CCO ->
+    CCOCC) or append a whole atom ([Na+]CCO) without a flag.
+    P1-B12: a non-string candidate counts as missing, never crashes.
     """
     out = dict(updated)
     flags: list[str] = []
     for key, prefilled in (original or {}).items():
-        if not prefilled:
+        if not isinstance(prefilled, str) or not prefilled:
             continue
         candidate = out.get(key, "")
-        if _strip_ion_marks(prefilled) in _strip_ion_marks(candidate):
+        if not isinstance(candidate, str):
+            candidate = ""
+        if _strip_ion_marks(prefilled) == _strip_ion_marks(candidate):
             continue
         out[key] = "None"
         flags.append(f"prefilled_smiles_changed:{key}")

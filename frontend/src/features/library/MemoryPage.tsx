@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import type { MemoryItem } from "./types";
 
@@ -12,6 +13,7 @@ const PAGE_SIZE = 20;
 
 /** Agent long-term memory: scope filter, search, paging, delete. */
 export default function MemoryPage() {
+  const { can } = useSession();
   const { t } = useTranslation();
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -57,7 +59,7 @@ export default function MemoryPage() {
           { title: t("common.actions", "操作"), width: 90, render: (_d, m) => (
             <Popconfirm title={t("library.memory.delete_q", "删除这条记忆？")} description={`${m.key}: ${m.value.slice(0, 80)}`}
               okButtonProps={{ danger: true }} onConfirm={() => remove.mutate(m.id)}>
-              <Button type="link" danger size="small" loading={remove.isPending && remove.variables === m.id}>{t("common.delete", "删除")}</Button>
+              <Button type="link" danger size="small" disabled={!can("knowledge.write")} loading={remove.isPending && remove.variables === m.id}>{t("common.delete", "删除")}</Button>
             </Popconfirm>) },
         ]} />
     </PageContainer>

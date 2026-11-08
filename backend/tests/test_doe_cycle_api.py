@@ -27,7 +27,7 @@ def test_doe_cycle_accepts_valid_body(monkeypatch):
         return JSONResponse(content={"task_id": "fake", "kind": kind}, status_code=202)
 
     monkeypatch.setattr("app.api.doe.submit", fake_submit)
-    monkeypatch.setattr("app.api.doe.enqueue_outbox", lambda op, payload: "outbox-doe")
+    monkeypatch.setattr("app.api.doe.enqueue_outbox", lambda op, payload, **kw: "outbox-doe")
     r = client.post("/api/doe/cycle", json=_body())
     assert r.status_code == 202
     assert captured["kind"] == "doe_cycle"
@@ -46,7 +46,7 @@ def test_doe_cycle_requires_requirement():
 
 def test_doe_cycle_broker_down_503(monkeypatch):
     monkeypatch.setattr("app.services.dispatch.broker_reachable", lambda: False)
-    monkeypatch.setattr("app.api.doe.enqueue_outbox", lambda op, payload: None)
+    monkeypatch.setattr("app.api.doe.enqueue_outbox", lambda op, payload, **kw: None)
     r = client.post("/api/doe/cycle", json=_body())
     assert r.status_code == 503
     assert "Redis" in r.text

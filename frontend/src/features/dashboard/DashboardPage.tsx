@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { ErrorAlert } from "@/shared/feedback";
 import { useSession } from "@/app/session";
 import { StatusTag } from "@/shared/tags";
 import { NovicePath } from "./NovicePath";
@@ -31,9 +32,12 @@ export default function DashboardPage() {
   const mine = (signoff.data ?? []).filter((p) => p.current_step && me?.roles.includes(p.current_step.role));
   const active = (myTasks.data ?? []).filter((x) => x.status === "in_progress" || x.status === "open");
 
+  const queryError = myTasks.error ?? openTasks.error ?? review.error ?? signoff.error;
   return (
     <PageContainer title={t("dashboard.hello", "你好，{{name}}", { name: me?.display_name || me?.username })}
       subTitle={me?.roles.map((r) => t(`role.${r}`, r)).join(" · ")}>
+      {/* P2-E5: counts below silently read 0 on failure; surface the failure instead. */}
+      <ErrorAlert error={queryError} />
       <ProCard ghost gutter={16} wrap>
         <StatisticCard colSpan={{ xs: 24, md: 6 }} statistic={{ title: t("dashboard.my_tasks", "我的实验任务"), value: active.length }} />
         <StatisticCard colSpan={{ xs: 24, md: 6 }} statistic={{ title: t("dashboard.open_tasks", "待领取任务"), value: openTasks.data?.length ?? 0 }} />

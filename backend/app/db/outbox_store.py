@@ -53,12 +53,19 @@ STATUS_CLAIMED = "CLAIMED"
 STATUS_DONE = "DONE"
 STATUS_FAILED = "FAILED"
 STATUS_DEAD = "DEAD"
+# P0 fix (2026-11-04 deep review): a user-cancelled task must reach a
+# terminal outbox state, otherwise recover_stalled replays it. CANCELLED
+# is terminal for recovery (only PENDING/CLAIMED are scanned) and is
+# deliberately NOT rearmable by the manual rearm_failed_row path (that
+# path only accepts FAILED/DEAD); a fresh submission of the same payload
+# re-arms it via enqueue, like any other finished row.
+STATUS_CANCELLED = "CANCELLED"
 
 # Statuses a finished job may be re-armed from when the same payload is
 # submitted again (a new submission is a new unit of work). FAILED joins
 # DONE/DEAD: resubmitting a failed payload is the stage-0 retry path
 # (a FAILED query/retry entry point is stage 1).
-_REARMABLE = (STATUS_DONE, STATUS_DEAD, STATUS_FAILED)
+_REARMABLE = (STATUS_DONE, STATUS_DEAD, STATUS_FAILED, STATUS_CANCELLED)
 
 
 def _utcnow() -> datetime:
@@ -137,6 +144,7 @@ def enqueue(
     payload: dict,
     *,
     status: str = STATUS_PENDING,
+    owner_id: str | None = None,
 ) -> tuple[str, str]:
     """Ensure one outbox row for *operation* × *idempotency_key*.
 
@@ -151,8 +159,10 @@ def enqueue(
     must be crash-recoverable again and its stall clock restarts.
 
     Concurrent enqueues for the same key are resolved by the DB unique
-    constraint: the loser rolls back the failed INSERT and re-selects the
-    now-existing row to preserve idempotency.
+    constraint: the loser gets IntegrityError, and the caller
+    (``api._idempotency.enqueue_outbox``) rolls back and re-selects the
+    now-existing row to preserve idempotency — this function itself
+    only returns the existing row when it sees it before inserting.
 
     Returns:
         ``(task_id: str, status: str)`` — status may differ from
@@ -174,6 +184,8 @@ def enqueue(
             existing.claimed_at = None
             existing.task_id = None  # a new submission gets a new id
             existing.payload = payload
+            if owner_id is not None:
+                existing.owner_id = owner_id
             existing.created_at = now
             existing.updated_at = now
             session.flush()
@@ -186,6 +198,7 @@ def enqueue(
         idempotency_key=idempotency_key,
         payload=payload,
         status=status,
+        owner_id=owner_id,
     )
     # No savepoint here: SQLAlchemy's begin_nested() on SQLite/pysqlite releases
     # the savepoint in a way that commits the flushed INSERT, so an outer
@@ -276,6 +289,42 @@ def record_failed(operation: str, payload: dict, error: str | None = None) -> bo
             return mark_failed(session, operation, payload, error)
     except Exception:
         logger.exception("outbox mark_failed failed (non-fatal)")
+        return False
+
+
+def mark_cancelled(session: Session, task_id: str) -> bool:
+    """Cancellation mark: flip the in-flight row(s) carrying *task_id* to
+    CANCELLED. Only PENDING / CLAIMED rows change; an already terminal
+    row is left alone. The caller owns the commit. Returns True when a
+    row was updated."""
+    result = session.execute(
+        update(TaskOutbox)
+        .where(
+            TaskOutbox.task_id == task_id,
+            TaskOutbox.status.in_([STATUS_PENDING, STATUS_CLAIMED]),
+        )
+        .values(
+            status=STATUS_CANCELLED,
+            claimed_by=None,
+            claimed_at=None,
+            updated_at=_utcnow(),
+        )
+    )
+    return bool(result.rowcount)
+
+
+def record_cancelled(task_id: str) -> bool:
+    """Cancellation mark in its own transaction. Never raises (mirrors
+    record_done): a missed mark is repaired by the dispatcher guard,
+    which closes cancelled-snapshot rows without replay."""
+    try:
+        from .database import default_session_factory
+        from .session_utils import commit_session
+
+        with commit_session(default_session_factory()) as session:
+            return mark_cancelled(session, task_id)
+    except Exception:
+        logger.exception("outbox mark_cancelled failed (non-fatal)")
         return False
 
 

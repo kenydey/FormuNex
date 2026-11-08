@@ -33,6 +33,17 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
   return result.data as T;
 }
 
+/** P3-E2: a non-JSON error body used to land verbatim in the message —
+ * a full HTML proxy error page. Downgrade HTML bodies to the status and
+ * truncate long text bodies. */
+function errorDetail(res: Response, data: unknown): unknown {
+  const detail = (data as { detail?: unknown })?.detail ?? data ?? res.statusText;
+  if (typeof detail !== "string") return detail;
+  const trimmed = detail.trim();
+  if (trimmed.startsWith("<")) return `HTTP ${res.status}`;
+  return trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed;
+}
+
 /** Plain JSON call for endpoints whose OpenAPI body is free-form; still goes through auth + refresh. */
 export async function call<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await authFetch(path, {
@@ -42,7 +53,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   });
   const text = await res.text();
   const data = text ? safeJson(text) : undefined;
-  if (!res.ok) throw new ApiError(res.status, (data as { detail?: unknown })?.detail ?? data ?? res.statusText,
+  if (!res.ok) throw new ApiError(res.status, errorDetail(res, data),
     res.headers.get("x-formunex-task-id"));
   return data as T;
 }
@@ -61,7 +72,7 @@ function safeJson(text: string): unknown {
 async function throwDownloadError(res: Response): Promise<never> {
   const text = await res.text();
   const data = text ? safeJson(text) : undefined;
-  throw new ApiError(res.status, (data as { detail?: unknown })?.detail ?? data ?? res.statusText,
+  throw new ApiError(res.status, errorDetail(res, data),
     res.headers.get("x-formunex-task-id"));
 }
 

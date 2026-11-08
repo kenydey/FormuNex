@@ -118,6 +118,12 @@ class InstrumentIn(BaseModel):
     name: str = ""
     model: str = ""
     location: str = ""
+    # P3-A15: naive datetimes are interpreted as UTC (see _to_naive_utc
+    # above and app.clock.to_naive_utc) — the API boundary does NOT guess
+    # a caller TZ. Sending wall-clock local time without an offset stores
+    # it as if it were UTC, so calibration-due comparisons against
+    # clock.utcnow() can fire up to the local UTC offset early; send an
+    # aware ISO value to avoid that.
     calibrated_at: datetime | None = None
     calibration_due: datetime | None = None
     parser: str = ""
@@ -356,12 +362,25 @@ def _attachment_dict(row) -> dict[str, Any]:
 
 
 @router.get("/tasks/{task_id}/attachments")
-def list_task_attachments(task_id: str) -> list[dict[str, Any]]:
+def list_task_attachments(task_id: str, request: Request) -> list[dict[str, Any]]:
     from sqlalchemy import select
 
     from ..db.models_lab import LabTaskAttachmentRow, LabTaskRow
+    from ..services.identity import tokens
+    from ._principal import _bearer, current_user
 
     with _session() as session:
+        # P3-A2: the list leaks attachment filenames / sizes / uploaders,
+        # so it needs the same project-scoped lab.execute OR lab.review
+        # check as the download below (personal JWTs only; the operator
+        # service key stays exempt, mirroring download_task_attachment).
+        token = _bearer(request)
+        if token and tokens.looks_like_access_token(token):
+            project_id = _task_project_id(session, task_id)
+            user = current_user(request)
+            if not (user.principal.can("lab.execute", project_id)
+                    or user.principal.can("lab.review", project_id)):
+                raise HTTPException(status_code=403, detail="缺少权限 lab.execute/lab.review")
         if session.get(LabTaskRow, task_id) is None:
             raise HTTPException(status_code=404, detail="任务单不存在")
         rows = session.execute(select(LabTaskAttachmentRow).where(
@@ -698,6 +717,12 @@ def eln_connectors() -> list[dict[str, Any]]:
 
     s = get_settings()
     configured = {"elabftw": bool(s.lab_elabftw_url and s.lab_elabftw_api_key)}
+    # P3-C21: can_push is hardcoded True because elabftw is currently the
+    # only connector (CONNECTORS == ("elabftw",)) and the ElnConnector base
+    # default is can_push=True (connectors/base.py:46). When a second
+    # connector lands, this must read that connector's capability instead
+    # of assuming True — a read-only connector advertised as pushable
+    # would fail only at push time.
     return [{"name": n, "configured": configured[n], "can_push": True} for n in CONNECTORS]
 
 

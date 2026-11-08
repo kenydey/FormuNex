@@ -98,7 +98,9 @@ def _candidates(result: ClassificationResult, props: MixtureProperties) -> dict[
 def derive_transport(result: ClassificationResult, props: MixtureProperties, components: list[Component],
                      *, substance_entries: dict[str, dict] | None = None) -> dict[str, Any]:
     """Return a transport proposal; ``needs_review`` is always True."""
-    phys = "solid" if props.phys_state == "solid" else "liquid"
+    # P1-C10: only solid/liquid have NOS entries below; gas, aerosol and
+    # paste must not fall through to a liquid NOS entry.
+    phys = {"solid": "solid", "liquid": "liquid"}.get(props.phys_state)
     notes: list[str] = []
     env = any(o.hazard_class == "aquatic_acute" and o.category == "1" for o in result.hazards) or any(
         o.hazard_class == "aquatic_chronic" and o.category in ("1", "2") for o in result.hazards)
@@ -144,7 +146,7 @@ def derive_transport(result: ClassificationResult, props: MixtureProperties, com
             notes.append(f"品名表中该物质无包装类别 {pg} 的条目，已取第一个条目，需人工确认")
         if pick.get("transport_class") and pick["transport_class"] != primary:
             notes.append(f"品名表条目类别 {pick['transport_class']} 与分类推导的 {primary} 不一致，需人工确认")
-    if entry is None and props.product_category == "paint" and (primary, subsidiary) in _PAINT:
+    if entry is None and phys is not None and props.product_category == "paint" and (primary, subsidiary) in _PAINT:
         entry = _PAINT[(primary, subsidiary)]
     if entry is None:
         entry = _NOS.get((primary, subsidiary, phys)) or _NOS.get((primary, None, phys))

@@ -118,7 +118,7 @@ export default function ReviewItemsPage() {
                 modal.confirm({
                   title: t("review.resolve", "标记为已处理"),
                   content: <Input.TextArea onChange={(e) => { note = e.target.value; }}
-                    placeholder={t("review.note", "处理说明（可选）")} />,
+                    placeholder={t("review.note_optional", "处理说明（可选）")} />,
                   onOk: () => resolve.mutateAsync({ id: r.id, note }),
                 });
               }}>{t("review.resolve", "标记为已处理")}</a>

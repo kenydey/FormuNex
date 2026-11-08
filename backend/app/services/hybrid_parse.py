@@ -157,7 +157,12 @@ def _render_blocks(blocks: list[mineru_cloud.MinerUBlock], *, page_label: str) -
         # v18-3: 只对文本类块做标题判定 —— equation/table 块的文本可能以
         # "数字编号+空白"开头（如表格首单元格"1. 试剂名称"），误判为标题
         # 会导致整表 HTML 静默丢失。
-        if kind in ("text", "title", "list"):
+        # P2-B7: list blocks are lists, not headings. A multi-line list block
+        # starting with "1. ..." used to be swallowed whole into one broken
+        # heading (the matcher only anchors at the start). Heading judgment
+        # applies only to single-line text/title blocks; anything else keeps
+        # its lines as prose.
+        if kind in ("text", "title") and "\n" not in (block.text or "").strip():
             heading = _heading_markdown(block.text, block.text_level)
             if heading:
                 text, level = heading
@@ -168,6 +173,10 @@ def _render_blocks(blocks: list[mineru_cloud.MinerUBlock], *, page_label: str) -
             # Already LaTeX. A vision model can only do worse.
             if block.text.strip():
                 parts.append(f"$$\n{block.text.strip()}\n$$")
+            else:
+                # P2-B12: an empty equation used to vanish silently. Keep a
+                # visible marker so the gap is auditable downstream.
+                parts.append("> _（公式块内容为空）_")
             continue
 
         if kind == "table":
@@ -203,6 +212,42 @@ def _render_blocks(blocks: list[mineru_cloud.MinerUBlock], *, page_label: str) -
             parts.append(block.text.strip())
 
     return "\n\n".join(p for p in parts if p.strip())
+
+
+def _count_vision_failure(error: str | None, page_label: str) -> None:
+    """Count one permanent vision failure toward the breaker.
+
+    Shared by the "returned None" path and the exception path (P2-B3:
+    the same permanent error used to count only in the former shape).
+    Transient failures are not counted. Budget <= 0 means the breaker
+    is DISABLED (config documents 0 = 不断路): the counter still moves
+    for observability, but quota exhaustion only logs instead of
+    pretending to open a breaker that can never open.
+    """
+    from .vision_extract import _is_permanent_vision_failure
+
+    if not _is_permanent_vision_failure(error):
+        return
+    budget = get_settings().vision_max_consecutive_failures
+    _vision_consecutive_failures.set(_vision_consecutive_failures.get() + 1)
+    # Quota exhaustion (429 insufficient_quota) is not going to recover
+    # until the vendor resets the weekly quota — skip the "wait N pages"
+    # ramp and open the breaker immediately so every remaining figure in
+    # this document degrades to a placeholder instead of retrying 3× each.
+    lower = (error or "").lower()
+    if "insufficient_quota" in lower or "quota has been exhausted" in lower:
+        if budget:
+            _vision_consecutive_failures.set(max(_vision_consecutive_failures.get(), budget))
+            logger.info("hybrid: vision quota exhausted — breaker opened immediately")
+        else:
+            logger.info(
+                "hybrid: vision quota exhausted but breaker disabled (budget 0) — continuing"
+            )
+    logger.info(
+        "hybrid: vision permanent failure #%d for %s — "
+        "breaker at %d; %s",
+        _vision_consecutive_failures.get(), page_label, budget, error,
+    )
 
 
 def _visual_markdown(
@@ -244,7 +289,10 @@ def _visual_markdown(
 
     try:
         extraction, error = extract_image(block.image, f"{page_label}.png")
-    except Exception as exc:  # pragma: no cover - vision layer already degrades
+    except Exception as exc:  # P2-B3: the exception path counts exactly
+        # like the None path — the same permanent endpoint error used to
+        # trip the breaker only when it arrived as "returned None".
+        _count_vision_failure(str(exc), page_label)
         return degrade_return(
             logger, exc, "hybrid: vision call failed",
             f"{fallback}\n>\n> _（视觉解析异常）_",
@@ -260,29 +308,71 @@ def _visual_markdown(
         # retrieval then has to compete with.
         logger.warning("hybrid: vision returned nothing for %s (%s)", page_label, error)
         # Permanent failures trip the breaker; transient ones keep trying.
-        from .vision_extract import _is_permanent_vision_failure
-
-        if _is_permanent_vision_failure(error):
-            _vision_consecutive_failures.set(_vision_consecutive_failures.get() + 1)
-            # Quota exhaustion (429 insufficient_quota) is not going to recover
-            # until the vendor resets the weekly quota — skip the "wait N pages"
-            # ramp and open the breaker immediately so every remaining figure in
-            # this document degrades to a placeholder instead of retrying 3× each.
-            lower = (error or "").lower()
-            if "insufficient_quota" in lower or "quota has been exhausted" in lower:
-                _vision_consecutive_failures.set(max(_vision_consecutive_failures.get(), budget))
-                logger.info("hybrid: vision quota exhausted — breaker opened immediately")
-            logger.info(
-                "hybrid: vision permanent failure #%d for %s — "
-                "breaker at %d; %s",
-                _vision_consecutive_failures.get(), page_label, budget, error,
-            )
+        _count_vision_failure(error, page_label)
         return f"{fallback}\n>\n> _（视觉解析未返回结果，详见服务端日志）_"
 
     # A successful call resets the counter: the endpoint is reachable again.
     _vision_consecutive_failures.set(0)
     rendered = image_markdown(extraction, page_label)
     return f"{caption}\n\n{rendered}" if caption else rendered
+
+
+def _has_table_markdown(text: str) -> bool:
+    """Table-structure signal: a pipe-table row or an HTML <table>."""
+    if "<table" in text:
+        return True
+    return any(
+        line.strip().startswith("|") and line.count("|") >= 2
+        for line in text.splitlines()
+    )
+
+
+def _adopt_upgraded(page_no: int, local_text: str, upgraded_text: str) -> tuple[str, bool]:
+    """Adoption gate for a MinerU-escalated page (P1-B4).
+
+    Escalation used to replace local text unconditionally, so a
+    placeholder-only or sparse MinerU result overwrote good local text.
+    Returns (text_to_use, adopted): when not adopted the caller keeps the
+    local text and the rejection is user-visible via a note.
+    """
+    local = (local_text or "").strip()
+    upgraded = (upgraded_text or "").strip()
+    if not upgraded:
+        return local, False
+    if not local:
+        return upgraded, True
+    content_lines = [
+        ln for ln in upgraded.splitlines()
+        if ln.strip() and not ln.strip().startswith(">")
+    ]
+    if not content_lines:
+        try:
+            from .parse_notices import note
+
+            note(f"MinerU 升级第 {page_no} 页仅含占位内容，已保留本地文本")
+        except Exception:
+            pass
+        return local, False
+    if len(upgraded) < 0.5 * len(local):
+        try:
+            from .parse_notices import note
+
+            note(
+                f"MinerU 升级第 {page_no} 页字符数显著低于本地 "
+                f"（{len(upgraded)} < 本地 {len(local)} 的 50%），已保留本地文本"
+            )
+        except Exception:
+            pass
+        return local, False
+    if _has_table_markdown(local) and not _has_table_markdown(upgraded):
+        try:
+            from .parse_notices import note
+
+            note(f"MinerU 升级第 {page_no} 页丢失本地表格结构，已保留本地文本")
+        except Exception:
+            pass
+        return local, False
+    return upgraded, True
 
 
 def _escalate_page(content: bytes, page: pdf_local.LocalPage) -> str | None:
@@ -304,7 +394,11 @@ def _escalate_page(content: bytes, page: pdf_local.LocalPage) -> str | None:
 
         note(f"MinerU 解析第 {page.page_no} 页返回空结果，已回退本地文本层")
         return None
-    return _render_blocks(document.blocks, page_label=f"p.{page.page_no}") or None
+    rendered = _render_blocks(document.blocks, page_label=f"p.{page.page_no}")
+    if not rendered:
+        return None
+    adopted, ok = _adopt_upgraded(page.page_no, page.markdown, rendered)
+    return adopted if ok else None
 
 
 def _escalate_pages_batch(
@@ -330,6 +424,7 @@ def _escalate_pages_batch(
     if not page_pdfs:
         return {}
 
+    local_by_page = {p.page_no: p.markdown for p in pages}
     documents = mineru_cloud.parse_pages_batch(page_pdfs)
     upgraded: dict[int, str] = {}
     for page_no, document in zip(order, documents):
@@ -343,8 +438,11 @@ def _escalate_pages_batch(
                 pass
             continue
         rendered = _render_blocks(document.blocks, page_label=f"p.{page_no}")
-        if rendered:
-            upgraded[page_no] = rendered
+        if not rendered:
+            continue
+        adopted, ok = _adopt_upgraded(page_no, local_by_page.get(page_no, ""), rendered)
+        if ok:
+            upgraded[page_no] = adopted
     return upgraded
 
 
@@ -376,6 +474,27 @@ def _parse_scanned(content: bytes, pages: list[pdf_local.LocalPage]) -> str | No
 
         note("MinerU OCR 解析返回空结果，已回退本地处理")
         return None
+
+    # P2-B12: _normalise defaults a missing page_idx to 0, so a document
+    # whose blocks carry no page info collapses wholesale onto p.1. When
+    # every block claims page 0 but the source has several pages, page
+    # attribution is untrustworthy: warn and render in document order
+    # instead of stamping a false p.1 on everything. (A genuine
+    # page-1-only result shares this path harmlessly — its content is
+    # preserved in order, only the page label is dropped.)
+    if len(pages) > 1 and document.blocks and all(b.page_idx == 0 for b in document.blocks):
+        logger.warning(
+            "hybrid: MinerU returned no page indices for a %d-page scan — "
+            "rendering %d blocks in document order",
+            len(pages), len(document.blocks),
+        )
+        try:
+            from .parse_notices import note
+
+            note(f"MinerU 返回的解析块无页码信息（{len(pages)} 页文档），已按文档顺序合并呈现")
+        except Exception:
+            pass
+        return _render_blocks(document.blocks, page_label="scan") or None
 
     by_page: dict[int, list[mineru_cloud.MinerUBlock]] = {}
     for block in document.blocks:
@@ -433,6 +552,27 @@ def _scanned_vision_fallback(content: bytes) -> str | None:
     return None
 
 
+def _scanned_density_ok(text: str, n_pages: int | None) -> bool:
+    """Per-page density gate for scanned-document OCR (P1-B8).
+
+    The old code returned any non-empty OCR output as the document, so a
+    100-page scan OCR-ing to 300 garbage characters shipped as the whole
+    document. Same 50 chars/page threshold as the PDF quality gate; an
+    unknown page count fails open (the gate cannot judge, so it does not
+    discard a document on its own ignorance).
+    """
+    if not n_pages:
+        return True
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    try:
+        threshold = get_settings().pdf_quality_gate_min_chars_per_page
+    except Exception:
+        threshold = 50
+    return len(stripped) / n_pages >= threshold
+
+
 def _scanned_without_cloud(content: bytes) -> str | None:
     """Read a document with no text layer, using only what is on this host.
 
@@ -455,6 +595,13 @@ def _scanned_without_cloud(content: bytes) -> str | None:
     a separate decision rather than a forced change here.
     """
     from . import rapidocr_local, tesseract_local
+
+    try:
+        from . import pdf_local as _pl
+
+        n_pages = _pl.page_count(content) or None
+    except Exception:
+        n_pages = None
 
     if tesseract_local.tesseract_available():
         # v3 P0 M-10 真修：多页投票 —— 此前只看第一页，英文封面+中文正文
@@ -491,26 +638,55 @@ def _scanned_without_cloud(content: bytes) -> str | None:
                     doc.close()
                 except Exception:
                     pass
-        if votes_eng > votes_chi and votes_eng > 0:
+        # P2-B11: one English vote out of three sampled pages is not a
+        # language judgment — require at least two English votes, else
+        # fall through to RapidOCR.
+        if votes_eng >= 2 and votes_eng > votes_chi:
             eng = tesseract_local.ocr_pdf(content, lang="eng")
-            if eng:
+            if eng and _scanned_density_ok(eng, n_pages):
                 logger.info(
                     "hybrid: scanned document read by Tesseract (English, %d/%d 页投票)",
                     votes_eng, votes_eng + votes_chi,
                 )
                 return eng
+            if eng:
+                # P1-B8: sparse Tesseract output must not ship as the
+                # document — fall through to RapidOCR (which has its own
+                # density gate and vision rescue below).
+                logger.info(
+                    "hybrid: Tesseract output too sparse (%d chars / %s pages), "
+                    "falling back to RapidOCR",
+                    len(eng.strip()), n_pages if n_pages else "?",
+                )
 
     text = rapidocr_local.ocr_pdf(content)
     if text:
         logger.info("hybrid: scanned document read by local OCR (no cloud)")
-        # OCR 输出过短(图多字少的页, 如数据表/图片型表格) → vision 兜底:
-        # 前几页整图交给视觉 LLM 结构化(表格保真), 避免结构流失为纯文字。
-        if len(text.strip()) < 200:
-            visual = _scanned_vision_fallback(content)
-            if visual:
-                # v24-fix: 拼接而非整体替换 —— 保留第 4 页起的 OCR 内容。
-                return text + "\n\n" + visual
-        return text
+        if _scanned_density_ok(text, n_pages):
+            # OCR 输出过短(图多字少的页, 如数据表/图片型表格) → vision 兜底:
+            # 前几页整图交给视觉 LLM 结构化(表格保真), 避免结构流失为纯文字。
+            if len(text.strip()) < 200:
+                visual = _scanned_vision_fallback(content)
+                if visual:
+                    # v24-fix: 拼接而非整体替换 —— 保留第 4 页起的 OCR 内容。
+                    return text + "\n\n" + visual
+            return text
+        # P1-B8: sparse OCR garbage must not ship as the document. Try the
+        # vision rescue; without it, fall through to layout OCR below (and,
+        # when MinerU is available, to _parse_scanned) instead of returning
+        # a few characters per page as if that were the document.
+        visual = _scanned_vision_fallback(content)
+        if visual:
+            return text + "\n\n" + visual
+        try:
+            from .parse_notices import note
+
+            note(
+                f"扫描件 OCR 结果过稀疏（{len(text.strip())} 字符 / "
+                f"{n_pages if n_pages else '未知'} 页），未直接采用；已回退后续解析路径"
+            )
+        except Exception:
+            pass
 
     # Same page cap as RapidOCR on purpose: this is the same job by another
     # engine, and a 200-page scan must not be able to swallow an ingest run
@@ -537,11 +713,24 @@ def _apply_heading_rules_local(markdown: str) -> str:
         if not get_settings().pdf_heading_rules_extended:
             return markdown
     except Exception:
-        pass
+        # P3-B11: an unreadable switch must NOT silently enable content
+        # rewriting — return the input unchanged (fail-closed), instead of
+        # falling through to apply the rules.
+        return markdown
     try:
         out: list[str] = []
+        # P3-B8: skip fenced code blocks — a "1. xxx" line inside a fence
+        # is code, not a numbered heading, and must not gain a "#" prefix.
+        in_fence = False
         for line in markdown.splitlines():
             s = line.strip()
+            if s.startswith("```") or s.startswith("~~~"):
+                in_fence = not in_fence
+                out.append(line)
+                continue
+            if in_fence:
+                out.append(line)
+                continue
             if s and not s.startswith("#") and len(s) <= 80:
                 hit = _heading_markdown(s, 0)
                 if hit:

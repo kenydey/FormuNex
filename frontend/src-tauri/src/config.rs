@@ -91,6 +91,9 @@ impl DesktopConfig {
         if self.image.trim().is_empty() || self.version.trim().is_empty() {
             return Err(DesktopError::Config("镜像与版本不能为空".into()));
         }
+        if !valid_image(&self.image) {
+            return Err(DesktopError::Config(format!("镜像名 “{}” 不合法（应为小写仓库路径，不含 tag，tag 在版本字段）", self.image)));
+        }
         if !valid_tag(&self.version) {
             return Err(DesktopError::Config(format!("镜像版本 “{}” 不合法", self.version)));
         }
@@ -124,6 +127,50 @@ pub fn normalize_remote_url(raw: &str) -> Result<String> {
     let path = parsed.path().trim_end_matches('/');
     out.push_str(path);
     Ok(out)
+}
+
+/// Docker image names (without tag — the tag lives in `version`):
+/// slash-separated components, each `[a-z0-9]+` with `.`/`-`/`_`/`__`
+/// separators that must be followed by an alphanumeric. The first
+/// component may carry a registry port (`localhost:5000/fx`).
+pub fn valid_image(image: &str) -> bool {
+    if image.is_empty() {
+        return false;
+    }
+    let mut parts = image.split('/');
+    let first = parts.next().unwrap_or("");
+    // A registry port is digits after a single colon on the first part only.
+    let first = match first.split_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
+        Some(_) => return false,
+        None => first,
+    };
+    std::iter::once(first).chain(parts).all(|part| {
+        let mut need_alnum = true;
+        let mut chars = part.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                need_alnum = false;
+            } else if c == '.' || c == '-' {
+                if need_alnum {
+                    return false;
+                }
+                need_alnum = true;
+            } else if c == '_' {
+                if need_alnum {
+                    return false;
+                }
+                // "__" counts as a single separator.
+                if chars.peek() == Some(&'_') {
+                    chars.next();
+                }
+                need_alnum = true;
+            } else {
+                return false;
+            }
+        }
+        !need_alnum
+    })
 }
 
 /// Docker image tags: `[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}`.
@@ -165,6 +212,24 @@ mod tests {
         assert!(normalize_remote_url("ftp://fx.example.com").is_err());
         assert!(normalize_remote_url("https://user:pw@fx.example.com").is_err());
         assert!(normalize_remote_url("not a url").is_err());
+    }
+
+    #[test]
+    fn images() {
+        assert!(valid_image("ghcr.io/kenydey/formunex-backend"));
+        assert!(valid_image("formunex-backend"));
+        assert!(valid_image("a-b_c.d/e__f"));
+        assert!(valid_image("localhost:5000/fx"));
+        assert!(!valid_image("localhost:abc/fx"));
+        assert!(!valid_image(""));
+        assert!(!valid_image("GHCR.IO/Foo"));
+        assert!(!valid_image("repo:tag"));
+        assert!(!valid_image("repo@sha256:abc"));
+        assert!(!valid_image("/leading"));
+        assert!(!valid_image("trailing/"));
+        assert!(!valid_image("a//b"));
+        assert!(!valid_image("a.-b"));
+        assert!(!valid_image("a_"));
     }
 
     #[test]

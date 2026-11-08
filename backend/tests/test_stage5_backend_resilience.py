@@ -72,8 +72,21 @@ def test_ordinary_overflow_still_reraises():
 # ── SR-097: every route's 422 is debug-logged (path + field + type) ────
 
 def test_422_on_non_projects_route_is_debug_logged(caplog):
-    with caplog.at_level(logging.DEBUG, logger="app.main"):
-        resp = client.post("/api/session-plans", json={})
+    # P1-A5: session-plan endpoints now require current_user, so the
+    # request must authenticate before it can reach validation (401
+    # otherwise); the test's intent — the 422 debug log — is unchanged.
+    from app.api._principal import CurrentUser, current_user
+    from app.services.identity.rbac import Principal
+
+    app.dependency_overrides[current_user] = lambda: CurrentUser(
+        id="u1", username="u1", display_name="u1", session_id="s",
+        principal=Principal("u1", frozenset(), {}),
+    )
+    try:
+        with caplog.at_level(logging.DEBUG, logger="app.main"):
+            resp = client.post("/api/session-plans", json={})
+    finally:
+        app.dependency_overrides.pop(current_user, None)
     assert resp.status_code == 422
     recs = [r for r in caplog.records if "validation failed" in r.message]
     assert recs, "no 422 log record for a non-/api/projects route"

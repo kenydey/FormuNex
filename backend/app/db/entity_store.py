@@ -521,6 +521,11 @@ class EntityStore:
         *,
         scan_limit: int = 500,
         project_id: str | None = None,
+        # P3-D2: mirrors chunk_store / source_store (include_global=False
+        # by default). Global docs stay visible to every project view by
+        # documented semantics; this switch only lets a caller EXCLUDE
+        # them, which the old unconditional `| is_(None)` made impossible.
+        include_global: bool = False,
     ) -> tuple[list[KGMention], int, bool]:
         if not entity_ids:
             return [], 0, False
@@ -533,13 +538,13 @@ class EntityStore:
                 .order_by(KGMention.created_at.desc())
             )
             if project_id:
+                project_filter = SourceDocument.project_id == project_id
+                if include_global:
+                    project_filter = project_filter | (SourceDocument.project_id.is_(None))
                 q = (
                     q.join(DocumentChunk, KGMention.chunk_id == DocumentChunk.id)
                     .join(SourceDocument, DocumentChunk.source_id == SourceDocument.id)
-                    .filter(
-                        (SourceDocument.project_id == project_id)
-                        | (SourceDocument.project_id.is_(None))
-                    )
+                    .filter(project_filter)
                 )
             total = q.count()
             truncated = total > scan_limit

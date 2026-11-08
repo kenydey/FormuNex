@@ -16,6 +16,44 @@ export interface SessionUser {
 
 type Listener = (token: string | null) => void;
 
+/** P2-E1: hung requests used to wait forever. Every authFetch gets a
+ * 120 s budget unless the caller supplies its own signal (which wins:
+ * long uploads / downloads pass one explicitly). The budget covers the
+ * initial attempt plus the single refresh retry. */
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+/** A timeout signal is only attached when this runtime accepts it: in
+ * some test runtimes (jsdom) the global AbortSignal and the Request
+ * constructor come from different realms, and a signal from one is
+ * rejected by the other ("Expected signal to be an instance of
+ * AbortSignal") — which broke auth.test.ts / session.test.tsx outright.
+ * The probe runs once at import; when it fails the default budget is
+ * skipped (callers can still pass their own signal). Real browsers are
+ * single-realm, so the budget applies there. */
+const defaultSignalWorks = (() => {
+  try {
+    new Request("http://localhost/", { signal: AbortSignal.timeout(1) });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+function defaultSignal(): AbortSignal | undefined {
+  return defaultSignalWorks ? AbortSignal.timeout(DEFAULT_TIMEOUT_MS) : undefined;
+}
+
+/** P2-E2: refresh-failure listeners. SessionProvider subscribes and
+ * clears the local session so RequireAuth bounces to /login instead of
+ * leaving a dead session behind (pages previously showed a bare 401). */
+type UnauthorizedListener = () => void;
+const unauthorizedListeners = new Set<UnauthorizedListener>();
+
+export function onUnauthorized(l: UnauthorizedListener): () => void {
+  unauthorizedListeners.add(l);
+  return () => unauthorizedListeners.delete(l);
+}
+
 let accessToken: string | null = null;
 let refreshing: Promise<string | null> | null = null;
 const listeners = new Set<Listener>();
@@ -104,15 +142,18 @@ export async function authFetch(input: Request | string | URL, init?: RequestIni
   let request = input instanceof Request ? input : new Request(absolute(input), init);
   const target = rebase(new URL(request.url));
   if (target.href !== request.url) request = new Request(target, request);
+  // Caller signal wins; otherwise the default budget applies to both attempts.
+  const signal = (input instanceof Request ? input.signal : init?.signal) ?? defaultSignal();
   const attempt = (token: string | null) => {
     const r = request.clone();
     const headers = new Headers(r.headers);
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    return fetch(new Request(r, { headers, credentials: "same-origin" }));
+    return fetch(new Request(r, { headers, credentials: "same-origin", signal }));
   };
   const res = await attempt(accessToken);
   const path = new URL(request.url).pathname.replace(/^.*(?=\/api\/identity\/)/, "");
   if (res.status !== 401 || NO_RETRY.includes(path)) return res;
   const token = await refreshAccessToken();
+  if (!token) unauthorizedListeners.forEach((l) => l());
   return token ? attempt(token) : res;
 }

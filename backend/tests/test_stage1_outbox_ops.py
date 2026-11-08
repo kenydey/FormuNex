@@ -92,3 +92,23 @@ def test_outbox_retry_rejects_non_failed_and_missing(db):
     client = TestClient(app)
     assert client.post(f"/api/ops/outbox/{row.id}/retry").status_code == 409
     assert client.post(f"/api/ops/outbox/{uuid.uuid4()}/retry").status_code == 404
+
+
+def test_outbox_retry_record_failure_is_503_not_success(db, monkeypatch):
+    """P2-3: a retry whose publish succeeded but whose task_id failed
+    to record must NOT be reported as success — the row stays PENDING
+    (task_id-less) and recovery will replay it under a new id, so
+    returning the unrecorded id would double-run the payload."""
+    from app.db import outbox_store
+
+    monkeypatch.setattr(dispatcher, "_dispatch", lambda *a, **k: None)
+    monkeypatch.setattr(outbox_store, "record_task_id", lambda *a, **k: False)
+    with db() as s:
+        row = _row(s, "search", status="FAILED", error="ValueError: boom", attempts=3)
+        row_id = row.id
+    client = TestClient(app)
+    res = client.post(f"/api/ops/outbox/{row_id}/retry")
+    assert res.status_code == 503, res.text
+    with db() as s:
+        after = s.get(TaskOutbox, row_id)
+        assert after.status == "PENDING" and after.task_id is None

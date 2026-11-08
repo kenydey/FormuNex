@@ -3,6 +3,11 @@
 In-process counters only — no new storage. Counters reset on process
 restart; the response says so explicitly. For durable history use the
 structured logs (``tier2 evidence compression: ...``).
+
+P3-A1: GETs here are NOT permission-gated — the ``/api/ops`` admin.llm
+    rule in ``_rbac_guard`` fires on write methods only (reads are never
+    blocked except _SENSITIVE_READS); a valid bearer is still required
+    by middleware. Only the POST endpoints below are admin.llm-gated.
 """
 from __future__ import annotations
 
@@ -21,8 +26,10 @@ def outbox_rows(
 ) -> dict:
     """Stage 1 / SR-002: outbox rows for operators (oldest first).
 
-    API-only (no screen); guarded by the existing ``/api/ops`` admin.llm
-    rule in ``_rbac_guard``. Payloads are not returned (see
+    API-only (no screen); P3-A1: GETs here are NOT permission-gated — the ``/api/ops`` admin.llm
+    rule in ``_rbac_guard`` fires on write methods only (reads are never
+    blocked except _SENSITIVE_READS); a valid bearer is still required
+    by middleware. Only the POST endpoints below are admin.llm-gated. Payloads are not returned (see
     ``outbox_store.list_outbox_rows``); FAILED rows carry their error
     summary here and are retried via the endpoint below.
     """
@@ -37,7 +44,10 @@ def outbox_rows(
 def metrics() -> dict:
     """Stage 1 / SR-029-SR-068: lightweight ops metrics (JSON, not Prometheus text).
 
-    Guarded by the existing ``/api/ops`` admin.llm rule. Counters marked
+    P3-A1: GETs here are NOT permission-gated — the ``/api/ops`` admin.llm
+    rule in ``_rbac_guard`` fires on write methods only (reads are never
+    blocked except _SENSITIVE_READS); a valid bearer is still required
+    by middleware. Only the POST endpoints below are admin.llm-gated. Counters marked
     ``process_local`` reset on process restart (same convention as the
     other ops counters); outbox counts and the 1 h failure count are
     durable queries. No payloads are returned.
@@ -108,7 +118,18 @@ def outbox_retry(row_id: str) -> dict:
             status_code=503,
             detail=f"retry queued but publish failed ({exc}); row stays PENDING for recovery",
         ) from exc
-    record_task_id(row_id, task_id)
+    # P2-3 (2026-11-04 deep review): the old code discarded this return
+    # value, so a publish that succeeded but whose task_id failed to
+    # record was reported as a successful retry — while recovery would
+    # replay the still-PENDING, task_id-less row under a NEW id, running
+    # the same payload twice in parallel. SR-088 pattern: fail loudly
+    # instead of returning the unrecorded task_id as success.
+    if not record_task_id(row_id, task_id):
+        raise HTTPException(
+            status_code=503,
+            detail="retry published but its task_id could not be recorded; "
+            "row stays PENDING for recovery (do not poll the returned id)",
+        )
     return {"outbox_id": row_id, "operation": operation, "task_id": task_id, "status": "PENDING"}
 
 
@@ -116,7 +137,10 @@ def outbox_retry(row_id: str) -> dict:
 def rules_status_endpoint() -> dict:
     """Stage 3 / SR-060 (3-7): what rule tables are live right now.
 
-    Guarded by the existing ``/api/ops`` admin.llm rule. No loads are
+    P3-A1: GETs here are NOT permission-gated — the ``/api/ops`` admin.llm
+    rule in ``_rbac_guard`` fires on write methods only (reads are never
+    blocked except _SENSITIVE_READS); a valid bearer is still required
+    by middleware. Only the POST endpoints below are admin.llm-gated. No loads are
     triggered: tables never loaded since start (or since the last
     reload) report ``not_loaded``.
     """

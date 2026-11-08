@@ -40,7 +40,9 @@ export interface DockerStatus {
 
 export interface ServiceState { service: string; state: string; health: string; status: string }
 export interface Health { reachable: boolean; status: string; detail: Record<string, unknown> | null; error: string | null }
-export interface StackStatus { services: ServiceState[]; health: Health }
+export interface StackStatus { services: ServiceState[]; health: Health; services_error: string | null }
+
+export interface CreateAdminResult { password: string; keychain_saved: boolean }
 export interface BackupInfo { path: string; name: string; bytes: number }
 
 /** Shell commands (src-tauri/src/commands.rs). Errors arrive as the shell's (Chinese) message string. */
@@ -69,7 +71,9 @@ export const desktop = {
   listBackups: () => invoke<BackupInfo[]>("list_backups"),
   upgrade: (version: string) => invoke<DesktopConfig>("stack_upgrade", { version }),
   seedRegulatory: () => invoke<void>("seed_regulatory"),
-  createAdmin: (username: string, displayName: string) => invoke<string>("create_admin", { username, displayName }),
+  createAdmin: (username: string, displayName: string) => invoke<CreateAdminResult>("create_admin", { username, displayName }),
+  resetConfig: () => invoke<void>("reset_config"),
+  updaterConfigured: () => invoke<boolean>("updater_configured"),
   keychainGet: (key: string) => invoke<string | null>("keychain_get", { key }),
   keychainSet: (key: string, value: string) => invoke<void>("keychain_set", { key, value }),
   keychainDelete: (key: string) => invoke<void>("keychain_delete", { key }),
@@ -91,7 +95,9 @@ export function deepLinkRoute(url: string): string | null {
   }
   if (parsed.protocol !== "formunex:") return null;
   // WHATWG parsing puts the first segment of a non-special scheme into ``host`` (or into the path).
-  const raw = `/${parsed.host}${parsed.pathname}`.replace(/\/{2,}/g, "/").replace(/\/$/, "") || "/";
+  // P3-E11: ``host`` keeps a port (``plm:8080``) which is not a route
+  // segment; ``hostname`` is the first segment, matching the shell.
+  const raw = `/${parsed.hostname}${parsed.pathname}`.replace(/\/{2,}/g, "/").replace(/\/$/, "") || "/";
   if (raw.includes("..")) return null;
   return parsed.search ? `${raw}${parsed.search}` : raw;
 }

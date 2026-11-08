@@ -30,10 +30,10 @@ def test_dunder_access_is_blocked():
 
 def test_legit_tags_still_render():
     out = render_docx(
-        {"header": {"product_name": "VIANT-X"}, "sections": []},
+        {"header": {"product_name": "PRODUCT-X"}, "sections": []},
         template=_template_docx("{{ header.product_name }}"),
     )
-    assert _rendered_text(out) == ["VIANT-X"]
+    assert _rendered_text(out) == ["PRODUCT-X"]
 
 
 def test_text_helper_still_callable():

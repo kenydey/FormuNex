@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { StatusTag } from "@/shared/tags";
 import { fx } from "./api";
@@ -18,6 +19,7 @@ export const rowKey = (c: number | string, r: number | string) => ["formulation"
 /** Attachment list + upload + unbind for one row (legacy AttachmentPreview). */
 export function RowAttachments({ campaignId, rowId }: { campaignId: number; rowId: number }) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const key = [...rowKey(campaignId, rowId), "attachments"];
@@ -36,8 +38,8 @@ export function RowAttachments({ campaignId, rowId }: { campaignId: number; rowI
   return (
     <>
       <Space style={{ marginBottom: 12 }}>
-        <Upload showUploadList={false} beforeUpload={(f) => { upload.mutate(f); return false; }}>
-          <Button icon={<UploadOutlined />} loading={upload.isPending}>{t("formulation.att.upload", "上传")}</Button>
+        <Upload showUploadList={false} beforeUpload={(f) => { if (!can("lab.execute")) return false; upload.mutate(f); return false; }}>
+          <Button icon={<UploadOutlined />} disabled={!can("lab.execute")} loading={upload.isPending}>{t("formulation.att.upload", "上传")}</Button>
         </Upload>
         <Typography.Text type="secondary">{t("formulation.att.bind_hint", "文件绑定到该行回灌的训练实验（需先保存台账为 Completed 且有实测值）")}</Typography.Text>
       </Space>
@@ -54,7 +56,7 @@ export function RowAttachments({ campaignId, rowId }: { campaignId: number; rowI
             <Popconfirm title={t("formulation.att.delete_q", "删除附件「{{f}}」？", { f: a.filename || a.source_document_id })}
               description={t("formulation.att.delete_desc", "仅解除与实验的绑定，本地镜像保留（可追溯）。")}
               onConfirm={() => remove.mutate(a)}>
-              <Button size="small" type="link" danger icon={<DeleteOutlined />} loading={remove.isPending && remove.variables?.id === a.id} />
+              <Button size="small" type="link" danger disabled={!can("lab.execute")} icon={<DeleteOutlined />} loading={remove.isPending && remove.variables?.id === a.id} />
             </Popconfirm>
           </Space> },
         ]} />
@@ -65,6 +67,7 @@ export function RowAttachments({ campaignId, rowId }: { campaignId: number; rowI
 /** Auto-saved versions of a row: compare with the previous one, restore (legacy RowVersionHistoryModal). */
 export function RowVersions({ campaignId, rowId, onRestored }: { campaignId: number; rowId: number; onRestored?: () => void }) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const key = [...rowKey(campaignId, rowId), "versions"];
@@ -107,7 +110,7 @@ export function RowVersions({ campaignId, rowId, onRestored }: { campaignId: num
           { title: t("common.actions", "操作"), width: 160, render: (_d, v) => <Space>
             <Button size="small" type="link" disabled={versions.length < 2} loading={compare.isPending && compare.variables?.id === v.id}
               onClick={() => compare.mutate(v)}>{t("formulation.ver.compare", "对比")}</Button>
-            <Button size="small" type="link" danger disabled={restore.isPending} onClick={() => askRestore(v)}>{t("formulation.rowver.restore", "恢复")}</Button>
+            <Button size="small" type="link" danger disabled={restore.isPending || !can("lab.execute")} onClick={() => askRestore(v)}>{t("formulation.rowver.restore", "恢复")}</Button>
           </Space> },
         ]} />
       {diff && <Alert style={{ marginTop: 12 }} type="info" closable onClose={() => setDiff(null)}

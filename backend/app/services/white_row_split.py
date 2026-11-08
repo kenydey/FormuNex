@@ -20,8 +20,27 @@ from __future__ import annotations
 import io
 import json
 
-import numpy as np
-from PIL import Image
+# P2-B30: PIL / numpy are lazy, not import-time hard deps — unlike the
+# chem=None degradation elsewhere, this module used to fail at import
+# when either was missing. Callers now get a catchable
+# WhiteRowSplitUnavailableError at call time instead.
+try:
+    import numpy as np
+    from PIL import Image
+except ImportError:  # pragma: no cover - exercised by dependency tests
+    np = None  # type: ignore[assignment]
+    Image = None  # type: ignore[assignment]
+
+
+class WhiteRowSplitUnavailableError(RuntimeError):
+    """PIL / numpy are required for white-row splitting."""
+
+
+def _require_deps() -> None:
+    if np is None or Image is None:
+        raise WhiteRowSplitUnavailableError(
+            "white-row splitting needs PIL and numpy"
+        )
 
 WHITE_THRESHOLD = 250
 WHITE_ROW_RATIO = 0.995
@@ -36,10 +55,11 @@ QC_MULTIPLE_CAPTIONS = "multiple_captions"
 
 
 def _white_rows(image_bytes: bytes) -> np.ndarray:
+    _require_deps()
     img = Image.open(io.BytesIO(image_bytes)).convert("L")
     arr = np.asarray(img)
-    if arr.ndim == 0:
-        return np.array([True])
+    # P3-B15: no ndim==0 branch — convert("L") always yields a 2-D array,
+    # so the old 0-d fallback was unreachable.
     row_white = (arr >= WHITE_THRESHOLD).mean(axis=1)
     return row_white >= WHITE_ROW_RATIO
 
@@ -65,18 +85,38 @@ def split_white_rows(
     even_step_px: int = EVEN_STEP_PX,
 ) -> tuple[list[bytes], list[int]]:
     """Split an image at white rows. Returns (segment PNG bytes, cut rows).
-    Empty cuts mean the image came back whole (no valid first cut)."""
+    Empty cuts mean the image came back whole (no valid first cut).
+
+    P3-B17: unparseable bytes raise PIL's UnidentifiedImageError — this
+    module does NOT fail open here. Callers must catch it (there is no
+    app/ caller today; tests pass valid images).
+    """
+    _require_deps()
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     width, height = img.size
     white_rows = _white_rows(image_bytes)
     lo = int(height * first_cut_min_fraction)
     hi = int(height * first_cut_max_fraction)
+    # P3-B16: a cut needs content on BOTH sides — a white row whose
+    # upper side or lower side is entirely blank is a margin / trailing
+    # gap, not a figure boundary. (white_rows is True for WHITE rows, so
+    # content means ~white_rows; the first version tested the mask
+    # un-negated and cut all-white images — fixed after the batch-7
+    # directed run flagged test_b28_tiny_all_white_image_returns_whole.)
+    # Known limitation, documented: a white gap INSIDE one figure still
+    # passes this gate, since both sides have content; the band + step
+    # heuristics bound that case but cannot rule it out. A rejected band
+    # falls back to the whole image, the module's safe default.)
     first_cut = None
     for row in range(lo, min(hi + 1, height)):
         if white_rows[row]:
-            first_cut = row
-            break
-    if first_cut is None:
+            if (~white_rows[:row]).any() and (~white_rows[row + 1:]).any():
+                first_cut = row
+                break
+    # P2-B28: a first cut at row 0 is not a cut at all — it would yield
+    # an empty first segment while cuts claims a split happened. Treat
+    # it as "no valid first cut" and return the whole image.
+    if first_cut is None or first_cut == 0:
         return [_png_bytes(img)], []
     cuts = [first_cut]
     target = first_cut + even_step_px
@@ -121,9 +161,14 @@ def recall_gate(decision) -> bool:
 
     Real bools pass through; strings must parse as JSON booleans;
     anything else (unparsable, wrong type, None) is uncertain -> keep.
+
+    P2-B29: numpy booleans count as real bools — np.bool_(False) used
+    to fall into "uncertain -> keep" and return True.
     """
-    if isinstance(decision, bool):
-        return decision
+    if isinstance(decision, bool) or (
+        np is not None and isinstance(decision, np.bool_)
+    ):
+        return bool(decision)
     if isinstance(decision, str):
         try:
             parsed = json.loads(decision)
@@ -136,8 +181,17 @@ def recall_gate(decision) -> bool:
 def filter_segments(
     segments: list[bytes], qc_labels: list[str]
 ) -> list[bytes]:
-    """Drop only no_image_content segments; everything else is kept."""
-    return [
-        seg for seg, label in zip(segments, qc_labels)
-        if label != QC_NO_IMAGE_CONTENT
-    ]
+    """Drop only no_image_content segments; everything else is kept.
+
+    P1-B20: the old zip truncated silently when the label list was
+    shorter than the segment list. A segment without a label is
+    uncertain, and this module is recall-biased — it is KEPT, never
+    dropped for lack of a label. Extra labels past the last segment
+    refer to nothing and are ignored.
+    """
+    out: list[bytes] = []
+    for idx, seg in enumerate(segments):
+        label = qc_labels[idx] if idx < len(qc_labels) else QC_OK
+        if label != QC_NO_IMAGE_CONTENT:
+            out.append(seg)
+    return out

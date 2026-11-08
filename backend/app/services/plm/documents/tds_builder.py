@@ -86,10 +86,18 @@ def build_tds(ctx: TdsContext) -> dict:
     p = doc.section(2, "typical_properties", t(lang, "典型物性", "Typical properties"))
     if not ctx.properties:
         doc.missing.append("典型物性")
+    prop_rows = []
+    skipped = 0
+    for x in ctx.properties:
+        if not (x.get("label") or x.get("key")):
+            skipped += 1
+            continue
+        prop_rows.append([x.get("label") or x.get("key"), x.get("value"), x.get("unit", ""), x.get("method", "")])
+    if skipped:
+        doc.warnings.append(f"{skipped} 条物性行缺项目名与键，已跳过")
     p.table("properties", [t(lang, "项目", "Property"), t(lang, "典型值", "Typical value"), t(lang, "单位", "Unit"),
                            t(lang, "测试方法", "Test method")],
-            [[x.get("label") or x["key"], x.get("value"), x.get("unit", ""), x.get("method", "")] for x in ctx.properties],
-            "measured")
+            prop_rows, "measured")
     p.paragraphs.append(t(lang, "以上为典型值，不作为产品规格。", "Typical values; not a specification."))
 
     if ctx.performance:

@@ -140,7 +140,9 @@ export default function DoeHistoryPage() {
           { title: t("common.created", "创建时间"), dataIndex: "created_at", width: 170,
             render: (_d, r) => (r.created_at ? r.created_at.slice(0, 19).replace("T", " ") : "—") },
           { title: t("common.actions", "操作"), valueType: "option", width: 200, render: (_d, r) => r.plan_id ? planActions(r.status).map((a) => (
-            <a key={a} onClick={() => (a === "abort" ? setAbortFor(r.plan_id!) : transition.mutate({ id: r.plan_id!, action: a }))}>{actionLabel[a]}</a>
+            can("doe.write", projectId)
+              ? <a key={a} onClick={() => (a === "abort" ? setAbortFor(r.plan_id!) : transition.mutate({ id: r.plan_id!, action: a }))}>{actionLabel[a]}</a>
+              : <span key={a} style={{ color: "rgba(0,0,0,0.25)" }}>{actionLabel[a]}</span>
           )) : [] },
         ]}
       />
@@ -154,7 +156,7 @@ export default function DoeHistoryPage() {
         extra={detail?.plan_id && <Space>
           <Button onClick={() => download(`/api/doe/${encodeURIComponent(detail.plan_id!)}/export?format=csv`, `doe_${detail.plan_id}.csv`)
             .catch((e) => message.error(errorText(e)))}>{t("design.doe.export_csv", "导出 CSV")}</Button>
-          <Button loading={adopt.isPending} disabled={!planQ.data || !can("lab.execute", projectId)} onClick={() => planQ.data && adopt.mutate(planQ.data)}>
+          <Button loading={adopt.isPending} disabled={!planQ.data || !can("lab.execute", projectId) || !can("doe.write", projectId) || !can("project.write", projectId)} onClick={() => planQ.data && adopt.mutate(planQ.data)}>
             {t("design.doe.adopt", "写入实验台账")}</Button>
           <DispatchButton planId={detail.plan_id} />
         </Space>}>

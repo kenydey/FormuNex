@@ -1,6 +1,7 @@
 import { Form, Input, Modal, message } from "antd";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { desktop, isDesktop } from "@/desktop/bridge";
 import { errorText } from "@/shared/feedback";
 
 export function ChangePasswordModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -13,6 +14,9 @@ export function ChangePasswordModal({ open, onClose }: { open: boolean; onClose:
         try {
           await call("POST", "/api/identity/password", { old_password: v.old_password, new_password: v.new_password });
           message.success(t("password.changed", "密码已修改，其他会话已全部退出"));
+          // P1-E14: the keychain bootstrap secret (the wizard-generated
+          // first password) must not survive a password change.
+          if (isDesktop()) await desktop.keychainDelete("admin-password").catch(() => undefined);
           onClose();
         } catch (e) {
           message.error(errorText(e));

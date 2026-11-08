@@ -73,7 +73,7 @@ def test_unsupported_structured_output_falls_back_to_prompt_json(monkeypatch) ->
     """The fallback is the same schema-in-the-prompt approach Anthropic and
     Gemini already use, so a provider without native structured output
     degrades to a working extraction rather than to nothing."""
-    llm._STRUCTURED_UNSUPPORTED_PROVIDERS.clear()
+    llm._STRUCTURED_UNSUPPORTED.clear()  # P3-B4: (provider, model) dict replaced the provider-level set
     calls: list[str] = []
 
     def native(*_args, **_kwargs):
@@ -99,7 +99,7 @@ def test_unsupported_structured_output_falls_back_to_prompt_json(monkeypatch) ->
 def test_the_fallback_is_not_retried_three_times(monkeypatch) -> None:
     """LLMStructuredUnsupported must be handled below the retry decorator —
     retrying a permanent 400 is pure waste."""
-    llm._STRUCTURED_UNSUPPORTED_PROVIDERS.clear()
+    llm._STRUCTURED_UNSUPPORTED.clear()  # P3-B4: (provider, model) dict replaced the provider-level set
     attempts: list[int] = []
 
     def native(*_args, **_kwargs):

@@ -1,5 +1,8 @@
 /** English strings of this feature area (merged into locales/en-US.ts). */
 const en: Record<string, string> = {
+  "workbench.bad_id": "Ledger not found",
+  "workbench.bad_id_hint": "The ledger id in the link is not a number; check the link or enter from Optimization & analysis.",
+  "workbench.back_list": "Back to ledger list",
   "workbench.stored_plan": "DOE plan",
   "workbench.source_stored": "A stored DOE plan",
   "workbench.pick_plan": "Pick a stored DOE plan",
@@ -250,7 +253,7 @@ const en: Record<string, string> = {
   "workbench.status.in_progress": "In progress",
   "workbench.status.pending": "Pending",
   "workbench.strategy": "Strategy",
-  "workbench.surface.n": "{{n}} completed runs interpolated",
+  "workbench.surface.n": "{{n}} completed runs interpolated ({{m}} measured, {{p}} predicted)",
   "workbench.surface.no_campaign": "No lab ledgers yet",
   "workbench.surface.sub": "IDW interpolation of completed runs' actual parameters and measurements: how two factors drive a metric",
   "workbench.surface.title": "Response surface · {{m}}",

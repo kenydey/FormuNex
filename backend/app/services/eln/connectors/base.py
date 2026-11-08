@@ -63,6 +63,10 @@ class ElnConnector(ABC):
     def pull_measurements(self, external_id: str, *, since: str | None = None) -> list[RemoteValue]:
         """Pull values recorded against ``external_id``.
 
+        Implementations may set ``self.last_pull_errors`` to a list of
+        per-field skip messages; sync.py surfaces them in the pull
+        report instead of dropping unparseable fields silently.
+
         ``since`` (ISO timestamp, optional): only values changed after it.
         Connectors whose backend cannot filter by time ignore it and return
         everything (sync.py dedupes via content_hash); document that in the override.

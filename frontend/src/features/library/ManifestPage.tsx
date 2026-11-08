@@ -85,7 +85,8 @@ function FreezeStrip({ projectId, manifest }: { projectId: string; manifest: Man
           const res = await call<{ async?: boolean; task_id?: string }>("POST", "/api/wiki/literature/screen", {
             project_id: projectId, apply: true, preset: v.preset || undefined, rule_name: v.rule_name?.trim() || undefined, criteria: criteria(),
           });
-          if (res.async && res.task_id) await awaitTask(res.task_id);
+          // P2-E3: bound the wait (was unbounded); the task keeps running server-side past the bound.
+          if (res.async && res.task_id) await awaitTask(res.task_id, { timeoutMs: 900_000 });
         })}>{t("library.screen.run", "运行筛选")}</Button>
         <Button loading={run.isPending} disabled={!can("knowledge.write")} onClick={() => {
           const name = form.getFieldValue("rule_name")?.trim();

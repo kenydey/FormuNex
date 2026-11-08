@@ -98,10 +98,12 @@ def _document_generate_impl(task_id: str, payload: dict) -> dict:
                 if doc_type in ("sds", "label"):
                     rows = docs.generate_documents(session, revision_id, doc_type, lang=lang,
                                                    payload=doc_payload, created_by=created_by,
-                                                   pdfa=pdfa, regulations=regulations)
+                                                   pdfa=pdfa, regulations=regulations,
+                                                   generated_by_task_id=task_id)
                 else:
                     rows = [docs.generate_document(session, revision_id, doc_type, lang=lang,
-                                                   payload=doc_payload, created_by=created_by, pdfa=pdfa)]
+                                                   payload=doc_payload, created_by=created_by, pdfa=pdfa,
+                                                   generated_by_task_id=task_id)]
             except (PdfaError, MissingRenderDependency, docs.DocumentError, KeyError) as exc:
                 session.rollback()
                 raise RuntimeError(str(exc)) from exc

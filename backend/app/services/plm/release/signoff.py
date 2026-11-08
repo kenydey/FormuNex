@@ -106,9 +106,13 @@ def _approve_guards(session: Session, doc: RegulatoryDocumentRow) -> None:
     """
     if doc.status != "draft":
         raise ReleaseError(f"文档状态为 {doc.status}，只能审核草稿")
+    # P3-C2: 按 regulation 过滤 —— 各法规独立版本序列，EU 的 SDS v2
+    # 生成后不应拦住 CN 的 SDS v1 批准（旧查询跨法规误拦，fail-closed
+    # 方向的过度拦截）。
     newer = session.execute(select(RegulatoryDocumentRow.id).where(
         RegulatoryDocumentRow.revision_id == doc.revision_id, RegulatoryDocumentRow.doc_type == doc.doc_type,
-        RegulatoryDocumentRow.lang == doc.lang, RegulatoryDocumentRow.version_no > doc.version_no,
+        RegulatoryDocumentRow.lang == doc.lang, RegulatoryDocumentRow.regulation == doc.regulation,
+        RegulatoryDocumentRow.version_no > doc.version_no,
         *([RegulatoryDocumentRow.batch_id == doc.batch_id] if doc.batch_id else []))).first()
     if newer:
         raise ReleaseError("该文档已有更新版本，请审核最新版本")
@@ -117,6 +121,26 @@ def _approve_guards(session: Session, doc: RegulatoryDocumentRow) -> None:
         raise ReleaseError(f"文档有缺项，不能审核通过：{'、'.join(missing)}")
     if doc.doc_type == "coa" and (doc.content.get("meta") or {}).get("overall") != "PASS":
         raise ReleaseError("COA 结论不是“合格”，不能签发")
+
+
+def _supersede_prior_approved(session: Session, doc: RegulatoryDocumentRow) -> None:
+    """P3-C1 (D-11 残留): 新版获批时，把同（修订版、类型、语言、法规
+    [、批次]）的旧 approved 行置 superseded。只在获批时做 —— 生成草稿
+    时不提前 supersede 已批准行。门禁/发布包/批量导出本就按“最新版本
+    号胜出”取文档，故旧 approved 行并存无错发影响；此处置消除按
+    status=approved 直接查库/列表时的审计歧义。
+    """
+    stmt = select(RegulatoryDocumentRow).where(
+        RegulatoryDocumentRow.revision_id == doc.revision_id,
+        RegulatoryDocumentRow.doc_type == doc.doc_type,
+        RegulatoryDocumentRow.lang == doc.lang,
+        RegulatoryDocumentRow.regulation == doc.regulation,
+        RegulatoryDocumentRow.status == "approved",
+        RegulatoryDocumentRow.id != doc.id,
+        *([RegulatoryDocumentRow.batch_id == doc.batch_id] if doc.batch_id else []),
+    )
+    for prior in session.execute(stmt).scalars().all():
+        prior.status = "superseded"
 
 
 def approve_document(session: Session, document_id: str, *, user_id: str, principal: Principal, password: str,
@@ -140,6 +164,7 @@ def approve_document(session: Session, document_id: str, *, user_id: str, princi
     esign.sign(session, user_id=user_id, password=password, meaning="review", subject_type="regulatory_document",
                subject_id=doc.id, object_hash=doc.content_hash, detail={"comment": comment})
     doc.status = "approved"
+    _supersede_prior_approved(session, doc)
     _audit(session, user_id, "document.approve", "regulatory_document", doc.id, doc_type=doc.doc_type,
            lang=doc.lang, version_no=doc.version_no)
     return doc
@@ -176,6 +201,7 @@ def approve_document_exempt(session: Session, document_id: str, *, user_id: str,
     content["meta"] = meta
     doc.content = content
     doc.status = "approved"
+    _supersede_prior_approved(session, doc)
     _audit(session, user_id, "document.approve_exempt", "regulatory_document", doc.id, doc_type=doc.doc_type,
            lang=doc.lang, version_no=doc.version_no, reason=reason)
     return doc
@@ -262,6 +288,12 @@ def submit(session: Session, revision_id: str, *, user_id: str, principal: Princ
                failed=[c["code"] for c in result["checks"] if c["status"] == "fail"])
         raise GateFailed(result)
     docs, _problems = gate.select_package_documents(session, rev)
+    if _problems:
+        # P2-C3: the second selection runs after the gate passed, so a new
+        # draft committed in between would otherwise ship unreviewed: fail
+        # instead of publishing a package the gate never saw.
+        raise ReleaseError("提交时文档选择发现问题（可能有新草案在门禁后提交）："
+                           + "；".join(f"{t} {lang}：{reason}" for t, lang, reason in _problems))
     manifest = package.build_manifest(session, rev, docs, gate.summary(result))
     phash = package.package_hash(manifest)
     pkg = ReleasePackageRow(id=str(uuid.uuid4()), revision_id=rev.id, gate_result={"result": result, "manifest": manifest},
@@ -445,9 +477,13 @@ def withdraw(session: Session, package_id: str, *, reason: str, user_id: str, pr
     # D10: withdrawing the current release restores the most recent
     # superseded revision — the version in force before this one — so
     # the product never sits in "no released version" limbo.
+    # P2-C2: order by the freeze (release) timestamp, not creation order:
+    # out-of-order publishing otherwise restores the wrong revision and
+    # re-ships its ZIP. created_at only breaks ties; never-frozen rows sort last.
     previous = session.execute(select(ProductRevisionRow).where(
         ProductRevisionRow.product_id == product.id, ProductRevisionRow.state == "superseded"
-    ).order_by(ProductRevisionRow.created_at.desc())).scalars().first()
+    ).order_by(ProductRevisionRow.frozen_at.desc().nulls_last(),
+               ProductRevisionRow.created_at.desc())).scalars().first()
     if previous is not None:
         previous.state = "released"
         for d in session.execute(select(RegulatoryDocumentRow).where(

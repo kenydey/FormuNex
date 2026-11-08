@@ -14,6 +14,7 @@ module-global ``_CACHE`` at call time.
 
 from __future__ import annotations
 
+import copy
 import time
 from typing import Any, TypeVar
 
@@ -26,7 +27,15 @@ PayloadT = TypeVar("PayloadT")
 def cache_get(
     store: dict[str, tuple[float, Any]], key: str, ttl_sec: float
 ) -> Any | None:
-    """Return the cached payload, or None on miss/expiry (expired entries evicted)."""
+    """Return the cached payload, or None on miss/expiry (expired entries evicted).
+
+    P3-C13: returns a deep copy — the old code returned the stored object
+    itself, so a caller mutating the result (e.g. rewriting ``cas``)
+    polluted every later lookup of the same key (repro: put, get, mutate,
+    get again). Note the mirror side is intentionally NOT changed:
+    ``cache_put`` still stores by reference, so callers must not mutate
+    an object after putting it.
+    """
     entry = store.get(key)
     if not entry:
         return None
@@ -34,7 +43,7 @@ def cache_get(
     if time.time() - ts > ttl_sec:
         store.pop(key, None)
         return None
-    return payload
+    return copy.deepcopy(payload)
 
 
 def cache_put(

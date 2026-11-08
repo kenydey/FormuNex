@@ -6,7 +6,7 @@ stream URL.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -30,7 +30,7 @@ class InverseDesignBody(BaseModel):
 
 
 @router.post("/design/inverse", status_code=202)
-def start_inverse_design(body: InverseDesignBody) -> JSONResponse:
+def start_inverse_design(body: InverseDesignBody, request: Request) -> JSONResponse:
     """Search formulation space for candidates meeting the target spec."""
     payload = {
         "requirement": body.requirement.model_dump(),
@@ -40,5 +40,7 @@ def start_inverse_design(body: InverseDesignBody) -> JSONResponse:
         "seed_with_llm": body.seed_with_llm,
         "seed": body.seed,
     }
-    outbox_id = enqueue_outbox("inverse_design", payload)
-    return submit(run_inverse_design_task, payload, "inverse_design", outbox_id=outbox_id)
+    from ..middleware.api_auth import request_owner
+    owner = request_owner(request)
+    outbox_id = enqueue_outbox("inverse_design", payload, owner_id=owner)
+    return submit(run_inverse_design_task, payload, "inverse_design", outbox_id=outbox_id, owner_id=owner)

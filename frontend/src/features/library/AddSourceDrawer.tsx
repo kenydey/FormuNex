@@ -163,6 +163,7 @@ type RowState = { status: string; source_id?: string | null; error?: string | nu
 
 /** Federated web search (patents / literature / internet); hits can be ingested into the KB one by one. */
 function WebSearchTab({ onDone }: { onDone: () => void }) {
+  const { can } = useSession();
   const { t } = useTranslation();
   const { message } = App.useApp();
   const label = useSourceTypeLabel();
@@ -285,14 +286,14 @@ function WebSearchTab({ onDone }: { onDone: () => void }) {
           { title: t("common.actions", "操作"), width: 260, render: (_v, e) => (
             <Space size={4} wrap>
               {canIngestFulltext(e) && (
-                <Button size="small" loading={busy === `ft:${e.identifier}`} onClick={() => void ingest(e)}>
+                <Button size="small" disabled={!can("knowledge.write")} loading={busy === `ft:${e.identifier}`} onClick={() => void ingest(e)}>
                   {rows[e.identifier]?.source_id ? t("library.search.reingest", "再入库全文") : t("library.search.ingest", "入库全文")}
                 </Button>
               )}
               {e.source === "surechembl" && e.identifier && (
                 <>
-                  <Button size="small" loading={busy === `kg:${e.identifier}`} onClick={() => void ingestKg(e)}>{t("library.search.kg", "入库图谱")}</Button>
-                  <Button size="small" loading={busy === `draft:${e.identifier}`} onClick={() => void extract(e)}>{t("library.search.draft", "提取实施例草稿")}</Button>
+                  <Button size="small" disabled={!can("knowledge.write")} loading={busy === `kg:${e.identifier}`} onClick={() => void ingestKg(e)}>{t("library.search.kg", "入库图谱")}</Button>
+                  <Button size="small" disabled={!can("knowledge.read")} loading={busy === `draft:${e.identifier}`} onClick={() => void extract(e)}>{t("library.search.draft", "提取实施例草稿")}</Button>
                 </>
               )}
               {rows[e.identifier]?.source_id && <Link to={`/knowledge/sources/${rows[e.identifier]!.source_id}`}>{t("library.search.open", "查看")}</Link>}

@@ -31,13 +31,17 @@ from .plm.render.fonts import resolve_font
 
 _LABELS = {
     "zh-CN": {
-        "domain": "产品领域", "source": "来源", "score": "综合评分", "total": "合计", "generated": "生成时间",
+        "domain": "产品领域", "source": "来源", "score": "综合评分", "total": "合计",
+        # P3-C20: 该时间实为导出（渲染）时间，配方卡片本身没有 created_at；
+        # 旧标签 "生成时间" 会让人误以为是配方版本的生成时间。
+        "generated": "导出时间", "total_off": "合计为 {total}%，与 100% 不符",
         "ingredients": "组分", "name": "名称", "role": "角色", "cas": "CAS", "wt": "wt%",
         "predicted": "预测指标", "metric": "指标", "value": "预测值", "std": "±σ",
         "rationale": "设计依据", "warnings": "警告", "none": "—",
     },
     "en-US": {
-        "domain": "Domain", "source": "Source", "score": "Score", "total": "Total", "generated": "Generated",
+        "domain": "Domain", "source": "Source", "score": "Score", "total": "Total",
+        "generated": "Exported", "total_off": "Total is {total}%, does not sum to 100%",
         "ingredients": "Ingredients", "name": "Name", "role": "Role", "cas": "CAS", "wt": "wt%",
         "predicted": "Predicted metrics", "metric": "Metric", "value": "Predicted", "std": "±σ",
         "rationale": "Rationale", "warnings": "Warnings", "none": "—",
@@ -92,6 +96,11 @@ def render_formulation_pdf(f: Formulation, *, lang: str = "zh-CN", title: str | 
     it = Table(rows, colWidths=[70 * mm, 36 * mm, 36 * mm, 28 * mm], hAlign="LEFT", repeatRows=1)
     it.setStyle(grid)
     story.append(it)
+    # P3-C20: 合计偏离 100% 时加注 —— 旧代码只展示合计值，组分缺失
+    # 或超配时读者无从察觉。容差 0.01 个百分点（浮点求和误差量级）。
+    _total = f.total_pct()
+    if _total is not None and abs(_total - 100.0) > 0.01:
+        story.append(p(lab["total_off"].format(total=_fmt(_total)), small))
 
     if f.predicted:
         story.append(p(lab["predicted"], h2))

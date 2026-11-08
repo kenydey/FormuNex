@@ -274,12 +274,18 @@ def run_inverse_design_task(self, payload: dict) -> dict:
 
 
 
-def _register_inverse_design_round(payload: dict) -> str | None:
+def _register_inverse_design_round(payload: dict, task_id: str | None = None) -> str | None:
     """v9: 逆向设计注册推荐轮次（C-8 分母），fail-open。
 
     返回 recommend_id 字符串（可 JSON 序列化），失败返回 None。
     抽成独立函数以便单测直接断言调用签名 —— v8 曾因签名错误导致
     整个修复是 no-op（TypeError 被静默吞掉）。
+
+    P2-9 (2026-11-04 deep review): derive the id from the task id
+    instead of minting a fresh UUID per run — register_round is
+    already idempotent on recommend_id, so a replay reuses the row
+    instead of inflating the C-8 denominator. Fits String(32).
+    Callers without a task id keep the old UUID path.
     """
     # v8 曾用错签名：register_round(session, *, recommend_id, project_id=None)
     try:
@@ -287,7 +293,11 @@ def _register_inverse_design_round(payload: dict) -> str | None:
         from ...db.database import default_session_factory
         from ...db.session_utils import commit_session
 
-        rec_id = f"inv-{uuid.uuid4().hex[:12]}"
+        rec_id = (
+            "inv-" + task_id.replace("-", "")[:28]
+            if task_id
+            else f"inv-{uuid.uuid4().hex[:12]}"
+        )
         req = payload.get("requirement") or {}
         pid = (req.get("project_id") or "").strip() or None
         with commit_session(default_session_factory()) as session:
@@ -333,7 +343,7 @@ def run_inverse_design_impl(task_id: str, payload: dict) -> dict:
         )
         data = result.model_dump()
         # v9: 逆向设计同样注册推荐轮次，否则采纳遥测漏掉整条路径。
-        _rec_id = _register_inverse_design_round(payload)
+        _rec_id = _register_inverse_design_round(payload, task_id=task_id)
         if _rec_id:
             data["recommend_id"] = _rec_id  # 字符串，json 可序列化
         persist_result(task_id, data, failed=False)

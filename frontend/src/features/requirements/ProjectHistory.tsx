@@ -4,6 +4,7 @@ import { App, Button, Empty, List, Popconfirm, Space, Tag, Tooltip, Typography }
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 
 export interface PayloadVersion {
@@ -31,6 +32,7 @@ export function causeParts(cause: string | null | undefined): { kind: "update" |
  * the previous payload; rolling back snapshots the current payload first, so a rollback is itself undoable.
  */
 export function ProjectHistory({ projectId, limit = 30, onRolledBack }: { projectId: string; limit?: number; onRolledBack?: () => void }) {
+  const { can } = useSession();
   const { t } = useTranslation();
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -70,7 +72,7 @@ export function ProjectHistory({ projectId, limit = 30, onRolledBack }: { projec
                   description={t("requirements.history.confirm_desc", "当前内容会先快照，再恢复该版本。")}
                   okButtonProps={{ danger: true, loading: rollback.isPending && rollback.variables === v.version }}
                   onConfirm={() => rollback.mutateAsync(v.version).catch(() => undefined)}>
-                  <Button size="small" icon={<RollbackOutlined />} disabled={rollback.isPending}>{t("requirements.history.rollback", "回滚")}</Button>
+                  <Button size="small" icon={<RollbackOutlined />} disabled={rollback.isPending || !can("project.write", projectId)}>{t("requirements.history.rollback", "回滚")}</Button>
                 </Popconfirm>,
               ]}>
                 <List.Item.Meta

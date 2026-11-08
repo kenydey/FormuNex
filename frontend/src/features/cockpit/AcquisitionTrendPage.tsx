@@ -58,8 +58,8 @@ export default function AcquisitionTrendPage() {
             <>
               <ProCard bordered style={{ marginTop: 16 }}>
                 <Space wrap>
-                  <span>{t("acq.engine", "引擎：{{e}}", { e: engine })}</span>
-                  <span>{t("acq.name", "采集函数：{{n}}", { n: acqName })}</span>
+                  <span>{t("acq.engine_value", "引擎：{{e}}", { e: engine })}</span>
+                  <span>{t("acq.name_value", "采集函数：{{n}}", { n: acqName })}</span>
                   <Tag>{trend}</Tag>
                 </Space>
                 <Chart height={380} option={{

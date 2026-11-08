@@ -26,6 +26,10 @@ import re
 
 # ── Constants (ChemEAGLE molnextr/constants.py, verbatim where ported) ──
 # RGROUP_SYMBOLS lives in B2's rgroup module and is not duplicated here.
+# P3-B13: VALENCES has no in-module consumer today — it is kept for the
+# future decoder (see module docstring), NOT an enforced valence table.
+# Do not mistake it for validation. ELEMENTS feeds _TWO_LETTER_ELEMENTS
+# below; FORMULA_REGEX is pinned by tests (formula tokenisation).
 VALENCES = {
     "H": [1], "Li": [1], "Be": [2], "B": [3], "C": [4], "N": [3, 5],
     "O": [2], "F": [1], "Na": [1], "Mg": [2], "Al": [3], "Si": [4],
@@ -50,9 +54,12 @@ ELEMENTS = [
 
 # Same construction as ChemEAGLE's FORMULA_REGEX, minus the abbreviation
 # alternation (deferred with the decoder, see module docstring).
+# P2-B27: the two-letter element pattern MUST precede the R pattern —
+# with R first, "Rf" matched "R" and the "f" was silently skipped by
+# findall, so Rf/Rn/Ra lost their second letter.
 FORMULA_REGEX = re.compile(
     "(?:" + "|".join(
-        ["R[0-9]*", "[A-Z][a-z]+", "[A-Z]", "[0-9]+", "\\(", "\\)"]
+        ["[A-Z][a-z]+", "R[0-9]*", "[A-Z]", "[0-9]+", "\\(", "\\)"]
     ) + ")"
 )
 
@@ -67,11 +74,10 @@ _REPAIR_HETEROATOMS = frozenset({7, 8, 15, 16, 34})
 _REPAIR_RING_ATOMS = frozenset({6, 7, 8, 15, 16, 34})
 _ORGANIC_FIRST_LETTERS = frozenset("BCNOPSFI")
 _AROMATIC_SECOND_LETTERS = frozenset("bcnops")
-_TWO_LETTER_ELEMENTS = frozenset((
-    "He Li Be Ne Na Mg Al Si Ar Ca Sc Ti Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Kr "
-    "Rb Sr Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te Xe Cs Ba La Ce Pr Nd Sm Eu "
-    "Gd Tb Dy Ho Er Tm Yb Lu Hf Ta Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn"
-).split())
+# P3-B12: derived from ELEMENTS, not hand-maintained — the old literal
+# list silently missed Br, Cl, Ac, Fr and every superheavy element, so
+# bracket_two_letter_elements() returned them unrepaired.
+_TWO_LETTER_ELEMENTS = frozenset(e for e in ELEMENTS if len(e) == 2)
 # Reconstructed token pattern (the source's exact pattern was not needed:
 # the membership + exclusion guards below do the real work).
 _TWO_LETTER_TOKEN = re.compile(r"[A-Z][a-z]")
@@ -261,17 +267,31 @@ def placeholder_runaway_graph(
     return {"symbols": ["*"], "coords": [centre], "edges": [[0]]}, True
 
 
-def drop_dust_nodes(graph: dict) -> tuple[dict, int]:
+def drop_dust_nodes(graph: dict, *, notes: list | None = None) -> tuple[dict, int]:
     """Drop isolated "*" nodes (dust specks misread as atoms). Returns
-    (new graph, dropped count) with edges reindexed."""
+    (new graph, dropped count) with edges reindexed.
+
+    P2-B23: degree counts edges in BOTH directions — the old code read
+    only the node's own row, so a "*" kept alive by another node's row
+    entry was deleted as "isolated" (the module's ketene code already
+    reads edges both ways). P2-B24: when coords do not line up with
+    symbols, the graph is returned unchanged (and the reason noted)
+    instead of raising IndexError on coords[i].
+    """
     symbols = graph.get("symbols", []) or []
     edges = graph.get("edges", []) or []
     coords = graph.get("coords", []) or []
+    if coords and len(coords) != len(symbols):
+        if notes is not None:
+            notes.append("coords_length_mismatch_graph_unchanged")
+        return copy.deepcopy(graph), 0
 
     def _degree(i: int) -> int:
         total = 0
         for j in range(len(symbols)):
             order = edges[i][j] if i < len(edges) and j < len(edges[i]) else 0
+            if not order and j < len(edges) and i < len(edges[j]):
+                order = edges[j][i]
             total += 1 if order else 0
         return total
 
@@ -281,12 +301,10 @@ def drop_dust_nodes(graph: dict) -> tuple[dict, int]:
     ]
     if len(keep) == len(symbols):
         return copy.deepcopy(graph), 0
-    remap = {old: new for new, old in enumerate(keep)}
     new_edges = [
         [edges[i][j] if i < len(edges) and j < len(edges[i]) else 0 for j in keep]
         for i in keep
     ]
-    _ = remap
     return {
         "symbols": [symbols[i] for i in keep],
         "coords": [coords[i] for i in keep] if coords else [],
@@ -319,6 +337,7 @@ def apply_edit_plan(
     coords = new_graph.get("coords", []) or []
     applied: list[int] = []
     failed: list[tuple[tuple, str]] = []
+    touched: set[int] = set()
     for bbox, new_symbol in edits or []:
         x0, y0, x1, y1 = (float(v) for v in bbox)
         best, best_dist = None, None
@@ -331,9 +350,14 @@ def apply_edit_plan(
                     best, best_dist = idx, dist
         if best is None:
             failed.append((bbox, new_symbol))
+        elif best in touched:
+            # P2-B25: a second edit hitting the same node keeps the
+            # FIRST symbol and fails — it never silently overwrites it.
+            failed.append((bbox, new_symbol))
         else:
             symbols[best] = new_symbol
             applied.append(best)
+            touched.add(best)
     return new_graph, applied, failed
 
 
@@ -382,10 +406,23 @@ def cross_check_paths(
 
 def bracket_two_letter_elements(smiles: str) -> str:
     """Se -> [Se] outside brackets, skipping pairs that also read as two
-    organic atoms (Sc, Co, Sn ...). Pure string transform, no RDKit."""
+    organic atoms (Sc, Co, Sn ...). Pure string transform, no RDKit.
+
+    P1-B18: tokens that are BOTH a two-letter element and an R-group
+    placeholder (Ar = argon / aryl, Pr = praseodymium / propyl) are
+    skipped — bracketing "Ar" into "[Ar]" turned an aryl placeholder
+    into a zero-valent argon atom that passes the parse gate, with no
+    flag that a rewrite happened. The ambiguous set is computed from
+    the two tables, not hardcoded, so it cannot rot.
+    """
+    from .rgroup import RGROUP_SYMBOLS
+
+    ambiguous = RGROUP_SYMBOLS & _TWO_LETTER_ELEMENTS
 
     def _sub(m: re.Match) -> str:
         token = m.group(0)
+        if token in ambiguous:
+            return token
         if token not in _TWO_LETTER_ELEMENTS or (
             token[0] in _ORGANIC_FIRST_LETTERS
             and token[1] in _AROMATIC_SECOND_LETTERS
@@ -477,27 +514,40 @@ def _aromatize_ring_around(rw, idx: int, chem) -> bool:
     return False
 
 
-def repair_unparsable_smiles(smiles: str, *, chem=None) -> str:
+def repair_unparsable_smiles(smiles: str, *, chem=None, notes: list | None = None) -> str:
     """Full deterministic repair chain (port of ChemEAGLE's
     _validate_and_fix_smiles / _repair_unparsable_smiles): bare-N
     charge fix first, then syntax rewrites, two-letter bracketing, then
     up to 8 rounds of valence fixes (halogen counter-ion unbonds,
     surplus-H removal, ring aromatisation), sanitised and re-validated.
     Without RDKit, or when nothing fixes it, the input is returned
-    unchanged."""
+    unchanged.
+
+    P2-B26: the old chain returned the first parseable rewrite with no
+    record of which rule fired. When a rewrite wins and a notes list is
+    supplied, the rule name is appended ("bare_n_charge", "syntax",
+    "bracketing", "valence_fixes") so callers can review what changed
+    instead of trusting a silent rewrite.
+    """
     if chem is None or not smiles:
         return smiles
     if _parses(smiles, chem):
         return smiles
     bare_n = repair_bare_n_charge(smiles, chem=chem)
     if bare_n != smiles:
+        if notes is not None:
+            notes.append("bare_n_charge")
         return bare_n
     syntactic = repair_smiles_syntax(smiles, chem=chem)
     if syntactic is not None:
+        if notes is not None:
+            notes.append("syntax")
         return syntactic
     try:
         bracketed = bracket_two_letter_elements(smiles)
         if bracketed != smiles and _parses(bracketed, chem):
+            if notes is not None:
+                notes.append("bracketing")
             return bracketed
         mol = chem.MolFromSmiles(bracketed, sanitize=False)
         if mol is None:
@@ -543,6 +593,10 @@ def repair_unparsable_smiles(smiles: str, *, chem=None) -> str:
         fixed = rw.GetMol()
         chem.SanitizeMol(fixed)
         out = chem.MolToSmiles(fixed)
-        return out if _parses(out, chem) else smiles
+        if _parses(out, chem):
+            if notes is not None:
+                notes.append("valence_fixes")
+            return out
+        return smiles
     except Exception:
         return smiles

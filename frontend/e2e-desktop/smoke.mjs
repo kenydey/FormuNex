@@ -2,7 +2,8 @@
 // Remote mode against a running FormuNex API: first-run wizard → connect → sign in → dashboard → a page
 // that downloads through the native save dialog is reachable. See e2e-desktop/README.md.
 import { spawn } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { remote } from "webdriverio";
@@ -14,11 +15,41 @@ const password = process.env.FX_PASSWORD || "Fx-Smoke-2026!";
 const shots = process.env.FX_SHOTS || "e2e-desktop/screenshots";
 mkdirSync(shots, { recursive: true });
 
-// Fresh desktop settings (first-run wizard).
-rmSync(path.join(os.homedir(), ".config", "com.formunex.desktop"), { recursive: true, force: true });
+// P3-E16: never wipe the user's real desktop settings unconditionally.
+// Default: point the app at a fresh temp config dir (XDG_CONFIG_HOME is
+// honoured by app_config_dir on Linux); FX_CONFIG_DIR opts into a
+// specific dir, deleted first, for runs that need a stable location.
+if (process.env.FX_CONFIG_DIR) {
+  rmSync(process.env.FX_CONFIG_DIR, { recursive: true, force: true });
+} else {
+  process.env.XDG_CONFIG_HOME = mkdtempSync(path.join(os.tmpdir(), "formunex-smoke-"));
+}
+
+// P3-E16: the backend must be up before the wizard runs — fail fast with
+// a clear message instead of timing out on "首次设置" later.
+for (let i = 0; i < 30; i++) {
+  try {
+    const r = await fetch(`${api}/health`);
+    if (r.ok) break;
+  } catch { /* not up yet */ }
+  if (i === 29) throw new Error(`backend not reachable at ${api} (start it first, see README)`);
+  await new Promise((r) => setTimeout(r, 1000));
+}
 
 const driver = spawn(process.env.TAURI_DRIVER || path.join(os.homedir(), ".cargo/bin/tauri-driver"), [], { stdio: ["ignore", "inherit", "inherit"] });
-await new Promise((r) => setTimeout(r, 1500));
+// P3-E16: wait for the driver to listen instead of a fixed sleep.
+await new Promise((resolve, reject) => {
+  const deadline = Date.now() + 60_000;
+  const tick = () => {
+    const s = net.connect(4444, "127.0.0.1");
+    s.once("connect", () => { s.end(); resolve(); });
+    s.once("error", () => {
+      if (Date.now() > deadline) reject(new Error("tauri-driver did not listen on 127.0.0.1:4444"));
+      else setTimeout(tick, 500);
+    });
+  };
+  tick();
+});
 
 let browser;
 const fail = (msg) => { throw new Error(msg); };

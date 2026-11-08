@@ -51,6 +51,28 @@ def _check_roles(session: Session, roles: list[str]) -> None:
         raise AccountError(f"未知角色：{', '.join(unknown)}")
 
 
+def _check_grant_subset(session: Session, actor: str, roles: list[str]) -> None:
+    """Stage 2 / SR-010 (D-1, forced boundary), shared by set_roles and
+    create_user: a real signed-in granter cannot grant a permission union
+    they do not hold themselves. A bootstrap actor with no UserRow (e.g.
+    "system") keeps the old behaviour — the check only applies when the
+    granter's roles are resolvable from the database."""
+    actor_row = session.get(UserRow, actor)
+    if actor_row is None:
+        return
+    actor_codes = session.execute(
+        select(UserRoleRow.role_code).where(UserRoleRow.user_id == actor)).scalars().all()
+    actor_perms: set[str] = set()
+    for row in session.execute(select(RoleRow).where(RoleRow.code.in_(actor_codes))).scalars():
+        actor_perms.update(row.permissions or [])
+    granted_perms: set[str] = set()
+    for row in session.execute(select(RoleRow).where(RoleRow.code.in_(roles))).scalars():
+        granted_perms.update(row.permissions or [])
+    excess = sorted(granted_perms - actor_perms)
+    if excess:
+        raise AccountError(f"不能授予自身未持有的权限：{', '.join(excess)}")
+
+
 def create_user(session: Session, *, username: str, password: str | None, display_name: str = "",
                 email: str | None = None, roles: list[str] | None = None, actor: str = "system") -> UserRow:
     username = username.strip()
@@ -60,6 +82,12 @@ def create_user(session: Session, *, username: str, password: str | None, displa
         raise AccountError(f"用户名 {username} 已存在")
     roles = list(dict.fromkeys(roles or []))
     _check_roles(session, roles)
+    # P0 fix (2026-11-04 deep review): create_user previously skipped the
+    # D-1 subset check that set_roles enforces, so an admin.users holder
+    # could mint a puppet account carrying permissions they do not hold
+    # (e.g. plm.document.write) and bypass the sys_admin business-role
+    # isolation. Fail fast, before any row is written.
+    _check_grant_subset(session, actor, roles)
     try:
         pw_hash = passwords.hash_password(password) if password else None
     except passwords.WeakPassword as exc:
@@ -89,19 +117,7 @@ def set_roles(session: Session, user_id: str, roles: list[str], *, actor: str) -
         raise AccountError("不能修改自身角色")
     roles = sorted(set(roles))
     _check_roles(session, roles)
-    actor_row = session.get(UserRow, actor)
-    if actor_row is not None:
-        actor_codes = session.execute(
-            select(UserRoleRow.role_code).where(UserRoleRow.user_id == actor)).scalars().all()
-        actor_perms: set[str] = set()
-        for row in session.execute(select(RoleRow).where(RoleRow.code.in_(actor_codes))).scalars():
-            actor_perms.update(row.permissions or [])
-        granted_perms: set[str] = set()
-        for row in session.execute(select(RoleRow).where(RoleRow.code.in_(roles))).scalars():
-            granted_perms.update(row.permissions or [])
-        excess = sorted(granted_perms - actor_perms)
-        if excess:
-            raise AccountError(f"不能授予自身未持有的权限：{', '.join(excess)}")
+    _check_grant_subset(session, actor, roles)
     before = sorted(session.execute(select(UserRoleRow.role_code).where(UserRoleRow.user_id == user_id)).scalars())
     for row in session.execute(select(UserRoleRow).where(UserRoleRow.user_id == user_id)).scalars():
         session.delete(row)

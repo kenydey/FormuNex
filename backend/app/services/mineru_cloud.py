@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -112,11 +113,30 @@ def _cache_root() -> Path:
     return Path(get_settings().mineru_cache_dir).expanduser()
 
 
-def _cache_key(content: bytes, *, ext: str, ocr: bool) -> str:
-    """Hash the bytes *and* the options — the same page parsed with OCR on is
-    a different result, and serving one for the other would be silently wrong."""
+# P1-B6/P2-B9: cache schema version. Bump when the stored format or the
+# meaning of a key changes; _cache_load treats any other version as a miss
+# (old entries are orphaned, never served). v2 = options in the key +
+# written_at/version in the payload + per-page image filenames.
+_CACHE_VERSION = 2
+# P2-B9: a cached MinerU result is not timeless — the cloud model moves.
+# 30 days is a judgment call, not a measured staleness point; the version
+# above is the real invalidation signal, this is only a backstop.
+_CACHE_TTL_S = 30 * 24 * 3600
+
+
+def _cache_key(content: bytes, *, ext: str, ocr: bool, formula: bool, table: bool) -> str:
+    """Hash the bytes *and* the effective options — the same page parsed
+    with OCR on is a different result, and serving one for the other would
+    be silently wrong. P1-B6: formula/table recognition options are part of
+    the key too, so a caller forcing formula=True/table=True (structured
+    path) no longer shares a key with a caller running on different
+    settings defaults. Callers must resolve the effective options with
+    _extract_options *before* the cache lookup, not after."""
     digest = hashlib.sha256(content).hexdigest()
-    return f"{digest}-{ext}-{'ocr' if ocr else 'txt'}"
+    return (
+        f"{digest}-{ext}-{'ocr' if ocr else 'txt'}"
+        f"-f{1 if formula else 0}t{1 if table else 0}-v{_CACHE_VERSION}"
+    )
 
 
 def _cache_load(key: str) -> MinerUDocument | None:
@@ -125,12 +145,25 @@ def _cache_load(key: str) -> MinerUDocument | None:
         if not path.is_file():
             return None
         payload = json.loads(path.read_text("utf-8"))
+        # P2-B9: version mismatch or age past TTL is a miss, not a serve.
+        if payload.get("version", 1) != _CACHE_VERSION:
+            logger.debug("mineru cache version mismatch for %s — miss", key[:12])
+            return None
+        written_at = payload.get("written_at")
+        if isinstance(written_at, (int, float)) and time.time() - written_at > _CACHE_TTL_S:
+            logger.debug("mineru cache expired for %s — miss", key[:12])
+            return None
         blocks = []
         for raw in payload.get("blocks", []):
             image_path = raw.get("image_path", "")
             image = None
             if image_path:
-                stored = path.parent / "images" / Path(image_path).name
+                # P2-B9: images are stored per (page_idx, basename); the
+                # basename-only file is tried as a defensive fallback for
+                # partially migrated caches.
+                stored = path.parent / "images" / f"{raw.get('page_idx', 0)}__{Path(image_path).name}"
+                if not stored.is_file():
+                    stored = path.parent / "images" / Path(image_path).name
                 if stored.is_file():
                     image = stored.read_bytes()
             blocks.append(MinerUBlock(**{**raw, "image": image}))
@@ -152,11 +185,14 @@ def _cache_store(key: str, document: MinerUDocument) -> None:
         for block in document.blocks:
             raw = {k: v for k, v in vars(block).items() if k != "image"}
             if block.image and block.image_path:
-                name = Path(block.image_path).name
+                # P2-B9: per-page filename — two pages whose images share a
+                # basename no longer overwrite each other in the cache.
+                name = f"{block.page_idx}__{Path(block.image_path).name}"
                 (target / "images" / name).write_bytes(block.image)
             blocks.append(raw)
         (target / "doc.json").write_text(
-            json.dumps({"blocks": blocks, "markdown": document.markdown},
+            json.dumps({"blocks": blocks, "markdown": document.markdown,
+                        "version": _CACHE_VERSION, "written_at": time.time()},
                        ensure_ascii=False),
             encoding="utf-8",
         )
@@ -171,6 +207,20 @@ def _cache_store(key: str, document: MinerUDocument) -> None:
 
 def _normalise(result, images_by_path: dict[str, bytes]) -> MinerUDocument:
     blocks: list[MinerUBlock] = []
+    bad_fields: list[str] = []
+
+    def _safe_int(value, field: str) -> int:
+        # P1-B5: a malformed page_idx/text_level (e.g. a string) used to
+        # raise out of _normalise and kill the whole batch result. Fall
+        # back to 0 per field and report once, not per block.
+        if value is None or value == "":
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            bad_fields.append(field)
+            return 0
+
     for raw in result.content_list or []:
         if not isinstance(raw, dict):
             continue
@@ -189,9 +239,9 @@ def _normalise(result, images_by_path: dict[str, bytes]) -> MinerUDocument:
         blocks.append(
             MinerUBlock(
                 type=kind,
-                page_idx=int(raw.get("page_idx") or 0),
+                page_idx=_safe_int(raw.get("page_idx"), "page_idx"),
                 text=str(raw.get("text") or ""),
-                text_level=int(raw.get("text_level") or 0),
+                text_level=_safe_int(raw.get("text_level"), "text_level"),
                 html=str(raw.get("table_body") or ""),
                 caption=str(caption),
                 image_path=image_path,
@@ -199,6 +249,11 @@ def _normalise(result, images_by_path: dict[str, bytes]) -> MinerUDocument:
                 image=images_by_path.get(image_path)
                 or images_by_path.get(Path(image_path).name if image_path else ""),
             )
+        )
+    if bad_fields:
+        logger.warning(
+            "mineru: %d block(s) had unparsable %s — fell back to 0",
+            len(bad_fields), sorted(set(bad_fields)),
         )
     return MinerUDocument(blocks=blocks, markdown=result.markdown or "")
 
@@ -244,7 +299,13 @@ def parse_bytes(
         )
         return None
 
-    key = _cache_key(content, ext=ext, ocr=ocr)
+    # P1-B6: resolve the effective options BEFORE the cache lookup, so the
+    # key reflects what will actually be requested (previously the key was
+    # computed first and the options resolved later, letting a structured
+    # caller forcing formula=True/table=True share a key with a caller on
+    # different settings defaults).
+    eff_formula, eff_table = _extract_options(formula=formula, table=table)
+    key = _cache_key(content, ext=ext, ocr=ocr, formula=eff_formula, table=eff_table)
     if not settings.prune_mineru_cache:
         cached = _cache_load(key)
         if cached is not None:
@@ -293,6 +354,9 @@ def parse_pages_batch(
 
     settings = get_settings()
     limit = settings.mineru_max_upload_mb * 1024 * 1024
+    # P1-B6: resolve once, before any cache lookup, so cache keys reflect
+    # the options that will actually be requested.
+    eff_formula, eff_table = _extract_options(formula=formula, table=table)
     results: list[MinerUDocument | None] = [None] * len(contents)
     accepted: list[int] = []
     paths: list[str] = []
@@ -304,7 +368,7 @@ def parse_pages_batch(
                 i, len(content) / 1024 / 1024, settings.mineru_max_upload_mb,
             )
             continue
-        key = _cache_key(content, ext=ext, ocr=False)
+        key = _cache_key(content, ext=ext, ocr=False, formula=eff_formula, table=eff_table)
         if not settings.prune_mineru_cache:
             cached = _cache_load(key)
             if cached is not None:
@@ -327,7 +391,6 @@ def parse_pages_batch(
 
     try:
         client = mineru.MinerU(token=token, base_url=setting_or_default(settings, "mineru_base_url"))
-        eff_formula, eff_table = _extract_options(formula=formula, table=table)
         documents = list(
             client.extract_batch(
                 paths, formula=eff_formula, table=eff_table, timeout=int(wait)
@@ -356,17 +419,47 @@ def parse_pages_batch(
             except OSError:  # pragma: no cover - already gone
                 pass
 
+    # P2-B8: the batch result must align 1:1 with the submitted pages. zip
+    # would silently drop the tail on a short result (or extra results on a
+    # long one) and misattribute pages. On any mismatch, discard the whole
+    # batch result — cache hits already in `results` are untouched, and
+    # every other page keeps its local text.
+    if len(documents) != len(accepted):
+        logger.warning(
+            "mineru: batch result count %d != submitted %d — discarding "
+            "batch results, keeping local text",
+            len(documents), len(accepted),
+        )
+        return results
+
     for idx, document in zip(accepted, documents):
         if document is None or getattr(document, "state", "done") != "done":
             continue
-        images: dict[str, bytes] = {}
-        for image in getattr(document, "images", None) or []:
-            images[getattr(image, "path", "")] = image.data
-            images[getattr(image, "name", "")] = image.data
-        normalised = _normalise(document, images)
+        # P1-B5: one malformed document must not kill the whole batch.
+        try:
+            images: dict[str, bytes] = {}
+            for image in getattr(document, "images", None) or []:
+                # P3-B9: skip empty keys — an empty path/name used to
+                # pollute images[""], and _normalise's fallback get("")
+                # could then attach an unrelated image to an imageless block.
+                for key in (getattr(image, "path", ""), getattr(image, "name", "")):
+                    if key:
+                        images[key] = image.data
+            normalised = _normalise(document, images)
+        except Exception as exc:
+            logger.warning(
+                "mineru: batch result for submitted page %d unusable (%s) — "
+                "keeping local text",
+                idx, exc,
+            )
+            continue
         results[idx] = normalised
         if not settings.prune_mineru_cache:
-            _cache_store(_cache_key(contents[idx], ext=ext, ocr=False), normalised)
+            _cache_store(
+                _cache_key(contents[idx], ext=ext, ocr=False,
+                           formula=eff_formula, table=eff_table),
+                normalised,
+            )
     return results
 
 
@@ -402,11 +495,15 @@ def _extract(
     token = str(effective_setting(settings, "mineru_api_key") or "")
     wait = float(settings.mineru_timeout_s if timeout is None else timeout)
     eff_formula, eff_table = _extract_options(formula=formula, table=table)
+    # P3-B10: ocr=False does NOT force OCR off — "ocr or None" below sends
+    # None, leaving the decision to the MinerU server default (the SDK
+    # default is not pinned down in this repo, so callers must not read
+    # False as "OCR disabled"). The log shows the value actually sent.
     logger.info(
-        "mineru: extract options formula=%s table=%s ocr=%s",
+        "mineru: extract options formula=%s table=%s ocr=%s (None = server default)",
         eff_formula,
         eff_table,
-        bool(ocr),
+        ocr if ocr else None,
     )
 
     handle, temp_path = tempfile.mkstemp(suffix=f".{ext}")
@@ -431,8 +528,10 @@ def _extract(
 
         images = {}
         for image in getattr(result, "images", None) or []:
-            images[getattr(image, "path", "")] = image.data
-            images[getattr(image, "name", "")] = image.data
+            # P3-B9: same empty-key skip as the batch path above.
+            for key in (getattr(image, "path", ""), getattr(image, "name", "")):
+                if key:
+                    images[key] = image.data
         return _normalise(result, images)
 
     except mineru.AuthError as exc:

@@ -140,12 +140,12 @@ export default function ProjectSourcesPage() {
                   </Popconfirm>),
               !r.source_id && r.evidence && <Popconfirm key="unlink" title={t("requirements.sources.unlink_confirm", "将「{{t}}」移出会话证据？", { t: r.title })}
                 onConfirm={() => remove.mutateAsync(r).catch(() => undefined)}>
-                <Button type="link" size="small" danger disabled={busy || !can("knowledge.write")}>{t("requirements.sources.unlink", "移出")}</Button>
+                <Button type="link" size="small" danger disabled={busy || !can("project.write", projectId)}>{t("requirements.sources.unlink", "移出")}</Button>
               </Popconfirm>,
               r.source_id && <Popconfirm key="del" title={t("requirements.sources.delete_confirm", "永久删除「{{t}}」？", { t: r.title })}
                 description={t("requirements.sources.delete_desc", "将移除切块与图谱提及，不可撤销（一般请用「归档」）。")} okButtonProps={{ danger: true }}
                 onConfirm={() => remove.mutateAsync(r).catch(() => undefined)}>
-                <Button type="link" size="small" danger disabled={busy || !can("knowledge.write")}>{t("requirements.sources.delete", "永久删除")}</Button>
+                <Button type="link" size="small" danger disabled={busy || !can("knowledge.write") || !can("project.write", projectId)}>{t("requirements.sources.delete", "永久删除")}</Button>
               </Popconfirm>,
             ].filter(Boolean);
           } },

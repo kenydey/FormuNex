@@ -5,6 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useSession } from "@/app/session";
 import { call } from "@/api/client";
 import { Chart } from "@/shared/Chart";
 import { EditableRows } from "@/shared/EditableRows";
@@ -87,6 +88,7 @@ const blank = (): FormulationIngredient => ({ name: "", role: "additive", weight
 /** 专利 / IP 分析: novelty & infringement-risk screening of a formulation (POST /api/ip/analyze). */
 export default function IpAnalysisPage() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { domain: projectDomain } = useProjectRequirement();
   const domains = useDomainOptions();
   const location = useLocation();
@@ -109,7 +111,7 @@ export default function IpAnalysisPage() {
     <PageContainer subTitle={t("research.ip.sub", "检索相关专利，评估配方新颖性与侵权风险，并给出技术空白区提示")}>
       <HandoffBanner />
       <ProCard title={t("research.ip.input", "待分析配方")} bordered
-        extra={<Button type="primary" icon={<SafetyCertificateOutlined />} loading={analyze.isPending} disabled={!filled} onClick={() => analyze.mutate()}>
+        extra={<Button type="primary" icon={<SafetyCertificateOutlined />} loading={analyze.isPending} disabled={!filled || !can("knowledge.read")} onClick={() => analyze.mutate()}>
           {t("research.ip.run", "运行 IP 分析")}</Button>}>
         <Space wrap style={{ marginBottom: 12 }}>
           <Input style={{ width: 260 }} value={name} onChange={(e) => setName(e.target.value)} placeholder={t("research.ip.name", "配方名称")} />

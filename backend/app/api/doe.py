@@ -5,7 +5,7 @@ v0.7 adds pydoe / baybe engine selection.
 v0.9 adds async closed-loop DOE cycle dispatch (Celery ``formunex.doe_cycle``)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -215,7 +215,7 @@ class DoeCycleBody(BaseModel):
 
 
 @router.post("/doe/cycle", status_code=202)
-def start_doe_cycle(body: DoeCycleBody) -> JSONResponse:
+def start_doe_cycle(body: DoeCycleBody, request: Request) -> JSONResponse:
     """Enqueue one ``formunex.doe_cycle`` job; client follows ``/api/tasks/{id}/stream``."""
     payload = {
         "requirement": body.requirement.model_dump(),
@@ -223,8 +223,10 @@ def start_doe_cycle(body: DoeCycleBody) -> JSONResponse:
         "budget_remaining": body.budget_remaining,
         "seed": body.seed,
     }
-    outbox_id = enqueue_outbox("doe_cycle", payload)
-    return submit(run_doe_cycle_task, payload, "doe_cycle", outbox_id=outbox_id)
+    from ..middleware.api_auth import request_owner
+    owner = request_owner(request)
+    outbox_id = enqueue_outbox("doe_cycle", payload, owner_id=owner)
+    return submit(run_doe_cycle_task, payload, "doe_cycle", outbox_id=outbox_id, owner_id=owner)
 
 
 class DoeHistoryResponse(BaseModel):
@@ -321,7 +323,14 @@ def doe_cycle_runs(
             .filter(DOECycleRunRow.project_id == project_id)
             .count()
         )
-    total_experiments = sum(i.experiment_count for i in items)
+        # P2-C28: items above is a limit() page — its sum is NOT the
+        # project total. Sum over all rows for this project instead.
+        total_experiments = sum(
+            v[0] or 0
+            for v in session.query(DOECycleRunRow.experiment_count)
+            .filter(DOECycleRunRow.project_id == project_id)
+            .all()
+        )
     last = items[0] if items else None
     # 累计测量数：registry 中本项目已有测量（跨 domain 求和，fail-open）。
     measured_count = 0

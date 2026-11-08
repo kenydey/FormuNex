@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..config import get_settings
-from ..middleware.api_auth import get_current_owner
+from ..middleware.api_auth import get_current_owner, request_owner
 from ..services import dependencies as deps
 from ..worker.tasks import run_deps_install_task
 from ._dispatch import submit
@@ -64,4 +64,4 @@ def install_dependencies(action: DependencyAction, request: Request) -> JSONResp
     }, "deps", outbox_id=enqueue_outbox("deps", {
         "names": action.names,
         "upgrade": action.upgrade,
-    }))
+    }, owner_id=request_owner(request)), owner_id=request_owner(request))

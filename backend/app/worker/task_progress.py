@@ -166,15 +166,15 @@ class ThinkingTracker:
 
 
 def channel_name(task_id: str) -> str:
-    return f"task_progress:{task_id}"
+    return f"formunex:task_progress:{task_id}"
 
 
 def _meta_key(task_id: str) -> str:
-    return f"task:meta:{task_id}"
+    return f"formunex:task:meta:{task_id}"
 
 
 def _result_key(task_id: str) -> str:
-    return f"task:result:{task_id}"
+    return f"formunex:task:result:{task_id}"
 
 
 def _progress_dir() -> Path:
@@ -255,7 +255,16 @@ def _store_progress(
     *,
     kind: str | None = None,
 ) -> None:
-    """Publish to Redis; fall back to disk when Redis is unavailable."""
+    """Publish to Redis; fall back to disk when Redis is unavailable.
+
+    P3-A8: the success path ALSO mirrors to disk (best-effort, never
+    raising). Previously only the Redis-failure branch wrote disk, so
+    after a Redis restart / flush, the success-path progress and results
+    were missing from both Redis and disk and progress queries fell back
+    to empty — even though the task record itself survived via
+    load_persisted_task. The disk mirror is a cache, not a second source
+    of truth; a failed mirror write only logs.
+    """
     payload = event.model_dump_json()
     try:
         client = _redis_client()
@@ -271,6 +280,10 @@ def _store_progress(
             meta["kind"] = kind
         client.hset(_meta_key(task_id), mapping=meta)
         client.expire(_meta_key(task_id), META_TTL_SECONDS)
+        try:
+            _file_write_meta(task_id, event, kind=kind)
+        except Exception as exc:  # mirror only; Redis already succeeded
+            logger.debug("disk progress mirror failed for %s: %s", task_id, exc)
     except Exception as exc:
         _log_redis_failure(exc, "progress store failed for %s: %s", task_id)
         _file_write_meta(task_id, event, kind=kind)
@@ -337,6 +350,10 @@ def persist_result(
             json.dumps(result or {}, ensure_ascii=False),
             ex=RESULT_TTL_SECONDS,
         )
+        try:  # P3-A8: mirror to disk, same rationale as _store_progress
+            _file_write_result(task_id, result)
+        except Exception as exc:  # mirror only; Redis already succeeded
+            logger.debug("disk result mirror failed for %s: %s", task_id, exc)
     except Exception as exc:
         _log_redis_failure(exc, "persist_result redis set failed for %s: %s", task_id)
         _file_write_result(task_id, result)

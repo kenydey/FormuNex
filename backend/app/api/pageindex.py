@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..services import kb_index
@@ -59,7 +59,7 @@ def rebuild_toc_tree(source_id: str) -> dict[str, Any]:
 
 
 @router.post("/sources/{source_id}/toc-tree/summarize", status_code=202)
-def summarize_toc_tree(source_id: str):
+def summarize_toc_tree(source_id: str, request: Request):
     """Trigger background LLM summaries for one document's ToC nodes.
 
     Cost guard: only the explicitly requested document is summarised, never a
@@ -79,10 +79,14 @@ def summarize_toc_tree(source_id: str):
     from ..worker.tasks import run_toc_summaries_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
+
 
     try:
-        return submit(run_toc_summaries_task, {"source_id": source_id}, kind="toc_summaries",
-                      outbox_id=enqueue_outbox("toc_summaries", {"source_id": source_id}))
+        owner = request_owner(request)
+        payload = {"source_id": source_id}
+        return submit(run_toc_summaries_task, payload, kind="toc_summaries",
+                      outbox_id=enqueue_outbox("toc_summaries", payload, owner_id=owner), owner_id=owner)
     except HTTPException:
         store.set_summaries_status(source_id, previous)  # not running now; the outbox row still replays at startup
         raise

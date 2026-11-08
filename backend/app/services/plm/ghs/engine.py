@@ -56,9 +56,31 @@ def _merge_duplicates(components: list[Component]) -> list[Component]:
             m.pct += c.pct
             m.via.extend(v for v in c.via if v not in m.via)
             m.assessed = m.assessed and c.assessed
+            # P1-C2: same substance via two raw materials keeps the UNION of
+            # hazards; identical (class, category) pairs merge SCLs (stricter
+            # limit wins) and M-factors (larger wins) instead of dropping the
+            # second occurrence's hazards.
+            for h in c.hazards:
+                dup = next((x for x in m.hazards
+                            if x.hazard_class == h.hazard_class and x.category == h.category), None)
+                if dup is None:
+                    m.hazards.append(h)
+                    continue
+                if h.scl:
+                    merged_scl = {str(e.get("category")): e for e in (dup.scl or [])}
+                    for e in h.scl:
+                        cat = str(e.get("category"))
+                        old = merged_scl.get(cat)
+                        if old is None or (e.get("min_pct") is not None and
+                                            (old.get("min_pct") is None or float(e["min_pct"]) < float(old["min_pct"]))):
+                            merged_scl[cat] = e
+                    dup.scl = list(merged_scl.values())
+                if h.m_factor_acute is not None:
+                    dup.m_factor_acute = max(dup.m_factor_acute or 0, h.m_factor_acute)
+                if h.m_factor_chronic is not None:
+                    dup.m_factor_chronic = max(dup.m_factor_chronic or 0, h.m_factor_chronic)
             continue
         clone = Component(**{**asdict(c), "hazards": list(c.hazards), "via": list(c.via)})
-        clone.hazards = c.hazards
         merged[key] = clone
         out.append(clone)
     return out
@@ -117,6 +139,19 @@ def classify(
             result.data_gaps.append(DataGap(
                 "conditional_substance_classification", None,
                 f"{c.label()} 在危化品目录中按形态 / 浓度给出不同分类，已从严取全部类别，请法规专员确认适用条件。"))
+    # P1-C11: a minimum-category ("*") row is computed as if exact today
+    # with no trace at all; at minimum it must surface as a data gap
+    # (same level as conditional), so a reviewer sees the uncertainty.
+    seen_min: set[tuple[str, str, str]] = set()
+    for c in comps:
+        for h in c.hazards:
+            key = (c.name, h.hazard_class, h.category)
+            if h.is_minimum and key not in seen_min:
+                seen_min.add(key)
+                result.data_gaps.append(DataGap(
+                    "minimum_category", h.hazard_class,
+                    f"{c.label()} 的 {h.hazard_class} 类别 {h.category} 为目录最低类别"
+                    f"（至少该类别），当前按精确类别计算，请法规专员复核。"))
 
     out = RuleOutput()
     acute, unknown = health.acute_toxicity(comps, props, rs)
@@ -162,7 +197,9 @@ def classify(
                             and g.hazard_class in suppressed)]
         out.trace.append(TraceEntry(
             "aqueous_suppression", None, "suppressed", "水溶液规则",
-            f"水为唯一最大组分且无低于 60 ℃ 的实测闪点，溶质物理危害不继承："
+            # P3-C9: 措辞与 is_aqueous 实现对齐 —— 水组分之和大于
+            # 最大单组分（不是“水为唯一最大组分”）。
+            f"水组分之和大于最大单组分且无低于 60 ℃ 的实测闪点，溶质物理危害不继承："
             f"已抑制筛查类 {sorted(suppressed)} 的试验缺口（实测物性判定不受影响）"))
 
     result.hazards = out.outcomes

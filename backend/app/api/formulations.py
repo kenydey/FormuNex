@@ -644,9 +644,15 @@ def _redact_snapshot(snapshot: dict) -> dict:
     snap = copy.deepcopy(snapshot)
     for key in ("ingredients", "components"):
         for ing in snap.get(key, []) or []:
-            if isinstance(ing, dict) and isinstance(ing.get("weight_pct"), (int, float)):
-                ing["weight_pct_band"] = band(float(ing["weight_pct"]))
-                del ing["weight_pct"]
+            if not isinstance(ing, dict):
+                continue
+            # P1-C13: PLM-imported snapshots carry "pct", not "weight_pct";
+            # the old code only redacted weight_pct and leaked exact ratios.
+            for pct_key in ("weight_pct", "pct"):
+                if isinstance(ing.get(pct_key), (int, float)):
+                    # One stable band key for consumers, whichever shape came in.
+                    ing["weight_pct_band"] = band(float(ing[pct_key]))
+                    del ing[pct_key]
     return snap
 
 

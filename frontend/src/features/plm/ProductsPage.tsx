@@ -32,7 +32,7 @@ export default function ProductsPage() {
   const categories = companies.data?.find((c) => c.is_default)?.coding_rules?.categories ?? [];
   const lifecycle = useMutation({
     mutationFn: (job: { id: string; action: "archive" | "restore" }) => call("POST", `/api/plm/products/${job.id}/${job.action}`),
-    onSuccess: () => { message.success("已保存"); void qc.invalidateQueries({ queryKey: ["plm", "products"] }); },
+    onSuccess: () => { message.success(t("common.saved", "已保存")); void qc.invalidateQueries({ queryKey: ["plm", "products"] }); },
     onError: (e) => message.error(errorText(e)),
   });
   const chosenCategory = Form.useWatch("category_identifier", form);
@@ -43,8 +43,8 @@ export default function ProductsPage() {
   });
   const submitNew = async () => {
     const v = await form.validateFields();
-    if (v.code && v.category_identifier) { message.error("产品代码与自动编码 Category 二选一"); return; }
-    if (!v.code && !v.category_identifier) { message.error("请填写产品代码或选择自动编码 Category"); return; }
+    if (v.code && v.category_identifier) { message.error(t("plm.code_or_category", "产品代码与自动编码 Category 二选一")); return; }
+    if (!v.code && !v.category_identifier) { message.error(t("plm.code_required", "请填写产品代码或选择自动编码 Category")); return; }
     create.mutate(v);
   };
   return (
@@ -54,31 +54,31 @@ export default function ProductsPage() {
         toolBarRender={() => [
           <Input.Search key="q" allowClear placeholder={t("plm.search", "产品代码 / 名称")} onSearch={setQ} />,
           <Button key="batch" disabled={!can("plm.document.write")} onClick={() => setBatchOpen(true)}>{t("plm.batch_export", "批量导出")}</Button>,
-          <Button key="import" disabled={!can("plm.document.write")} onClick={() => setImportOpen(true)}>Excel 导入</Button>,
+          <Button key="import" disabled={!can("plm.document.write")} onClick={() => setImportOpen(true)}>{t("plm.excel_import", "Excel 导入")}</Button>,
           <Button key="new" type="primary" disabled={!can("plm.document.write")} title={t("common.need_document_write", "需要权限：编制 SDS / TDS / 标签")} onClick={() => setOpen(true)}>{t("plm.new_product", "新建产品")}</Button>]}
         columns={[
           { title: t("plm.code", "产品代码"), dataIndex: "code", render: (_d, r) => <Link to={`/plm/products/${r.id}`}>{r.code}</Link> },
           { title: t("plm.name", "名称"), dataIndex: "name_zh" },
           { title: "English", dataIndex: "name_en" },
           { title: t("plm.lifecycle", "生命周期"), dataIndex: "lifecycle_state", render: (_d, r) => <StatusTag status={r.lifecycle_state} /> },
-          { title: t("plm.revisions", "修订版数"), dataIndex: "revisions", width: 100 },
+          { title: t("plm.revisions_count", "修订版数"), dataIndex: "revisions", width: 100 },
           { title: t("common.updated", "更新时间"), dataIndex: "updated_at", valueType: "dateTime", width: 170 },
-          { title: "操作", render: (_d, r) => r.lifecycle_state === "withdrawn"
-            ? <Popconfirm title="恢复该产品？恢复后生命周期回到研发中（rd）。" onConfirm={() => lifecycle.mutate({ id: r.id, action: "restore" })}><Button type="link">恢复</Button></Popconfirm>
-            : <Popconfirm title="归档该产品？归档后生命周期变为已撤回（withdrawn）。" onConfirm={() => lifecycle.mutate({ id: r.id, action: "archive" })}><Button type="link" danger>归档</Button></Popconfirm> },
+          { title: t("common.actions", "操作"), render: (_d, r) => r.lifecycle_state === "withdrawn"
+            ? <Popconfirm title={t("plm.restore_confirm", "恢复该产品？恢复后生命周期回到研发中（rd）。")} onConfirm={() => lifecycle.mutate({ id: r.id, action: "restore" })}><Button type="link" disabled={!can("plm.document.write")}>{t("plm.restore", "恢复")}</Button></Popconfirm>
+            : <Popconfirm title={t("plm.archive_confirm", "归档该产品？归档后生命周期变为已撤回（withdrawn）。")} onConfirm={() => lifecycle.mutate({ id: r.id, action: "archive" })}><Button type="link" danger disabled={!can("plm.document.write")}>{t("plm.archive", "归档")}</Button></Popconfirm> },
         ]} />
       <BatchExportModal open={batchOpen} onClose={() => setBatchOpen(false)} />
       <ExcelImportModal open={importOpen} onClose={() => setImportOpen(false)} kind="formulas" />
       <Modal open={open} title={t("plm.new_product", "新建产品")} onCancel={() => setOpen(false)} confirmLoading={create.isPending}
         onOk={submitNew} destroyOnHidden>
         <Form form={form} layout="vertical">
-          <Form.Item name="code" label={t("plm.code", "产品代码")}><Input disabled={!!chosenCategory} placeholder={chosenCategory ? "按编码规则自动生成" : undefined} /></Form.Item>
-          {categories.length > 0 && <Form.Item name="category_identifier" label="自动编码 Category">
-            <Select allowClear placeholder="选择后按默认公司编码规则自动生成代码"
+          <Form.Item name="code" label={t("plm.code", "产品代码")}><Input disabled={!!chosenCategory} placeholder={chosenCategory ? t("plm.code_auto", "按编码规则自动生成") : undefined} /></Form.Item>
+          {categories.length > 0 && <Form.Item name="category_identifier" label={t("plm.auto_category", "自动编码 Category")}>
+            <Select allowClear placeholder={t("plm.auto_category_ph", "选择后按默认公司编码规则自动生成代码")}
               options={categories.map((c) => ({ label: `${c.name_zh} (${c.identifier})`, value: c.identifier }))}
               onChange={(v) => { if (v) form.setFieldsValue({ code: undefined }); }} />
           </Form.Item>}
-          <Form.Item name="legacy_code" label="旧码对照（手工维护，不自动映射）"><Input /></Form.Item>
+          <Form.Item name="legacy_code" label={t("plm.legacy_code", "旧码对照（手工维护，不自动映射）")}><Input /></Form.Item>
           <Form.Item name="name_zh" label={t("plm.name", "名称")} rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="name_en" label="English"><Input /></Form.Item>
         </Form>

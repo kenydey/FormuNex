@@ -95,7 +95,7 @@ function CollectionsBody({ projectId }: { projectId: string }) {
         columns={[
           { title: t("library.coll.name", "名称"), dataIndex: "name", render: (_d, c) => <a onClick={() => setOpenId(c.collection_id)}>{c.name}</a> },
           { title: t("library.coll.query", "查询"), dataIndex: "query", ellipsis: true },
-          { title: t("library.coll.preset", "筛选预设"), width: 170, render: (_d, c) => c.screening_preset
+          { title: t("library.coll.preset_col", "筛选预设"), width: 170, render: (_d, c) => c.screening_preset
             ? <Tag>{(presets.data?.presets ?? []).find((p) => p.name === c.screening_preset)?.title ?? c.screening_preset}</Tag>
             : <Typography.Text type="secondary">—</Typography.Text> },
           { title: t("library.coll.sched", "定时刷新"), width: 130, render: (_d, c) => (c.schedule.enabled
@@ -108,7 +108,7 @@ function CollectionsBody({ projectId }: { projectId: string }) {
             <Space size={0}>
               <Button type="link" size="small" disabled={!can("knowledge.write")} loading={refresh.isPending && refresh.variables === c.collection_id} onClick={() => refresh.mutate(c.collection_id)}>
                 {t("library.coll.refresh", "刷新")}</Button>
-              <Popconfirm title={t("common.confirm_delete", "确认删除？")} onConfirm={() => remove.mutate(c.collection_id)} okButtonProps={{ danger: true }}>
+              <Popconfirm title={t("common.confirm_delete", "确定删除？")} onConfirm={() => remove.mutate(c.collection_id)} okButtonProps={{ danger: true }}>
                 <Button type="link" size="small" danger disabled={!can("knowledge.write")} loading={remove.isPending && remove.variables === c.collection_id}>{t("common.delete", "删除")}</Button>
               </Popconfirm>
             </Space>) },
@@ -119,7 +119,7 @@ function CollectionsBody({ projectId }: { projectId: string }) {
         <ErrorAlert error={detail.error} />
         {detail.data && detail.data.screening_preset && (
           <Typography.Paragraph type="secondary">
-            {t("library.coll.preset", "筛选预设")}：{(presets.data?.presets ?? []).find((p) => p.name === detail.data!.screening_preset)?.title ?? detail.data.screening_preset}
+            {t("library.coll.preset_col", "筛选预设")}：{(presets.data?.presets ?? []).find((p) => p.name === detail.data!.screening_preset)?.title ?? detail.data.screening_preset}
             （{detail.data.screening_preset}）
           </Typography.Paragraph>
         )}

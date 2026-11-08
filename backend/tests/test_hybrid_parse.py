@@ -562,7 +562,10 @@ def test_scanned_pages_stay_out_of_the_batch(monkeypatch: pytest.MonkeyPatch) ->
     batch_sizes: list[int] = []
     monkeypatch.setattr(
         pdf_local, "extract_pages",
-        lambda c, **kw: [_page(1, chars=3, image_ratio=0.0), _page(2, image_ratio=0.5)],
+        # P2-B6: a scanned page carries no word structure — the old fixture
+        # paired chars=3 with the default "body text" markdown, which the
+        # new word-structure rule correctly reads as real text, not a scan.
+        lambda c, **kw: [_page(1, markdown="", chars=3, image_ratio=0.0), _page(2, image_ratio=0.5)],
     )
     monkeypatch.setattr(mineru_cloud, "mineru_available", lambda: (True, ""))
     monkeypatch.setattr(pdf_local, "page_as_png", lambda c, n, dpi: b"PNG")

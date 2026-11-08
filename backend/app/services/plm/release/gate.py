@@ -252,7 +252,12 @@ def _check_substances(session: Session, c: Check, items: list[dict], regs: list[
             if not comp.assessed:
                 c.fail(k, f"{label}：危害未评估")
                 continue
-            weak = sorted({h.source for h in comp.hazards if rank(h.source) > rank(MIN_SOURCE)})
+            # P2-C1: the weak-source check must use THIS regulation's source
+            # order (EU puts clp_annex_vi right after manual); the default
+            # order ranks it last and would flag EU-harmonised data as weak.
+            order = rs.get("source_priority")
+            weak = sorted({h.source for h in comp.hazards
+                           if rank(h.source, order) > rank(MIN_SOURCE, order)})
             if weak:
                 c.fail(k, f"{label}：分类来源置信度不足（{', '.join(weak)}），需供应商 SDS 或法规专员确认")
     sub_ids = [x.substance_id for x in first if x.substance_id]
@@ -331,11 +336,25 @@ def _check_objectives(
             c.fail(item_key(metric), f"{label}：无已复核的实测值")
             continue
         lo, hi = a.get("min"), a.get("max")
-        if (lo is not None and m.value < lo) or (hi is not None and m.value > hi):
+        # P2-C4: acceptance may carry its own unit; the measured value is
+        # already normalised to the method unit at recording time, so when
+        # both units are present and convertible, compare in the acceptance
+        # unit — and fail closed when they cannot be reconciled.
+        value, unit = m.value, m.unit or ""
+        if a.get("unit") and m.unit and a["unit"] != m.unit:
+            from ...eln.unit_conversions import convert_unit
+
+            converted = convert_unit(m.value, m.unit, a["unit"])
+            if converted is None:
+                c.fail(item_key(metric),
+                       f"{label}：实测单位 {m.unit} 与验收单位 {a['unit']} 无法换算，拒绝比较")
+                continue
+            value, unit = converted, a["unit"]
+        if (lo is not None and value < lo) or (hi is not None and value > hi):
             rng = f"{'' if lo is None else f'≥{lo:g}'}{' ' if lo is not None and hi is not None else ''}" \
                   f"{'' if hi is None else f'≤{hi:g}'}"
-            c.fail(item_key(metric), f"{label}：实测 {m.value:g}{m.unit or ''} 未达到 {rng}")
-        c.evidence[metric] = {"value": m.value, "measurement_id": m.id,
+            c.fail(item_key(metric), f"{label}：实测 {value:g}{unit} 未达到 {rng}")
+        c.evidence[metric] = {"value": value, "unit": unit, "measurement_id": m.id,
                               "basis": "manual" if picks.get(metric) == m.id else "latest"}
 
 

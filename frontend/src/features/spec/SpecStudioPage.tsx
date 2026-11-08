@@ -82,7 +82,7 @@ export default function SpecStudioPage() {
   const setR = (patch: Partial<Requirement>) => setReq({ ...req, ...patch });
   const setS = (patch: Partial<SpecContract>) => setSpec({ ...spec, ...patch });
   const pw = spec.process_window ?? {};
-  const canWrite = can("project.write");
+  const canWrite = can("project.write", projectId);
 
   return (
     <PageContainer title={q.data?.title} subTitle={t("spec.sub", "规格契约是 DOE、寻优、合规拦截与发布门禁的共同依据")}
@@ -92,7 +92,7 @@ export default function SpecStudioPage() {
           onClick={() => setRenameOpen(true)}>{t("common.edit", "编辑")}</Button>
         <Button danger disabled={!canWrite || !q.data} title={t("common.need_project_write", "需要权限：创建 / 编辑项目")}
           onClick={() => setDeleteOpen(true)}>{t("common.delete", "删除")}</Button>
-        <Button type="primary" loading={save.isPending} onClick={saveChecked}>{t("common.save", "保存")}</Button>
+        <Button type="primary" loading={save.isPending} disabled={!canWrite || !q.data} onClick={saveChecked}>{t("common.save", "保存")}</Button>
       </Space>}>
       <ProjectRenameModal open={renameOpen} onClose={() => setRenameOpen(false)}
         project={q.data ? { id: projectId, title: q.data.title } : null} />
@@ -245,7 +245,7 @@ export default function SpecStudioPage() {
                   newRow={() => ({ metric: "" })}
                   columns={[
                     { title: t("spec.metric", "指标"), dataIndex: "metric", formItemProps: { rules: [{ required: true }] } },
-                    { title: t("spec.label", "名称"), dataIndex: "label" },
+                    { title: t("spec.label_name", "名称"), dataIndex: "label" },
                     { title: t("spec.min", "下限"), dataIndex: "min", valueType: "digit" },
                     { title: t("spec.max", "上限"), dataIndex: "max", valueType: "digit" },
                   ]}

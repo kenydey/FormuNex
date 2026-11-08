@@ -35,6 +35,7 @@ from ....db.models_regulatory import (
 from . import cas as cas_mod
 from .catalog_text_parser import parse_hazard_text as parse_catalog_text
 from .hazard_classes import BY_CODE, english_class_to_code, h_code_for
+from ..ghs.cache import CACHE
 
 SOURCE = "supplier_sds"
 CONFIDENCE = 0.95
@@ -422,6 +423,9 @@ def import_sds(session, parsed: ParsedSds, *, filename: str, digest: str) -> dic
             release_id=release.id,
         ))
     session.flush()
+    # P2-C9: the bulk delete above fires no ORM events, so the cache hook
+    # never sees the replacement — invalidate explicitly.
+    CACHE.invalidate("classifications", substance.id)
     return {
         "substance_id": substance.id,
         "cas_no": cas,

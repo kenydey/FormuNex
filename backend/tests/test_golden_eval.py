@@ -86,6 +86,12 @@ def test_golden_eval_dataset_valid():
         assert doc.get("text"), f"sample_documents[{i}] missing text"
 
 
+# P3-D5: mean-RR floor. Measured baseline 2026-11-05: 1.000 (all 53
+# questions first-hit at rank 1). Threshold 0.5 keeps 50% margin and
+# still catches systematic rank-3 degradation (mean RR 0.333).
+GOLDEN_MIN_MEAN_RR = 0.5
+
+
 # ── test 2: golden retrieval relevance ───────────────────────────────────────
 
 
@@ -114,7 +120,10 @@ def test_golden_retrieval_relevance(stores):
     )
 
     # Run each golden question through hybrid_search
+    from app.services.kb_query_test import keyword_rank_metrics
+
     failures = []
+    reciprocal_ranks = []
     for entry in golden_questions:
         question = entry["question"]
         keywords = entry["expected_keywords"]
@@ -130,6 +139,15 @@ def test_golden_retrieval_relevance(stores):
         results = resp.json()
         top3_texts = [r.get("text", "") for r in results[:3]]
 
+        # P3-D5: rank depth, not just top-3 presence. The top-3 any-hit
+        # gate below stays the enforcement; mean reciprocal rank is the
+        # depth signal (a gate that only ever passed at rank 3 for every
+        # question would still pass top-3 while ranking is degraded).
+        metrics = keyword_rank_metrics(
+            [{"text": t} for t in top3_texts], keywords, top_k=3
+        )
+        reciprocal_ranks.append(metrics["reciprocal_rank"])
+
         # At least one keyword must appear in the combined top-3 text
         combined = "".join(top3_texts)
         hit = any(kw in combined for kw in keywords)
@@ -139,9 +157,18 @@ def test_golden_retrieval_relevance(stores):
                 f"in top-3: {[t[:60] for t in top3_texts]}"
             )
 
+    mean_rr = sum(reciprocal_ranks) / len(reciprocal_ranks) if reciprocal_ranks else 0.0
+    print(f"\ngolden retrieval mean reciprocal rank (top-3): {mean_rr:.3f}")
+    if mean_rr < GOLDEN_MIN_MEAN_RR:
+        failures.append(
+            f"mean reciprocal rank {mean_rr:.3f} below threshold "
+            f"{GOLDEN_MIN_MEAN_RR} (first-hit rank distribution: "
+            f"{sorted(reciprocal_ranks, reverse=True)[:10]}...)"
+        )
     if failures:
         pytest.fail(
-            f"{len(failures)}/{len(golden_questions)} golden questions failed:\n"
+            f"{len(failures)}/{len(golden_questions)} golden questions failed "
+            f"(mean RR {mean_rr:.3f}):\n"
             + "\n".join(failures)
         )
 

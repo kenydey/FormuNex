@@ -70,7 +70,7 @@ export default function MethodsPage() {
             ]} />
         ) },
       ]} />
-      <Modal open={!!editM} title={t("methods.title", "检测方法")} onCancel={() => setEditM(null)} confirmLoading={saveM.isPending} destroyOnHidden
+      <Modal open={!!editM} title={t("methods.title_edit", "检测方法")} onCancel={() => setEditM(null)} confirmLoading={saveM.isPending} destroyOnHidden
         onOk={async () => {
           const v = await mForm.validateFields();
           saveM.mutate({ ...v, rounding: v.decimals == null ? {} : { decimals: v.decimals } });
@@ -81,13 +81,13 @@ export default function MethodsPage() {
           <Form.Item name="name_en" label="English"><Input /></Form.Item>
           <Form.Item name="metric" label={t("tasks.metric", "指标")}><Input /></Form.Item>
           <Form.Item name="unit" label={t("spec.unit", "单位")}><Input /></Form.Item>
-          <Form.Item name="decimals" label={t("methods.decimals", "修约位数（GB/T 8170）")}><InputNumber min={0} max={6} /></Form.Item>
+          <Form.Item name="decimals" label={t("methods.decimals_gb", "修约位数（GB/T 8170）")}><InputNumber min={0} max={6} /></Form.Item>
           <Form.Item name="valid_min" label={t("methods.min", "有效范围下限")}><InputNumber /></Form.Item>
           <Form.Item name="valid_max" label={t("methods.max", "有效范围上限")}><InputNumber /></Form.Item>
           <Form.Item name="active" label={t("methods.active", "启用")} valuePropName="checked"><Switch /></Form.Item>
         </Form>
       </Modal>
-      <Modal open={!!editI} title={t("instruments.title", "仪器")} onCancel={() => setEditI(null)} confirmLoading={saveI.isPending} destroyOnHidden
+      <Modal open={!!editI} title={t("instruments.item", "仪器")} onCancel={() => setEditI(null)} confirmLoading={saveI.isPending} destroyOnHidden
         onOk={async () => {
           const v = await iForm.validateFields();
           saveI.mutate({ ...v, calibrated_at: v.calibrated_at?.toISOString() ?? null, calibration_due: v.calibration_due?.toISOString() ?? null });

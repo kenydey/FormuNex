@@ -252,7 +252,7 @@ export default function ClassicDoePage() {
           extra={<Space wrap>
             <Button onClick={() => exportPlan("csv")}>{t("design.doe.export_csv", "导出 CSV")}</Button>
             <Button onClick={() => exportPlan("xlsx")}>XLSX</Button>
-            <Button loading={adopt.isPending} disabled={!can("lab.execute", projectId)} onClick={() => adopt.mutate(plan)}>{t("design.doe.adopt", "写入实验台账")}</Button>
+            <Button loading={adopt.isPending} disabled={!can("lab.execute", projectId) || !can("doe.write", projectId) || !can("project.write", projectId)} onClick={() => adopt.mutate(plan)}>{t("design.doe.adopt", "写入实验台账")}</Button>
             {dispatchId ? <DispatchButton planId={dispatchId} />
               : <Space wrap>
                 <Tooltip title={t("design.doe.not_persisted", "该计划未能保存到 DOE 历史，无法下发为实验任务")}>

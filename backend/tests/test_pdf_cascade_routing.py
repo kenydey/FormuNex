@@ -128,8 +128,11 @@ def test_quality_gate_escalates_to_mineru_on_table_loss(monkeypatch):
     monkeypatch.setattr(
         parsing,
         "_parse_mineru",
+        # P1-B1: the challenger must pass the full gate itself, density
+        # included — the old 30-char table string (30 < 50/page) is now
+        # rejected, so this test's challenger is padded past the threshold.
         lambda c: parsing.ParseResult(
-            "| 指标 | 值 |\n|---|---|\n| 盐雾 | 1000h |", "mineru"
+            "| 指标 | 值 |\n|---|---|\n| 盐雾 | 1000h |\n\n" + "补充说明文字。" * 10, "mineru"
         ),
     )
     result = parsing.parse_document(_pdf_bytes(["hello world " * 20]), "pdf")

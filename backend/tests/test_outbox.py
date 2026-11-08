@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.db.database import make_engine, make_session_factory
 from app.db.dispatcher import recover_stalled
 from app.db.models import TaskOutbox
-from app.db.outbox_store import enqueue, select_pending
+from app.db.outbox_store import enqueue, mark_cancelled, select_pending
 from tests.alembic_helpers import run_upgrade
 
 
@@ -421,3 +421,156 @@ def test_schedule_recover_stalled_returns_immediately(
     assert started.wait(timeout=2), "background recover never started"
     release.set()
     thread.join(timeout=2)
+
+
+def test_mark_cancelled_flips_only_inflight_rows(session: Session) -> None:
+    """P0 fix (2026-11-04 deep review): cancelling must land the outbox
+    row in a terminal state, or recover_stalled replays the cancelled job."""
+    from app.db.outbox_store import STATUS_CANCELLED
+
+    row_id, _ = enqueue(session, "search", "key-cancel", {"q": "x"})
+    row = session.get(TaskOutbox, row_id)
+    row.task_id = "celery-1"
+    session.commit()
+    assert mark_cancelled(session, "celery-1") is True
+    session.commit()
+    assert session.get(TaskOutbox, row_id).status == STATUS_CANCELLED
+    # Already terminal: second call is a no-op, unknown task id too.
+    assert mark_cancelled(session, "celery-1") is False
+    assert mark_cancelled(session, "nope") is False
+
+
+def test_recover_stalled_closes_cancelled_snapshot_without_replay(
+    session: Session, _stub_dispatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0 fix: the dispatcher guard used to miss 'cancelled' snapshots, so
+    a cancelled task whose row never got its terminal mark was replayed."""
+    from types import SimpleNamespace
+
+    import app.worker.tasks as worker_tasks
+
+    row_id, _ = enqueue(session, "search", "key-cancel-guard", {"q": "x"})
+    row = session.get(TaskOutbox, row_id)
+    row.task_id = "celery-2"
+    row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=31)
+    session.commit()
+    monkeypatch.setattr(worker_tasks, "load_persisted_task",
+                        lambda tid: SimpleNamespace(state="cancelled", message=""))
+    assert recover_stalled(session, cutoff_minutes=30) == 0
+    _stub_dispatch.assert_not_called()
+    assert session.get(TaskOutbox, row_id).status == "CANCELLED"
+
+
+# ── Batch 2 (2026-11-04 deep review): dispatcher / enqueue ────────────────
+
+
+def test_dispatch_with_timeout_returns_on_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P2-1: a publish slower than the timeout raises promptly instead
+    of waiting for the pool to drain (the old ``with`` block waited the
+    full publish duration despite the timeout)."""
+    import time
+
+    from app.db import dispatcher
+
+    def _slow(operation, payload, task_id=None):
+        time.sleep(2.0)
+
+    monkeypatch.setattr(dispatcher, "_dispatch", _slow)
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError):
+        dispatcher._dispatch_with_timeout("search", {}, timeout_s=0.1)
+    assert time.monotonic() - t0 < 1.5
+
+
+def test_recover_counts_deterministic_failures_toward_dead(
+    session: Session, _stub_dispatch: MagicMock
+) -> None:
+    """P2-2: a deterministic dispatch failure (unknown op / bad payload)
+    counts toward MAX_ATTEMPTS and the row goes DEAD with the error
+    recorded, instead of retrying forever uncounted."""
+    import uuid
+
+    _stub_dispatch.side_effect = ValueError("no outbox handler for operation 'search'")
+    old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+    row = TaskOutbox(
+        id=str(uuid.uuid4()),
+        operation="search",
+        idempotency_key="p22-key",
+        payload={},
+        status="PENDING",
+        attempt_count=4,
+        created_at=old,
+        updated_at=old,
+    )
+    session.add(row)
+    session.commit()
+
+    assert recover_stalled(session, cutoff_minutes=30) == 0
+    reloaded = session.get(TaskOutbox, row.id)
+    assert reloaded.status == "PENDING" and reloaded.attempt_count == 5
+    assert reloaded.error and "no outbox handler" in reloaded.error
+
+    # Aged again, the next pass DEADs it without another dispatch.
+    reloaded.updated_at = old
+    session.commit()
+    assert recover_stalled(session, cutoff_minutes=30) == 0
+    assert session.get(TaskOutbox, row.id).status == "DEAD"
+    assert _stub_dispatch.call_count == 1
+
+
+def test_recover_leaves_transient_failures_uncounted(
+    session: Session, _stub_dispatch: MagicMock
+) -> None:
+    """P2-2 (other half): a transient failure (broker unreachable)
+    keeps the old behaviour — reset to PENDING, attempt not bumped."""
+    import uuid
+
+    _stub_dispatch.side_effect = ConnectionError("broker down")
+    old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+    row = TaskOutbox(
+        id=str(uuid.uuid4()),
+        operation="search",
+        idempotency_key="p22-transient",
+        payload={},
+        status="PENDING",
+        attempt_count=0,
+        created_at=old,
+        updated_at=old,
+    )
+    session.add(row)
+    session.commit()
+
+    assert recover_stalled(session, cutoff_minutes=30) == 0
+    reloaded = session.get(TaskOutbox, row.id)
+    assert reloaded.status == "PENDING" and reloaded.attempt_count == 0
+    assert reloaded.error is None
+
+
+def test_enqueue_outbox_reselects_on_key_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2-4: the loser of the unique-key race still gets the winner's
+    row id (via re-select) instead of a silent None with no durable row."""
+    from app.api import _idempotency
+    from app.db import outbox_store
+    from app.db.database import default_session_factory
+
+    db_url = f"sqlite:///{tmp_path}/p24.db"
+    run_upgrade(db_url, monkeypatch)
+    monkeypatch.setenv("FORMUNEX_DB_URL", db_url)
+
+    first = _idempotency.enqueue_outbox("search", {"q": "race"})
+    assert first
+    real_enqueue = outbox_store.enqueue
+    calls = {"n": 0}
+
+    def _flaky(session_, operation, key, payload_, *, status="PENDING", owner_id=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+        return real_enqueue(session_, operation, key, payload_, status=status, owner_id=owner_id)
+
+    monkeypatch.setattr(outbox_store, "enqueue", _flaky)
+    assert _idempotency.enqueue_outbox("search", {"q": "race"}) == first
+    with default_session_factory()() as s:
+        assert s.get(TaskOutbox, first) is not None

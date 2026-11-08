@@ -22,6 +22,7 @@ from ..domain.schemas import ExperimentRecord, Requirement
 from ..db.database import default_session_factory
 from ..db.session_utils import commit_session
 from ..db.models import DOECycleRunRow, ExperimentRow
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,9 @@ def record_cycle_run(
         with commit_session(factory) as session:
             session.add(
                 DOECycleRunRow(
-                    project_id=project_id or "",
+                    # P3-D1: unassigned runs are NULL, not "" ("" equals
+                    # no project and satisfies no IS NULL query).
+                    project_id=project_id or None,
                     domain=domain or "",
                     engine=engine or "",
                     prior_measurement_count=prior_measurement_count,
@@ -149,6 +152,7 @@ def generate_experiment_dicts(
     prior_measurements: list[ExperimentRecord],
     budget_remaining: int | None = None,
     seed: int | None = None,
+    workbench_campaign_id: int | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Step 2 (execution dispatch): generate the next experiment points.
 
@@ -166,10 +170,12 @@ def generate_experiment_dicts(
         if not baybe_engine.available():
             logger.warning("Baybe engine not available, falling back to LHS")
             return _generate_via_lhs(
-                requirement, prior_measurements, budget_remaining=budget_remaining, seed=seed
+                requirement, prior_measurements, budget_remaining=budget_remaining, seed=seed,
+                workbench_campaign_id=workbench_campaign_id,
             )
         return _generate_via_baybe(
-            requirement, prior_measurements, baybe_engine, budget_remaining=budget_remaining, seed=seed
+            requirement, prior_measurements, baybe_engine, budget_remaining=budget_remaining, seed=seed,
+            workbench_campaign_id=workbench_campaign_id,
         )
     except Exception as e:
         logger.error("Failed to generate experiments: %s", e)
@@ -181,6 +187,7 @@ def _generate_via_lhs(
     prior_measurements: list[ExperimentRecord],
     budget_remaining: int | None = None,
     seed: int | None = None,
+    workbench_campaign_id: int | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     from ..services.active_learning import active_learning_doe
 
@@ -197,7 +204,7 @@ def _generate_via_lhs(
         n_suggest=5,
         design="lhs",
         engine="auto",
-        workbench_campaign_id=None,
+        workbench_campaign_id=workbench_campaign_id,
         budget_remaining=budget_remaining,
         seed=seed,
     )
@@ -212,13 +219,14 @@ def _generate_via_baybe(
     baybe_engine: Any,
     budget_remaining: int | None = None,
     seed: int | None = None,
+    workbench_campaign_id: int | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     active_result = baybe_engine.recommend(
         req=requirement,
         measurements=prior_measurements,  # closed-loop: seed with real data
         batch_size=5,
         design="baybe_active",
-        workbench_campaign_id=None,
+        workbench_campaign_id=workbench_campaign_id,
         budget_remaining=budget_remaining,
         seed=seed,
     )
@@ -246,19 +254,43 @@ def persist_experiments(
     requirement: Requirement,
     experiment_dicts: list[dict[str, Any]],
     candidate_formulations: list,
+    *,
+    task_id: str | None = None,
+    workbench_campaign_id: int | None = None,
 ) -> dict[str, Any]:
     """Step 3 (result convergence): persist pending experiments + provenance."""
     factory = default_session_factory()
     with commit_session(factory) as session:
+        if task_id:
+            # P1-A7 (2026-11-04 deep review): replay/autoretry cleanup.
+            # A cycle whose persist already committed but whose task
+            # crashed before record_done is replayed under the same
+            # task_id; without this, the regenerated batch stacks a
+            # duplicate set of pending experiments. Drop this task's
+            # previous batch first — but only still-unmeasured rows:
+            # losing a lab measurement to the rare measure-then-replay
+            # race is worse than a duplicate pending point.
+            prior = session.execute(
+                select(ExperimentRow).where(ExperimentRow.doe_task_id == task_id)
+            ).scalars().all()
+            for row in prior:
+                if not row.measured:
+                    session.delete(row)
         experiment_ids = []
+        skipped_infeasible: list[str] = []
         for exp_dict in experiment_dicts:
-            # 只持久化数值型 factors。注意：不要把嵌套 dict（如旧代码的
-            # "_doe_metadata"）塞进 ExperimentRow.factors —— 下游消费者
-            # 按 dict[str, float] 使用（similarity 里的 `cv > 0` 会直接
-            # TypeError；SimilarFormulationMatch 的 factors 字段也会校验
-            # 失败），且 db/store 的 _coerce_factor_floats 本就丢弃这类
-            # metadata blob，没有任何消费者会读回它。
-            base_factors = exp_dict["natural_factors"].copy()
+            # P1-C17: an infeasible point must never become pending lab
+            # work. Skip it and report the interception instead of
+            # persisting it as-is; the reason stays in the task result.
+            if exp_dict.get("infeasible"):
+                skipped_infeasible.append(str(exp_dict.get("infeasible_reason") or exp_dict["run_id"]))
+                continue
+            # P2-C24: only numeric factors. The old code copied
+            # natural_factors wholesale despite the comment above it —
+            # a nested dict (e.g. "_doe_metadata") breaks downstream
+            # consumers that read factors as dict[str, float].
+            base_factors = {k: v for k, v in exp_dict["natural_factors"].items()
+                            if isinstance(v, (int, float)) and not isinstance(v, bool)}
             doe_metadata = {
                 "ai_suggested": exp_dict["ai_suggested"],
                 "infeasible": exp_dict["infeasible"],
@@ -268,11 +300,16 @@ def persist_experiments(
             experiment = ExperimentRow(
                 item_id=None,
                 domain=requirement.domain.value,
+                doe_task_id=task_id,
+                workbench_campaign_id=workbench_campaign_id,
                 project_id=(requirement.project_id or ""),
                 factors=base_factors,
                 cure_temperature_c=None,
                 measured={},
-                source="lab",
+                # P2-C24: pending AI-suggested points are not lab
+                # measurements; "lab" would let readers mistake them
+                # for measured rows.
+                source="doe_cycle",
                 label=str(exp_dict["run_id"]),
             )
             session.add(experiment)
@@ -300,7 +337,10 @@ def persist_experiments(
         "experiment_ids": experiment_ids,
         "status": "success",
         "count": len(experiment_ids),
-        "message": f"Generated {len(experiment_ids)} new experiments",
+        "skipped_infeasible": len(skipped_infeasible),
+        "skipped_infeasible_reasons": skipped_infeasible,
+        "message": f"Generated {len(experiment_ids)} new experiments"
+                   + (f" ({len(skipped_infeasible)} infeasible points skipped)" if skipped_infeasible else ""),
     }
 
 
@@ -347,6 +387,8 @@ def run_doe_cycle(
     seed: int | None = None,
     # P1-1: 透传 workbench_campaign_id，生成的实验关联到 campaign
     workbench_campaign_id: int | None = None,
+    # P1-A7: 透传任务 id，persist 层按它做重放清理
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute one DOE cycle for closed-loop automation.
 
@@ -436,7 +478,8 @@ def run_doe_cycle(
     # 2. Next experiment points (BayBE seeded with priors, else LHS).
     try:
         engine, experiment_dicts = generate_experiment_dicts(
-            requirement, prior_measurements, budget_remaining=budget_remaining, seed=seed
+            requirement, prior_measurements, budget_remaining=budget_remaining, seed=seed,
+            workbench_campaign_id=workbench_campaign_id,
         )
     except Exception as e:
         _record("", 0, "error")
@@ -445,7 +488,8 @@ def run_doe_cycle(
     # 3. Persist as pending + provenance links.
     try:
         result = persist_experiments(
-            requirement, experiment_dicts, candidate_formulations
+            requirement, experiment_dicts, candidate_formulations,
+            task_id=task_id, workbench_campaign_id=workbench_campaign_id,
         )
         # P1-1: 结果中携带 campaign_id，便于上游关联
         if workbench_campaign_id is not None:

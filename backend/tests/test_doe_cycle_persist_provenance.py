@@ -69,3 +69,35 @@ def test_a_provenance_failure_still_does_not_break_the_cycle(db, monkeypatch):
     experiments = [{"run_id": 1, "natural_factors": {"Zinc phosphate": 5.0}, "ai_suggested": False, "infeasible": False, "infeasible_reason": ""}]
     out = svc.persist_experiments(req, experiments, [knowledge.baseline_formulation(req)])
     assert out["status"] == "success" and out["count"] == 1
+
+
+def test_persist_twice_with_same_task_id_replaces_unmeasured_batch(db):
+    """P1-A7: a replayed / autoretried DOE cycle drops its own previous
+    unmeasured batch before persisting, instead of stacking duplicates;
+    already-measured rows are kept, not deleted."""
+    from sqlalchemy import select
+
+    from app.db.database import default_session_factory
+    from app.db.models import ExperimentRow
+
+    req = default_requirement()
+    candidate = knowledge.baseline_formulation(req)
+    experiments = [
+        {"run_id": i + 1, "natural_factors": {"Zinc phosphate": 5.0 + i}, "ai_suggested": False, "infeasible": False, "infeasible_reason": ""}
+        for i in range(3)
+    ]
+    first = svc.persist_experiments(req, experiments, [candidate], task_id="cycle-1")
+    assert first["count"] == 3 and len(first["experiment_ids"]) == 3
+    # Simulate a lab measurement landing on one row between persist and replay.
+    with default_session_factory()() as s:
+        row = s.execute(select(ExperimentRow).where(ExperimentRow.doe_task_id == "cycle-1")).scalars().first()
+        row.measured = {"density": 1.0}
+        s.commit()
+    second = svc.persist_experiments(req, experiments, [candidate], task_id="cycle-1")
+    assert second["count"] == 3
+    with default_session_factory()() as s:
+        rows = s.execute(select(ExperimentRow).where(ExperimentRow.doe_task_id == "cycle-1")).scalars().all()
+        # 1 measured old row kept + 3 fresh rows; the 2 unmeasured old rows are gone.
+        assert len(rows) == 4
+        assert sum(1 for r in rows if r.measured) == 1
+        assert all(r.doe_task_id == "cycle-1" for r in rows)

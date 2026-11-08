@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..config import get_settings
@@ -272,7 +272,7 @@ class KgRelationsRebuildBody(BaseModel):
 
 
 @router.post("/relations/rebuild")
-def rebuild_relations_api(body: KgRelationsRebuildBody | None = None):
+def rebuild_relations_api(request: Request, body: KgRelationsRebuildBody | None = None):
     """异步补语义关系(2026-09-05 / Top-5′ #4): 实体/提及已在库, 只重跑关系提取。
 
     不依赖 ``kg_relation_extract_enabled``（该旗标只控制入库同步）。
@@ -284,14 +284,17 @@ def rebuild_relations_api(body: KgRelationsRebuildBody | None = None):
     from ..worker.tasks import run_kg_relations_rebuild
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
+
 
     b = body or KgRelationsRebuildBody()
     lim = b.limit
     if lim is not None:
         lim = max(1, min(int(lim), 500))
     payload = {"source_id": b.source_id, "limit": lim, "force": True}
+    owner = request_owner(request)
     return submit(run_kg_relations_rebuild, payload, "kg_relations_rebuild",
-                  outbox_id=enqueue_outbox("kg_relations_rebuild", payload))
+                  outbox_id=enqueue_outbox("kg_relations_rebuild", payload, owner_id=owner), owner_id=owner)
 
 
 @router.post("/link-source/{source_id}", response_model=KGLinkReport)

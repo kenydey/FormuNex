@@ -55,6 +55,11 @@ class MixtureSpace:
 
     def pseudo(self, point: dict[str, Any]) -> list[float]:
         span = self.total - sum(self.lower)
+        if span == 0:
+            # P1-C16: every component is pinned at its lower bound and the
+            # lowers already sum to the total — a single-point space, so
+            # every feasible point maps to the zero pseudo-vector.
+            return [0.0 for _ in self.names]
         return [(float(point[n]) - lo) / span for n, lo in zip(self.names, self.lower, strict=True)]
 
 

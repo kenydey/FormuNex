@@ -10,6 +10,7 @@ intranet host), so the ordinary client is used rather than the public-only one.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -18,6 +19,8 @@ import httpx
 from ...http_safe import make_client
 
 from .base import ConnectorError, ElnConnector, RemoteRecord, RemoteValue
+
+logger = logging.getLogger(__name__)
 
 
 class ElabftwConnector(ElnConnector):
@@ -98,6 +101,7 @@ class ElabftwConnector(ElnConnector):
         except ValueError:
             raise ConnectorError(f"eLabFTW 实验 {external_id} 的 metadata 不是 JSON") from None
         out = []
+        errors = []
         for metric, f in (meta.get("extra_fields") or {}).items():
             raw = str(f.get("value", "")).strip()
             if not raw:
@@ -105,6 +109,13 @@ class ElabftwConnector(ElnConnector):
             try:
                 value = float(raw)
             except ValueError:
+                # P2-C22: an unparseable field used to vanish silently.
+                # It is now a warning and a pull-report error, while the
+                # remaining fields still land.
+                msg = f"{metric}: 无法解析为数值（{raw!r}），已跳过"
+                logger.warning("eLabFTW pull: %s (experiment %s)", msg, external_id)
+                errors.append(msg)
                 continue
             out.append(RemoteValue(metric, value, f.get("unit", "") or "", f.get("description", "") or ""))
+        self.last_pull_errors = errors
         return out

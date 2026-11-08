@@ -7,6 +7,7 @@ from inferring an equation out of a product table.
 """
 from __future__ import annotations
 
+import copy
 import re
 
 # Variable-group symbols recognised in schemes and tables.
@@ -20,19 +21,37 @@ RGROUP_SYMBOLS = frozenset({
 _DEFINITION_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9']*)\s*=\s*(.+?)\s*$")
 
 
-def parse_rgroup_definitions(text: str) -> dict[str, str]:
+def parse_rgroup_definitions(
+    text: str, *, ignored: list | None = None
+) -> dict[str, str]:
     """Parse explicit ``SYM = fragment`` definitions (one per line or
-    semicolon-separated). Anything else is ignored — never inferred."""
+    semicolon-separated). Anything else is ignored — never inferred.
+
+    P2-B16: silently dropped definitions are now reported — when an
+    ``ignored`` list is supplied, each skipped definition line is
+    appended as (symbol, line). The gate also accepts ``Ar\\d+``
+    (Ar1, Ar2 — aryl variants); anything else outside RGROUP_SYMBOLS
+    / R\\d+ still does not become a mapping.
+    """
     mapping: dict[str, str] = {}
     if not text:
         return mapping
+    # P3-B22 (record only, verified): \r\n needs no explicit split — the
+    # definition regex anchors (\s* ... \s*$) swallow a stray \r on
+    # either side of a definition, so CRLF input parses like LF input.
     for part in re.split(r"[;\n]", text):
         match = _DEFINITION_RE.match(part)
         if not match:
             continue
         symbol, fragment = match.group(1), match.group(2)
-        if symbol in RGROUP_SYMBOLS or re.fullmatch(r"R\d+", symbol):
+        if (
+            symbol in RGROUP_SYMBOLS
+            or re.fullmatch(r"R\d+", symbol)
+            or re.fullmatch(r"Ar\d+", symbol)
+        ):
             mapping[symbol] = fragment
+        elif ignored is not None:
+            ignored.append((symbol, part.strip()))
     return mapping
 
 
@@ -40,18 +59,39 @@ def _substitute_string(smiles: str, mapping: dict[str, str]) -> tuple[str, bool]
     """String-level substitution. Bracketed [SYM] forms always; bare SYM
     only when bounded by non-alphanumerics on both sides (a bare R inside
     OR / CR is ambiguous with real atoms and is NOT substituted).
-    Longest symbols first so R1 wins over R."""
+    Longest symbols first so R1 wins over R.
+
+    P2-B14: single-pass. Each matched occurrence is first replaced by
+    a NUL placeholder and fragments are swapped in only at the end,
+    so a fragment that itself contains a symbol is never rescanned:
+    {"R1": "[R]", "R": "C"} on "[R1]" yields "[R]", not "C".
+    """
     out, changed = smiles, False
-    for symbol in sorted(mapping, key=len, reverse=True):
+    placeholders: dict[str, str] = {}
+    for idx, symbol in enumerate(sorted(mapping, key=len, reverse=True)):
         fragment = mapping[symbol]
+        token = f"\x00RG{idx}\x00"
+        hit = False
         bracketed = f"[{symbol}]"
         if bracketed in out:
-            out = out.replace(bracketed, fragment)
-            changed = True
+            out = out.replace(bracketed, token)
+            hit = True
         bounded = re.compile(r"(?<![A-Za-z0-9])" + re.escape(symbol) + r"(?![A-Za-z0-9])")
         if bounded.search(out):
-            out = bounded.sub(fragment, out)
+            # P0 fix (2026-11-04 deep review): the replacement string must
+            # not pass through re.sub's escape processing — a fragment with
+            # a backslash (legal SMILES stereochemistry, e.g. C\C=C\C)
+            # raised re.error: bad escape. A lambda returns it verbatim.
+            # (Here the lambda returns only the placeholder token, which
+            # carries no backslash; the fragment itself is swapped in
+            # with str.replace below, so it stays verbatim too.)
+            out = bounded.sub(lambda m, t=token: t, out)
+            hit = True
+        if hit:
+            placeholders[token] = fragment
             changed = True
+    for token, fragment in placeholders.items():
+        out = out.replace(token, fragment)
     return out, changed
 
 
@@ -84,6 +124,22 @@ def substitute_rgroups(
     return new_smiles, []
 
 
+def _dummy_count(mol, smi: str) -> int:
+    """Dummy-atom count for a mol, with a SMILES-text fallback.
+
+    Real RDKit mols expose GetAtoms (atomic num 0); fake/test chem
+    objects do not, so fall back to counting "[*]" plus bare "*"
+    markers in the SMILES text.
+    """
+    get_atoms = getattr(mol, "GetAtoms", None)
+    if callable(get_atoms):
+        try:
+            return sum(1 for a in get_atoms() if a.GetAtomicNum() == 0)
+        except Exception:
+            pass
+    return smi.count("[*]") + len(re.findall(r"(?<!\[)\*(?!\])", smi))
+
+
 def graft_rgroup_fragment(
     template_smiles: str, fragment_smiles: str, *, chem
 ) -> str | None:
@@ -92,6 +148,12 @@ def graft_rgroup_fragment(
     RDKit ReplaceSubstructs, replaceAll=False, SanitizeMol-checked.
     Returns the grafted SMILES or None (no dummy, parse failure, or
     sanitisation failure — the caller keeps the original).
+
+    P2-B13: a template with TWO dummies used to return "success" with
+    the second dummy still in place. The graft is valid only when
+    exactly one template dummy was consumed: the grafted dummy count
+    must equal the fragment's own dummy count, and the template must
+    have carried at least one dummy.
     """
     if chem is None:
         return None
@@ -105,7 +167,13 @@ def graft_rgroup_fragment(
         if not grafted:
             return None
         chem.SanitizeMol(grafted[0])
-        return chem.MolToSmiles(grafted[0])
+        out = chem.MolToSmiles(grafted[0])
+        template_dummies = _dummy_count(template, template_smiles)
+        fragment_dummies = _dummy_count(fragment, fragment_smiles)
+        grafted_dummies = _dummy_count(grafted[0], out)
+        if template_dummies < 1 or grafted_dummies != fragment_dummies:
+            return None
+        return out
     except Exception:
         return None
 
@@ -124,24 +192,58 @@ def apply_rgroup_to_reaction(reaction, mapping: dict[str, str], *, chem=None):
     string_fallback: list[str] = []
 
     def _sub_side(side):
-        if not (side.smiles or "").strip():
+        # P2-B15: duck-typed means dict sides and plain objects too, not
+        # just pydantic models — SimpleNamespace sides used to crash on
+        # .model_copy. Dict sides get a dict copy; models keep
+        # model_copy; anything else gets a shallow copy + setattr.
+        if isinstance(side, dict):
+            smiles = side.get("smiles") or ""
+            label = side.get("label") or ""
+        else:
+            smiles = getattr(side, "smiles", "") or ""
+            label = getattr(side, "label", "") or ""
+        if not (smiles or "").strip():
             return side
-        new_smiles, flags = substitute_rgroups(side.smiles, mapping, chem=chem)
-        if new_smiles == side.smiles:
+        new_smiles, flags = substitute_rgroups(smiles, mapping, chem=chem)
+        if new_smiles == smiles:
             return side
-        report[side.label or side.smiles] = (side.smiles, new_smiles)
+        report[label or smiles] = (smiles, new_smiles)
         if "rgroup_string_fallback" in flags:
-            string_fallback.append(side.label or side.smiles)
-        return side.model_copy(update={"smiles": new_smiles, "verified": False})
+            string_fallback.append(label or smiles)
+        if isinstance(side, dict):
+            out = dict(side)
+            out["smiles"] = new_smiles
+            out["verified"] = False
+            return out
+        if hasattr(side, "model_copy"):
+            return side.model_copy(update={"smiles": new_smiles, "verified": False})
+        out = copy.copy(side)
+        out.smiles = new_smiles
+        out.verified = False
+        return out
 
-    return (
-        reaction.model_copy(update={
-            "reactants": [_sub_side(s) for s in reaction.reactants],
-            "products": [_sub_side(s) for s in reaction.products],
-        }),
-        report,
-        string_fallback,
-    )
+    if isinstance(reaction, dict):
+        return (
+            {
+                **reaction,
+                "reactants": [_sub_side(s) for s in reaction.get("reactants", [])],
+                "products": [_sub_side(s) for s in reaction.get("products", [])],
+            },
+            report,
+            string_fallback,
+        )
+    new_reactants = [_sub_side(s) for s in reaction.reactants]
+    new_products = [_sub_side(s) for s in reaction.products]
+    if hasattr(reaction, "model_copy"):
+        new_reaction = reaction.model_copy(update={
+            "reactants": new_reactants,
+            "products": new_products,
+        })
+    else:
+        new_reaction = copy.copy(reaction)
+        new_reaction.reactants = new_reactants
+        new_reaction.products = new_products
+    return new_reaction, report, string_fallback
 
 
 def decompose_rgroups(

@@ -13,7 +13,9 @@ import time
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from ..clock import utcnow
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -285,7 +287,7 @@ async def ingest_batch(
 
 
 @router.post("/ingest/url")
-def ingest_from_url(req: IngestUrlRequest):
+def ingest_from_url(req: IngestUrlRequest, request: Request):
     """Queue a URL ingest: 202 + task_id, results via /api/tasks poll.
 
     Stage 3 / SR-026: fetch + parse used to run inline, holding the HTTP
@@ -298,12 +300,16 @@ def ingest_from_url(req: IngestUrlRequest):
     from ..worker.tasks import run_url_ingest_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
+
 
     url = req.url.strip()
     if not is_safe_url(url):
         raise HTTPException(status_code=400, detail="URL must be a public http(s) address")
-    return submit(run_url_ingest_task, {"url": url}, "url_ingest",
-                  outbox_id=enqueue_outbox("url_ingest", {"url": url}))
+    owner = request_owner(request)
+    payload = {"url": url}
+    return submit(run_url_ingest_task, payload, "url_ingest",
+                  outbox_id=enqueue_outbox("url_ingest", payload, owner_id=owner), owner_id=owner)
 
 
 @router.post("/ingest/text", response_model=IngestResponse)
@@ -319,7 +325,7 @@ def ingest_from_text(req: IngestTextRequest):
 
 
 @router.post("/ingest/task")
-def ingest_from_task(req: IngestTaskRequest):
+def ingest_from_task(req: IngestTaskRequest, request: Request):
     """DOI/arXiv id/专利号/URL → 全文 → 入库(编排见 services.document_task).
 
     Stage 3 / SR-026: same 202 + poll shape as /ingest/url. Input-shape
@@ -329,14 +335,17 @@ def ingest_from_task(req: IngestTaskRequest):
     from ..worker.tasks import run_task_ingest_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
+
 
     doc_type = req.doc_type.strip().lower()
     identifier = req.identifier.strip()
     if doc_type == "web" and not identifier.lower().startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="web 类型 identifier 必须是 http(s) URL")
     payload = {"doc_type": doc_type, "identifier": identifier}
+    owner = request_owner(request)
     return submit(run_task_ingest_task, payload, "task_ingest",
-                  outbox_id=enqueue_outbox("task_ingest", payload))
+                  outbox_id=enqueue_outbox("task_ingest", payload, owner_id=owner), owner_id=owner)
 
 
 @router.get("/sources/{source_id}", response_model=SourceDocumentResponse, include_in_schema=False)
@@ -573,7 +582,7 @@ def _assemble_sources_markdown(docs, missing: list[str]) -> str:
     from ..services import table_contract
 
     lines = ["# 文献批量导出", ""]
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    stamp = utcnow().strftime("%Y-%m-%d %H:%M")  # P3-A6: naive-UTC convention, not server-local time
     note = f"导出时间：{stamp}；共 {len(docs)} 篇"
     if missing:
         note += f"；{len(missing)} 篇未找到已跳过"

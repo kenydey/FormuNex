@@ -71,7 +71,7 @@ def age_normalized_citation_score(ev: Evidence) -> float:
     无 cited_by/pub_year 时返回 0.0（不惩罚未知）。
     """
     import math
-    from datetime import date
+    from ..clock import utcnow
 
     cited = getattr(ev, "cited_by", None)
     if cited is None:
@@ -82,7 +82,7 @@ def age_normalized_citation_score(ev: Evidence) -> float:
         return 0.0
     if cited <= 0:
         return 0.0
-    current_year = date.today().year
+    current_year = utcnow().year  # P3-A6: UTC year, not server-local
     age_years = 1
     year = getattr(ev, "pub_year", None)
     if year is not None:

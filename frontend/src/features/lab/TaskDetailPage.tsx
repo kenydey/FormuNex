@@ -62,7 +62,7 @@ export default function TaskDetailPage() {
     let value: number | null = m.value;
     let reason = "";
     modal.confirm({
-      title: t("measure.amend", "修改测量值"),
+      title: t("measure.amend_value", "修改测量值"),
       content: <Space direction="vertical" style={{ width: "100%" }}>
         <InputNumber defaultValue={m.value} onChange={(v) => { value = v; }} style={{ width: "100%" }} />
         <Input.TextArea placeholder={t("measure.reason", "修改理由（必填，保留原值）")} onChange={(e) => { reason = e.target.value; }} />
@@ -95,14 +95,14 @@ export default function TaskDetailPage() {
                 ? ` / ${t("tasks.matrix_total", "共 {{n}} 点", { n: plan.data!.runs.length })}` : ""}
             </Descriptions.Item>
             {data.doe_plan_id && (
-              <Descriptions.Item label={t("tasks.plan", "所属 DOE 计划")}>
+              <Descriptions.Item label={t("tasks.plan_label", "所属 DOE 计划")}>
                 <a onClick={() => navigate(`/lab/tasks?plan=${data.doe_plan_id}`)}>{data.doe_plan_id.slice(0, 8)}</a>
               </Descriptions.Item>
             )}
             {Object.entries(data.factors).map(([k, v]) => <Descriptions.Item key={k} label={k}>{String(v)}</Descriptions.Item>)}
           </Descriptions>
           <Table size="small" pagination={false} rowKey="metric" dataSource={data.requested_metrics} columns={[
-            { title: t("tasks.metric", "待测指标"), dataIndex: "metric" },
+            { title: t("tasks.metric_pending", "待测指标"), dataIndex: "metric" },
             { title: t("tasks.predicted", "模型预测"), dataIndex: "predicted", render: (v) => v ?? "—" },
             { title: t("tasks.reviewed_value", "复核值"), render: (_v, r) => data.measured?.[r.metric] ?? "—" },
           ]} />
@@ -110,7 +110,7 @@ export default function TaskDetailPage() {
         <ProCard colSpan={{ xs: 24, md: 16 }} bordered title={t("measure.entry", "录入")}
           extra={editable && <Space>
             <Button onClick={startEntries}>{t("measure.prefill", "按待测指标生成录入行")}</Button>
-            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>{t("measure.import", "导入仪器文件")}</Button>
+            <Button icon={<UploadOutlined />} disabled={!can("lab.execute", data.project_id)} onClick={() => setImportOpen(true)}>{t("measure.import", "导入仪器文件")}</Button>
           </Space>}>
           {!editable && <Alert type="info" showIcon message={t("measure.locked", "只有领取人在任务进行中时可以录入")} style={{ marginBottom: 8 }} />}
           {warnings.length > 0 && <Alert type="warning" showIcon closable style={{ marginBottom: 8 }} message={warnings.map((w, i) => <div key={i}>{w}</div>)} onClose={() => setWarnings([])} />}
@@ -157,7 +157,7 @@ export default function TaskDetailPage() {
             void qc.invalidateQueries({ queryKey: ["lab", "task-attachments", taskId] });
           } catch (e) { message.error(errorText(e)); }
         }}>
-          <Button icon={<UploadOutlined />}>{t("tasks.upload", "上传附件")}</Button>
+          <Button icon={<UploadOutlined />} disabled={!can("doe.write", data.project_id)}>{t("tasks.upload", "上传附件")}</Button>
         </Upload>}>
         <Table size="small" pagination={false} rowKey="id" dataSource={attachments.data ?? []} columns={[
           { title: t("tasks.file", "文件名"), dataIndex: "filename" },
@@ -170,7 +170,7 @@ export default function TaskDetailPage() {
                 window.open(url, "_blank", "noopener");
               } catch (e) { message.error(errorText(e)); }
             }}>{t("tasks.download", "下载")}</a>,
-            can("doe.write") && <a key="del" onClick={() => modal.confirm({
+            can("doe.write", data.project_id) && <a key="del" onClick={() => modal.confirm({
               title: t("tasks.del_att", "删除附件"), content: r.filename,
               onOk: async () => {
                 await call("DELETE", `/api/lab/tasks/${taskId}/attachments/${r.id}`);
@@ -191,19 +191,19 @@ export default function TaskDetailPage() {
           { title: t("common.actions", "操作"), valueType: "option", render: (_d, r) => [
             (can("lab.execute", data.project_id) || can("lab.review", data.project_id)) && r.review_status !== "legacy" && <a key="amend" onClick={() => amend(r)}>{t("measure.amend", "修改")}</a>,
             r.review_status === "reviewed" && can("lab.review", data.project_id) && <a key="pick" onClick={() => act.mutate({ path: `/api/lab/measurements/${r.id}/pick`, body: { reason: "" } })}>{t("measure.pick", "指定为代表值")}</a>,
-            <a key="hist" onClick={async () => setHistory({ id: r.id, rows: await call("GET", `/api/lab/measurements/${r.id}/history`) })}>{t("measure.history", "留痕")}</a>,
+            <a key="hist" onClick={async () => setHistory({ id: r.id, rows: await call("GET", `/api/lab/measurements/${r.id}/history`) })}>{t("measure.history_link", "留痕")}</a>,
           ] },
         ]} />
       </ProCard>
       <Modal open={!!history} footer={null} onCancel={() => setHistory(null)} title={t("measure.history", "修改留痕")}>
         <Timeline items={(history?.rows ?? []).map((h) => ({ children: <span>{h.field}：{h.old} → {h.new}<br />{h.reason} · {h.at.slice(0, 19).replace("T", " ")}</span> }))} />
       </Modal>
-      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} methods={methods.data ?? []} instruments={instruments.data ?? []} onDone={refresh} />
+      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} methods={methods.data ?? []} instruments={instruments.data ?? []} onDone={refresh} canImport={can("lab.execute", data.project_id)} />
     </PageContainer>
   );
 }
 
-function ImportModal({ open, onClose, methods, instruments, onDone }: { open: boolean; onClose: () => void; methods: Method[]; instruments: Instrument[]; onDone: () => void }) {
+function ImportModal({ open, onClose, methods, instruments, onDone, canImport }: { open: boolean; onClose: () => void; methods: Method[]; instruments: Instrument[]; onDone: () => void; canImport: boolean }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const [file, setFile] = useState<File | null>(null);
@@ -231,7 +231,7 @@ function ImportModal({ open, onClose, methods, instruments, onDone }: { open: bo
   });
   return (
     <Modal open={open} title={t("measure.import", "导入仪器文件")} onCancel={onClose} confirmLoading={submit.isPending}
-      okButtonProps={{ disabled: !file }} onOk={async () => submit.mutate(await form.validateFields())} destroyOnHidden>
+      okButtonProps={{ disabled: !file || !canImport }} onOk={async () => submit.mutate(await form.validateFields())} destroyOnHidden>
       <Form form={form} layout="vertical">
         <Form.Item label={t("measure.file", "文件（CSV / Excel，样品号须与任务单一致）")}>
           <Upload beforeUpload={(f) => { setFile(f); return false; }} maxCount={1} onRemove={() => setFile(null)}>

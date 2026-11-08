@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 
 from ..config import get_settings
@@ -52,6 +53,10 @@ logger = logging.getLogger(__name__)
 # A page whose rendered text is shorter than this is treated as having no text
 # layer worth using — the usual signature of a scan.
 _SCANNED_CHARS_PER_PAGE = 80
+
+# A run of 2+ Latin/digit or CJK characters: the smallest unit that says "a
+# text layer exists". A lone digit or punctuation mark is not one.
+_WORD_RUN_RE = re.compile(r"[A-Za-z0-9]{2,}|[\u4e00-\u9fff]{2,}")
 
 
 @dataclass
@@ -65,6 +70,10 @@ class LocalPage:
     n_images: int = 0
     image_area_ratio: float = 0.0
     has_markdown_table: bool = False
+    # P1-B10: the local pass failed on this page (pymupdf4llm raised). The
+    # page stays in the list with a gap marker instead of vanishing, so
+    # downstream can see — and escalate — the hole.
+    failed: bool = False
 
     @property
     def looks_scanned(self) -> bool:
@@ -77,11 +86,21 @@ class LocalPage:
 
         v28: a page with detected tables is not scanned — tables are structure
         from a text layer (or layout analysis); a pure image has neither.
-        The 80-char threshold misfires on table-heavy datasheets.
+
+        P2-B6: the 80-char threshold misfires on short real text — a
+        title-only or abstract-only page is not a scan. Below the threshold,
+        only a fragment with no word structure counts as scanned; any real
+        word run means a text layer exists. char_count == 0 is always scanned
+        (a failed page lands here too, which is what routes it to OCR/MinerU
+        rescue instead of dropping it).
         """
         if self.n_tables > 0:
             return False
-        return self.char_count < _SCANNED_CHARS_PER_PAGE
+        if self.char_count == 0:
+            return True
+        if self.char_count < _SCANNED_CHARS_PER_PAGE:
+            return not _WORD_RUN_RE.search(self.markdown or "")
+        return False
 
 
 def local_available() -> tuple[bool, str]:
@@ -270,12 +289,22 @@ def extract_pages(content: bytes, *, ocr: bool | None = None) -> list[LocalPage]
                             # pymupdf4llm renders simple ruled tables as pipe
                             # tables perfectly well. Knowing whether it managed is
                             # what stops us paying a cloud parser to redo them.
-                            has_markdown_table="|---" in markdown.replace(" ", ""),
+                            has_markdown_table=bool(re.search(r"\|[:]*---", markdown.replace(" ", ""))),  # P3-B7: aligned separators (|:---|) also count
                         )
                     )
                 except Exception as exc:
                     logger.warning("pdf_local: 第 %d 页解析失败，已跳过: %s", index + 1, exc)
-                    continue
+                    # P1-B10: keep the page in the list with a gap marker
+                    # instead of dropping it — a silently missing page is a
+                    # quality defect, and a marked one can still be rescued
+                    # by escalation (char_count 0 → looks_scanned → MinerU).
+                    pages.append(
+                        LocalPage(
+                            page_no=index + 1,
+                            markdown=f"> _（第 {index + 1} 页本地解析失败，内容缺失）_",
+                            failed=True,
+                        )
+                    )
             return pages
         finally:
             doc.close()
@@ -287,6 +316,11 @@ def to_markdown(content: bytes) -> str | None:
     """Whole document as Markdown with page markers — the plain parser tier."""
     pages = extract_pages(content)
     if not pages:
+        return None
+    # P1-B10: a document whose every page failed locally has no real content
+    # — return None so the cascade can try the next tier (MinerU) instead of
+    # accepting a marker-only string as the parse result.
+    if all(p.failed for p in pages):
         return None
     return assemble([(page.page_no, page.markdown) for page in pages])
 

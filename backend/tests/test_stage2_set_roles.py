@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import app.db.models  # noqa: F401
@@ -46,3 +46,23 @@ def test_system_bootstrap_actor_keeps_old_behaviour(session):
     # No UserRow for "system": the subset check only applies to a real
     # signed-in granter, so bootstrap/admin seeding is unaffected.
     assert accounts.set_roles(session, "target", ["role_b"], actor="system") == ["role_b"]
+
+
+def test_create_user_cannot_mint_permissions_granter_does_not_hold(session):
+    # P0 fix (2026-11-04 deep review): create_user used to skip the D-1
+    # subset check, so an admin.users holder could mint a puppet account
+    # carrying permissions they do not hold (e.g. plm.document.write).
+    with pytest.raises(accounts.AccountError, match="未持有"):
+        accounts.create_user(session, username="puppet", password="Str0ng!Pass123",
+                             roles=["role_b"], actor="admin")
+    # Fail-fast: no row was written.
+    assert session.execute(select(UserRow.id).where(UserRow.username == "puppet")).first() is None
+
+
+def test_create_user_subset_ok_and_bootstrap_unaffected(session):
+    user = accounts.create_user(session, username="ok", password="Str0ng!Pass123",
+                                roles=["role_a"], actor="admin")
+    assert user.username == "ok"
+    boot = accounts.create_user(session, username="boot", password="Str0ng!Pass123",
+                                roles=["role_b"], actor="system")
+    assert boot.username == "boot"

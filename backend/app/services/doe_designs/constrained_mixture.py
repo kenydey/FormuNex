@@ -136,6 +136,26 @@ class MixtureDesign:
                 "bounds": self.bounds, "notes": self.notes}
 
 
+def _centroid_index(cands: list[dict[str, Any]], names: list[str]) -> int | None:
+    """Index of the overall centroid, matched by coordinates, not by tag.
+
+    P1-C15/P2-C27: the centroid point is always present in the candidate
+    set, but ``setdefault`` keeps an earlier kind tag when its coordinates
+    coincide with another point (two-component mixtures: the centroid IS
+    the edge midpoint). Tag matching then misses it and ``next()`` raises
+    StopIteration. Vertices are always tagged, so recompute the centroid
+    as their mean and match within 1e-6.
+    """
+    verts = [c for c in cands if c.get("_kind") == "vertex"]
+    if not verts:
+        return None
+    cen = {n: sum(c[n] for c in verts) / len(verts) for n in names}
+    for i, c in enumerate(cands):
+        if all(abs(c[n] - cen[n]) < 1e-6 for n in names):
+            return i
+    return None
+
+
 def design(components: list[Component], *, total: float = 100.0, n_runs: int | None = None,
            mixture_order: str = "quadratic", process: list[ContinuousFactor] | None = None,
            process_order: str = "linear", categorical: list[CategoricalFactor] | None = None,
@@ -156,19 +176,21 @@ def design(components: list[Component], *, total: float = 100.0, n_runs: int | N
     p = F.shape[1]
     n = n_runs or (p + max(5, p // 2))  # parameters + a few degrees of freedom for lack of fit / error
     include = []
-    if include_centroid and not process and not categorical:
-        include = [i for i, c in enumerate(cands) if c["_kind"] == "centroid"]
+    centroid_idx = _centroid_index(cands, names) if (include_centroid and not process and not categorical) else None
+    if centroid_idx is not None:
+        include = [centroid_idx]
     sel = select(F, n, seed=seed, include=include, terms=terms)
     runs = [dict(cands[i]) for i in sel.indices]
-    if replicate_centroid and not process and not categorical:
-        cen = next(c for c in cands if c["_kind"] == "centroid")
-        runs += [dict(cen) for _ in range(replicate_centroid)]
+    if replicate_centroid and not process and not categorical and centroid_idx is not None:
+        runs += [dict(cands[centroid_idx]) for _ in range(replicate_centroid)]
     for k, r in enumerate(runs, start=1):
         r["_run"] = k
         r["_kind"] = r.pop("_kind")
         for nme in names:
             r[nme] = round(float(r[nme]), 6)
     notes = []
+    if replicate_centroid and not process and not categorical and centroid_idx is None:
+        notes.append("未找到中心点候选，跳过中心点重复")
     tightened = [c.name for c, o in zip(comps, components, strict=True) if (c.low, c.high) != (o.low, o.high)]
     if tightened:
         notes.append("按总量约束收紧了上下限：" + "、".join(tightened))

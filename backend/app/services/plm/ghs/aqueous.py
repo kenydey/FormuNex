@@ -1,9 +1,12 @@
 """Aqueous-mixture physical-hazard suppression (G3).
 
-Ported from MSDS-Generator ``aqueous_mixture_rules``: when water is the
-strictly largest single component of the formula, solute physical hazards
+Ported from MSDS-Generator ``aqueous_mixture_rules``: when the summed
+water content strictly exceeds the largest single non-water component
+(P3-C9: the old "strictly largest single component" wording did not match
+``is_aqueous``, which sums all water rows), solute physical hazards
 must not be inherited into the mixture — unless the mixture itself has a
 measured flash point below 60 °C, in which case flammability stands.
+Applied uniformly across rulesets (the engine passes no ruleset here).
 
 FormuNex adaptation (deliberate, documented): FormuNex physical outcomes
 are measurement-based, never inherited from ingredient hazards, so there
@@ -52,7 +55,14 @@ def _is_water(component: Component) -> bool:
 
 
 def is_aqueous(components: list[Component]) -> bool:
-    """Water is the strictly largest single component (ties do not count)."""
+    """P3-C9 (doc aligned to implementation): water is aqueous when the SUM
+    of all water rows strictly exceeds the largest single non-water
+    component — not, as the old docstring said, when water is "the
+    strictly largest single component". Ties do not suppress. The rule is
+    applied uniformly across rulesets (the engine calls it without a
+    ruleset argument): it is an MSDS-derived screening-gap suppression,
+    and whether CLP/OSHA should scope it differently is an EHS-semantics
+    decision, not something this P3 item changes."""
     if not components:
         return False
     water_pct = sum(c.pct for c in components if _is_water(c))

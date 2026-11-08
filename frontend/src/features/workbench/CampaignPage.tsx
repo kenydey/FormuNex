@@ -1,5 +1,5 @@
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { Alert, App, Badge, Button, Dropdown, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
+import { Alert, App, Badge, Button, Dropdown, Input, InputNumber, Modal, Result, Select, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { BarChartOutlined, DownloadOutlined, HistoryOutlined, PaperClipOutlined, RedoOutlined, SaveOutlined, SnippetsOutlined, UndoOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -281,6 +281,19 @@ export default function CampaignPage() {
     else navigate(to);
   };
 
+  // P2-E7: a non-numeric id used to render an empty ledger (all queries
+  // disabled by the finite guard). Numeric-but-missing still goes through
+  // the backend 404 -> ErrorAlert path below, unchanged.
+  if (!Number.isFinite(campaignId)) {
+    return (
+      <PageContainer>
+        <Result status="404" title={t("workbench.bad_id", "台账不存在")}
+          subTitle={t("workbench.bad_id_hint", "链接中的台账编号不是数字，请检查链接或从寻优与分析进入。")}
+          extra={<Button type="primary" onClick={() => navigate("/cockpit/workbench")}>{t("workbench.back_list", "返回台账列表")}</Button>} />
+      </PageContainer>
+    );
+  }
+
   return (
     <PageContainer
       title={d ? `#${d.campaign_id} · ${d.name}` : t("workbench.ledger", "实验台账")}
@@ -385,7 +398,7 @@ export default function CampaignPage() {
         {!projectId ? <Typography.Text type="secondary">{t("workbench.no_project", "在顶部选择项目后可设置项目级自动化开关")}</Typography.Text> : (
           <Space direction="vertical">
             <Space>
-              <Switch checked={!!ws.auto_loop_on_sync} loading={patch.isPending} data-testid="workbench-auto-loop"
+              <Switch checked={!!ws.auto_loop_on_sync} loading={patch.isPending} disabled={!can("project.write", projectId)} data-testid="workbench-auto-loop"
                 onChange={(on) => toggleFlag("auto_loop_on_sync", on, t("workbench.auto_loop_confirm", "Completed 行保存后将触发 optimize + 下一轮 DOE。\n不会自动把 next_doe 写入台账（需在闭环页另开「自动采纳 DOE」）。"))} />
               {t("workbench.auto_loop", "保存后自动分析收敛并建议下一轮")}
             </Space>
@@ -393,12 +406,12 @@ export default function CampaignPage() {
               <Typography.Text type="secondary">{t("workbench.auto_loop_suggest", "建议：已有 Completed + 测量行，可开启「保存后自动闭环」形成项目级飞轮（仍不自动采纳 DOE）。")}</Typography.Text>
             )}
             <Space>
-              <Switch checked={!!ws.wiki_dossier_auto_patch} loading={patch.isPending}
+              <Switch checked={!!ws.wiki_dossier_auto_patch} loading={patch.isPending} disabled={!can("project.write", projectId)}
                 onChange={(on) => toggleFlag("wiki_dossier_auto_patch", on, t("workbench.dossier_confirm", "仅白名单事件（入库/DOE/台账/闭环等）刷新卷宗对应节；未知事件跳过。\n全局旗标仍可关。"))} />
               {t("workbench.dossier", "本项目卷宗事件自动更新")}
             </Space>
             <Space>
-              <Switch checked={!!ws.prediction_bias_soft_correct} loading={patch.isPending}
+              <Switch checked={!!ws.prediction_bias_soft_correct} loading={patch.isPending} disabled={!can("project.write", projectId)}
                 onChange={(on) => toggleFlag("prediction_bias_soft_correct", on, t("workbench.soft_confirm", "推荐/评分时会用台账 prediction_bias.mean_error 校正 predicted（predicted − mean_error）。\n不改实测值 / 台账行。"))} />
               {t("workbench.soft_correct", "本项目预测偏差软校准")}
               {ws.prediction_bias_soft_correct && <Tag color="purple">{t("workbench.soft_on", "已开（会改 predicted）")}</Tag>}

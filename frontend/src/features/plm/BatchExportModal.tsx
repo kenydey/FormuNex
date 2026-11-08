@@ -27,7 +27,7 @@ export function BatchExportModal({ open, onClose }: { open: boolean; onClose: ()
     onError: (e) => message.error(errorText(e)),
   });
   return (
-    <Modal open={open} width={640} title={t("plm.batch_export", "批量导出文档")} onCancel={() => { onClose(); setResult(null); }}
+    <Modal open={open} width={640} title={t("plm.batch_export_docs", "批量导出文档")} onCancel={() => { onClose(); setResult(null); }}
       footer={result ? [<Button key="dl" type="primary" href={`/api/plm/documents/batch-export/${result.id}/download`}>{t("common.download", "下载 ZIP")}</Button>,
         <Button key="close" onClick={() => { onClose(); setResult(null); }}>{t("common.close", "关闭")}</Button>]
         : [<Button key="cancel" onClick={onClose}>{t("common.cancel", "取消")}</Button>,

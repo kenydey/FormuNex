@@ -21,8 +21,28 @@ OLD_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 
 
 def _old(line: str):
-    m = OLD_HEADING.match(line)
-    return None if m is None else (len(m.group(1)), m.group(2).strip())
+    # Reference implementation: the old pattern, updated for the two
+    # deliberate batch-5 rule changes — P2-B43 (up to 3 leading spaces
+    # allowed) and P2-B44 (a trailing hash run is an ATX closing
+    # sequence only when preceded by whitespace, so "C#" keeps its "#").
+    # Re-attach the run only when the regex really stripped it: the line
+    # without the run must still parse as a heading, else the run IS the
+    # title itself (e.g. "#\r\u3000#" — the lone "#" after the gap).
+    stripped = line
+    n = 0
+    while n < 3 and n < len(stripped) and stripped[n] == " ":
+        n += 1
+    m = OLD_HEADING.match(stripped[n:])
+    if m is None:
+        return None
+    title = m.group(2).strip()
+    rstripped = line.rstrip()
+    run = len(rstripped) - len(rstripped.rstrip("#"))
+    if run and len(rstripped) > run and not rstripped[-run - 1].isspace():
+        before = rstripped[:-run]
+        if OLD_HEADING.match(before[n:]) is not None:
+            title += "#" * run
+    return len(m.group(1)), title
 
 
 @pytest.mark.parametrize("seed", range(4))
@@ -42,7 +62,7 @@ def test_parse_heading_answers_exactly_as_the_old_pattern_did(seed):
         ("###### deep", (6, "deep")),
         ("####### seven", None),
         ("#nospace", None),
-        ("# C#", (1, "C")),  # the old pattern strips trailing hashes even without a space before them
+        ("# C#", (1, "C#")),  # P2-B44: no space before the hashes, so it is content, not a closing sequence
         ("# ###", (1, "#")),
         ("#   ", (1, "")),
         ("# ", None),

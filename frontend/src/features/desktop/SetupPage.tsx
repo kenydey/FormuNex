@@ -22,9 +22,16 @@ export default function SetupPage() {
 
   const save = async (patch: Partial<DesktopConfig>) => {
     if (!info) throw new Error("desktop not initialised");
+    const oldBase = info.api_base;
     const config = await desktop.saveConfig({ ...info.config, ...patch });
     const fresh = await desktop.info();
     applyDesktopInfo(fresh);
+    // P2-E16: the refresh token for the previous server stays in the
+    // keychain otherwise, and a later return to that server would
+    // silently reuse a stale token.
+    if (oldBase && fresh.api_base && oldBase !== fresh.api_base) {
+      await desktop.keychainDelete(`refresh:${oldBase}`).catch(() => undefined);
+    }
     return config;
   };
 
@@ -266,6 +273,7 @@ function StartStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
       <Button type="primary" loading={s.busy} disabled={ready} onClick={() => { setStarted(true); void s.run(() => desktop.stackUp()); }}>
         {t("desktop.start_stack", "启动本机服务")}</Button>
       {s.error ? <Alert type="error" showIcon message={errorText(s.error)} /> : null}
+      {status?.services_error ? <Alert type="error" showIcon message={status.services_error} /> : null}
       {status && <ServicesTable status={status} />}
       {ready && <Alert type="success" showIcon icon={<CheckCircleOutlined />} message={t("desktop.stack_ready", "服务已就绪")} />}
       <LogView lines={s.lines} />
@@ -360,14 +368,17 @@ function AdminStep({ onDone }: { onDone: (username: string) => void }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const [password, setPassword] = useState<string | null>(null);
+  const [keychainSaved, setKeychainSaved] = useState(true);
   const [username, setUsername] = useState("admin");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   if (password) {
     return (
       <Space direction="vertical" style={{ width: "100%" }}>
-        <Alert type="success" showIcon message={t("desktop.admin_created", "管理员 {{u}} 已创建", { u: username })}
-          description={t("desktop.admin_pw_note", "初始密码只显示这一次，同时已保存到系统钥匙串（条目 com.formunex.desktop / admin-password）。登录后请在右上角修改密码。")} />
+        <Alert type={keychainSaved ? "success" : "warning"} showIcon message={t("desktop.admin_created", "管理员 {{u}} 已创建", { u: username })}
+          description={keychainSaved
+            ? t("desktop.admin_pw_note", "初始密码只显示这一次，同时已保存到系统钥匙串（条目 com.formunex.desktop / admin-password）。登录后请在右上角修改密码。")
+            : t("desktop.admin_pw_nokeychain", "初始密码只显示这一次，且未能写入系统钥匙串——请立即复制保存，关闭后无法找回。登录后请在右上角修改密码。")} />
         <Typography.Paragraph copyable={{ text: password, onCopy: () => message.success(t("desktop.copied", "已复制")) }} code style={{ fontSize: 18 }}>
           {password}</Typography.Paragraph>
         <Button type="primary" onClick={() => onDone(username)}>{t("desktop.go_login", "完成，去登录")}</Button>
@@ -381,7 +392,9 @@ function AdminStep({ onDone }: { onDone: (username: string) => void }) {
         setError(null);
         try {
           setUsername(v.username);
-          setPassword(await desktop.createAdmin(v.username, v.display));
+          const r = await desktop.createAdmin(v.username, v.display);
+          setPassword(r.password);
+          setKeychainSaved(r.keychain_saved);
         } catch (e) {
           setError(e);
         } finally {

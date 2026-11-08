@@ -61,7 +61,8 @@ def test_pick_wins_over_latest_reviewed(session):
     _check_objectives(c, (rev.spec_snapshot or {}).get("acceptance") or [],
                       measured, picks, rev.winning_experiment_id)
     assert c.items == []
-    assert c.evidence["salt_spray_hours"] == {"value": 600.0, "measurement_id": old.id, "basis": "manual"}
+    # P2-C4: evidence now carries the comparison unit.
+    assert c.evidence["salt_spray_hours"] == {"value": 600.0, "unit": "h", "measurement_id": old.id, "basis": "manual"}
 
 
 def test_no_pick_keeps_latest_reviewed_behaviour(session):

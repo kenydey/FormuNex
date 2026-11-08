@@ -41,6 +41,10 @@ class ComponentHazard:
     # Skin / eye additivity does not apply (strong acids / bases, Table 3.2.4).
     non_additive: bool = False
     conditional: bool = False
+    # P1-C11: catalogue asterisk — the listed category is a MINIMUM ("at
+    # least category 3"), not a final call. Carried so the engine can flag
+    # it; conservative re-grading is an EHS decision, not done here.
+    is_minimum: bool = False
 
     def scl_for(self, category: str) -> float | None:
         for entry in self.scl or []:

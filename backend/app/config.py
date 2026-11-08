@@ -32,6 +32,7 @@ _RETIRED_ENV_KEYS = frozenset({
     "FORMUNEX_DATALAB_API_TOKEN",  # retired with the Datalab removal (batch 5)
     "FORMUNEX_DATALAB_TIMEOUT_SECONDS",  # retired with the Datalab removal (batch 5)
     "FORMUNEX_DATALAB_REQUIRED",  # retired with the Datalab removal (batch 5)
+    "FORMUNEX_DATALAB_PROBE_TIMEOUT_S",  # retired with the Datalab removal (batch 5)
 })
 # Env keys read by subsystems but not declared on Settings.
 _INFRA_ENV_KEYS = frozenset({
@@ -78,7 +79,6 @@ _INFRA_ENV_KEYS = frozenset({
     "FORMUNEX_PG_PASSWORD",            # docker-compose.eln.yml
     "FORMUNEX_PG_DB",                  # docker-compose.eln.yml
     "FORMUNEX_USE_HOST_NETWORK",       # scripts/deploy-docker.sh
-    "FORMUNEX_DATALAB_PROBE_TIMEOUT_S",  # retired with the Datalab removal (batch 5)
 })
 
 
@@ -1322,7 +1322,18 @@ def _audit_formunex_env() -> None:
         return
     known = {f"FORMUNEX_{name.upper()}" for name in Settings.model_fields}
     known |= _INFRA_ENV_KEYS | _RETIRED_ENV_KEYS
-    unknown = sorted(k for k in os.environ if k.startswith("FORMUNEX_") and k not in known)
+    candidates = {k for k in os.environ if k.startswith("FORMUNEX_")}
+    # P2-10: .env files are the primary config surface (the Settings UI
+    # persists there, and deployment docs tell operators to edit them),
+    # but pydantic reads them without touching os.environ — so a typo
+    # there used to pass silently while the same typo in the process
+    # environment failed fast. Audit both files pydantic reads, with the
+    # same known-key sets (infra + retired keys still pass).
+    from .env_compat import _parse_env_file
+
+    for path in (Path(".env"), resolve_env_path()):
+        candidates |= {k for k in _parse_env_file(path) if k.startswith("FORMUNEX_")}
+    unknown = sorted(k for k in candidates if k not in known)
     if unknown:
         raise ValueError(
             "Unknown FORMUNEX_* environment variables: " + ", ".join(unknown)

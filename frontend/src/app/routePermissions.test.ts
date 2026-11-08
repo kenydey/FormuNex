@@ -10,12 +10,13 @@ const ALL_PERMS = [
 const leaves = () => NAV.flatMap((g) => g.children ?? []);
 
 describe("routePermissions (stage 4 / SR-056, single source)", () => {
-  it("table holds exactly the previously separate declarations, nothing added or dropped", () => {
+  it("table holds exactly the previously separate declarations, plus the deliberate B1 desktop gate", () => {
     expect(ROUTE_PERMISSIONS).toEqual({
       "/admin/users": { permission: "admin.users" },
       "/admin/companies": { permission: "admin.companies" },
       "/admin/audit": { permission: "audit.read" },
       "/admin/settings": { permissions: ["admin.llm", "admin.connectors"] },
+      "/admin/desktop": { permissions: ["admin.users", "admin.llm", "admin.connectors"] },
       "/admin/org-dashboard": { permissions: ["formulation.read"] },
       "/knowledge/search": { permission: "knowledge.read" },
       "/plm/regulatory/review-items": { permission: "regulatory.read" },

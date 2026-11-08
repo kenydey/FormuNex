@@ -90,6 +90,10 @@ class Plan:
     created_at: float = field(default_factory=_utcnow)
     decided_at: float | None = None
     decided_by: str | None = None
+    # P1-A5 (2026-11-04 deep review): who submitted the plan, for the
+    # owner filter on pending/get/advance. None = legacy plan written
+    # before owner tracking (grandfathered: visible, actionable by id).
+    submitted_by: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +105,7 @@ class Plan:
             "created_at": self.created_at,
             "decided_at": self.decided_at,
             "decided_by": self.decided_by,
+            "submitted_by": self.submitted_by,
         }
 
     @classmethod
@@ -113,6 +118,7 @@ class Plan:
             created_at=float(data.get("created_at") or 0.0),
             decided_at=data.get("decided_at"),
             decided_by=data.get("decided_by"),
+            submitted_by=data.get("submitted_by"),
         )
 
 
@@ -167,7 +173,8 @@ def _validate_phases(phases: Any) -> list[PlanPhase]:
     return out
 
 
-def submit_plan(session_id: str, phases: list[dict[str, Any]]) -> Plan:
+def submit_plan(session_id: str, phases: list[dict[str, Any]], *,
+                submitted_by: str | None = None) -> Plan:
     """Submit a structured plan; returns it in ``pending`` status."""
     if not isinstance(session_id, str) or not session_id.strip():
         raise ValueError("session_id must be a non-empty string")
@@ -176,6 +183,7 @@ def submit_plan(session_id: str, phases: list[dict[str, Any]]) -> Plan:
         session_id=session_id.strip(),
         phases=_validate_phases(phases),
         status=PLAN_PENDING,
+        submitted_by=submitted_by,
     )
     _save_plan(plan)
     logger.info("session plan submitted: %s (session %s)", plan.plan_id, plan.session_id)
@@ -216,6 +224,7 @@ def list_pending_plans() -> list[dict[str, Any]]:
                 "created_at": plan.created_at,
                 "phase_names": [p.name for p in plan.phases],
                 "step_count": sum(len(p.steps) for p in plan.phases),
+                "submitted_by": plan.submitted_by,
             }
         )
     items.sort(key=lambda it: it["created_at"])

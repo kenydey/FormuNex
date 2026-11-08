@@ -3,6 +3,7 @@ import { App, Button, Segmented, Space, Tag, Tooltip, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { useSession } from "@/app/session";
 import { errorText } from "@/shared/feedback";
 
 interface WikiMode { current: string; choices: { value: string; label: string; desc: string }[] }
@@ -10,6 +11,7 @@ interface WikiMode { current: string; choices: { value: string; label: string; d
 /** Wiki / Raw fusion weight of the chat's dual track (FORMUNEX_WIKI_CHAT_MODE). Claims still only trust Raw. */
 export function WikiChatModeSelector() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["chat", "wiki-mode"], retry: false,
@@ -27,7 +29,7 @@ export function WikiChatModeSelector() {
     <Tooltip title={t("chat.wiki_mode.tip", "Wiki / Raw 融合模式（不影响 Claims 只认 Raw）")}>
       <Space size={4} data-testid="wiki-chat-mode">
         <Typography.Text type="secondary">{t("chat.wiki_mode", "Wiki 模式")}</Typography.Text>
-        <Segmented size="small" value={q.data.current} disabled={set.isPending} onChange={(v) => set.mutate(String(v))}
+        <Segmented size="small" value={q.data.current} disabled={set.isPending || !can("admin.llm")} onChange={(v) => set.mutate(String(v))}
           options={q.data.choices.map((c) => ({ value: c.value, label: <Tooltip title={c.desc}>{c.label}</Tooltip> }))} />
       </Space>
     </Tooltip>
@@ -39,6 +41,7 @@ interface Prewarm { status: string; backend: string | null; elapsed_ms: number |
 /** RAG index warm-up status; offers a prewarm when idle or failed (first retrieval is slow otherwise). */
 export function RagPrewarmBar() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["chat", "rag-status"], retry: false,
@@ -66,7 +69,7 @@ export function RagPrewarmBar() {
             ? t("chat.rag.failed", "RAG 预热失败：{{e}}", { e: pw.error || "unknown" })
             : t("chat.rag.idle", "RAG 尚未预热（首次检索会更慢）")}
         </Tag>
-        <Button size="small" icon={<FireOutlined />} loading={run.isPending} onClick={() => run.mutate()}>
+        <Button size="small" icon={<FireOutlined />} disabled={!can("knowledge.read")} loading={run.isPending} onClick={() => run.mutate()}>
           {t("chat.rag.prewarm", "预热 RAG")}
         </Button>
       </Space>

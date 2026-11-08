@@ -17,7 +17,12 @@ def test_cache_put_get_roundtrip():
     store: dict = {}
     payload = {"rows": [1, 2, 3]}
     assert cache_put(store, "k", payload) is payload
-    assert cache_get(store, "k", 60.0) is payload
+    # P3-C13 (scheme behavior change): cache_get returns a deep copy,
+    # so identity no longer holds — but mutation isolation must.
+    got = cache_get(store, "k", 60.0)
+    assert got == payload and got is not payload
+    got["rows"].append(4)
+    assert cache_get(store, "k", 60.0) == payload
 
 
 def test_cache_get_miss_returns_none():

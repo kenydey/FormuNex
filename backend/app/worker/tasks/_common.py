@@ -372,6 +372,73 @@ task_manager = TaskManager()
 
 
 
+def reap_stalled_snapshots(
+    *,
+    max_age_hours: float = 24.0,
+    retention_days: float = 30.0,
+    live_ids: set[str] | None = None,
+) -> dict[str, int]:
+    """P1-A9 (2026-11-04 deep review): heal tasks without an outbox row.
+
+    Tasks dispatched without ``_OutboxTask`` (file ingest, KB ingest,
+    wiki compile, screening) leave only a disk snapshot: when the
+    worker dies mid-run, nothing ever flips it out of ``running`` and
+    clients poll it forever. This pass fails snapshots stuck in
+    ``running`` / ``pending`` longer than ``max_age_hours`` (24 h by
+    default — past the 5 h Celery hard time limit, so no live worker
+    can still own one; eager threads past 24 h are dead by policy)
+    and deletes terminal snapshots older than ``retention_days``.
+
+    Fail-open per file, never raises: the reaper runs in lifespan /
+    periodic threads where an exception must not break startup. The
+    mtime pre-filter means only stale candidates are parsed, and a
+    reaped file's refreshed mtime keeps it out of the same pass's
+    prune step.
+    """
+    root = _task_persist_dir()
+    stats = {"reaped": 0, "pruned": 0}
+    if not root.is_dir():
+        return stats
+    live = live_ids or set()
+    now = time.time()
+    reap_before = now - max_age_hours * 3600.0
+    prune_before = now - retention_days * 86400.0
+    try:
+        paths = list(root.glob("*.json"))
+    except OSError:
+        return stats
+    for path in paths:
+        task_id = path.stem
+        if not _TASK_ID_RE.fullmatch(task_id):
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime >= reap_before and mtime >= prune_before:
+            continue
+        try:
+            snap = load_persisted_task(task_id)
+        except Exception:  # noqa: BLE001 - fail-open per file
+            continue
+        if snap is None:
+            continue
+        state = getattr(snap.state, "value", snap.state)
+        try:
+            if mtime < reap_before and state in ("running", "pending") and task_id not in live:
+                _persist_terminal(
+                    task_id, snap.kind, None, failed=True,
+                    message=f"任务超过 {max_age_hours:g} 小时无进展，worker 可能已崩溃，回收为失败",
+                )
+                stats["reaped"] += 1
+            elif mtime < prune_before and state in ("completed", "failed", "cancelled"):
+                path.unlink(missing_ok=True)
+                stats["pruned"] += 1
+        except Exception:  # noqa: BLE001 - fail-open per file
+            continue
+    return stats
+
+
 def list_persisted_task_ids(limit: int = 1000) -> list[tuple[str, float]]:
     """``(task_id, mtime)`` of the task snapshots on disk, newest first.
 

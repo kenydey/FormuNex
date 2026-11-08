@@ -468,8 +468,10 @@ def test_solventborne_epoxy_primer():
         Component("磷酸锌", 15, "7779-90-0", hazards=[H("aquatic_acute", "1", "H400"), H("aquatic_chronic", "1", "H410")]),
     ]
     r = classify(comps, MixtureProperties(flash_point_c=27, initial_boiling_point_c=138, kinematic_viscosity_40c=500))
+    # P3-C8 (scheme behavior change): the only eye contributor is
+    # generic "2", so the mixture keeps "2" instead of upgrading to "2A".
     assert {(o.hazard_class, o.category) for o in r.hazards} == {
-        ("flammable_liquid", "3"), ("skin_corrosion", "2"), ("eye_damage", "2A"), ("skin_sensitizer", "1"),
+        ("flammable_liquid", "3"), ("skin_corrosion", "2"), ("eye_damage", "2"), ("skin_sensitizer", "1"),
         ("stot_se", "3"), ("aquatic_acute", "2"), ("aquatic_chronic", "2"),
     }
     assert r.signal_word == "警告" and [p["code"] for p in r.pictograms] == ["GHS02", "GHS07", "GHS09"]

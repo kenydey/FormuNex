@@ -78,6 +78,9 @@ def test_guard_table_covers_new_prefixes():
         ("GET", "/api/identity/users", "admin.users"),
         ("GET", "/api/identity/roles", "admin.users"),
         ("GET", "/api/projects/anything", None),  # 普通读不拦截
+        # P1-A1/P1-A2 (2026-11-04 deep review): diff 与源文件下载补登记。
+        ("GET", "/api/plm/documents/abc/diff", "plm.document.read"),
+        ("GET", "/api/documents/abc/file", "knowledge.read"),
     ]
     for method, path, expected in cases:
         assert required_permission(method, path)[0] == expected, (method, path)
@@ -130,3 +133,68 @@ def test_rbac_audit_script_passes():
     # Stage 2 audit wording: exemptions are not coverage, and endpoint
     # claims are verified against endpoint source.
     assert "every non-exempt write route covered by exactly one verified layer" in proc.stdout
+
+
+def test_sensitive_reads_diff_and_source_file(env):
+    """P1-A1/P1-A2 live: diff needs plm.document.read (lab lacks it, rd
+    passes the guard and then 404s on the missing document); source file
+    needs knowledge.read (all fixture roles hold it, so rd passes the
+    guard and 404s — the mapping test above pins the registration)."""
+    c, h = env["client"], env["h"]
+    assert c.get("/api/plm/documents/nope/diff", headers=h["lab"]).status_code == 403
+    assert c.get("/api/plm/documents/nope/diff", headers=h["rd"]).status_code == 404
+    assert c.get("/api/documents/nope/file", headers=h["rd"]).status_code == 404
+
+
+def test_experiment_attachment_guard_helper(env):
+    """P1-A3: the lab.execute/lab.review project-scoped rule itself —
+    admin (no lab perms) is refused, lab (global lab.execute) passes."""
+    import pytest
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from app.api.experiments import _require_lab_attachment_access
+
+    def _req(token: str) -> Request:
+        return Request({"type": "http", "method": "GET", "path": "/x",
+                        "headers": [(b"authorization", f"Bearer {token}".encode())]})
+
+    tokens = _fixture_tokens(env)
+    with pytest.raises(HTTPException) as exc:
+        _require_lab_attachment_access(_req(tokens["admin"]), "p1")
+    assert exc.value.status_code == 403
+    _require_lab_attachment_access(_req(tokens["lab"]), "p1")
+    _require_lab_attachment_access(_req(tokens["lab"]), None)
+
+
+def _fixture_tokens(env):
+    """Raw access tokens, split out of the fixture's Authorization headers
+    (avoids duplicating the fixture password)."""
+    return {name: headers["Authorization"].split(None, 1)[1]
+            for name, headers in env["h"].items()}
+
+
+def test_experiment_attachments_list_guarded(env):
+    """P1-A3 live: native attachment list needs lab.execute/lab.review;
+    unknown experiments 404 (no id enumeration through the list)."""
+    from app.db.database import default_session_factory
+    from app.db.models import ExperimentRow
+
+    with default_session_factory()() as s:
+        s.add(ExperimentRow(id=4242, domain="doe", project_id="p1", measured={}))
+        s.commit()
+    c, h = env["client"], env["h"]
+    assert c.get("/api/experiments/4242/attachments", headers=h["admin"]).status_code == 403
+    r = c.get("/api/experiments/4242/attachments", headers=h["lab"])
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+    assert c.get("/api/experiments/999999/attachments", headers=h["lab"]).status_code == 404
+
+
+def test_project_export_download_guarded(env):
+    """P1-A4 live: export download needs project.write (global or
+    project-scoped) or project membership; admin has neither → 403,
+    rd (global project.write) passes the guard and then 404s."""
+    c, h = env["client"], env["h"]
+    assert c.get("/api/projects/p1/exports/x.csv", headers=h["admin"]).status_code == 403
+    assert c.get("/api/projects/p1/exports/x.csv", headers=h["rd"]).status_code == 404

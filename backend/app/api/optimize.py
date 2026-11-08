@@ -1,7 +1,7 @@
 """Optimize endpoint: async Celery closed-loop optimizer."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -25,7 +25,7 @@ class OptimizeRequest(BaseModel):
 
 
 @router.post("/optimize", status_code=202)
-def start_optimization(payload: OptimizeRequest) -> JSONResponse:
+def start_optimization(payload: OptimizeRequest, request: Request) -> JSONResponse:
     from ._idempotency import enqueue_outbox
 
     job_payload = {
@@ -36,5 +36,7 @@ def start_optimization(payload: OptimizeRequest) -> JSONResponse:
         "workbench_campaign_id": payload.workbench_campaign_id,
     "seed": payload.seed,
     }
-    outbox_id = enqueue_outbox("optimize", job_payload)
-    return submit(run_optimize_task, job_payload, "optimize", outbox_id=outbox_id)
+    from ..middleware.api_auth import request_owner
+    owner = request_owner(request)
+    outbox_id = enqueue_outbox("optimize", job_payload, owner_id=owner)
+    return submit(run_optimize_task, job_payload, "optimize", outbox_id=outbox_id, owner_id=owner)

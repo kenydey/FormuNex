@@ -109,7 +109,29 @@ def _latest_document(session: Session, revision_id: str, doc_type: str, lang: st
                                             RegulatoryDocumentRow.status.in_(_SHIPPABLE_STATUSES))
     if batch_id is not None and doc_type == "coa":
         q = q.where(RegulatoryDocumentRow.batch_id == batch_id)
-    return session.execute(q.order_by(RegulatoryDocumentRow.version_no.desc()).limit(1)).scalar_one_or_none()
+    rows = session.execute(q.order_by(RegulatoryDocumentRow.version_no.desc())).scalars().all()
+    if doc_type == "coa":
+        # P2-C11: a FAIL / incomplete COA is not issuable even when approved
+        # — the builder's own rule (meta.issuable only on PASS). Rows that
+        # predate the issuable flag carry no key and stay shippable.
+        rows = [r for r in rows if ((r.content or {}).get("meta") or {}).get("issuable") is not False]
+    return rows[0] if rows else None
+
+
+def _has_unissuable_coa(session: Session, revision_id: str, lang: str,
+                        batch_id: str | None = None) -> bool:
+    """A shippable-status COA exists but was filtered out by the issuable rule."""
+    q = select(RegulatoryDocumentRow.id).where(RegulatoryDocumentRow.revision_id == revision_id,
+                                               RegulatoryDocumentRow.doc_type == "coa",
+                                               RegulatoryDocumentRow.lang == lang,
+                                               RegulatoryDocumentRow.status.in_(_SHIPPABLE_STATUSES))
+    if batch_id is not None:
+        q = q.where(RegulatoryDocumentRow.batch_id == batch_id)
+    for (row_id,) in session.execute(q).all():
+        row = session.get(RegulatoryDocumentRow, row_id)
+        if row is not None and ((row.content or {}).get("meta") or {}).get("issuable") is False:
+            return True
+    return False
 
 
 def _latest_documents(session: Session, revision_id: str, doc_type: str, lang: str,
@@ -179,7 +201,11 @@ def build_batch_zip(session: Session, *, product_ids: list[str], doc_types: list
                 docs = _latest_documents(session, rev.id, dt, lang, batch_id=batch_id)
                 if not docs:
                     entry = {"product_id": product.id, "product_code": product.code, "doc_type": dt}
-                    if _has_any_document(session, rev.id, dt, lang):
+                    if dt == "coa" and _has_unissuable_coa(session, rev.id, lang, batch_id=batch_id):
+                        # P2-C11: approved but not issuable — reported as
+                        # missing, not silently skipped.
+                        entry.update({"reason": f"修订版 {rev.rev} 的 COA（{lang}）已批准但结论不合格（不可签发），未导出"})
+                    elif _has_any_document(session, rev.id, dt, lang):
                         # Deliberately excluded, not absent: only draft /
                         # unapproved versions exist, and those never ship.
                         entry.update({"reason": f"修订版 {rev.rev} 的 {dt}（{lang}）仅有草稿/未批准版本，未导出"

@@ -2,9 +2,10 @@ import { BulbOutlined, GlobalOutlined, LockOutlined, LogoutOutlined, PlusOutline
 import { App, Badge, Button, Dropdown, Select, Space, Tooltip, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { Suspense, useEffect, useState, type CSSProperties } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { call } from "@/api/client";
+import { errorText } from "@/shared/feedback";
 import { useSession } from "./session";
 import { useUi } from "./store";
 import { deriveNav, visibleNav, type NavItem } from "./nav";
@@ -62,22 +63,23 @@ export function Shell() {
     }
   }, [projects.data, ui.projectId, setProject, message, t]);
 
+  const [searchParams] = useSearchParams();
   const visible = visibleNav(can);
   const derived = deriveNav(location.pathname);
   const visibleGroup = visible.find((g) => g.path === derived?.group.path);
-  const showHome =
-    (location.state as { groupHome?: boolean } | null)?.groupHome === true &&
-    !!visibleGroup?.children?.length;
+  // P2-E8: group-home is now a query flag (?home=1), not location state —
+  // state was lost on refresh, so a reloaded group home showed the leaf.
+  const showHome = searchParams.get("home") === "1" && !!visibleGroup?.children?.length;
 
   const goGroup = (g: NavItem) => {
     if (!g.children?.length) {
       navigate(g.path);
       return;
     }
-    navigate(g.children[0].path, { state: { groupHome: true } });
+    navigate(`${g.children[0].path}?home=1`);
   };
   const goLeaf = (leaf: NavItem) => navigate(leaf.path);
-  const goHome = () => navigate(location.pathname, { state: { groupHome: true } });
+  const goHome = () => navigate(`${location.pathname}?home=1`);
   const goNextGroup = (groupPath: string) => {
     const g = visible.find((x) => x.path === groupPath);
     if (g) goGroup(g);
@@ -104,6 +106,8 @@ export function Shell() {
             showSearch
             optionFilterProp="label"
             style={{ width: 220 }}
+            status={projects.isError ? "error" : undefined}
+            title={projects.isError ? errorText(projects.error) : undefined}
             placeholder={t("shell.project", "选择项目")}
             value={ui.projectId ?? undefined}
             onChange={(v) => ui.setProject(v ?? null)}
@@ -115,9 +119,11 @@ export function Shell() {
         </Space.Compact>
         <TaskCenter />
         <Tooltip title={t("shell.review_queue", "待复核测量值")}>
-          {can("lab.review", ui.projectId) && <Badge count={reviewQueue.data?.count ?? 0} size="small">
-            <Button type="text" onClick={() => navigate("/lab/measurements?tab=review")}>{t("shell.todo", "待办")}</Button>
-          </Badge>}
+          {can("lab.review", ui.projectId) && (reviewQueue.isError
+            ? <Button type="text" onClick={() => navigate("/lab/measurements?tab=review")}>{t("shell.todo", "待办")}</Button>
+            : <Badge count={reviewQueue.data?.count ?? 0} size="small">
+              <Button type="text" onClick={() => navigate("/lab/measurements?tab=review")}>{t("shell.todo", "待办")}</Button>
+            </Badge>)}
         </Tooltip>
         <Tooltip title={t("shell.theme", "明暗主题")}>
           <Button type="text" icon={<BulbOutlined />} onClick={() => ui.setTheme(ui.theme === "dark" ? "light" : "dark")} />

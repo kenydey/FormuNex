@@ -44,6 +44,8 @@ acute_toxicity:            # GB 30000.18
     dust_mist: [[0.05, "1"], [0.5, "2"], [1.0, "3"], [5, "4"]]
 
 skin_corrosion:            # GB 30000.19, additivity (Table 3.2.3)
+  # P3-C12: dead key — no Python code reads include_category_3;
+  # kept for schema stability, do not rely on it.
   include_category_3: false
   cat1_limit_pct: 5.0              # Σ skin 1 ≥ 5 % → category 1
   cat2_from_cat1_pct: 1.0          # 1 % ≤ Σ skin 1 < 5 % → category 2
@@ -100,6 +102,9 @@ ozone:                     # GB 30000.29
 
 flammable_liquid:          # CLP Annex I 2.6 (closed-cup flash point, initial boiling point, °C)
   cat1: {flash_point_lt: 23, ibp_le: 35}
+  # P3-C12: dead key — flammable_liquid cat 2 is derived by the
+  # initial-boiling-point branch (physical.py reads cat1 only); kept
+  # for schema stability, do not rely on it.
   cat2: {flash_point_lt: 23, ibp_gt: 35}
   cat3: {flash_point_ge: 23, flash_point_le: 60}
   # CLP has no category 4: a liquid with 60 < FP <= 93 °C is not classified

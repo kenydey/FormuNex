@@ -61,15 +61,22 @@ impl StackFiles {
     }
 
     /// Write the compose file and the `.env`: secrets generated on first use and kept afterwards; image,
-    /// version and port follow the current config.
-    pub fn prepare(&self, cfg: &DesktopConfig) -> Result<()> {
+    /// version and port follow the current config. Returns whether any
+    /// secret had to be generated (P3-E14: a missing `.env` regenerates
+    /// secrets, which locks the stack out of its existing volumes —
+    /// callers fail closed on that case instead of starting a broken stack).
+    pub fn prepare(&self, cfg: &DesktopConfig) -> Result<bool> {
         fs::create_dir_all(&self.dir)?;
         let compose = self.compose();
         if fs::read_to_string(&compose).ok().as_deref() != Some(COMPOSE_TEMPLATE) {
             fs::write(&compose, COMPOSE_TEMPLATE)?;
         }
         let mut env = fs::read_to_string(self.env()).map(|t| parse_env(&t)).unwrap_or_default();
+        let mut regenerated = false;
         for (key, len) in SECRET_KEYS {
+            if !env.contains_key(key) {
+                regenerated = true;
+            }
             env.entry(key.to_string()).or_insert_with(|| random_secret(len));
         }
         env.insert("FORMUNEX_IMAGE".into(), cfg.image.clone());
@@ -81,7 +88,7 @@ impl StackFiles {
             text.push_str(&format!("{k}={v}\n"));
         }
         write_private(&self.env(), &text)?;
-        Ok(())
+        Ok(regenerated)
     }
 
     pub fn docker(&self, bin: PathBuf) -> Docker {
@@ -124,8 +131,12 @@ pub struct BackupInfo {
 }
 
 fn write_private(path: &Path, text: &str) -> Result<()> {
+    write_private_bytes(path, text.as_bytes())
+}
+
+fn write_private_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, text)?;
+    fs::write(&tmp, bytes)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -135,14 +146,22 @@ fn write_private(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// `pg_dump -Fc` of the stack database into `<app_data>/backups/formunex-<stamp>[-<label>].dump`; keeps
-/// the newest [`KEEP_BACKUPS`].
+/// `pg_dump -Fc` of the stack database into `<app_data>/backups/formunex-<stamp>-<pid>-<nanos>[-<label>].dump`;
+/// keeps the newest [`KEEP_BACKUPS`].
 pub fn backup(files: &StackFiles, docker: &Docker, label: &str) -> Result<BackupInfo> {
     fs::create_dir_all(files.backups())?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let suffix: String = label.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-    let name =
-        if suffix.is_empty() { format!("formunex-{stamp}.dump") } else { format!("formunex-{stamp}-{suffix}.dump") };
+    // P2-E19: two backups in the same second used to overwrite each other.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let name = if suffix.is_empty() {
+        format!("formunex-{stamp}-{}-{nanos}.dump", std::process::id())
+    } else {
+        format!("formunex-{stamp}-{}-{nanos}-{suffix}.dump", std::process::id())
+    };
     let out = docker.run(
         &docker.compose_args(&["exec", "-T", "postgres", "pg_dump", "-U", "formunex", "-d", "formunex", "-Fc"]),
         &[],
@@ -151,8 +170,12 @@ pub fn backup(files: &StackFiles, docker: &Docker, label: &str) -> Result<Backup
         return Err(DesktopError::Docker { command: "pg_dump".into(), message: "备份为空".into() });
     }
     let path = files.backups().join(&name);
-    fs::write(&path, &out.stdout)?;
-    files.prune_backups()?;
+    // P1-E13: a backup holds the database; it must not be world-readable.
+    write_private_bytes(&path, &out.stdout)?;
+    // P2-E19: a prune failure must not fail the backup that just succeeded.
+    if let Err(e) = files.prune_backups() {
+        eprintln!("prune backups failed (backup kept): {e}");
+    }
     Ok(BackupInfo { path: path.display().to_string(), name, bytes: out.stdout.len() as u64 })
 }
 
@@ -215,14 +238,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let files = StackFiles::new(dir.path());
         let mut cfg = DesktopConfig::default();
-        files.prepare(&cfg).unwrap();
+        assert!(files.prepare(&cfg).unwrap(), "first prepare generates secrets");
         let first = parse_env(&fs::read_to_string(files.env()).unwrap());
         assert_eq!(first["FORMUNEX_PG_PASSWORD"].len(), 32);
         assert_eq!(first["FORMUNEX_AUTH_JWT_SECRET"].len(), 64);
         assert_eq!(first["FORMUNEX_VERSION"], cfg.version);
         cfg.version = "9.9.9".into();
         cfg.api_port = 18000;
-        files.prepare(&cfg).unwrap();
+        assert!(!files.prepare(&cfg).unwrap(), "second prepare keeps existing secrets");
         let second = parse_env(&fs::read_to_string(files.env()).unwrap());
         assert_eq!(second["FORMUNEX_PG_PASSWORD"], first["FORMUNEX_PG_PASSWORD"]);
         assert_eq!(second["FORMUNEX_AUTH_JWT_SECRET"], first["FORMUNEX_AUTH_JWT_SECRET"]);

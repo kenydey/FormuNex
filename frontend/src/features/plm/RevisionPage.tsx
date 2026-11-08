@@ -85,7 +85,7 @@ export default function RevisionPage() {
               { title: t("spec.comparison", "判定"), dataIndex: "comparison", valueType: "select", valueEnum: { full: t("spec.cmp.full", "全数值比较"), rounded: t("spec.cmp.rounded", "修约值比较") } }]} />
             <Typography.Title level={5} style={{ marginTop: 16 }}>{t("spec.acceptance", "定型验收指标（发布门禁 G3）")}</Typography.Title>
             <EditableRows<Acceptance> value={spec.acceptance} onChange={(v) => setSpec({ ...spec, acceptance: v })} newRow={() => ({ metric: "" })} columns={[
-              { title: t("spec.metric", "指标"), dataIndex: "metric" }, { title: t("spec.label", "名称"), dataIndex: "label" },
+              { title: t("spec.metric", "指标"), dataIndex: "metric" }, { title: t("spec.label_name", "名称"), dataIndex: "label" },
               { title: t("spec.min", "下限"), dataIndex: "min", valueType: "digit" }, { title: t("spec.max", "上限"), dataIndex: "max", valueType: "digit" }]} />
             <Typography.Title level={5} style={{ marginTop: 16 }}>{t("spec.redlines.substances", "禁用 / 限用物质")}</Typography.Title>
             <EditableRows<RedLineSubstance> value={spec.red_lines} onChange={(v) => setSpec({ ...spec, red_lines: v })} newRow={() => ({ cas: "", max_pct: 0 })} columns={[
@@ -106,7 +106,7 @@ export default function RevisionPage() {
               { title: t("plm.state", "状态"), dataIndex: "status", render: (_d, d) => <StatusTag status={d.status} /> },
               { title: t("doc.missing_col", "缺项"), render: (_d, d) => d.missing.length ? <Tag color="red">{d.missing.length}</Tag> : <Tag color="green">0</Tag> },
               { title: t("doc.warnings", "提示"), render: (_d, d) => d.warnings.length || "—" },
-              { title: t("common.created", "生成时间"), dataIndex: "created_at", valueType: "dateTime" },
+              { title: t("common.generated", "生成时间"), dataIndex: "created_at", valueType: "dateTime" },
             ]} />
         ) },
         { key: "gate", label: <span>{t("gate.title", "发布门禁")} {gate.data && !gate.data.passed && <Tag color="red">!</Tag>}</span>, children: (
@@ -120,7 +120,7 @@ export default function RevisionPage() {
           <ProTable<PackageView> rowKey="id" search={false} options={false} dataSource={packages.data} columns={[
             { title: t("plm.package", "发布包"), dataIndex: "id", render: (_d, p) => <Link to={`/plm/packages/${p.id}`}>{p.package_hash.slice(0, 12)}</Link> },
             { title: t("plm.state", "状态"), dataIndex: "status", render: (_d, p) => <StatusTag status={p.status} /> },
-            { title: t("common.created", "提交时间"), dataIndex: "created_at", valueType: "dateTime" },
+            { title: t("common.submitted", "提交时间"), dataIndex: "created_at", valueType: "dateTime" },
             { title: t("plm.released_at", "发布时间"), dataIndex: "released_at", valueType: "dateTime" },
           ]} />
         ) },

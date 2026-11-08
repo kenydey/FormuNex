@@ -49,9 +49,14 @@ export function needsSetup(info: DesktopInfo | null): boolean {
   return !!info && (!info.config.setup_complete || !info.api_base);
 }
 
-/** Follow formunex:// links: cold start (plugin), and links forwarded by a second instance (shell event). */
-export async function startDeepLinks(navigate: (route: string) => void): Promise<void> {
-  if (!isDesktop()) return;
+/** Follow formunex:// links: cold start (plugin), and links forwarded by a second instance (shell event).
+ * Returns an unsubscribe function; the App effect calls it on unmount.
+ * P2-E17: the shell-event `listen` used to sit outside the try (an
+ * import failure rejected the whole boot path) and its unsubscribe was
+ * never kept, leaking a listener per mount. */
+export async function startDeepLinks(navigate: (route: string) => void): Promise<() => void> {
+  const offs: (() => void)[] = [];
+  if (!isDesktop()) return () => undefined;
   const open = (urls: string[]) => {
     for (const url of urls) {
       const route = deepLinkRoute(url);
@@ -65,10 +70,15 @@ export async function startDeepLinks(navigate: (route: string) => void): Promise
     const dl = await import("@tauri-apps/plugin-deep-link");
     const initial = await dl.getCurrent();
     if (initial?.length) open(initial);
-    await dl.onOpenUrl(open);
+    offs.push(await dl.onOpenUrl(open));
   } catch {
     // deep links unavailable (e.g. not registered on this OS)
   }
-  const { listen } = await import("@tauri-apps/api/event");
-  await listen<string>("deep-link://open", (e) => navigate(e.payload));
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    offs.push(await listen<string>("deep-link://open", (e) => navigate(e.payload)));
+  } catch {
+    // shell-event forwarding unavailable; plugin links above still work
+  }
+  return () => offs.forEach((off) => off());
 }

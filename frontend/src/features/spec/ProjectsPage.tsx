@@ -39,9 +39,9 @@ export default function ProjectsPage() {
           { title: t("common.updated", "更新时间"), dataIndex: "updated_at", valueType: "dateTime", width: 170 },
           { title: t("common.actions", "操作"), valueType: "option", width: 150, render: (_d, r) => (
             <Space>
-              <Button size="small" disabled={!canWrite} title={t("common.need_project_write", "需要权限：创建 / 编辑项目")}
+              <Button size="small" disabled={!can("project.write", r.id)} title={t("common.need_project_write", "需要权限：创建 / 编辑项目")}
                 onClick={() => setRenameTarget({ id: r.id, title: r.title })}>{t("common.edit", "编辑")}</Button>
-              <Button size="small" danger disabled={!canWrite} title={t("common.need_project_write", "需要权限：创建 / 编辑项目")}
+              <Button size="small" danger disabled={!can("project.write", r.id)} title={t("common.need_project_write", "需要权限：创建 / 编辑项目")}
                 onClick={() => setDeleteTarget({ id: r.id, title: r.title })}>{t("common.delete", "删除")}</Button>
             </Space>
           ) },

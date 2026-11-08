@@ -17,8 +17,8 @@ const NEXT_HINTS: Record<string, { toGroup?: string; key: string; zh: string }> 
   "/spec": { toGroup: "/lab", key: "ia.next.spec", zh: "立项后，去配方与实验开始设计" },
   "/lab": { toGroup: "/cockpit", key: "ia.next.lab", zh: "有了实验数据，去寻优与分析找最优配方" },
   "/cockpit": { toGroup: "/product", key: "ia.next.cockpit", zh: "寻优定型后，去产品管理建产品并生成文档" },
-  "/product": { key: "ia.next.product", zh: "定型后在这里生成 SDS / 标签并发布" },
-  "/materials": { key: "ia.next.materials", zh: "原料与物质数据贯穿配方与产品的全过程" },
+  "/product": { toGroup: "/materials", key: "ia.next.product", zh: "定型后在这里生成 SDS / 标签并发布" },
+  "/materials": { toGroup: "/admin", key: "ia.next.materials", zh: "原料与物质数据贯穿配方与产品的全过程" },
 };
 
 /**

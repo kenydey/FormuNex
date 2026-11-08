@@ -147,6 +147,13 @@ def cancel_task_endpoint(task_id: str, request: Request) -> TaskStatus:
     from ..worker.tasks import cancel_task
 
     cancel_task(task_id)
+    # P0 fix (2026-11-04 deep review): cancelling used to leave the
+    # outbox row PENDING/CLAIMED, so recover_stalled replayed the
+    # cancelled job ~30 minutes later. Mark the row CANCELLED here;
+    # the dispatcher snapshot guard closes any row this mark misses.
+    from ..db.outbox_store import record_cancelled
+
+    record_cancelled(task_id)
     # 返回 cancelled 快照（可能仍在 revoke 竞态中，强制返回 cancelled）
     updated = task_manager.get(task_id)
     if updated and updated.state == TaskState.cancelled:

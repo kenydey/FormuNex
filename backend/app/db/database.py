@@ -316,6 +316,17 @@ def _ensure_audit_log_guard(engine: Engine) -> None:
             conn.execute(text(stmt))
 
 
+def _is_duplicate_column(exc: Exception) -> bool:
+    """True when a soft-add-column raced an identical concurrent add.
+
+    SQLite reports "duplicate column name"; PostgreSQL reports
+    `column "x" of relation "y" already exists`. Both are benign races
+    for the idempotent soft-column helpers below, not real errors.
+    """
+    msg = str(exc).lower()
+    return "duplicate column" in msg or "already exists" in msg
+
+
 def _ensure_measurement_lab_columns(engine: Engine) -> None:
     """软扩列：measurements 表的实验执行溯源 / 复核列（alembic 0059，兼容未迁移旧库）。"""
     from sqlalchemy import inspect, text
@@ -331,7 +342,7 @@ def _ensure_measurement_lab_columns(engine: Engine) -> None:
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE measurements ADD COLUMN {ddl}"))
         except Exception as exc:
-            if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
+            if not _is_duplicate_column(exc):
                 raise
 
 
@@ -355,7 +366,7 @@ def _ensure_source_soft_columns(engine: Engine) -> None:
                     except Exception:
                         pass
         except Exception as exc:
-            if "duplicate column" not in str(exc).lower():
+            if not _is_duplicate_column(exc):
                 raise
 
 
@@ -418,7 +429,7 @@ def _ensure_material_columns(engine: Engine) -> None:
                             pass
             except Exception as exc:
                 # 竞态或已存在：静默（alembic 已加过）
-                if "duplicate column" not in str(exc).lower():
+                if not _is_duplicate_column(exc):
                     raise
     # New pending-queue table: create_all covers fresh DBs; existing DBs need it too.
     from .models import MaterialCandidateRow, MaterialSupplierRow, SupplierRow
@@ -462,7 +473,7 @@ def _ensure_supplier_quote_columns(engine: Engine) -> None:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE suppliers ADD COLUMN {ddl}"))
             except Exception as exc:
-                if "duplicate column" not in str(exc).lower():
+                if not _is_duplicate_column(exc):
                     raise
     if "material_suppliers" in tables:
         existing = {c["name"] for c in inspector.get_columns("material_suppliers")}
@@ -473,7 +484,7 @@ def _ensure_supplier_quote_columns(engine: Engine) -> None:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE material_suppliers ADD COLUMN {ddl}"))
             except Exception as exc:
-                if "duplicate column" not in str(exc).lower():
+                if not _is_duplicate_column(exc):
                     raise
 
 
@@ -498,7 +509,7 @@ def _ensure_owner_id_column(engine: Engine, table: str) -> None:
                 pass
     except Exception as exc:
         # 竞态或已存在：静默（alembic 已加过）
-        if "duplicate column" not in str(exc).lower():
+        if not _is_duplicate_column(exc):
             raise
 
 
@@ -517,7 +528,7 @@ def _ensure_outbox_error_column(engine: Engine) -> None:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "task_outbox" ADD COLUMN error TEXT'))
     except Exception as exc:  # a concurrent starter may have added it first
-        if "duplicate column" not in str(exc).lower():
+        if not _is_duplicate_column(exc):
             raise
 
 
@@ -536,7 +547,7 @@ def _ensure_conflict_remote_units_column(engine: Engine) -> None:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "eln_sync_conflicts" ADD COLUMN remote_units JSON'))
     except Exception as exc:  # a concurrent starter may have added it first
-        if "duplicate column" not in str(exc).lower():
+        if not _is_duplicate_column(exc):
             raise
 
 
@@ -553,7 +564,7 @@ def _ensure_parse_shards_columns(engine: Engine) -> None:
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE "parse_shards" ADD COLUMN parser_version VARCHAR(16)'))
         except Exception as exc:  # a concurrent starter may have added it first
-            if "duplicate column" not in str(exc).lower():
+            if not _is_duplicate_column(exc):
                 raise
     if not any(ix["name"] == "ix_parse_shards_updated_at"
                for ix in inspect(engine).get_indexes("parse_shards")):
@@ -577,7 +588,7 @@ def _ensure_mcp_policy_expiry_column(engine: Engine) -> None:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "mcp_tool_policies" ADD COLUMN expires_at FLOAT'))
     except Exception as exc:  # a concurrent starter may have added it first
-        if "duplicate column" not in str(exc).lower():
+        if not _is_duplicate_column(exc):
             raise
 
 
@@ -596,7 +607,7 @@ def _ensure_outbox_task_id_column(engine: Engine) -> None:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "task_outbox" ADD COLUMN task_id VARCHAR(64)'))
     except Exception as exc:  # a concurrent starter may have added it first
-        if "duplicate column" not in str(exc).lower():
+        if not _is_duplicate_column(exc):
             raise
 
 

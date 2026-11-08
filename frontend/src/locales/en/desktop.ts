@@ -91,6 +91,7 @@ const en: Record<string, string> = {
   "desktop.detail": "Details",
   "desktop.admin_created": "Administrator {{u}} created",
   "desktop.admin_pw_note": "The initial password is shown only once and was also saved to the system keychain (entry com.formunex.desktop / admin-password). Change it after signing in (top-right menu).",
+  "desktop.admin_pw_nokeychain": "The initial password is shown only once and could NOT be saved to the system keychain — copy it now; it cannot be recovered after closing. Change it after signing in (top-right menu).",
   "desktop.copied": "Copied",
   "desktop.go_login": "Done, sign in",
   "desktop.admin_exists_hint": "If the administrator already exists (re-install), just sign in.",

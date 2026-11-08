@@ -61,6 +61,15 @@ class ExperimentRow(Base):
     domain: Mapped[str] = mapped_column(String(64), index=True)
     project_id: Mapped[str] = mapped_column(String(36), default="", index=True)
     owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True, default=None)
+    # P1-A7 (2026-11-04 deep review): the DOE-cycle task that wrote this
+    # row. A replayed / autoretried cycle deletes its own previous
+    # unmeasured rows by this key before persisting, instead of stacking
+    # a duplicate batch. NULL = written before task tracking (legacy).
+    doe_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True, default=None)
+    # P2-C23 (2026-11-04 deep review): the workbench campaign this cycle
+    # ran for. NULL = written before campaign tracking (legacy) or a
+    # campaign-free cycle.
+    workbench_campaign_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True, default=None)
     factors: Mapped[dict] = mapped_column(JSON, default=dict)
     cure_temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     measured: Mapped[dict] = mapped_column(JSON)
@@ -844,7 +853,8 @@ class DOECycleRunRow(Base):
     __tablename__ = "doe_cycle_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    project_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # P3-D1: nullable since 0095; unassigned runs store NULL (was "").
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None, index=True)
     domain: Mapped[str] = mapped_column(String(64), default="")
     engine: Mapped[str] = mapped_column(String(16), default="")  # baybe | lhs
     prior_measurement_count: Mapped[int] = mapped_column(Integer, default=0)

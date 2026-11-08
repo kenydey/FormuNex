@@ -6,6 +6,7 @@
  * 样式随 chunk 一起加载：`ketcher-react/dist/index.css`。
  */
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Editor } from "ketcher-react";
 import { StandaloneStructServiceProvider } from "ketcher-standalone";
 import type { Ketcher } from "ketcher-core";
@@ -24,6 +25,7 @@ export function KetcherCanvas({
   onReady: (ketcher: Ketcher) => void;
   onError: (message: string) => void;
 }) {
+  const { t } = useTranslation();
   const readyRef = useRef(false);
   const pendingRef = useRef<string | undefined>(initialSmiles);
 
@@ -48,7 +50,7 @@ export function KetcherCanvas({
             try {
               await ketcher.setMolecule(smiles);
             } catch {
-              onError("SMILES 无法解析，已打开空白画布，请重新绘制或修改文本后载入。");
+              onError(t("ketcher.smiles_failed", "SMILES 无法解析，已打开空白画布，请重新绘制或修改文本后载入。"));
             }
           }
         }}

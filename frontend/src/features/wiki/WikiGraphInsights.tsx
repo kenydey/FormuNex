@@ -1,5 +1,6 @@
 import { Button, Card, List, Space, Tooltip, Typography } from "antd";
 import { useTranslation } from "react-i18next";
+import { useSession } from "@/app/session";
 import type { WikiPageGraphInsights } from "./types";
 
 type Props = {
@@ -14,6 +15,7 @@ type Props = {
 /** Gap insights next to the wiki link graph: orphans / broken links → open, lint, dossier refresh. */
 export function WikiGraphInsights({ insights, busy, canRefreshDossier, onOpenPath, onRunLint, onRefreshDossier }: Props) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const orphans = insights?.orphans ?? [];
   const broken = insights?.broken ?? [];
   const isolates = insights?.isolates ?? [];
@@ -23,7 +25,7 @@ export function WikiGraphInsights({ insights, busy, canRefreshDossier, onOpenPat
       extra={comps && <Typography.Text type="secondary">{t("wiki.components", "分量 {{n}} · 最大 {{max}}", { n: comps.count, max: comps.largest })}</Typography.Text>}>
       <Space wrap style={{ marginBottom: 12 }}>
         <Tooltip title={t("wiki.lint_tip", "扫描 stale / conflict / orphan 并写回 flags")}>
-          <Button size="small" disabled={!!busy} loading={busy === "lint"} onClick={onRunLint}>{t("wiki.run_lint", "跑 Lint")}</Button>
+          <Button size="small" disabled={!!busy || !can("knowledge.write")} loading={busy === "lint"} onClick={onRunLint}>{t("wiki.run_lint", "跑 Lint")}</Button>
         </Tooltip>
         <Button size="small" disabled={!!busy || !canRefreshDossier} loading={busy === "dossier"} onClick={onRefreshDossier}>{t("wiki.dossier_refresh", "刷新卷宗")}</Button>
       </Space>

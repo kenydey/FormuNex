@@ -2457,6 +2457,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plm/substances/{substance_id}/lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lock Substance Classification
+         * @description EHS locks a substance's manual classification (P1-C1): the production
+         *     path the release gate's key-component check waits for. Wrong password
+         *     commits first so the failed attempt (and lock-out counter) persists.
+         */
+        post: operations["lock_substance_classification_api_plm_substances__substance_id__lock_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plm/regulatory/updates/clp-stage": {
         parameters: {
             query?: never;
@@ -11412,6 +11434,17 @@ export interface components {
             paragraph?: number | null;
             /** Has Fulltext */
             has_fulltext?: boolean | null;
+            /** Merged From */
+            merged_from?: string[];
+            /** Image Refs */
+            image_refs?: string[];
+            /**
+             * Image Vector Match
+             * @default false
+             */
+            image_vector_match: boolean;
+            /** Kept By */
+            kept_by?: string | null;
             /** Cited By */
             cited_by?: number | null;
             /** Pub Year */
@@ -12848,6 +12881,8 @@ export interface components {
              * @default rule
              */
             extraction_method: string;
+            /** Weight */
+            weight?: number | null;
         };
         /** KGRetrieveRequest */
         KGRetrieveRequest: {
@@ -12973,6 +13008,8 @@ export interface components {
              * @default 1
              */
             hops: number;
+            /** Weight */
+            weight?: number | null;
             /** Path */
             path?: components["schemas"]["KGPathStep"][];
             /**
@@ -16524,6 +16561,13 @@ export interface components {
             session_id: string;
             /** Phases */
             phases: components["schemas"]["PhaseIn"][];
+        };
+        /** SubstanceLockIn */
+        SubstanceLockIn: {
+            /** Password */
+            password: string;
+            /** Classifications */
+            classifications?: components["schemas"]["HazardIn"][] | null;
         };
         /** SubstituteRequest */
         SubstituteRequest: {
@@ -21690,6 +21734,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ReviewResolveIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lock_substance_classification_api_plm_substances__substance_id__lock_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                substance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubstanceLockIn"];
             };
         };
         responses: {

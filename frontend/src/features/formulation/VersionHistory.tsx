@@ -10,6 +10,7 @@ import { useUi } from "@/app/store";
 import { Chart } from "@/shared/Chart";
 import { ErrorAlert, errorText } from "@/shared/feedback";
 import { fx } from "./api";
+import { useSession } from "@/app/session";
 import { previousVersion, versionTree } from "./logic";
 import type { Formulation, FormulationVersion, IngredientChange, Lineage, VersionDiff } from "./types";
 
@@ -87,6 +88,7 @@ export function VersionHistory({ lineageId, formulation, onLineage, onOpenVersio
   lineageId?: string | null; formulation?: Formulation; onLineage?: (l: { lineage_id: string; parent: string }) => void; onOpenVersion?: (versionId: string) => void;
 }) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const projectId = useUi((s) => s.projectId);
@@ -130,7 +132,7 @@ export function VersionHistory({ lineageId, formulation, onLineage, onOpenVersio
       <Typography.Text type="secondary">{t("formulation.ver.intro", "每次保存都是一条不可变的修订记录；选两版即可看到具体改了哪些成分、指标怎么变。")}</Typography.Text>
       {formulation && <Space.Compact style={{ width: "100%" }}>
         <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("formulation.ver.note_ph", "本次修改说明（留空则自动生成）")} />
-        <Button type="primary" loading={save.isPending} disabled={!formulation.ingredients.length} onClick={() => save.mutate()}>{t("formulation.ver.save", "保存为新版本")}</Button>
+        <Button type="primary" loading={save.isPending} disabled={!formulation.ingredients.length || !can("formulation.write")} onClick={() => save.mutate()}>{t("formulation.ver.save", "保存为新版本")}</Button>
       </Space.Compact>}
       <ErrorAlert error={lineage.error ?? diff.error} />
       {versions.length === 0 ? <Empty description={lineage.isLoading ? undefined : t("formulation.ver.empty", "该配方尚无修订记录——保存一次即可开始记录谱系。")} /> : <>

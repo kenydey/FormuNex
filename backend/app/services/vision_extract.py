@@ -184,7 +184,11 @@ def _verify_reaction(reaction: VisionReaction) -> VisionReaction:
 
     reaction.reactants = [_verify_side(s) for s in reaction.reactants]
     reaction.products = [_verify_side(s) for s in reaction.products]
-    if any(not s.verified for s in reaction.reactants + reaction.products if s.smiles):
+    # P3-B6: strip before the emptiness check, matching
+    # compute_reaction_confidence's gate_fired — a whitespace-only
+    # smiles string is 'missing', not 'unverified', and must not cap.
+    if any(not s.verified for s in reaction.reactants + reaction.products
+           if s.smiles and s.smiles.strip()):
         reaction.confidence = min(reaction.confidence, 0.3)
     left = " + ".join(s.smiles for s in reaction.reactants if s.verified)
     right = " + ".join(s.smiles for s in reaction.products if s.verified)
@@ -642,20 +646,43 @@ def merge_footnotes(
         new_conditions: list[VisionReactionCondition] = []
         for cond in rxn.conditions:
             original = cond.text or ""
-            text = original
+            # P3-B1: single-pass expansion over the ORIGINAL text. The old
+            # loop substituted footnote by footnote into evolving text, so
+            # an earlier expansion could itself be re-expanded by a later
+            # footnote (chain over-expansion). One combined pattern, longest
+            # abbr first; first definition wins for a duplicated abbr.
+            defs: list[tuple[str, str, str]] = []
             for fn in footnotes:
                 if fn.entry and fn.entry != (rxn.entry or ""):
                     continue
                 definition = _FOOTNOTE_DEF_RE.match(fn.text or "")
                 if definition:
-                    abbr, expansion = definition.group(1), definition.group(2)
-                    bounded = re.compile(
-                        r"(?<![A-Za-z0-9])" + re.escape(abbr) + r"(?![A-Za-z0-9])"
-                    )
-                    if bounded.search(text):
-                        text = bounded.sub(expansion, text)
-                        if fn.key and fn.key not in applied:
-                            applied.append(fn.key)
+                    defs.append((fn.key or "", definition.group(1), definition.group(2)))
+            text = original
+            if defs:
+                by_abbr: dict[str, tuple[str, str]] = {}
+                for key, abbr, expansion in defs:
+                    by_abbr.setdefault(abbr, (key, expansion))
+                pattern = re.compile("|".join(
+                    r"(?<![A-Za-z0-9])" + re.escape(abbr) + r"(?![A-Za-z0-9])"
+                    for abbr in sorted(by_abbr, key=len, reverse=True)
+                ))
+
+                def _expand(m: re.Match[str]) -> str:
+                    key, expansion = by_abbr[m.group(0)]
+                    if key and key not in applied:
+                        applied.append(key)
+                    return expansion
+
+                text = pattern.sub(_expand, text)
+            # Marker notes are independent of definitions: they must run
+            # even when no footnote is an ABBR = EXPANSION definition
+            # (a scoping bug in the first P3-B1 version nested this loop
+            # inside `if defs:` and reused the stale loop variable `fn`,
+            # so plain marker footnotes like "dry solvent" never applied).
+            for fn in footnotes:
+                if fn.entry and fn.entry != (rxn.entry or ""):
+                    continue
                 if fn.key and _footnote_marker_re(fn.key).search(original):
                     if fn.key not in applied:
                         applied.append(fn.key)
@@ -681,14 +708,31 @@ def apply_condition_inheritance(
     model free play). A condition whose text is an explicit inherit marker
     takes the previous row's same-role condition; any other value replaces;
     an absent role stays absent (absence is not inheritance). First-row
-    markers have no previous row and are kept verbatim."""
+    markers have no previous row and are kept verbatim.
+
+    P2-B5: two fixes. Inherited conditions are COPIES, not the previous
+    row's object — sharing one object meant a later mutation rewrote
+    several rows at once. And inheritance resets at a table boundary:
+    when a non-empty entry id repeats an id already seen, a new table
+    has started (entry ids are unique within one table), so the new
+    table's first row never inherits the previous table's last row.
+    Empty entries carry no boundary signal and do not reset. Callers
+    that know table boundaries exactly should call once per table —
+    entry-repeat is a heuristic, not a table id.
+    """
     out: list[VisionReaction] = []
     prev_by_role: dict[str, VisionReactionCondition] = {}
+    seen_entries: set[str] = set()
     for rxn in reactions:
+        entry = (rxn.entry or "").strip()
+        if entry and entry in seen_entries:
+            prev_by_role = {}
+        if entry:
+            seen_entries.add(entry)
         new_conditions: list[VisionReactionCondition] = []
         for cond in rxn.conditions:
             if (cond.text or "").strip().lower() in _INHERIT_MARKERS and cond.role in prev_by_role:
-                new_conditions.append(prev_by_role[cond.role])
+                new_conditions.append(prev_by_role[cond.role].model_copy())
             else:
                 new_conditions.append(cond)
         for cond in new_conditions:
@@ -832,18 +876,33 @@ def extract_reaction_image(
         return None, degrade_return(logger, exc, "vision reaction extraction failed", _failure_hint(exc))
 
 
-# DeepSeek ships a vision model (`deepseek-v4-flash-vision-exp`) but its text
-# models (deepseek-v4-pro / v4-flash) still reject an `image_url` content part
-# with a 400 ("This model does not support image"). So the guard is model-level
-# for deepseek: a vision model passes, a text model gets a hint naming the
-# vision model. Every other OpenAI-compatible vendor (qwen / moonshot) is left
-# to fail at the call with the provider's own message rather than be guessed at.
+# DeepSeek's serving vision model is deepseek-flash (DeepSeek-V4.1-Flash,
+# GA 2026-09-10; verified 2026-11-03) — the old vision-exp id is retired
+# to a compat route only. DeepSeek text models (deepseek-chat /
+# deepseek-reasoner) still reject an `image_url` content part with a 400
+# ("This model does not support image"). So the guard is model-level
+# for deepseek: a vision model passes, a text model gets a hint naming
+# the vision model. Every other OpenAI-compatible vendor (qwen / moonshot)
+# is left to fail at the call with the provider's own message rather
+# than be guessed at.
 _DEEPSEEK_VISION_MARKER = "vision"
 
 
 def _is_deepseek_vision(model: str) -> bool:
-    """DeepSeek models that accept images carry ``vision`` in their id."""
-    return _DEEPSEEK_VISION_MARKER in (model or "").lower()
+    """DeepSeek models that accept images.
+
+    P1-B2: the old check only recognised a "vision" substring, so the
+    actual serving vision model deepseek-flash was rejected and users
+    were pointed at the retired vision-exp id. A model counts as
+    vision when its id carries "vision" (compat route) or is
+    deepseek-flash (optionally with a dated suffix).
+    """
+    name = (model or "").lower()
+    return (
+        _DEEPSEEK_VISION_MARKER in name
+        or name == "deepseek-flash"
+        or name.startswith("deepseek-flash-")
+    )
 
 
 def vision_available() -> tuple[bool, str]:
@@ -882,8 +941,8 @@ def vision_available() -> tuple[bool, str]:
         return False, "Gemini 原生接口暂不支持图片解析——请切换 OpenAI 兼容供应商或 Anthropic"
     if cfg.provider == "deepseek" and not _is_deepseek_vision(cfg.model):
         hint = (
-            "deepseek 文本模型（deepseek-v4-pro / v4-flash）不支持图片输入。"
-            "请在「设置 → 大模型 → 视觉模型」指定 deepseek-v4-flash-vision-exp，"
+            "deepseek 文本模型（deepseek-chat / deepseek-reasoner）不支持图片输入。"
+            "请在「设置 → 大模型 → 视觉模型」指定 deepseek-flash（DeepSeek 官方视觉模型），"
             "或切换其他支持视觉的供应商（Claude / OpenAI / 自定义端点），"
             "文本模型可保持不变。"
         )
@@ -902,12 +961,63 @@ def vision_available() -> tuple[bool, str]:
     return True, ""
 
 
+def _balanced_braces(t: str):
+    """Balanced {...} segments of t, string-aware (braces inside JSON
+    strings do not count). Yields each top-level segment in order."""
+    i, n = 0, len(t)
+    while i < n:
+        if t[i] != "{":
+            i += 1
+            continue
+        depth, in_str, esc, j = 0, False, False, i
+        while j < n:
+            c = t[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            else:
+                if c == '"':
+                    in_str = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        yield t[i : j + 1]
+                        break
+            j += 1
+        i = j + 1
+
+
 def _strip_json_fences(raw: str) -> str:
+    """Extract the JSON object from a model reply.
+
+    P2-B2: the old greedy ``\\{.*\\}`` swallowed everything from the
+    first "{" to the LAST "}", so a reply carrying two JSON blocks
+    failed json.loads with "Extra data" and the whole extraction died.
+    Now: the whole reply first (it usually IS just JSON), then each
+    balanced segment in order until one parses; genuinely unparseable
+    input falls back to the fence-stripped text, as before.
+    """
     t = (raw or "").strip()
     t = re.sub(r"^```(?:json)?\s*", "", t)
     t = re.sub(r"\s*```$", "", t)
-    m = re.search(r"\{.*\}", t, re.DOTALL)
-    return m.group(0) if m else t
+    try:
+        json.loads(t)
+        return t
+    except Exception:
+        pass
+    for candidate in _balanced_braces(t):
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            continue
+    return t
 
 
 def _call_openai_vision(
@@ -1018,11 +1128,15 @@ def _is_permanent_vision_failure(error: str | None) -> bool:
     if not error:
         return False
     lower = error.lower()
+    # P2-B3: the bare "account" marker is gone — any error mentioning
+    # an account (including transient advisory copy) tripped the
+    # per-document breaker. Genuine account failures still match via
+    # the strong signals below ("... account ... is suspended" hits
+    # "suspended"; revoked keys hit "unauthorized"/"forbidden").
     permanent = (
         "endpoint is paused",
         "bad request",
         "bad_request",
-        "account",
         "suspended",
         "forbidden",
         "unauthorized",

@@ -234,3 +234,25 @@ def test_gate_classification_checks_each_regulation_without_mixed_false_positive
         # each regulation legitimately has its own classification.
         assert "mixed" not in keys
         assert c.evidence["rule_set_versions"] == {"CN": "gb30000-2013.v1", "EU": "clp-1272-2008.v1"}
+
+
+def test_generate_document_replay_with_same_task_id_returns_existing_row(sf):
+    """P1-A6: a replayed document_generate task (same task_id) returns
+    the row its first run wrote instead of appending a version the
+    user never asked for; a genuinely new task still appends."""
+    with sf() as s:
+        revision_id, _fv = _revision_with_formulation(s)
+        first = docs.generate_document(s, revision_id, "sds", lang="zh-CN", payload={},
+                                       created_by="u1", regulation="CN",
+                                       generated_by_task_id="task-abc")
+        s.commit()
+        assert first.version_no == 1
+        replay = docs.generate_document(s, revision_id, "sds", lang="zh-CN", payload={},
+                                        created_by="u1", regulation="CN",
+                                        generated_by_task_id="task-abc")
+        s.commit()
+        assert replay.id == first.id and replay.version_no == 1
+        second = docs.generate_document(s, revision_id, "sds", lang="zh-CN", payload={},
+                                        created_by="u1", regulation="CN",
+                                        generated_by_task_id="task-def")
+        assert second.version_no == 2 and second.id != first.id

@@ -74,7 +74,8 @@ def _patch_cycle(monkeypatch, records, calls):
         "generate_experiment_dicts",
         # A-7: signature gained budget_remaining (default None).
         # v16 P0-3: signature gained seed (default None).
-        lambda req, priors, budget_remaining=None, seed=None: calls.append("generate")
+        # Batch 3 (P2-C23): signature gained workbench_campaign_id (default None).
+        lambda req, priors, budget_remaining=None, seed=None, workbench_campaign_id=None: calls.append("generate")
         or ("lhs", []),
     )
     recorded = {}
@@ -124,7 +125,7 @@ def test_target_not_achieved_proceeds(monkeypatch):
     records = [_rec({"salt_spray_hours": 800.0})]
     recorded = _patch_cycle(monkeypatch, records, calls)
 
-    def _persist(req, dicts, cands):
+    def _persist(req, dicts, cands, **kw):
         return {"experiment_ids": ["1"], "status": "success", "count": 1,
                 "message": "ok"}
 

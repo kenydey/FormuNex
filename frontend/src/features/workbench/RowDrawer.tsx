@@ -47,6 +47,7 @@ function DetailTab({ row, objectives, factors }: { row: WorkbenchRow; objectives
 
 function NoteTagsTab({ campaignId, row, onSaved }: { campaignId: number; row: WorkbenchRow; onSaved: (r: WorkbenchRow) => void }) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const [note, setNote] = useState(row.note ?? "");
   const [tags, setTags] = useState<string[]>(row.tags ?? []);
@@ -60,17 +61,18 @@ function NoteTagsTab({ campaignId, row, onSaved }: { campaignId: number; row: Wo
       <ErrorAlert error={saveNote.error ?? saveTags.error} />
       <Typography.Text strong>{t("workbench.note", "备注")}</Typography.Text>
       <Input.TextArea rows={4} value={note} onChange={(e) => setNote(e.target.value)} />
-      <Button type="primary" loading={saveNote.isPending} onClick={() => saveNote.mutate()}>{t("workbench.save_note", "保存备注")}</Button>
+      <Button type="primary" loading={saveNote.isPending} disabled={!can("lab.execute")} onClick={() => saveNote.mutate()}>{t("workbench.save_note", "保存备注")}</Button>
       <Typography.Text strong style={{ marginTop: 12 }}>{t("workbench.tags", "标签")}</Typography.Text>
       <Select mode="tags" value={tags} onChange={setTags} style={{ width: "100%" }} placeholder={t("workbench.tags_ph", "输入后回车添加，如 复测 / 异常 / 优选")}
         options={["复测", "异常", "优选", "对照", "待确认"].map((v) => ({ value: v }))} />
-      <Button type="primary" loading={saveTags.isPending} onClick={() => saveTags.mutate()}>{t("workbench.save_tags", "保存标签")}</Button>
+      <Button type="primary" loading={saveTags.isPending} disabled={!can("lab.execute")} onClick={() => saveTags.mutate()}>{t("workbench.save_tags", "保存标签")}</Button>
     </Space>
   );
 }
 
 function AttachmentsTab({ campaignId, rowId, onCount }: { campaignId: number; rowId: number; onCount?: (n: number) => void }) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const [kind, setKind] = useState("report");
@@ -91,8 +93,8 @@ function AttachmentsTab({ campaignId, rowId, onCount }: { campaignId: number; ro
         <Select value={kind} onChange={setKind} style={{ width: 140 }} options={[
           { value: "report", label: t("workbench.att.report", "检测报告") }, { value: "photo", label: t("workbench.att.photo", "照片") },
           { value: "raw_data", label: t("workbench.att.raw", "原始数据") }, { value: "other", label: t("workbench.att.other", "其他") }]} />
-        <Upload showUploadList={false} beforeUpload={(f) => { upload.mutate(f); return false; }}>
-          <Button icon={<UploadOutlined />} loading={upload.isPending}>{t("workbench.upload", "上传附件")}</Button>
+        <Upload showUploadList={false} beforeUpload={(f) => { if (!can("lab.execute")) return false; upload.mutate(f); return false; }}>
+          <Button icon={<UploadOutlined />} disabled={!can("lab.execute")} loading={upload.isPending}>{t("workbench.upload", "上传附件")}</Button>
         </Upload>
       </Space>
       <List loading={q.isLoading} dataSource={q.data ?? []} rowKey="id" locale={{ emptyText: t("workbench.att.empty", "暂无附件") }}
@@ -100,7 +102,7 @@ function AttachmentsTab({ campaignId, rowId, onCount }: { campaignId: number; ro
           <List.Item actions={[
             <Button key="dl" size="small" icon={<DownloadOutlined />} onClick={() => void download(`${base(campaignId, rowId)}/attachments/${a.id}/download`, a.filename)} />,
             <Popconfirm key="del" title={t("workbench.att.confirm_delete", "删除该附件？")} onConfirm={() => del.mutate(a.id)}>
-              <Button size="small" danger icon={<DeleteOutlined />} />
+              <Button size="small" danger disabled={!can("lab.execute")} icon={<DeleteOutlined />} />
             </Popconfirm>,
           ]}>
             <List.Item.Meta title={a.filename} description={<Space><Tag>{a.kind}</Tag>{a.created_at?.slice(0, 16).replace("T", " ")}{a.note}</Space>} />
@@ -147,6 +149,7 @@ function QcTab({ campaignId, rowId, onSynced }: { campaignId: number; rowId: num
 
 function VersionsTab({ campaignId, row, onRestored }: { campaignId: number; row: WorkbenchRow; onRestored: () => void }) {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const key = ["workbench", campaignId, "row", row.id, "versions"];
@@ -186,7 +189,7 @@ function VersionsTab({ campaignId, row, onRestored }: { campaignId: number; row:
             <Space>
               <Button size="small" loading={compare.isPending && compare.variables?.id === v.id} onClick={() => compare.mutate(v)}>{t("workbench.ver.compare", "对比上一版")}</Button>
               <Popconfirm title={t("workbench.ver.confirm", "恢复到 v{{v}}？将覆盖该行当前的参数/测量/状态（可逆）。", { v: v.version })} onConfirm={() => restore.mutate(v)}>
-                <Button size="small">{t("workbench.ver.restore", "恢复")}</Button>
+                <Button size="small" disabled={!can("lab.execute")}>{t("workbench.ver.restore", "恢复")}</Button>
               </Popconfirm>
             </Space>
           ) },

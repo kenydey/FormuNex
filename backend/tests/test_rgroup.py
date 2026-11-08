@@ -31,6 +31,15 @@ def test_substitute_bare_bounded_only():
     assert rg.substitute_rgroups("COR", {"R": "CC"})[0] == "COR"
 
 
+def test_substitute_backslash_fragment_verbatim():
+    # P0 fix: a fragment containing backslashes (SMILES stereochemistry)
+    # used to crash re.sub with "bad escape"; it must pass through verbatim.
+    new, _ = rg.substitute_rgroups("C(R)O", {"R": r"C\C=C\C"})
+    assert new == r"C(C\C=C\C)O"
+    new, _ = rg.substitute_rgroups("C(R)O", {"R": r"C/C=C/C"})
+    assert new == r"C(C/C=C/C)O"
+
+
 def test_substitute_failure_keeps_original():
     class _FailChem:
         @staticmethod

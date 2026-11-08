@@ -34,6 +34,14 @@ def acute_toxicity(components: list[Component], props: MixtureProperties, rs: Ru
             if h.ate_value and (h.ate_unit or unit) == unit:
                 ate, how = float(h.ate_value), f"ATE {fmt(h.ate_value)} {unit}"
             else:
+                if h.ate_value:
+                    # P2-C12: a recorded ATE in the wrong unit must not silently
+                    # fall back to the category point estimate without a trace.
+                    out.gaps.append(DataGap(
+                        "ate_unit_mismatch", hazard_class,
+                        f"{c.name} 的 ATE 单位 {h.ate_unit} 与途径要求单位 {unit} 不符，"
+                        f"改用类别换算值；请核对录入单位。",
+                    ))
                 ate = float(p["point_estimates"][form][h.category])
                 how = f"类别 {h.category} 换算值 {fmt(ate)} {unit}"
             term += c.pct / ate
@@ -153,11 +161,11 @@ def eye_damage(components: list[Component], props: MixtureProperties, rs: RuleSe
     p = rs["eye_damage"]
     out = RuleOutput()
     candidates: list[tuple[str, str, str, list]] = []
-    if skin_category and skin_category.startswith("1"):
-        candidates.append(("1", "implied", f"混合物皮肤腐蚀类别 {skin_category}，视为严重眼损伤类别 1", []))
     sp = rs["skin_corrosion"]
     if props.ph is not None and (props.ph <= sp["ph_low"] or props.ph >= sp["ph_high"]):
         candidates.append(("1", "ph", f"混合物 pH = {props.ph}，按极端 pH 判为严重眼损伤类别 1", []))
+    if skin_category and skin_category.startswith("1"):
+        candidates.append(("1", "implied", f"混合物皮肤腐蚀类别 {skin_category}，视为严重眼损伤类别 1", []))
     for hazard_class in ("skin_corrosion", "eye_damage"):
         cat, hits = _non_additive(components, hazard_class, p["non_additive_corrosive_pct"],
                                   p["non_additive_irritant_pct"])
@@ -168,6 +176,10 @@ def eye_damage(components: list[Component], props: MixtureProperties, rs: RuleSe
     score2 = 0.0
     contributors = []
     only_2b = True
+    # P3-C8: 与 only_2b 平行 —— 只有当全部眼 2 类组分都是未细分通用 "2"
+    # 时才保留原始字符串 "2"；混有 2A/2B 时仍保守归 2A（2A 比 2B 严，
+    # 不降级）。皮肤 1 类组分出现时同样打破（与 only_2b 同步）。
+    only_generic_2 = True
     for c in components:
         skin = c.worst("skin_corrosion")
         eye = c.worst("eye_damage")
@@ -177,22 +189,24 @@ def eye_damage(components: list[Component], props: MixtureProperties, rs: RuleSe
             eye = None
         if (skin and skin.category.startswith("1")) or (eye and eye.category == "1"):
             h = eye if (eye and eye.category == "1") else skin
-            limit = h.scl_for("1") or float(p["cat1_limit_pct"])
+            limit = h.scl_for(h.category) or h.scl_for("1") or float(p["cat1_limit_pct"])
             cat1_ratio += c.pct / limit
             score2 += p["cat1_weight"] * c.pct
             only_2b = False
+            only_generic_2 = False
             contributors.append(contributor(c, f"{'眼' if h is eye else '皮肤'} {h.category}"))
         elif eye and eye.category in ("2", "2A", "2B"):
             limit2 = eye.scl_for(eye.category) or float(p["cat2_limit_pct"])
             score2 += c.pct * float(p["cat2_limit_pct"]) / limit2
             only_2b = only_2b and eye.category == "2B"
+            only_generic_2 = only_generic_2 and eye.category == "2"
             contributors.append(contributor(c, f"眼 {eye.category}"))
     if contributors:
         if cat1_ratio >= 1 - 1e-9:
             candidates.append(("1", "calculation",
                                f"加和法：Σ(皮肤1 + 眼1) Ci/限值 = {fmt(cat1_ratio)} ≥ 1 → 类别 1", contributors))
         elif score2 >= float(p["cat2_limit_pct"]) - 1e-9:
-            cat = "2B" if only_2b else "2A"
+            cat = "2B" if only_2b else ("2" if only_generic_2 else "2A")
             candidates.append((cat, "calculation",
                                f"加和法：10×Σ(皮肤1 + 眼1) + Σ眼2 = {fmt(score2)}% ≥ {p['cat2_limit_pct']}% → 类别 {cat}",
                                contributors))
@@ -223,7 +237,9 @@ def _threshold_class(components, hazard_class, limits: dict[str, float], ref: st
     triggered: dict[str, list] = {}
     for c in components:
         for h in c.of(hazard_class):
-            limit = h.scl_for(h.category)
+            # P1-C4: an SCL registered under the generic category "1" applies
+            # to 1A/1B too (same fallback chain as the skin rule).
+            limit = h.scl_for(h.category) or h.scl_for("1")
             if limit is None:
                 limit = limits.get(h.category)
             if limit is None:

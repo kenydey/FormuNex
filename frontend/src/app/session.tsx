@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getAccessToken, logoutBody, refreshAccessToken, rememberRefreshToken, setAccessToken } from "@/api/auth";
+import { getAccessToken, logoutBody, onUnauthorized, refreshAccessToken, rememberRefreshToken, setAccessToken } from "@/api/auth";
 import { ApiError, call } from "@/api/client";
 import { useUi } from "./store";
 
@@ -59,6 +59,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     reload().catch(() => undefined).finally(() => setReady(true));
   }, [reload]);
+
+  // P2-E2: a failed refresh means the session is dead (expired refresh
+  // token, revoked, logged out elsewhere). Clear locally without a
+  // server round-trip — RequireAuth then bounces to /login.
+  useEffect(() => onUnauthorized(() => {
+    setAccessToken(null);
+    setMe(null);
+    setProject(null);
+    qc.clear();
+  }), [qc, setProject]);
 
   const login = useCallback(async (username: string, password: string) => {
     const out = await call<{ access_token: string; refresh_token?: string }>("POST", "/api/identity/login", { username, password });

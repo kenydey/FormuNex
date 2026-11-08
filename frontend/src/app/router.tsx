@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { Navigate, createBrowserRouter, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button, Result } from "antd";
@@ -12,11 +12,7 @@ import { canAccessRoute, routePermissionFor } from "./routePermissions";
 import LoginPage from "@/features/auth/LoginPage";
 import { MODULES } from "./modules";
 import { needsSetup, useDesktop } from "@/desktop/runtime";
-
-const L = (f: () => Promise<{ default: React.ComponentType }>) => {
-  const C = lazy(f);
-  return <C />;
-};
+import { L } from "./lazy";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { t } = useTranslation();

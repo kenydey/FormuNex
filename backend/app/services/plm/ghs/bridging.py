@@ -287,13 +287,22 @@ def apply(target: list[Component], calculated: list[HazardOutcome], bridging: Br
         calc = sorted({o.category for o in calculated if o.hazard_class == hc}, key=severity)
         numbers = {"principle": bridging.principle, "references": ref_ids, "calculated": calc}
         part = f"GB {BY_CODE[hc].part}" if hc in BY_CODE else "GB 30000"
+        # P1-C6: a direct physical determination of THIS mixture (extreme pH,
+        # measured property) is not inherited from a reference, so bridging
+        # must not wipe it: the class keeps its calculated outcomes.
+        phys = [o for o in calculated if o.hazard_class == hc and o.basis in ("ph", "measured")]
+        if phys:
+            out.trace.append(TraceEntry(hc, phys[0].category, f"{rule}:not_applicable", part,
+                                        f"桥接原则（{name}）不适用：目标混合物已有物性判定结果"
+                                        f"（{phys[0].basis} 类别 {phys[0].category}），保留计算法结果",
+                                        numbers=numbers))
+            continue
         if not ok:
             out.trace.append(TraceEntry(hc, calc[0] if calc else None, f"{rule}:not_applicable", part,
                                         f"桥接原则（{name}）不适用：{why}；按计算法结果", numbers=numbers))
             continue
         bridged = [HazardOutcome(o.hazard_class, o.category, list(o.h_codes), "bridging", o.effect)
-                   for o in (refs[0].of(hc) if bridging.principle != "interpolation" else
-                             [o for o in refs[0].of(hc) if o.category == refs[0].category(hc)])]
+                   for o in refs[0].of(hc)]
         out.outcomes = [o for o in out.outcomes if o.hazard_class != hc] + bridged
         out.applied.append(hc)
         result = "、".join(sorted({o.category for o in bridged}, key=severity))

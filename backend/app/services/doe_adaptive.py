@@ -18,21 +18,28 @@ from .doe_explain import (
 )
 
 
-def adapt_factor_ranges(factors: list, results: list[dict]) -> list:
+def adapt_factor_ranges(factors: list, results: list[dict], direction: str = "max") -> list:
     """自适应 DOE：基于已完成实验结果动态调整因子范围。
 
     规则：
     - 若最优解在边界附近，扩展该方向范围 20%
-    - 若某因子对结果影响小（方差贡献 <5%），收缩范围聚焦
+    - 若某因子对结果影响小（单因子线性拟合 R² < 5%），收缩范围聚焦
+      （区间两端各收 10%，总宽收窄 20%；最优值必在收缩后的区间内）
+    - direction="max" 时最优解取最大响应，"min" 时取最小响应
     fail-open：异常时返回原 factors。
     """
     try:
         if not factors or not results or len(results) < 3:
             return factors
         import copy
+
         adapted = copy.deepcopy(factors)
-        # 简单实现：检查最优解位置
-        best = max(results, key=lambda r: r.get("response", 0))
+        # P2-C25: "best" follows the objective direction; the old code
+        # always maximized, which inverts the rule for minimize goals.
+        if direction == "min":
+            best = min(results, key=lambda r: r.get("response", 0))
+        else:
+            best = max(results, key=lambda r: r.get("response", 0))
         for f in adapted:
             fname = getattr(f, "name", "")
             f_low = getattr(f, "low", 0)
@@ -48,6 +55,28 @@ def adapt_factor_ranges(factors: list, results: list[dict]) -> list:
                 f.low = new_low
             elif best_val >= f_high - span * 0.1:
                 f.high = f_high + span * 0.2
+            else:
+                # P2-C25: implement the documented shrink rule. Single-
+                # factor linear-fit R² is the variance contribution; a
+                # factor explaining <5% of response variance is narrowed
+                # 20% around the best value (best stays inside by
+                # construction: it lies strictly within the inner 80%).
+                pairs = [(r.get(fname), r["response"]) for r in results
+                         if isinstance(r.get(fname), (int, float))
+                         and isinstance(r.get("response"), (int, float))]
+                if len(pairs) >= 3:
+                    ys = [p[1] for p in pairs]
+                    mean_y = sum(ys) / len(ys)
+                    ss_tot = sum((y - mean_y) ** 2 for y in ys)
+                    xs = [p[0] for p in pairs]
+                    mean_x = sum(xs) / len(xs)
+                    sxx = sum((x - mean_x) ** 2 for x in xs)
+                    if ss_tot > 0 and sxx > 0:
+                        slope = sum((x - mean_x) * (y - mean_y) for x, y in pairs) / sxx
+                        ss_res = sum((y - (mean_y + slope * (x - mean_x))) ** 2 for x, y in pairs)
+                        if 1 - ss_res / ss_tot < 0.05:
+                            f.low = f_low + span * 0.1
+                            f.high = f_high - span * 0.1
         return adapted
     except Exception:
         return factors

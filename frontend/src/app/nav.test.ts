@@ -100,7 +100,7 @@ const EXPECTED: Group[] = [
       { path: "/admin/settings", zh: "设置中心", permissions: ["admin.llm", "admin.connectors"] },
       { path: "/admin/audit", zh: "审计日志", permission: "audit.read" },
       { path: "/admin/org-dashboard", zh: "组织看板", permissions: ["formulation.read"] },
-      { path: "/admin/desktop", zh: "桌面端与本机服务", hasWhen: true },
+      { path: "/admin/desktop", zh: "桌面端与本机服务", permissions: ["admin.users", "admin.llm", "admin.connectors"], hasWhen: true },
     ],
   },
 ];
@@ -195,7 +195,7 @@ const OLD: Group[] = [
       { path: "/admin/settings", zh: "设置中心", permission: "admin.llm" },
       { path: "/admin/audit", zh: "审计日志", permission: "audit.read" },
       { path: "/admin/org-dashboard", zh: "组织看板" },
-      { path: "/admin/desktop", zh: "桌面端与本机服务", hasWhen: true },
+      { path: "/admin/desktop", zh: "桌面端与本机服务", permissions: ["admin.users", "admin.llm", "admin.connectors"], hasWhen: true },
     ],
   },
 ];
@@ -272,6 +272,12 @@ describe("nav (8-group IA, scheme §2)", () => {
         // Stage 0 / SR-005: dashboard gate added (formulation.read; nothing dropped, paths unchanged).
         expect(item.permission).toBeUndefined();
         expect(item.permissions).toEqual(["formulation.read"]);
+      } else if (old.path === "/admin/desktop") {
+        // Deep-review P2-A/B1: desktop route was open (nav only hid it
+        // behind isDesktop); gated on any admin-family permission since
+        // no admin.desktop exists backend-side (nothing dropped, paths unchanged).
+        expect(item.permission).toBeUndefined();
+        expect(item.permissions).toEqual(["admin.users", "admin.llm", "admin.connectors"]);
       } else {
         expect(item.permission).toBe(old.permission);
         expect(item.permissions).toBeUndefined();

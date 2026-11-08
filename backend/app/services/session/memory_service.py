@@ -87,9 +87,9 @@ class SessionMemoryService:
                 "updated_at": json.dumps({"$date": "now"}),
                 "context": context or {},
             }
-            await client.setex(f"chat_history:{session_id}", HOT_CACHE_TTL, json.dumps(data, default=str))
+            await client.setex(f"formunex:chat_history:{session_id}", HOT_CACHE_TTL, json.dumps(data, default=str))
             await client.setex(
-                f"chat_session:{session_id}",
+                f"formunex:chat_session:{session_id}",
                 HOT_CACHE_TTL,
                 json.dumps(
                     {"history_count": len(history), "updated_at": json.dumps({"$date": "now"}),
@@ -105,7 +105,7 @@ class SessionMemoryService:
         try:
             redis_breaker.refuse_if_open()
             client = await self._get_redis()
-            await client.delete(f"chat_history:{session_id}", f"chat_session:{session_id}")
+            await client.delete(f"formunex:chat_history:{session_id}", f"formunex:chat_session:{session_id}")
         except Exception as e:
             redis_breaker.note_failure(e)
 
@@ -216,7 +216,7 @@ class SessionMemoryService:
     async def _cache_read(self, session_id: str) -> Optional[Dict[str, Any]]:
         try:
             client = await self._get_redis()
-            raw = await client.get(f"chat_history:{session_id}")
+            raw = await client.get(f"formunex:chat_history:{session_id}")
             if raw is None:
                 return None
             data = json.loads(raw)

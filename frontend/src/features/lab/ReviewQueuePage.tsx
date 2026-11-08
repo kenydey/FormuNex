@@ -50,7 +50,7 @@ export default function ReviewQueuePage() {
   if (!can("lab.review", projectId)) return <Forbidden permission="lab.review" />;
   const own = new Set((q.data ?? []).filter((m) => m.operator_id === me?.id).map((m) => m.id));
   return (
-    <PageContainer subTitle={t("review.sub", "录入人不能复核自己的数据；驳回会把任务单退回录入人")}>
+    <PageContainer subTitle={t("review.sub_queue", "录入人不能复核自己的数据；驳回会把任务单退回录入人")}>
       <ErrorAlert error={q.error} />
       <ProTable<Measurement>
         rowKey="id" search={false} loading={q.isLoading} dataSource={q.data} options={{ reload: () => void q.refetch() }}

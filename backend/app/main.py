@@ -87,10 +87,23 @@ def _skip_lifespan_bootstrap() -> bool:
     Test-speedup flag ONLY: when set ("1"/"true"/"yes", case-insensitive),
     the lifespan manager skips the heavy bootstrap steps (secrets
     reload_settings, ColBERT seed-corpus bootstrap, PubChem enrichment).
-    Default (unset/falsy) behaviour is completely unchanged — never set this
-    in production.
+    Default (unset/falsy) behaviour is completely unchanged.
+
+    P1-A10: a production process never honours this flag, even if it
+    leaks in from a copied test environment — silently skipping the DB
+    head gate would let a stale schema serve. The refusal is logged so
+    the misconfiguration is visible instead of silent.
     """
-    return os.environ.get(_SKIP_BOOTSTRAP_ENV, "").strip().lower() in {"1", "true", "yes"}
+    if os.environ.get(_SKIP_BOOTSTRAP_ENV, "").strip().lower() not in {"1", "true", "yes"}:
+        return False
+    if settings.environment.strip().lower() in {"production", "prod"}:
+        logger.error(
+            "FORMUNEX_SKIP_LIFESPAN_BOOTSTRAP is set but environment=%s: "
+            "refusing to skip lifespan bootstrap",
+            settings.environment,
+        )
+        return False
+    return True
 
 
 @asynccontextmanager
@@ -101,7 +114,14 @@ async def lifespan(_app: FastAPI):
     _skip_lifespan_bootstrap) to skip the heavy bootstrap steps while keeping
     the lightweight ELN store branch and shutdown semantics intact.
     """
+    global settings  # P2-11: reassigned below by reload_settings()
     skip_bootstrap = _skip_lifespan_bootstrap()
+    if skip_bootstrap:
+        logger.warning(
+            "lifespan: test fast path active — skipping predictor prewarm, "
+            "startup DB checks, builtin-role sync, settings reload, ColBERT "
+            "bootstrap, material seed, PubChem enrichment, RAG preheat"
+        )
     # ------------------------------------------------------------------
     # R4: 预热 predictor 冷启动(首个 predict 实测 9-29s: thermo 数据库
     # 初始化 + rdkit import)——后台线程, 不阻塞启动; 失败静默(首个
@@ -215,7 +235,16 @@ async def lifespan(_app: FastAPI):
         try:
             from .services.secrets_store import reload_settings
 
-            reload_settings()
+            # P2-11: reload_settings() rebuilds and returns a NEW Settings
+            # object; discarding it left this module's global (read by the
+            # material-seed / PubChem branches below and by the enrich
+            # closure) on import-time values while get_settings() elsewhere
+            # returned the UI-persisted ones — one process, two configs.
+            # Deliberately NOT retro-updated: middleware installed at app
+            # build (CORS, rate limit) and the branches above this point
+            # (API-token resolve, startup checks, role sync) captured
+            # import-time values; those are env-driven, not UI flags.
+            settings = reload_settings()
         except Exception as exc:
             log_handled_exception(logger, exc, "lifespan: reload_settings failed")
         try:

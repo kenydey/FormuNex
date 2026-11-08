@@ -1553,11 +1553,16 @@ def _parse_pdf_sharded(
                 window = list(enumerate(ranges[win_start:win_start + workers], start=win_start))
                 pending: dict = {}
                 for idx, (start, end) in window:
-                    cached = get_shard(sha, idx) if resume else None
+                    # P1-B7: the page-range check now lives in get_shard
+                    # (a row under another window is a miss); the nonempty
+                    # check stays here as defence for legacy empty rows.
+                    cached = (
+                        get_shard(sha, idx, page_start=start, page_end=end)
+                        if resume
+                        else None
+                    )
                     if (
                         cached is not None
-                        and cached["page_start"] == start
-                        and cached["page_end"] == end
                         and (cached["markdown"] or "").strip()
                     ):
                         pending[idx] = ("cached", cached)
@@ -1723,6 +1728,19 @@ def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> Pa
                         timing.note(pdf_route="standard")
             # Batch 1 MinerU 分片预算：无预算上下文时原样返回。
             order = _apply_mineru_budget(order)
+            # P2-B1: the density half of the quality gate used to depend
+            # on routing being enabled (route_pages None -> density
+            # skipped silently). When the gate is on, compute the page
+            # count independently so the density check always runs when
+            # a count is obtainable.
+            if (
+                auto_mode
+                and settings.pdf_quality_gate_enabled
+                and route_pages is None
+            ):
+                _gate_stats = _pdf_page_text_stats(content)
+                if _gate_stats is not None:
+                    route_pages = _gate_stats[0]
             for name, fn in order:
                 # v18-15: tier 异常不杀整篇 —— 记 note 后继续下一 tier。
                 # 违背 fail-open 承诺是数据丢失级 bug。
@@ -1784,7 +1802,21 @@ def parse_document(content: bytes, ext: str, *, prefer: str | None = None) -> Pa
                             challenger_text = challenger.markdown
                         elif isinstance(challenger, str):
                             challenger_text = challenger
-                        if challenger_text and challenger_text.strip():
+                        # P1-B1: the challenger replaces hybrid ONLY when
+                        # it passes the same quality gate itself. The old
+                        # code accepted any non-empty challenger, so a
+                        # challenger that was equally table-less or even
+                        # sparser replaced a good hybrid result and still
+                        # burned a whole MinerU pass.
+                        if (
+                            challenger_text
+                            and challenger_text.strip()
+                            and not _hybrid_quality_failed(
+                                challenger_text,
+                                route_pages,
+                                settings.pdf_quality_gate_min_chars_per_page,
+                            )
+                        ):
                             timing.note(parser="mineru:challenger")
                             final = (
                                 challenger

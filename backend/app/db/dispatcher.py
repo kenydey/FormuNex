@@ -1,9 +1,10 @@
 """Startup outbox stall recovery — re-enqueue stalled async jobs (Task 1.3).
 
 Scans ``task_outbox`` for rows that are still PENDING or CLAIMED beyond a
-configurable cutoff (default 30 min) and re-dispatches them via the
-Celery ``.delay()`` path so no durable outbox row is left behind after a
-crash / redeploy while jobs are in-flight.
+configurable cutoff (default 30 min) and re-dispatches them via
+``_publish`` (``apply_async(task_id=...)`` when the client's Celery id is
+known, ``.delay()`` otherwise) so no durable outbox row is left behind
+after a crash / redeploy while jobs are in-flight.
 
 A row is only ever replayed while it is *unfinished*: the worker flips it to
 ``DONE`` when the task reaches a final state (``outbox_store.record_done``),
@@ -16,12 +17,12 @@ has no Celery handler (audit records such as ``ingest_complete``) are never
 replayed, and rows untouched for ``MAX_RECOVER_AGE_HOURS`` are expired instead.
 
 W1-10 ③ coverage: EVERY async submission kind now writes an outbox row and
-has a handler in ``_HANDLERS`` (research_recommend, research_deep,
-inverse_design, doe_cycle, loop, optimize, kb_reparse, kg_relations_rebuild,
-toc_summaries, pubchem_enrich, deps, search, topic_sweep, wiki_storm_report)
-— each was checked replay-safe before wiring (same-slot task persistence,
-upsert, or fill-missing; never append-a-new-record), and a test pins that
-any ``enqueue_outbox`` call site in ``api/*`` or ``services/*`` has a handler.
+has a handler in ``_HANDLERS`` — the table itself is the op list (20 ops;
+do NOT enumerate them here, the list drifts — a stale enumeration already
+bit this docstring once). Each was checked replay-safe before wiring
+(same-slot task persistence, upsert, or fill-missing; never
+append-a-new-record), and a test pins that any ``enqueue_outbox`` call
+site in ``api/*`` or ``services/*`` has a handler.
 Recovery parameters: one pass replays at most ``DEFAULT_MAX_ROWS`` (20) rows
 (or ``FORMUNEX_OUTBOX_RECOVER_MAX_ROWS`` when set), a row is dropped to DEAD
 after ``MAX_ATTEMPTS`` (5) failed replays, and rows untouched for 24 h expire
@@ -56,6 +57,20 @@ from .models import TaskOutbox
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 5
+
+# P2-2 (2026-11-04 deep review): dispatch failures split into
+# deterministic vs transient. A deterministic failure (unknown op,
+# unserializable payload) fails the same way on every retry, so it
+# counts toward MAX_ATTEMPTS and the row goes DEAD with the error
+# recorded; anything else (broker unreachable, publish timeout — where
+# the publish may still have landed) stays uncounted, as before.
+_DETERMINISTIC_DISPATCH_ERRORS: tuple[type[BaseException], ...] = (ValueError,)
+try:
+    from kombu.exceptions import EncodeError as _KombuEncodeError
+
+    _DETERMINISTIC_DISPATCH_ERRORS += (_KombuEncodeError,)
+except Exception:  # kombu absent in broker-less envs: ValueError still counts
+    pass
 # Recovery is for jobs interrupted by a crash / redeploy, not archaeology: a
 # row still unfinished after this long is expired (DEAD) instead of replayed,
 # so legacy rows written before the completion mark existed cannot trigger a
@@ -273,8 +288,19 @@ def _dispatch_with_timeout(
     timeout_s: float = DEFAULT_DISPATCH_TIMEOUT_S,
     task_id: str | None = None,
 ) -> None:
-    """Publish to the broker with a hard wall-clock limit (non-eager path)."""
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="outbox-delay") as pool:
+    """Publish to the broker with a hard wall-clock limit (non-eager path).
+
+    P2-1 (2026-11-04 deep review): the old ``with`` block waited for
+    ``shutdown(wait=True)`` on exit, so a hung publish held the caller
+    past the timeout anyway (a 2 s publish with timeout=0.2 still took
+    2.0 s). Mirrors the dispatch kernel's ``_delay_with_timeout``: no
+    ``with``, ``finally: pool.shutdown(wait=False)``. The tradeoff is
+    explicit — a publish that lands after the timeout is still a
+    publish, and the same-task_id replay / handler idempotency (D-4
+    at-least-once) is what absorbs it, not a pretended cancellation.
+    """
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="outbox-delay")
+    try:
         fut = (
             pool.submit(_dispatch, operation, payload, task_id)
             if task_id
@@ -286,19 +312,27 @@ def _dispatch_with_timeout(
             raise TimeoutError(
                 f"Celery publish timed out after {timeout_s:.1f}s for {operation}"
             ) from exc
+    finally:
+        pool.shutdown(wait=False)
 
 
 def _expire_ancient(session: Session, expiry: datetime) -> int:
-    """Mark unfinished dispatchable rows untouched since *expiry* ``DEAD`` (no replay).
+    """Mark unfinished rows untouched since *expiry* ``DEAD`` (no replay).
 
     One bulk UPDATE, outside the per-pass ``max_rows`` budget: otherwise the
     oldest (least useful) rows would eat the budget one pass at a time.
+
+    P3-A4/A10: no operation filter here on purpose. DISPATCHABLE_OPERATIONS
+    is exactly the handler table, so a row with an unknown operation (a
+    hand-written row, or an op removed from the table) could otherwise sit
+    PENDING forever — invisible to every count and never expired. Such a
+    row can never dispatch anyway, so expiring it (with the warning below)
+    is strictly better than lingering.
     """
     result = session.execute(
         update(TaskOutbox)
         .where(
             TaskOutbox.status.in_(["PENDING", "CLAIMED"]),
-            TaskOutbox.operation.in_(DISPATCHABLE_OPERATIONS),
             TaskOutbox.updated_at < expiry,
         )
         .values(status="DEAD")
@@ -393,8 +427,17 @@ def recover_stalled(
     if not stalled:
         return 0
 
+    # P3-A9: the initial batch is a snapshot, not a budget. A row whose
+    # atomic claim loses to another worker used to eat one of the
+    # max_rows slots with nothing to show for it; the claim-failure branch
+    # below now pulls one replacement row from beyond the batch, so a
+    # contended pass still recovers its full quota.
+    seen_ids = {row.id for row in stalled}
     count = 0
-    for row in stalled:
+    idx = 0
+    while idx < len(stalled):
+        row = stalled[idx]
+        idx += 1
         if (row.attempt_count or 0) >= MAX_ATTEMPTS:
             row.status = "DEAD"
             logger.error(
@@ -420,8 +463,12 @@ def recover_stalled(
                 state = getattr(snap.state, "value", snap.state) if snap is not None else None
             except Exception:  # noqa: BLE001 — unreadable snapshot means "no guard", replay as before
                 snap, state = None, None
-            if state in ("completed", "failed"):
-                row.status = "DONE" if state == "completed" else "FAILED"
+            if state in ("completed", "failed", "cancelled"):
+                # P0 fix (2026-11-04 deep review): "cancelled" was missing
+                # from this guard, so a cancelled task whose row never got
+                # its terminal mark was replayed by recover_stalled.
+                row.status = {"completed": "DONE", "failed": "FAILED",
+                              "cancelled": "CANCELLED"}[state]
                 if state == "failed":
                     row.error = (snap.message or "")[:500] or None
                 row.claimed_by = None
@@ -451,6 +498,19 @@ def recover_stalled(
         ).rowcount
         session.commit()
         if claimed != 1:
+            nxt = (
+                session.execute(
+                    select(TaskOutbox)
+                    .where(*stalled_where, ~TaskOutbox.id.in_(seen_ids))
+                    .order_by(TaskOutbox.created_at.asc())
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+            if nxt is not None:
+                seen_ids.add(nxt.id)
+                stalled.append(nxt)
             continue
         # Drop the pre-claim ORM state: the Core UPDATE above bypassed it,
         # and the dispatch/failure paths below must see post-claim values.
@@ -463,7 +523,7 @@ def recover_stalled(
                 )
             else:
                 _dispatch_with_timeout(row.operation, row.payload, dispatch_timeout_s)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "recover_stalled: dispatch failed for outbox row %s "
                 "(operation=%s)",
@@ -477,11 +537,16 @@ def recover_stalled(
             row = session.get(TaskOutbox, row.id)
             if row is None:
                 continue
-            # Skipped: reset claim metadata without bumping attempt_count —
-            # only successful dispatches are counted toward MAX_ATTEMPTS.
+            # P2-2: deterministic failures count toward MAX_ATTEMPTS (the
+            # row goes DEAD on a later pass via the top-of-loop check,
+            # with the error recorded); transient failures keep the old
+            # behaviour — reset to PENDING uncounted.
             row.status = "PENDING"
             row.claimed_by = None
             row.claimed_at = None
+            if isinstance(exc, _DETERMINISTIC_DISPATCH_ERRORS):
+                row.attempt_count = (row.attempt_count or 0) + 1
+                row.error = str(exc)[:500] or None
             session.commit()
             continue
 
@@ -568,6 +633,20 @@ def schedule_recover_stalled() -> threading.Thread:
                             "lifespan: recovered %d stalled outbox row(s)", recovered
                         )
                     session.commit()
+            # P1-A9: tasks without an outbox row leave only a disk
+            # snapshot; reap ones stuck running past the cutoff and
+            # prune old terminal snapshots (fail-open, never raises).
+            try:
+                from ..worker.tasks import reap_stalled_snapshots
+
+                stats = reap_stalled_snapshots()
+                if stats["reaped"] or stats["pruned"]:
+                    logger.info(
+                        "lifespan: reaped %d stalled task snapshot(s), pruned %d old snapshot(s)",
+                        stats["reaped"], stats["pruned"],
+                    )
+            except Exception:
+                logger.exception("lifespan: task snapshot reaping failed (non-fatal)")
         except Exception:
             logger.exception("lifespan: outbox stall recovery failed (non-fatal)")
 
@@ -611,6 +690,19 @@ def schedule_periodic_recover_stalled(interval_s: float = 900.0) -> threading.Th
                                 recovered,
                             )
                         session.commit()
+                # P1-A9: same snapshot reaping as the startup pass, so a
+                # crashed non-outbox task heals without a restart.
+                try:
+                    from ..worker.tasks import reap_stalled_snapshots
+
+                    stats = reap_stalled_snapshots()
+                    if stats["reaped"] or stats["pruned"]:
+                        logger.info(
+                            "periodic recover: reaped %d stalled task snapshot(s), pruned %d old snapshot(s)",
+                            stats["reaped"], stats["pruned"],
+                        )
+                except Exception:
+                    logger.exception("periodic task snapshot reaping failed (non-fatal)")
             except Exception:
                 logger.exception("periodic outbox recovery failed (non-fatal)")
 

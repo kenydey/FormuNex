@@ -141,7 +141,7 @@ export default function InverseDesignPage() {
 
       {result && (
         <ProCard bordered style={{ marginTop: 16 }} title={t("design.inv.result", "候选配方")}
-          extra={<Button disabled={!cands.length || !can("lab.execute")} loading={save.isPending} onClick={() => save.mutate(frontier(cands))}>
+          extra={<Button disabled={!cands.length || !can("formulation.write")} loading={save.isPending} onClick={() => save.mutate(frontier(cands))}>
             {t("design.inv.save_front", "保存前沿候选为配方版本")}</Button>}>
           <Descriptions size="small" column={{ xs: 1, md: 5 }} style={{ marginBottom: 12 }}>
             <Descriptions.Item label={t("design.inv.engine", "引擎")}>{result.engine}</Descriptions.Item>

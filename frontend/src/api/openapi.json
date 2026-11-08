@@ -5789,6 +5789,61 @@
     }
    }
   },
+  "/api/plm/substances/{substance_id}/lock": {
+   "post": {
+    "tags": [
+     "plm"
+    ],
+    "summary": "Lock Substance Classification",
+    "description": "EHS locks a substance's manual classification (P1-C1): the production\npath the release gate's key-component check waits for. Wrong password\ncommits first so the failed attempt (and lock-out counter) persists.",
+    "operationId": "lock_substance_classification_api_plm_substances__substance_id__lock_post",
+    "parameters": [
+     {
+      "name": "substance_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Substance Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SubstanceLockIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Lock Substance Classification Api Plm Substances  Substance Id  Lock Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/plm/regulatory/updates/clp-stage": {
    "post": {
     "tags": [
@@ -28734,6 +28789,36 @@
       ],
       "title": "Has Fulltext"
      },
+     "merged_from": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Merged From"
+     },
+     "image_refs": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Image Refs"
+     },
+     "image_vector_match": {
+      "type": "boolean",
+      "title": "Image Vector Match",
+      "default": false
+     },
+     "kept_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Kept By"
+     },
      "cited_by": {
       "anyOf": [
        {
@@ -32055,6 +32140,17 @@
       "type": "string",
       "title": "Extraction Method",
       "default": "rule"
+     },
+     "weight": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weight"
      }
     },
     "type": "object",
@@ -32309,6 +32405,17 @@
       "type": "integer",
       "title": "Hops",
       "default": 1
+     },
+     "weight": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weight"
      },
      "path": {
       "items": {
@@ -40739,6 +40846,33 @@
      "phases"
     ],
     "title": "SubmitPlanBody"
+   },
+   "SubstanceLockIn": {
+    "properties": {
+     "password": {
+      "type": "string",
+      "title": "Password"
+     },
+     "classifications": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/components/schemas/HazardIn"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Classifications"
+     }
+    },
+    "type": "object",
+    "required": [
+     "password"
+    ],
+    "title": "SubstanceLockIn"
    },
    "SubstituteRequest": {
     "properties": {

@@ -561,9 +561,15 @@ _LLM_RETRY = tenacity_retry(
 )
 
 
+_AUTH_ERROR_RE = re.compile(
+    r"(?<![0-9])(401|403)(?![0-9])|\bauthentication\b|\binvalid api key\b|\bunauthorized\b"
+)
+
+
 def _is_auth_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(k in msg for k in ("401", "403", "authentication", "invalid api key", "unauthorized"))
+    # P3-B5: word/digit-bounded — the old substring test mistook "1401" /
+    # "2403" style digit strings for 401 / 403.
+    return _AUTH_ERROR_RE.search(str(exc).lower()) is not None
 
 
 def _anthropic_request(prompt: str, api_key: str, model: str, max_tokens: int) -> str:
@@ -993,13 +999,11 @@ def complete_json(prompt: str, *, model: str | None = None) -> dict | None:
         if not raw:
             span["error"] = "empty_llm_response"
             return None
-        text = raw.strip()
-        if "```" in text:
-            # Take the content of the first fenced block.
-            text = text.split("```", 2)[1] if text.count("```") >= 2 else text
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
+        # P3-B3: same fence semantics as _validate_structured (via
+        # _strip_json_fences) — the old split kept a lone unclosed fence
+        # in the text, so a single-fence reply always failed to parse
+        # while _validate_structured parsed it fine.
+        text = _strip_json_fences(raw)
         try:
             data = loads_lenient(text)
         except Exception as exc:
@@ -1057,7 +1061,30 @@ class LLMStructuredUnsupported(Exception):
 
 # Providers already observed to reject `response_format` json_schema — cached so
 # subsequent structured calls skip the doomed 400 attempt (DeepSeek among them).
-_STRUCTURED_UNSUPPORTED_PROVIDERS: set[str] = set()
+# P3-B4: negative cache for native structured output, keyed by
+# (provider, model) with a TTL. The old provider-level, process-lifetime
+# set demoted every model of a provider when one model lacked support,
+# and never refreshed.
+_STRUCTURED_UNSUPPORTED_TTL_S = 3600.0
+_STRUCTURED_UNSUPPORTED: dict[tuple[str, str], float] = {}
+
+
+def _structured_unsupported(provider: str, model: str) -> bool:
+    import time as _time
+
+    stamped = _STRUCTURED_UNSUPPORTED.get((provider, model))
+    if stamped is None:
+        return False
+    if _time.monotonic() - stamped > _STRUCTURED_UNSUPPORTED_TTL_S:
+        del _STRUCTURED_UNSUPPORTED[(provider, model)]
+        return False
+    return True
+
+
+def _mark_structured_unsupported(provider: str, model: str) -> None:
+    import time as _time
+
+    _STRUCTURED_UNSUPPORTED[(provider, model)] = _time.monotonic()
 
 
 # Substrings that mean "structured output is not implemented here", as opposed
@@ -1194,7 +1221,7 @@ def _invoke_structured_once(
     schema: dict,
 ) -> TModel:
     if provider not in ("anthropic", "gemini"):
-        if provider in _STRUCTURED_UNSUPPORTED_PROVIDERS:
+        if _structured_unsupported(provider, model):
             # 已知该 provider 不支持 native structured output，直接 prompt-based，
             # 省去每次先发一次必然 400 的请求。
             return _openai_prompt_structured_request(
@@ -1220,7 +1247,7 @@ def _invoke_structured_once(
             )
         except LLMStructuredUnsupported as exc:
             # Fall back rather than retry: the endpoint will keep saying no.
-            _STRUCTURED_UNSUPPORTED_PROVIDERS.add(provider)
+            _mark_structured_unsupported(provider, model)
             log.info(
                 "%s has no native structured output (%s) — using prompt-based JSON",
                 provider, exc,

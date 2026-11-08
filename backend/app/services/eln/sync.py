@@ -60,10 +60,48 @@ def get_connector(name: str) -> ElnConnector:
 
 
 def _digest(state: dict[str, float]) -> str:
-    return hashlib.sha256(json.dumps(sorted(state.items())).encode()).hexdigest()[:32]
+    # P3-C14: normalize numerics before hashing — json.dumps spells 500
+    # as "500" but 500.0 as "500.0", so an int-valued remote state and a
+    # float-valued local state hashed differently and every pull looked
+    # like a remote change (a spurious re-pull, and a false conflict when
+    # a local edit existed). The live eLabFTW connector already float()s,
+    # so current libraries are unaffected in practice; this guards future
+    # connectors. Non-numeric values pass through unchanged.
+    norm: dict[str, object] = {}
+    for k, v in state.items():
+        try:
+            norm[k] = float(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            norm[k] = v
+    return hashlib.sha256(json.dumps(sorted(norm.items())).encode()).hexdigest()[:32]
+
+
+def _rejected_metrics(session: Session, connector: str, external_id: str) -> set[str]:
+    """Metrics whose latest external measurement for this link was rejected.
+
+    Mirrors ``_local_state``'s last-wins ordering, but over ALL review
+    states: a metric counts as rejected only when its latest row is
+    rejected, so a corrected re-pull (a new unreviewed row) revives it.
+    """
+    rows = session.execute(select(MeasurementRow).where(
+        MeasurementRow.external_ref.like(_external_ref_prefix(connector, external_id), escape="\\"),
+    ).order_by(MeasurementRow.created_at, MeasurementRow.id)).scalars().all()
+    latest = {r.metric: r.review_status for r in rows}
+    return {m for m, s in latest.items() if s == "rejected"}
 
 
 def _local_state(session: Session, connector: str, external_id: str) -> dict[str, float]:
+    """Latest non-rejected measurement per metric, for EXTERNAL-ref rows only.
+
+    P3-C15 (documented limitation, no behavior change): a manually entered
+    row for the same metric carries no external_ref, so it is invisible to
+    this digest — a remote change does not raise a conflict against the
+    manual value. That is not a loss: the manual value is protected by the
+    review mirror (record_external never overwrites a reviewed row), it is
+    just not part of conflict detection. Widening the digest to manual rows
+    would turn every manual edit into a conflict signal and needs a
+    product decision, so it stays out of this P3 item.
+    """
     rows = session.execute(select(MeasurementRow).where(
         MeasurementRow.external_ref.like(_external_ref_prefix(connector, external_id), escape="\\"),
         MeasurementRow.review_status != "rejected").order_by(
@@ -103,8 +141,12 @@ def push_tasks(session: Session, connector: ElnConnector, task_ids: list[str], *
         reqs = []
         for r in payload["requested_metrics"]:
             if not r.get("method_code"):
+                # P3-C16: order_by(code), mirroring lab/measurements
+                # _method_for — without it, several active methods for one
+                # metric made method_code/unit nondeterministic on push.
                 m = session.execute(select(TestMethodRow).where(TestMethodRow.metric == r["metric"],
-                                                                TestMethodRow.active.is_(True))).scalars().first()
+                                                                TestMethodRow.active.is_(True))
+                                    .order_by(TestMethodRow.code)).scalars().first()
                 if m is not None:
                     r = {**r, "method_code": m.code, "unit": r.get("unit") or m.unit}
             reqs.append(r)
@@ -187,6 +229,9 @@ def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | Non
             link.sync_state = "error"
             report["errors"].append({"task_no": task.task_no, "error": str(exc)})
             continue
+        # P2-C22: per-field skips recorded by the connector surface here.
+        for err in getattr(connector, "last_pull_errors", None) or []:
+            report["errors"].append({"task_no": task.task_no, "error": err})
         # Stage 1 / SR-052: a remote payload that repeats a metric keeps
         # the last value (dict construction below) — but that must be a
         # visible warning, not a silent choice, so an ELN double-report
@@ -210,13 +255,23 @@ def pull(session: Session, connector: ElnConnector, *, task_ids: list[str] | Non
             report["unchanged"] += 1
             continue
         if _digest(local) != last_local:
+            # P2-C21: the conflict snapshot must not carry metrics the lab
+            # already rejected — take_remote would otherwise resurrect them.
+            rejected = _rejected_metrics(session, link.connector, link.external_id)
+            remote_snapshot = {k: v for k, v in remote.items() if k not in rejected}
+            remote_units_snapshot = {k: v for k, v in remote_units.items() if k not in rejected}
             open_conflict = session.execute(select(ElnSyncConflictRow).where(
-                ElnSyncConflictRow.link_id == link.id, ElnSyncConflictRow.status == "open")).first()
+                ElnSyncConflictRow.link_id == link.id, ElnSyncConflictRow.status == "open")).scalars().first()
             if not open_conflict:
                 # Stage 1 / SR-051: snapshot the remote units alongside
                 # the values, so take_remote can convert before storing.
                 session.add(ElnSyncConflictRow(id=str(uuid.uuid4()), link_id=link.id, local_snapshot=local,
-                                               remote_snapshot=remote, remote_units=remote_units))
+                                               remote_snapshot=remote_snapshot, remote_units=remote_units_snapshot))
+            else:
+                # P2-C20: refresh the open conflict with the latest remote
+                # state instead of leaving the first-seen snapshot stale.
+                open_conflict.remote_snapshot = remote_snapshot
+                open_conflict.remote_units = remote_units_snapshot
             link.sync_state = "conflict"
             report["conflicts"] += 1
             continue
@@ -238,12 +293,23 @@ def resolve_conflict(session: Session, conflict_id: str, *, resolution: str, use
     local = _local_state(session, link.connector, link.external_id)
     remote = {k: float(v) for k, v in (c.remote_snapshot or {}).items()}
     if resolution == "take_remote":
+        # P2-C21: never resurrect locally-rejected metrics — including
+        # ones rejected after the snapshot was taken, or carried by a
+        # pre-fix snapshot. Skips are explicit in the log and the audit
+        # detail, not silent.
+        rejected = _rejected_metrics(session, link.connector, link.external_id)
+        skipped = sorted(m for m in remote if m in rejected)
+        if skipped:
+            logger.warning("eln conflict %s take_remote: skipping locally-rejected metrics %s",
+                           conflict_id, skipped)
+        remote = {k: v for k, v in remote.items() if k not in rejected}
+        remote_units = {k: v for k, v in (c.remote_units or {}).items() if k not in rejected}
         # Stage 1 / SR-051: pass the snapshotted remote units through so
         # values convert to the method unit before storing (1-10). A
         # pre-stage-1 snapshot has remote_units NULL: _apply then gets
         # no units and falls back to the method unit, exactly as before.
         _apply(session, link, task, remote, local,
-               remote_units=dict(c.remote_units or {}),
+               remote_units=remote_units,
                local_units=_local_units(session, link.connector, link.external_id))
     else:  # FormuNex values stand; this remote state is acknowledged and will not conflict again
         link.content_hash = _digest(remote) + _digest(local)
@@ -251,6 +317,7 @@ def resolve_conflict(session: Session, conflict_id: str, *, resolution: str, use
         link.last_synced_at = utcnow()
     c.status, c.resolution, c.resolved_by, c.resolved_at = "resolved", resolution, user_id, utcnow()
     hash_chain.append(session, actor=user_id, action="eln.conflict.resolve", entity_type="eln_link", entity_id=link.id,
-                      detail={"resolution": resolution, "local": local, "remote": remote})
+                      detail={"resolution": resolution, "local": local, "remote": remote,
+                              "skipped_rejected": skipped if resolution == "take_remote" else []})
     session.flush()
     return c

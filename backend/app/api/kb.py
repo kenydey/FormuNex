@@ -10,7 +10,7 @@ from typing import Literal
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from ..domain.schemas import ChunkListResponse, DocumentChunkResponse, Evidence
@@ -477,7 +477,7 @@ def resolve_sources(body: KBResolveRequest) -> KBResolveResponse:
     status_code=202,
     summary="按当前解析配置重新解析知识库文档（后台任务，重建切块/索引/目录树）",
 )
-def reparse_source(source_id: str):
+def reparse_source(source_id: str, request: Request):
     """Re-parse the retained original file → full text, chunks, FTS, tables, ToC tree.
 
     202 + ``AsyncTaskAccepted``; 404 unknown source; 409 when KB v2 is off or
@@ -489,6 +489,8 @@ def reparse_source(source_id: str):
     from ..worker.tasks import run_kb_reparse_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
+
 
     try:
         original_file(source_id)
@@ -496,8 +498,10 @@ def reparse_source(source_id: str):
         raise HTTPException(status_code=404, detail="source not found") from None
     except SourceFileMissing as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
-    return submit(run_kb_reparse_task, {"source_id": source_id}, "kb_reparse",
-                  outbox_id=enqueue_outbox("kb_reparse", {"source_id": source_id}))
+    owner = request_owner(request)
+    payload = {"source_id": source_id}
+    return submit(run_kb_reparse_task, payload, "kb_reparse",
+                  outbox_id=enqueue_outbox("kb_reparse", payload, owner_id=owner), owner_id=owner)
 
 
 class KBSourceDeleteResponse(BaseModel):
@@ -818,7 +822,7 @@ class IngestEvidenceResponse(BaseModel):
     "/ingest-evidence",
     summary="Evidence 一键入库全文（P3.2）",
 )
-def ingest_evidence(body: IngestEvidenceRequest):
+def ingest_evidence(body: IngestEvidenceRequest, request: Request):
     """Fetch + persist fulltext for one Evidence row (user-clicked).
 
     Stage 3 / SR-026: 202 + task_id, results via /api/tasks poll. The
@@ -830,6 +834,8 @@ def ingest_evidence(body: IngestEvidenceRequest):
     from ..worker.tasks import run_evidence_ingest_task
     from ._dispatch import submit
     from ._idempotency import enqueue_outbox
+    from ..middleware.api_auth import request_owner
+
 
     if not kb_index.kb_enabled():
         raise HTTPException(status_code=409, detail="知识库 v2 未启用（FORMUNEX_KB_V2_ENABLED）")
@@ -848,8 +854,9 @@ def ingest_evidence(body: IngestEvidenceRequest):
         is_oa=body.is_oa,
     )
     payload = {"evidence": ev.model_dump(mode="json"), "project_id": body.project_id}
+    owner = request_owner(request)
     return submit(run_evidence_ingest_task, payload, "evidence_ingest",
-                  outbox_id=enqueue_outbox("evidence_ingest", payload))
+                  outbox_id=enqueue_outbox("evidence_ingest", payload, owner_id=owner), owner_id=owner)
 
 
 @router.post("/ingest", response_model=IngestResponse, summary="全文入库（幂等）", include_in_schema=False)

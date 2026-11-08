@@ -209,7 +209,16 @@ def test_user_admin_requires_permission(env):
     assert r.status_code == 422
     r = c.post("/api/identity/users", headers=h["admin"], json={
         "username": "new.user", "password": PASSWORD, "roles": ["quality"]})
-    assert r.status_code == 200 and r.json()["roles"] == ["quality"]
+    # Deep-review P0-1 (batch 0, scheme behavior change): create_user now
+    # enforces the same D-1 grant-subset boundary as set_roles, so a pure
+    # sys_admin can no longer mint a business-role account — that was the
+    # puppet-account bypass. An admin may only create users with roles
+    # they hold themselves; business onboarding needs a granter holding
+    # those permissions (or bootstrap "system").
+    assert r.status_code == 422
+    r = c.post("/api/identity/users", headers=h["admin"], json={
+        "username": "new.admin", "password": PASSWORD, "roles": ["sys_admin"]})
+    assert r.status_code == 200 and r.json()["roles"] == ["sys_admin"]
     r = c.put(f"/api/identity/users/{r.json()['id']}/roles", headers=h["admin"], json={"roles": ["nope"]})
     assert r.status_code == 422
 
@@ -527,6 +536,48 @@ def test_withdraw_restores_previous_release_and_stops_old_zip(env, signed_off_ru
     # Restored A's ZIP ships again; withdrawn B's does not.
     assert c.get(f"/api/plm/packages/{pkg['id']}/delivery").status_code == 200
     assert c.get(f"/api/plm/packages/{pkg2['id']}/delivery").status_code == 410
+
+
+def test_withdraw_restores_latest_frozen_not_latest_created(env, signed_off_ruleset):
+    """P2-C2 (batch 3): out-of-order publishing must restore the revision
+    frozen last, not the one created last. Publish C, then A, then B;
+    withdrawing B restores A (frozen after C), not C."""
+    c, pid, h = env["client"], env["pid"], env["h"]
+    spec = {"formulation_version_id": "fv-1", "spec_snapshot": {"release_specs": [
+        {"metric": "solids", "label": "固含量", "unit": "%", "min": 55, "max": 60},
+        {"metric": "density_g_cm3", "label": "密度", "unit": "g/cm³", "min": 1.3, "max": 1.4}]}}
+    # The env fixture already owns revision A; only B and C are created here.
+    rids = {"A": env["rid"]}
+    for letter in ("B", "C"):
+        rids[letter] = c.post(f"/api/plm/products/{pid}/revisions", json=spec).json()["id"]
+    pkgs = {}
+    for letter in ("C", "A", "B"):
+        e = {**env, "rid": rids[letter]}
+        _ready(e)
+        pkgs[letter] = c.post(f"/api/plm/revisions/{rids[letter]}/submit", headers=h["lead"]).json()
+        for who in ("lead2", "ehs", "qa", "rm"):
+            assert c.post(f"/api/plm/packages/{pkgs[letter]['id']}/sign", headers=h[who],
+                          json={"decision": "approve", "password": PASSWORD}).status_code == 200
+    assert {x["rev"]: x["state"] for x in c.get(f"/api/plm/products/{pid}").json()["revisions"]} == {
+        "A": "superseded", "B": "released", "C": "superseded"}
+    r = c.post(f"/api/plm/packages/{pkgs['B']['id']}/withdraw", headers=h["rm"],
+               json={"reason": "召回", "password": PASSWORD})
+    assert r.status_code == 200
+    assert {x["rev"]: x["state"] for x in c.get(f"/api/plm/products/{pid}").json()["revisions"]} == {
+        "A": "released", "B": "withdrawn", "C": "superseded"}
+
+
+def test_submit_fails_when_second_selection_reports_problems(env, signed_off_ruleset, monkeypatch):
+    """P2-C3 (batch 3): a draft committed between the gate run and the
+    second document selection must not ship unreviewed — submit fails."""
+    from app.services.plm.release import signoff
+
+    c, rid, h = env["client"], env["rid"], env["h"]
+    _ready(env)
+    monkeypatch.setattr(signoff.gate, "select_package_documents",
+                        lambda session, rev: ([], [("sds", "zh-CN", "最新版本未审核")]))
+    r = c.post(f"/api/plm/revisions/{rid}/submit", headers=h["lead"])
+    assert r.status_code == 409 and "最新版本未审核" in str(r.json()["detail"])
 
 
 # --------------------------------------------------------------------------- connectors

@@ -3,6 +3,7 @@ import { Alert, Button, Descriptions, Form, Input, InputNumber, Select, Space, S
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSession } from "@/app/session";
 import { call } from "@/api/client";
 import { useUi } from "@/app/store";
 import { Chart } from "@/shared/Chart";
@@ -15,6 +16,7 @@ const SAMPLES = ["硅烷偶联剂", "磷化液", "钝化膜 铬酸盐", "水性�
 /** Scored multi-recall probe of KB chunk retrieval (POST /api/kb/query-test) + golden batch with an MRR trend. */
 export function RetrievalProbe() {
   const { t } = useTranslation();
+  const { can } = useSession();
   const { token } = theme.useToken();
   const projectId = useUi((s) => s.projectId);
   const [query, setQuery] = useState(SAMPLES[0]);
@@ -68,8 +70,8 @@ export function RetrievalProbe() {
       <Space.Compact style={{ width: "100%" }}>
         <Input value={query} onChange={(e) => setQuery(e.target.value)} onPressEnter={() => query.trim() && probe.mutate()}
           placeholder={t("library.probe.placeholder", "输入化学专业检索词…")} />
-        <Button type="primary" loading={probe.isPending} disabled={!query.trim()} onClick={() => probe.mutate()}>{t("library.probe.run", "运行")}</Button>
-        <Button loading={golden.isPending} onClick={() => golden.mutate()}>{t("library.probe.golden", "Golden 批跑")}</Button>
+        <Button type="primary" loading={probe.isPending} disabled={!query.trim() || !can("knowledge.read")} onClick={() => probe.mutate()}>{t("library.probe.run", "运行")}</Button>
+        <Button loading={golden.isPending} disabled={!can("knowledge.read")} onClick={() => golden.mutate()}>{t("library.probe.golden", "Golden 批跑")}</Button>
       </Space.Compact>
       <Space wrap>{SAMPLES.map((s) => <Tag.CheckableTag key={s} checked={query === s} onChange={() => setQuery(s)}>{s}</Tag.CheckableTag>)}</Space>
       <Form layout="inline" style={{ rowGap: 8 }}>

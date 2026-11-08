@@ -201,7 +201,7 @@ def mixture_design(body: MixtureIn) -> dict[str, Any]:
                       process_order=body.process_order,
                       categorical=[CategoricalFactor(c.name, list(c.levels)) for c in body.categorical_factors],
                       cross=body.cross, seed=body.seed, replicate_centroid=body.replicate_centroid)
-    except (cm.MixtureError, ValueError) as exc:
+    except (cm.MixtureError, ValueError, StopIteration) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     out = d.to_dict()
     runs = d.runs

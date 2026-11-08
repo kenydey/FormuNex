@@ -2,7 +2,10 @@
 
 ``chunk_markdown`` is the shared chunker for every ingest path.  Behaviour:
 
-* the document is first sectioned on ATX headings (``#`` … ``######``); each
+* the document is first sectioned on ATX headings (``#`` … ``######``) only:
+  Setext headings (``===`` / ``---`` underlines) and blockquote lines (``>``)
+  are NOT structure — they stay ordinary text (P3-B33, documented rather
+  than implemented: no caller relies on Setext/blockquote sectioning); each
   chunk remembers its heading path (``实施例 > 实施例 3``) so retrieval and
   citations can show *where* in the document a passage lives;
 * Markdown tables (and fenced code blocks) are atomic — they are never split
@@ -23,11 +26,29 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
-_HEADING_OPEN_RE = re.compile(r"^(#{1,6})(\s+)")
+logger = logging.getLogger(__name__)
+
+_HEADING_OPEN_RE = re.compile(r"^ {0,3}(#{1,6})(\s+)")
 _MAX_HEADING_PATH = 80
+
+
+def _truncate_heading_path(full: str) -> str:
+    """P3-B28: cut a heading path at a ``" > "`` boundary, not mid-word.
+
+    A path longer than ``_MAX_HEADING_PATH`` used to be hard-sliced, which
+    could leave a dangling half-word (or half CJK term) as the last segment.
+    Now the cut backs up to the last level boundary inside the budget; only
+    a single over-long title (no boundary inside the budget) still hard-cuts.
+    """
+    if len(full) <= _MAX_HEADING_PATH:
+        return full
+    cut = full[:_MAX_HEADING_PATH]
+    idx = cut.rfind(" > ")
+    return cut[:idx] if idx > 0 else cut
 
 
 def _parse_heading(line: str) -> tuple[int, str] | None:
@@ -48,7 +69,21 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
         # whitespace character after the hashes therefore was not a heading, two or more were (with an empty title)
         return (level, "") if len(gap) >= 2 else None
     trimmed = rest.rstrip()
-    title = trimmed.rstrip("#").rstrip()
+    # P2-B44: strip only an ATX closing sequence (whitespace + hashes).
+    # The old rstrip("#") also ate element symbols: "C#" became "C".
+    # The separator is Unicode whitespace (as in the old pattern's \s),
+    # not just space/tab: a hash run after U+3000/NBSP is still a closing
+    # sequence, while one glued to a letter is content.
+    closing = trimmed.rstrip("#")
+    if closing != trimmed and closing and closing[-1].isspace():
+        title = closing.rstrip()
+    elif closing == "":
+        # Nothing but hashes ("# ###"): the old pattern kept the first
+        # one as the title. (A multi-hash title from the closing branch,
+        # e.g. "###" in "###\r###\xa0#", is genuine content, not this.)
+        title = "#"
+    else:
+        title = trimmed
     if title:
         return level, title
     if trimmed:  # nothing but closing hashes: the first one stays as the title
@@ -58,7 +93,10 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
 PAGE_MARKER_RE = re.compile(r"^\s*<!--\s*page:(\d+)\s*-->\s*$")
 # v2 P0-9: 视觉解析占位符 —— vision 失败/跳过时的降级文本，入库即检索噪声。
 # 保知识库质量：chunking 时直接丢弃，不进入索引。
-VISION_PLACEHOLDER_RE = re.compile(r"（视觉解析(已跳过|异常|未返回结果)")
+# P2-B54: 半角括号与“失败”变体一并认（上游是否真发“失败”文案未确认，
+# 但放宽只影响占位符丢弃，且 _is_vision_placeholder 仍要求全引用行，
+# 故误伤面极小，照做）。
+VISION_PLACEHOLDER_RE = re.compile(r"[（(]视觉解析(已跳过|异常|未返回结果|失败)")
 
 
 def _is_vision_placeholder(block: str) -> bool:
@@ -98,7 +136,20 @@ class Chunk:
     heading_path: str = ""
     page_no: int | None = None
     # PageIndex 借鉴 A5: 跨页 chunk 的末页（None = 单页，与 page_no 相同）。
+    # P3-B38 (reachability, verified): page_end is set only when ONE
+    # emitted chunk covers a page range — a caption+table atom whose parts
+    # sit on different pages, or an accumulated chunk that ends exactly at
+    # a page marker (trailing-marker boundary, verbatim still holds). An
+    # accumulation spanning a marker with content on BOTH sides never
+    # reaches verbatim (the marker text sits in md but not in the chunk),
+    # so it falls back to per-block emission where each block keeps its own
+    # page and page_end is None by design — not a missing range.
     page_end: int | None = None
+    # P3-B40: hard-cut segments of one block SHARE one paragraph_idx by
+    # design. Downstream (kb_index persist, kb/hybrid_search citation
+    # labels, models comment "orders multi-paragraph sections") uses it
+    # only for ordering/display — never as an identity key (the dedup key
+    # is text+heading_path+page_no, see chunk_dedup_key), so sharing is safe.
     paragraph_idx: int | None = None
     offset_start: int | None = None
     offset_end: int | None = None
@@ -126,16 +177,37 @@ _CHEM_TOKEN_RE = re.compile(r"[A-Za-z0-9()\[\]+]{2,}")
 _SMILES_CHARSET = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789[]()=#:/\\@+-.%")
 
 
-def _is_reaction_line(line: str) -> bool:
-    """含反应箭头且箭头两侧均有化学 token（长度 ≥ 2）的独立行。
+def _is_chem_token(tok: str) -> bool:
+    """A token that looks chemical, not a prose word.
 
-    纯文本箭头（如“流程 → 下一步”）两侧无化学 token 形态 → 不保护。
+    P3-B32: the old "any token of length >= 2" gate let "Step 1 -> Step 2"
+    through ("Step" is a length-4 token). A token now qualifies if it
+    carries a digit (H2O, C6H12O6), is an element symbol (Na, Cl), or has
+    an uppercase letter past the first position (NaCl). Tradeoff, stated
+    plainly: bare hydrocarbon names ("Benzene -> ...") no longer qualify —
+    they usually travel with a formula on the same line, and the cost of a
+    miss is only that the line joins the surrounding text block.
+    """
+    return (
+        any(ch.isdigit() for ch in tok)
+        or bool(re.fullmatch(r"[A-Z][a-z]?", tok))
+        or bool(re.search(r"[A-Z]", tok[1:]))
+    )
+
+
+def _is_reaction_line(line: str) -> bool:
+    """含反应箭头且箭头两侧均有化学 token 的独立行。
+
+    纯文本箭头（如“流程 → 下一步”、“Step 1 -> Step 2”）两侧无化学
+    token 形态 → 不保护。
     """
     m = _ARROW_RE.search(line)
     if not m:
         return False
     left, right = line[: m.start()], line[m.end():]
-    return bool(_CHEM_TOKEN_RE.search(left)) and bool(_CHEM_TOKEN_RE.search(right))
+    return any(_is_chem_token(t) for t in _CHEM_TOKEN_RE.findall(left)) and any(
+        _is_chem_token(t) for t in _CHEM_TOKEN_RE.findall(right)
+    )
 
 
 def _is_smiles_like(line: str, min_len: int = 20) -> bool:
@@ -152,7 +224,15 @@ def _is_smiles_like(line: str, min_len: int = 20) -> bool:
         return False
     if any(ch not in _SMILES_CHARSET for ch in s):
         return False
-    return any(ch.isdigit() for ch in s) or ("(" in s and ")" in s)
+    if any(ch.isdigit() for ch in s) or ("(" in s and ")" in s):
+        return True
+    # P3-B32: a long unbranched carbon chain ("C" x 20) has neither digits
+    # nor branches, so the old rule missed it. Heuristic: length >= min_len,
+    # contains carbon, and every character is an element-letter that can
+    # appear in an organic skeleton (C/B/N/O/S/P/F/I plus the second
+    # letters l/r for Cl/Br). A 20+ letter prose word almost never fits
+    # that alphabet *and* contains C without a vowel outside the set.
+    return "C" in s and all(ch.lower() in "cbnospfilr" for ch in s)
 
 
 def _is_protected_line(line: str, smiles_min_len: int = 20) -> bool:
@@ -173,6 +253,186 @@ PROTECTED_SPANS: tuple[str, ...] = ("reaction_line", "smiles_like")
 # ── legacy plain-text splitter (moved verbatim from ingestion) ───────────────
 
 
+_DOT_ABBREV = frozenset({
+    "e.g", "i.e", "etc", "vs", "fig", "eq", "no", "mr", "mrs", "ms",
+    "dr", "prof", "inc", "ltd", "approx", "al",  # "al" = "et al."
+    "u.s", "u.k",
+})
+
+
+def _split_sentence_sep(text: str, sep: str) -> list[str]:
+    """Split on *sep* like ``str.split`` except for guarded cases.
+
+    P3-B31: ". " does not split after a known abbreviation ("e.g. ",
+    "Fig. ", "et al. ") or inside a spaced decimal ("3. 5"); full-width
+    "．" does not split inside a full-width decimal ("3．5"). The guard
+    only ever *withholds* a split, so chunk texts are unchanged apart from
+    fewer, longer pieces at those points.
+    """
+    if sep not in (". ", "．"):
+        return text.split(sep)
+    parts: list[str] = []
+    start = 0
+    pat = re.compile(re.escape(sep))
+    for m in pat.finditer(text):
+        if sep == ". ":
+            j = m.start()
+            k = j
+            # P3-B31 fix: the abbreviation run includes inner periods —
+            # for "e.g. " the word before the final period is "e.g", not
+            # just "g" (the first version scanned letters only and missed
+            # every multi-period abbreviation).
+            while k > 0 and (text[k - 1].isalpha() or text[k - 1] == "."):
+                k -= 1
+            if text[k:j].rstrip(".").lower() in _DOT_ABBREV:
+                continue
+            if (
+                j > 0 and text[j - 1].isdigit()
+                and m.end() < len(text) and text[m.end()].isdigit()
+            ):
+                continue
+        else:  # "．": digit on both sides = decimal point, not a terminator
+            if (
+                m.start() > 0 and text[m.start() - 1].isdigit()
+                and m.end() < len(text) and text[m.end()].isdigit()
+            ):
+                continue
+        parts.append(text[start:m.start()])
+        start = m.end()
+    parts.append(text[start:])
+    return parts
+
+
+def _plain_hard_slices(
+    text: str, max_chars: int, overlap: int
+) -> list[tuple[str, int]]:
+    """Hard slices with overlap (depth-cap / no-separator fallback)."""
+    chunks: list[tuple[str, int]] = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_chars, len(text))
+        raw = text[start:end]
+        chunk = raw.strip()
+        if chunk:
+            chunks.append((chunk, start + (len(raw) - len(raw.lstrip()))))
+        if end >= len(text):
+            break
+        start = max(end - overlap, start + 1)
+    return chunks
+
+
+def _plain_split(
+    text: str, *, max_chars: int, overlap: int, max_depth: int, _depth: int = 0
+) -> list[tuple[str, int]]:
+    """Position-aware core of the legacy recursive splitter.
+
+    Returns [(chunk, start)] with starts relative to the stripped input —
+    the same chunk texts the old ``chunk_plain_text`` produced, plus the
+    true position of each. Split/join round-trips exactly (``sep.join`` of
+    ``split``), so piece starts are cumulative lengths, not guesses.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [(text, 0)]
+    # P3-B31: Chinese sentence punctuation joins the separator ladder —
+    # a long Chinese paragraph with only ！/？/； used to hard-cut at
+    # max_chars because no separator matched.
+    _PLAIN_SEPS = ("\n\n", "\n", "。", "！", "？", "；", "．", ". ")
+    if _depth >= max_depth or not any(sep in text for sep in _PLAIN_SEPS):
+        return _plain_hard_slices(text, max_chars, overlap)
+
+    for sep in _PLAIN_SEPS:
+        if sep not in text:
+            continue
+        parts = _split_sentence_sep(text, sep)
+        starts: list[int] = []
+        pos = 0
+        for i, part in enumerate(parts):
+            starts.append(pos)
+            pos += len(part) + (len(sep) if i < len(parts) - 1 else 0)
+        chunks: list[tuple[str, int]] = []
+        current = ""
+        current_start = 0
+        # (stripped chunk, start, end) of the last emitted chunk — the
+        # overlap source for a following recursive split (P2-B48).
+        last_flushed: tuple[str, int, int] | None = None
+        for i, part in enumerate(parts):
+            piece = part if i == len(parts) - 1 else part + sep
+            piece_start = starts[i]
+            if len(current) + len(piece) <= max_chars:
+                if not current:
+                    current_start = piece_start
+                current += piece
+            else:
+                if current.strip():
+                    cs = current.strip()
+                    cs_start = current_start + (len(current) - len(current.lstrip()))
+                    cs_end = current_start + len(current.rstrip())
+                    chunks.append((cs, cs_start))
+                    last_flushed = (cs, cs_start, cs_end)
+                else:
+                    last_flushed = None
+                if len(piece) > max_chars:
+                    sub: list[tuple[str, int]] = []
+                    if last_flushed is not None and overlap > 0:
+                        # P2-B48: the recursive split starts with the tail
+                        # of the previous chunk, so the boundary carries
+                        # overlap like every other boundary in this splitter.
+                        prev, _ps, prev_end = last_flushed
+                        tail = prev[-overlap:]
+                        combined = tail + piece
+                        lead = len(combined) - len(combined.lstrip())
+                        tail_start = prev_end - len(tail)
+                        for sc, sp in _plain_split(
+                            combined, max_chars=max_chars, overlap=overlap,
+                            max_depth=max_depth, _depth=_depth + 1,
+                        ):
+                            s_pos = sp + lead
+                            if s_pos < len(tail):
+                                sub.append((sc, tail_start + s_pos))
+                            else:
+                                sub.append((sc, piece_start + (s_pos - len(tail))))
+                    else:
+                        sub = [
+                            (sc, piece_start + sp)
+                            for sc, sp in _plain_split(
+                                piece, max_chars=max_chars, overlap=overlap,
+                                max_depth=max_depth, _depth=_depth + 1,
+                            )
+                        ]
+                    chunks.extend(sub)
+                    if sub:
+                        last_flushed = (
+                            sub[-1][0], sub[-1][1], sub[-1][1] + len(sub[-1][0])
+                        )
+                    current = ""
+                else:
+                    current = piece
+                    current_start = piece_start
+        if current.strip():
+            cs = current.strip()
+            cs_start = current_start + (len(current) - len(current.lstrip()))
+            chunks.append((cs, cs_start))
+        if chunks:
+            return chunks
+    return _plain_hard_slices(text, max_chars, overlap)
+
+
+def _validate_chunk_params(max_chars: int, overlap: int) -> int:
+    """P3-B36: ``max_chars <= 0`` is a caller error (raise); ``overlap``
+    is clamped into ``[0, max_chars)`` (a negative or >= max_chars overlap
+    used to make the hard slicer crawl one char at a time). Returns the
+    clamped overlap.
+    """
+    if max_chars <= 0:
+        raise ValueError("max_chars must be > 0")
+    if max_chars == 1:
+        return 0
+    return min(max(overlap, 0), max_chars - 1)
+
+
 def chunk_plain_text_with_offsets(
     text: str,
     *,
@@ -182,23 +442,27 @@ def chunk_plain_text_with_offsets(
 ) -> list[tuple[str, int]]:
     """P1-3: chunk_plain_text + each chunk's start offset in ``text``.
 
-    The old call sites did ``char_pos += len(c)``, assuming chunks are
-    back-to-back — wrong when ``overlap > 0`` (offsets drift). Here offsets
-    are located with ``str.find`` from a moving cursor, so overlapping chunks
-    get their true positions. ``find`` works despite the internal stripping:
-    the stripped chunk is still a substring of the original at its location.
+    P2-B49: offsets come from the splitter itself, not from ``str.find``
+    guessing — repeated text used to resolve to the first occurrence and
+    drift every later offset. The splitter strips its input, so the
+    leading whitespace of the original text is added back here.
+
+    P3-B35 (offset convention, stated once): offsets index the stripped
+    segment text, and ``text[offset_start:offset_end] == chunk text`` for
+    plain-path chunks. The structured path keeps the same contract via
+    verbatim emission; when a page/block marker sits between blocks,
+    verbatim fails and emission falls back to per-block chunks, each still
+    carrying its true position.
     """
-    chunks = chunk_plain_text(text, max_chars=max_chars, overlap=overlap, max_depth=max_depth)
-    out: list[tuple[str, int]] = []
-    cursor = 0
-    for c in chunks:
-        idx = text.find(c, cursor)
-        if idx == -1:
-            # Shouldn't happen; fall back to cursor to avoid crashing.
-            idx = cursor
-        out.append((c, idx))
-        cursor = idx + 1  # +1 (not +len) so overlapping next chunks are found
-    return out
+    overlap = _validate_chunk_params(max_chars, overlap)
+    lead = len(text) - len(text.lstrip())
+    stripped = text.strip()
+    return [
+        (c, lead + s)
+        for c, s in _plain_split(
+            stripped, max_chars=max_chars, overlap=overlap, max_depth=max_depth
+        )
+    ]
 
 
 def chunk_plain_text(
@@ -209,83 +473,41 @@ def chunk_plain_text(
     max_depth: int = 10,
     _depth: int = 0,
 ) -> list[str]:
-    """Recursive split on \\n\\n > \\n > 句号，控制 chunk 大小。"""
-    text = text.strip()
-    if not text:
-        return []
+    """纯文本递归切分：按换行 > 句末标点逐级切分，控制 chunk 尺寸。
 
-    if len(text) <= max_chars:
-        return [text]
-
-    if _depth >= max_depth:
-        chunks: list[str] = []
-        start = 0
-        while start < len(text):
-            end = min(start + max_chars, len(text))
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
-            if end >= len(text):
-                break
-            start = max(end - overlap, start + 1)
-        return chunks
-
-    for sep in ("\n\n", "\n", "。", ". "):
-        if sep not in text:
-            continue
-        parts = text.split(sep)
-        chunks = []
-        current = ""
-        for i, part in enumerate(parts):
-            piece = part if i == len(parts) - 1 else part + sep
-            if len(current) + len(piece) <= max_chars:
-                current += piece
-            else:
-                if current.strip():
-                    chunks.append(current.strip())
-                if len(piece) > max_chars:
-                    chunks.extend(
-                        chunk_plain_text(
-                            piece,
-                            max_chars=max_chars,
-                            overlap=overlap,
-                            max_depth=max_depth,
-                            _depth=_depth + 1,
-                        )
-                    )
-                    current = ""
-                else:
-                    current = piece
-        if current.strip():
-            chunks.append(current.strip())
-        if chunks:
-            return chunks
-
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + max_chars, len(text))
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        if end >= len(text):
-            break
-        start = max(end - overlap, start + 1)
-    return chunks
+    P2-B49 后与旧版逐项一致，唯一有意差异：递归边界处把上一 chunk
+    的尾部 overlap 拼入 combined 再递归，子偏移按 tail/piece 两段
+    映射回原文，不再用 find 猜测。
+    """
+    overlap = _validate_chunk_params(max_chars, overlap)
+    return [
+        c
+        for c, _ in _plain_split(
+            text, max_chars=max_chars, overlap=overlap,
+            max_depth=max_depth, _depth=_depth,
+        )
+    ]
 
 
 # ── markdown structure parsing ───────────────────────────────────────────────
 
 
 def _split_sections(md: str) -> list[tuple[str, str]]:
-    """Split on ATX headings → [(heading_path, body)]. Empty path = preamble."""
+    """Split on ATX headings → [(heading_path, body)]. Empty path = preamble.
+
+    P3-B33: ATX only — a Setext underline or a ``>`` quote line never opens
+    a section; both stay body text of the current section.
+    """
     lines = md.split("\n")
     sections: list[tuple[str, list[str]]] = [("", [])]
     stack: list[tuple[int, str]] = []  # (level, title)
     in_fence = False
     in_math = False  # v22: 跟踪 math 块，避免 math 内行首 # 被误判为标题
+    math_lines = 0  # P2-B53: math 块行数护栏计数
     for line in lines:
-        if line.lstrip().startswith("```"):
+        # P1-B26: fence 切换只在非 math 状态下生效 —— math 块内的 ``` 行是
+        # 内容，不是围栏开关；旧逻辑会翻转 in_fence，让后续标题识别错乱。
+        if line.lstrip().startswith("```") and not in_math:
             in_fence = not in_fence
         stripped = line.strip()
         # v22: math 块状态跟踪（复用 _math_open/_math_selfclosed）
@@ -294,15 +516,33 @@ def _split_sections(md: str) -> list[tuple[str, str]]:
                 closer = _math_open(stripped)
                 if closer:
                     in_math = closer
-        elif in_math and stripped.startswith(in_math):
-            in_math = False
+                    math_lines = 0
+        elif in_math:
+            math_lines += 1
+            if _math_line_closes(stripped, in_math):
+                in_math = False
+                math_lines = 0
+            elif math_lines >= 50:
+                # P2-B53: 未闭合 math 超过 50 行，恢复文本并重启用标题
+                # 识别 —— 否则一个丢了 \end 的公式块吞掉后续整篇标题。
+                in_math = False
+                math_lines = 0
         heading = None if (in_fence or in_math) else _parse_heading(line)
         if heading:
             level, title = heading
+            if not title:
+                # P3-B29: "## " (empty title) is not a section boundary —
+                # the old code pushed an empty segment, giving paths like
+                # "A >  > B", while bare "##" (no gap) was not a heading at
+                # all. An empty title now stays a body line, consistent
+                # with the no-gap case. (_parse_heading's (level, "") return
+                # itself is kept: the linear-time differential test pins it.)
+                sections[-1][1].append(line)
+                continue
             while stack and stack[-1][0] >= level:
                 stack.pop()
             stack.append((level, title))
-            path = " > ".join(t for _, t in stack)[:_MAX_HEADING_PATH]
+            path = _truncate_heading_path(" > ".join(t for _, t in stack))
             sections.append((path, []))
         else:
             sections[-1][1].append(line)
@@ -320,11 +560,42 @@ def _math_open(stripped: str) -> str | None:
     return None
 
 
+_BEGIN_ENV_RE = re.compile(r"^\\begin\{([^}]+)\}")
+
+
 def _math_selfclosed(stripped: str) -> bool:
-    return (
+    # P1-B23: a single-line \begin{env}…\end{env} used to open a math block
+    # that swallowed every following section until a stray \end{ appeared.
+    # The env must match: \begin{aligned}…\end{equation} is not self-closed.
+    if (
         (stripped.startswith("$$") and stripped.count("$$") >= 2 and len(stripped) > 2)
         or (stripped.startswith("\\[") and stripped.endswith("\\]") and len(stripped) > 3)
-    )
+    ):
+        return True
+    m = _BEGIN_ENV_RE.match(stripped)
+    if m:
+        return f"\\end{{{m.group(1)}}}" in stripped[m.end():]
+    return False
+
+
+def _math_line_closes(stripped: str, closer: str) -> bool:
+    """Whether a line inside a math block closes it (P1-B24).
+
+    The old rule was startswith-only, so a content line ending with the
+    closer (``x $$``) never closed the block, while ``$$5$$`` — an inline
+    span, not a closer — closed it early whenever it happened to start a
+    line. New rule: the line contains the closer and is not itself a fresh
+    opener span — for ``$$`` that means an odd count (``$$5$$`` has two);
+    for ``\\]`` / ``\\end{`` it means no fresh opener of the same family
+    on the same line.
+    """
+    if closer == "$$":
+        return stripped.count("$$") % 2 == 1
+    if closer == "\\]":
+        return "\\]" in stripped and "\\[" not in stripped
+    if closer == "\\end{":
+        return "\\end{" in stripped and "\\begin{" not in stripped
+    return stripped.startswith(closer)
 
 
 def _split_blocks(
@@ -350,32 +621,74 @@ def _split_blocks(
             blocks.append(block)
         current.clear()
 
+    # P3-B34: blank lines tolerated inside a markdown table (0 = none
+    # seen yet; reset on every pipe row and on entering table mode).
+    _table_blanks = 0
     # v19-2: 块级行数上限，未闭合时强制闭合，避免吞整篇。
     # v21-fix: 推广到 fence/html_table（与 math 同类问题）。
     _BLOCK_MAX_LINES = 50
     _block_lines = 0
+    # P1-B22: an unclosed block that hits the line cap used to flush and
+    # re-enter the state machine, so its continuation lines were re-read as
+    # new fences/math/tables — a cascade of mislabels. Now the cap trip
+    # suppresses further mode transitions for the rest of this section body:
+    # continuation lines stay plain text (a later genuine fence in the same
+    # section is sacrificed, which is cheaper than mislabelling the block).
+    # Suppression is per _split_blocks call, so later sections are unaffected.
+    suppress_modes = False
 
     for line in lines:
         stripped = line.strip()
         if mode == "fence":
+            # P2-B46: a page marker inside a fence still splits the block —
+            # otherwise chunk_markdown never sees it and later chunks inherit
+            # the wrong page. The fence resumes after the marker.
+            if PAGE_MARKER_RE.match(line):
+                flush()
+                blocks.append(stripped)
+                continue
             current.append(line)
             _block_lines += 1
-            if stripped.startswith("```") or _block_lines >= _BLOCK_MAX_LINES:
+            if stripped.startswith("```"):
                 flush()
                 mode = "text"
                 _block_lines = 0
+            elif _block_lines >= _BLOCK_MAX_LINES:
+                logger.warning(
+                    "chunking: unclosed fence force-closed after %d lines; "
+                    "remaining lines in this section stay plain text",
+                    _BLOCK_MAX_LINES,
+                )
+                flush()
+                mode = "text"
+                _block_lines = 0
+                suppress_modes = True
             continue
         if mode == "math":
+            if PAGE_MARKER_RE.match(line):
+                flush()
+                blocks.append(stripped)
+                continue
             current.append(line)
             _block_lines += 1
-            # v19-2: closer 改行首匹配（与 opener 对称），避免行内 $$5$$ 提前闭合。
-            # 未闭合超过上限时强制闭合，避免吞整篇。
-            if stripped.startswith(math_closer) or _block_lines >= _BLOCK_MAX_LINES:
+            # P1-B24: line-end closers (``x $$``) and odd-count $$ lines
+            # close; ``$$5$$`` inline spans do not.
+            if _math_line_closes(stripped, math_closer):
                 flush()
                 mode = "text"
                 _block_lines = 0
+            elif _block_lines >= _BLOCK_MAX_LINES:
+                logger.warning(
+                    "chunking: unclosed math force-closed after %d lines; "
+                    "remaining lines in this section stay plain text",
+                    _BLOCK_MAX_LINES,
+                )
+                flush()
+                mode = "text"
+                _block_lines = 0
+                suppress_modes = True
             continue
-        if stripped.startswith("```"):
+        if stripped.startswith("```") and not suppress_modes:
             flush()
             mode = "fence"
             current.append(line)
@@ -395,7 +708,7 @@ def _split_blocks(
             flush()
             blocks.append(stripped)
             continue
-        closer = _math_open(stripped)
+        closer = _math_open(stripped) if not suppress_modes else None
         if closer:
             flush()
             mode = "math"
@@ -409,20 +722,55 @@ def _split_blocks(
         _is_html_table_start = stripped.lower().startswith("<table")
         _is_html_table_end = "</table>" in stripped.lower()
         if mode == "table":
-            if is_table_row:
+            # P2-B50: once anchored, a row needs only a pipe — leading /
+            # trailing pipes are not required.
+            if "|" in stripped:
                 current.append(line)
+                _table_blanks = 0
+                continue
+            if not stripped and _table_blanks == 0:
+                # P3-B34: one blank line inside a table is tolerated (a
+                # stray blank from PDF conversion); the second blank ends
+                # the table, as before. The tolerated blank is stripped by
+                # flush() if it ends up trailing.
+                current.append(line)
+                _table_blanks = 1
                 continue
             flush()
             mode = "text"
         if mode == "html_table":
             current.append(line)
             _block_lines += 1
-            if _is_html_table_end or _block_lines >= _BLOCK_MAX_LINES:
+            if _is_html_table_end:
                 flush()
                 mode = "text"
                 _block_lines = 0
+            elif _block_lines >= _BLOCK_MAX_LINES:
+                # P1-B22: same suppression as fence/math on cap trip.
+                logger.warning(
+                    "chunking: unclosed html table force-closed after %d lines; "
+                    "remaining lines in this section stay plain text",
+                    _BLOCK_MAX_LINES,
+                )
+                flush()
+                mode = "text"
+                _block_lines = 0
+                suppress_modes = True
             continue
-        if _is_html_table_start:
+        # P2-B50: separator-row anchor — a table without leading/trailing
+        # pipes is recognised by its delimiter row, backtracking one line
+        # for the header (which is still in `current`: no blank line sits
+        # between a header and its delimiter row).
+        if _is_table_sep_row(stripped) and not suppress_modes:
+            if current and "|" in current[-1].strip():
+                header = current.pop()
+                flush()
+                mode = "table"
+                _table_blanks = 0
+                current.append(header)
+                current.append(line)
+                continue
+        if _is_html_table_start and not suppress_modes:
             flush()
             mode = "html_table"
             _block_lines = 0
@@ -432,9 +780,10 @@ def _split_blocks(
                 flush()
                 mode = "text"
             continue
-        if is_table_row:
+        if is_table_row and not suppress_modes:
             flush()
             mode = "table"
+            _table_blanks = 0
             current.append(line)
             continue
         # 2.6：受保护独立行（反应式 / SMILES）——先 flush 当前文本块，
@@ -452,6 +801,39 @@ def _split_blocks(
     return blocks
 
 
+def _is_table_sep_row(stripped: str) -> bool:
+    """A Markdown delimiter row: pipes, colons, dashes, spaces — and at
+    least one ``---`` run. A bare ``---`` is a thematic break, not a table,
+    so the pipe is required. Used by _split_blocks (P2-B50 anchor) and by
+    _is_atomic/_is_table_block/_classify_block_type (pipe-less tables)."""
+    return (
+        "|" in stripped
+        and "---" in stripped
+        and all(ch in "|-: " for ch in stripped)
+    )
+
+
+def _block_has_table_sep(block: str) -> bool:
+    return any(_is_table_sep_row(line.strip()) for line in block.split("\n"))
+
+
+def _looks_like_table(block: str) -> bool:
+    """P3-B37: the single table predicate shared by ``_classify_block_type``
+    and ``_is_atomic`` (pipe-led row, ``<table`` at the block start, or a
+    delimiter row). ``_is_table_block`` deliberately keeps its wider
+    anywhere-in-200-chars ``<table`` rule for caption attachment and is
+    NOT unified here — narrowing it would detach captions from text-led
+    blocks that embed a table.
+    """
+    first = block.lstrip()
+    lower = first[:64].lower()
+    return (
+        first.startswith("|")
+        or lower.startswith("<table")
+        or _block_has_table_sep(block)
+    )
+
+
 def _classify_block_type(block: str) -> str:
     """Heuristic block kind for the text chain: table | formula | figure | code | text.
 
@@ -461,8 +843,7 @@ def _classify_block_type(block: str) -> str:
     table/formula" from running text for retrieval-time filtering.
     """
     first = block.lstrip()
-    lower = first[:64].lower()
-    if first.startswith("|") or lower.startswith("<table"):
+    if _looks_like_table(block):
         return "table"
     if (
         first.startswith("$$")
@@ -484,25 +865,38 @@ def _is_atomic(block: str) -> bool:
     them as atomic prevents blank-line splits from shredding rows.
     """
     first = block.lstrip()
-    lower = first[:64].lower()
     return (
-        first.startswith("|")
+        _looks_like_table(block)
         or first.startswith("```")
         or first.startswith("$$")
         or first.startswith("\\[")
         or first.startswith("\\begin{")
-        or lower.startswith("<table")
-        or "<table" in block[:200].lower()
+        # P2-B51: <table> counts only at the block start, aligned with
+        # _classify_block_type — the old "anywhere in the first 200 chars"
+        # clause marked text-led blocks atomic and hid their tables.
+        # (Now expressed via _looks_like_table, P3-B37.)
     )
 
 
-_CAPTION_START_RE = re.compile(r"^\s*(?:表|Table|TABLE|Tab\.)\s*[\dIVXivx]+", re.UNICODE)
+_CAPTION_START_RE = re.compile(
+    r"^\s*(?:表格|表|Table|TABLE|table|Tab\.?)\s*"
+    r"(?:[\dIVXivx]+|[A-Z]\d*|[一二三四五六七八九十百千]+)",
+    re.UNICODE,
+)
+# P2-B47: 长度上限维持 300 —— 报告的“放宽”分支与既有钉子测试直接冲突
+# （403 字“表1 说明文字×100”段必须不是 caption）；形式扩展（表格/小写
+# table/Tab/字母附录/中文数字）已做，长度半项不擅自放宽，待 Cheng 定。
 _CAPTION_MAX_CHARS = 300
 
 
 def _is_table_block(block: str) -> bool:
     first = block.lstrip()
-    return first.startswith("|") or "<table" in first[:200].lower()
+    return (
+        first.startswith("|")
+        or "<table" in first[:200].lower()
+        # P2-B50: a pipe-less table block still counts for caption attachment.
+        or _block_has_table_sep(block)
+    )
 
 
 def _is_table_caption(paragraph: str) -> bool:
@@ -536,8 +930,12 @@ def _split_pages(md: str) -> list[tuple[int | None, str]]:
     return [(p, "\n".join(body).strip()) for p, body in segments if "\n".join(body).strip()]
 
 
+# P3-B39: 中文数字（实施例三）、"3-1" 型编号、复数（Examples /
+# Embodiments）与 "第" 前缀一并认；独立成行才算边界（行内提及不受影响）。
 _EXAMPLE_HEAD_LINE = re.compile(
-    r"^\s*(example|embodiment|实施例|实例)\s*([0-9０-９]+|[IVXLC]+)?\s*[:：.]?\s*$",
+    r"^\s*(?:第\s*)?(examples?|embodiments?|实施例|实例)\s*"
+    r"([0-9０-９]+(?:-[0-9０-９]+)?|[IVXLC]+|[一二三四五六七八九十百千]+)?"
+    r"\s*[:：.]?\s*$",
     re.I,
 )
 
@@ -548,11 +946,35 @@ def mark_example_boundaries(md: str) -> str:
     使 ``_split_sections`` 按示例边界切分，单个示例不被拦腰切断；
     heading_path 自然带上 "Example N"，示例 chunk 可整体召回。
     非独立成行的行内提及（如 "as shown in example 1"）不受影响。
+
+    P2-B52: fence/math 块内的行不改写 —— 代码块里出现 "Example 1"
+    是代码内容，不是示例边界。
     """
-    return "\n".join(
-        f"## {line.strip()}" if _EXAMPLE_HEAD_LINE.match(line) else line
-        for line in (md or "").split("\n")
-    )
+    out: list[str] = []
+    in_fence = False
+    in_math: str | bool = False
+    for line in (md or "").split("\n"):
+        stripped = line.strip()
+        if line.lstrip().startswith("```") and not in_math:
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if not in_fence and not in_math:
+            if not _math_selfclosed(stripped):
+                closer = _math_open(stripped)
+                if closer:
+                    in_math = closer
+                    out.append(line)
+                    continue
+        elif in_math and _math_line_closes(stripped, in_math):
+            in_math = False
+            out.append(line)
+            continue
+        if (in_fence or in_math) or not _EXAMPLE_HEAD_LINE.match(line):
+            out.append(line)
+        else:
+            out.append(f"## {line.strip()}")
+    return "\n".join(out)
 
 
 def chunk_markdown(
@@ -571,6 +993,7 @@ def chunk_markdown(
     （默认关）；显式传 True / False 时覆盖配置。smiles_min_len 同理
     （默认 kb_protected_smiles_min_len=20）。
     """
+    overlap = _validate_chunk_params(max_chars, overlap)
     if protected_spans is None or smiles_min_len is None:
         try:
             from ..config import get_settings
@@ -607,7 +1030,12 @@ def chunk_markdown(
 
     sections = _split_sections(md)
     has_structure = (
-        any(path for path, _ in sections) or "|" in md or "```" in md or "$$" in md
+        any(path for path, _ in sections)
+        # P2-B42: html tables, display math and ~~~ fences are structure
+        # too — without them such documents fell to the plain splitter and
+        # lost heading/table handling.
+        or "|" in md or "```" in md or "$$" in md
+        or "<table" in md or "\\begin" in md or "\\[" in md or "~~~" in md
     )
     if not has_structure:
         pages = _split_pages(md)
@@ -622,6 +1050,11 @@ def chunk_markdown(
                 seg = _strip_block_markers(seg)
                 seg_base = md.find(seg, md_cursor)
                 if seg_base == -1:
+                    # P3-B30: 同上，页段 find 失败回退并记 warning。
+                    logger.warning(
+                        "chunking: page segment not found in md, falling "
+                        "back to cursor (page=%r)", page_no,
+                    )
                     seg_base = md_cursor
                 md_cursor = seg_base + len(seg)
                 for c, off in chunk_plain_text_with_offsets(
@@ -687,6 +1120,10 @@ def chunk_markdown(
 
         单个 strip block 经 body.find 必命中，verbatim 天然成立。
         PageIndex 借鉴 A5: page_end 为跨页 chunk 的末页（None = 单页）。
+        P3-B38: the per-block fallback below intentionally drops the range
+        (blk_page_end=None): each emitted block sits on exactly one page,
+        so there is no range to record — the old "beta" bug was precisely
+        stamping the whole accumulation's range onto every block.
         """
         oe_ = os_ + len(t)
         if md[os_:oe_] == t:
@@ -702,7 +1139,12 @@ def chunk_markdown(
         for _bi, blk in enumerate(blocks):
             bpos, cursor = _locate_block(body, blk, cursor)
             if bpos == -1:
-                # 极端防御：找不到则跳过该 block（不应发生）
+                # P3-B30: 极端防御：找不到则跳过该 block（不应发生）。
+                # 跳过即丢内容，记 warning 而不是静默丢弃。
+                logger.warning(
+                    "chunking: block not found in body, skipping "
+                    "(path=%r, block=%.80s)", path, blk,
+                )
                 continue
             bos_ = seg_base + bpos
             # A block that was emitted on its own sits on ITS page. Giving every block the range of the whole
@@ -720,9 +1162,19 @@ def chunk_markdown(
         return out
 
     for path, body in sections:
+        # P2-B45: a block marker announces the kind of the immediately
+        # following block only — it must not leak across a section boundary
+        # (a marker at the end of one section used to type the next
+        # section's first chunk).
+        pending_block = None
         # section body 在 md 中的基址
         seg_base = md.find(body, md_cursor)
         if seg_base == -1:
+            # P3-B30: find 失败回退到游标（不应发生），记 warning。
+            logger.warning(
+                "chunking: section body not found in md, falling back "
+                "to cursor (path=%r)", path,
+            )
             seg_base = md_cursor  # 防御性
         md_cursor = seg_base + len(body)
         body_cursor = 0
@@ -757,14 +1209,20 @@ def chunk_markdown(
             if _is_atomic(block):
                 caption = ""
                 caption_body_pos = -1
-                if current.strip() and _is_table_block(block):
-                    head, _, tail = current.rpartition("\n\n")
-                    if _is_table_caption(tail):
-                        caption, current = tail.strip(), head
-                        # v14-5: caption 是最后一个 block，current_blocks 去尾
-                        # v15: 删死变量 caption_block（赋值后未使用）
+                caption_page: int | None = None
+                # P1-B25: caption attachment by block sequence, not string
+                # surgery on `current`. The old rpartition("\n\n") lost the
+                # caption whenever a page/block marker (transparent to
+                # current_blocks) sat between caption and table, and the
+                # verbatim atom lookup then failed and split the pair.
+                if current.strip() and _is_table_block(block) and current_blocks:
+                    last = current_blocks[-1]
+                    if _is_table_caption(last):
+                        caption = last.strip()
+                        caption_page = current_pages[-1]
                         current_blocks = current_blocks[:-1]
                         current_pages = current_pages[:-1]
+                        current = "\n\n".join(current_blocks)
                         # caption 在 body 中的位置（current 起始处搜索）
                         caption_body_pos, _ = _locate_block(
                             body, caption, current_start_body
@@ -799,31 +1257,28 @@ def chunk_markdown(
                     atom_body_pos = bpos if bpos != -1 else body_cursor
                 aos_ = seg_base + atom_body_pos
                 aoe_ = aos_ + len(atom)
-                if md[aos_:aoe_] == atom:
+                if caption and caption_body_pos != -1:
+                    # P1-B25: emit the caption+table atom directly with the
+                    # block-sequence span — caption start to table end —
+                    # and the page span caption page → table page. The old
+                    # verbatim check required contiguity and fell through
+                    # to the split emission exactly when a marker intervened.
+                    cos_ = seg_base + caption_body_pos
+                    bend = bpos if bpos != -1 else body_cursor
+                    coe_ = seg_base + bend + len(block)
+                    chunks.append(Chunk(
+                        atom, path, caption_page,
+                        page_end=(page if page != caption_page else None),
+                        paragraph_idx=para_counter,
+                        offset_start=cos_, offset_end=coe_,
+                        block_type=pending_block or _classify_block_type(block),
+                    ))
+                elif md[aos_:aoe_] == atom:
                     chunks.append(Chunk(
                         atom, path, page,
                         paragraph_idx=para_counter,
                         offset_start=aos_,
                         offset_end=aoe_,
-                        block_type=pending_block or _classify_block_type(block),
-                    ))
-                elif caption and caption_body_pos != -1:
-                    # v14-5: caption 与表格被多空行/marker 隔断，拆开发射
-                    cos_ = seg_base + caption_body_pos
-                    chunks.append(Chunk(
-                        caption, path, page,
-                        paragraph_idx=para_counter,
-                        offset_start=cos_,
-                        offset_end=cos_ + len(caption),
-                        block_type="text",
-                    ))
-                    # block 单独成 atom（用 bpos 真实位置）
-                    bbs_ = seg_base + (bpos if bpos != -1 else body_cursor)
-                    chunks.append(Chunk(
-                        block, path, page,
-                        paragraph_idx=para_counter,
-                        offset_start=bbs_,
-                        offset_end=bbs_ + len(block),
                         block_type=pending_block or _classify_block_type(block),
                     ))
                 else:
@@ -878,6 +1333,8 @@ def chunk_markdown(
                 # 2.6：硬切父子键 = 硬切前原子块在原文中的偏移区间，
                 # 各段共享同一键（保护 ≠ 不限长，超长保护行仍硬切）。
                 _parent_key = f"{block_base}-{block_base + len(block)}"
+                # P3-B40: all hard-cut segments of this block share
+                # para_counter (one paragraph); ordering is by offset.
                 for c, off in chunk_plain_text_with_offsets(
                     block, max_chars=max_chars, overlap=overlap
                 ):

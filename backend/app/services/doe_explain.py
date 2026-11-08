@@ -131,7 +131,14 @@ def _y_best(existing: list[ExperimentRecord], metric: str, direction: str = "max
     # P1-3: minimize 方向取 min（之前恒用 max，minimize 目标全错）
     if not existing:
         return 0.0
-    vals = [(exp.measured or {}).get(metric, 0.0) for exp in existing]
+    # P3-C19: 缺失指标的记录跳过，不再默认 0.0 —— minimize 下一条缺失
+    # 记录曾把 y_best 拉成 0.0（真实值 300），EI / 提升百分比全失真。
+    # 全部记录都缺失时仍回 0.0（调用方 _estimate_improvement_pct 对
+    # y_best <= 0 本就返回 0.0，保持旧 fallback 语义）。
+    vals = [(exp.measured or {}).get(metric) for exp in existing]
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return 0.0
     return min(vals) if direction == "minimize" else max(vals)
 
 

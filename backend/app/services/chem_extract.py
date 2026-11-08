@@ -135,7 +135,8 @@ def extract_smiles(text: str) -> list[dict]:
     except Exception:
         return []
     out: list[dict] = []
-    seen: set[str] = set()
+    seen_raw: set[str] = set()
+    seen_canonical: set[str] = set()
     for m in _SMILES_CAND_RE.finditer(text or ""):
         token = m.group(0).strip(".,;:")
         if len(token) < 5 or " " in token:
@@ -143,8 +144,9 @@ def extract_smiles(text: str) -> list[dict]:
         ring_closure = _has_ring_closure(token)
         if not (_SMILES_HINT_RE.search(token) or ring_closure):
             continue
-        if token in seen or any(ch.isdigit() for ch in token[:1]):
+        if token in seen_raw or any(ch.isdigit() for ch in token[:1]):
             continue
+        seen_raw.add(token)
         # Skip things already recognised as formulas (Zn3(PO4)2 etc.), unless
         # a ring-closure digit pair makes SMILES the more plausible reading.
         if not ring_closure and _FORMULA_CAND_RE.fullmatch(token):
@@ -156,7 +158,11 @@ def extract_smiles(text: str) -> list[dict]:
         if mol is None or mol.GetNumAtoms() < 2:
             continue
         canonical = Chem.MolToSmiles(mol)
-        seen.add(token)
+        # P3-B2: dedup on the canonical form — the same molecule written
+        # two ways used to enter meta twice.
+        if canonical in seen_canonical:
+            continue
+        seen_canonical.add(canonical)
         out.append({"raw": token, "canonical": canonical})
     return out
 
@@ -501,26 +507,48 @@ def resolve_side_label(label: str, label_to_smiles: dict) -> str | None:
 def extract_entities(text: str, *, label_to_smiles: dict | None = None) -> dict | None:
     """All entity families for one chunk → compact meta dict (None if empty)."""
     try:
+        # P2-B4: families are interleaved round-robin up to the cap, not
+        # concatenated in fixed order — the old chem[:25] on a
+        # CAS→formula→SMILES→reaction concatenation dropped every SMILES
+        # once 20 CAS + 5 formulas filled the cap.
+        cas_items = [
+            {"type": "cas", "value": cas}
+            for cas in extract_cas(text)[:_MAX_CHEM_PER_CHUNK]
+        ]
+        formula_items = [
+            {"type": "formula", "value": formula}
+            for formula in extract_formulas(text)[:_MAX_CHEM_PER_CHUNK]
+        ]
+        smiles_items = [
+            {"type": "smiles", "value": smi["canonical"], "raw": smi["raw"]}
+            for smi in extract_smiles(text)[:_MAX_CHEM_PER_CHUNK]
+        ]
+        reaction_items = [
+            {
+                "type": "reaction",
+                "value": rxn["raw"],
+                "reactants": rxn["reactants"],
+                "products": rxn["products"],
+            }
+            for rxn in extract_reactions(text)[:5]
+        ]
         chem: list[dict] = []
-        for cas in extract_cas(text)[:_MAX_CHEM_PER_CHUNK]:
-            chem.append({"type": "cas", "value": cas})
-        for formula in extract_formulas(text)[:_MAX_CHEM_PER_CHUNK]:
-            chem.append({"type": "formula", "value": formula})
-        for smi in extract_smiles(text)[:_MAX_CHEM_PER_CHUNK]:
-            chem.append({"type": "smiles", "value": smi["canonical"], "raw": smi["raw"]})
-        for rxn in extract_reactions(text)[:5]:
-            chem.append(
-                {
-                    "type": "reaction",
-                    "value": rxn["raw"],
-                    "reactants": rxn["reactants"],
-                    "products": rxn["products"],
-                }
-            )
+        cap = _MAX_CHEM_PER_CHUNK + 5
+        families = [cas_items, formula_items, smiles_items, reaction_items]
+        round_idx = 0
+        while len(chem) < cap:
+            progressed = False
+            for fam in families:
+                if round_idx < len(fam) and len(chem) < cap:
+                    chem.append(fam[round_idx])
+                    progressed = True
+            if not progressed:
+                break
+            round_idx += 1
         products = extract_products(text)
         meta: dict = {}
         if chem:
-            meta["chem"] = chem[: _MAX_CHEM_PER_CHUNK + 5]
+            meta["chem"] = chem
         if products:
             meta["products"] = products
         # A3: label linking is opt-in (None → previous behaviour) and runs

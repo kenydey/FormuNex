@@ -12,13 +12,14 @@ describe("desktop logic", () => {
     expect(memoryWarning(null)).toBeNull();
   });
 
-  it("is ready only when the API answers and the required services run", () => {
+  it("is ready only when the API answers ok and the required services run", () => {
     const up = { reachable: true, status: "ok", detail: null, error: null };
     const all = ["postgres", "redis", "kg", "api", "worker"].map((s) => svc(s));
-    expect(stackReady({ health: up, services: all })).toBe(true);
-    expect(stackReady({ health: up, services: all.filter((s) => s.service !== "worker") })).toBe(false);
-    expect(stackReady({ health: { ...up, reachable: false }, services: all })).toBe(false);
-    expect(stackReady({ health: up, services: [...all.slice(0, 4), svc("worker", "restarting")] })).toBe(false);
+    expect(stackReady({ health: up, services: all, services_error: null })).toBe(true);
+    expect(stackReady({ health: up, services: all.filter((s) => s.service !== "worker"), services_error: null })).toBe(false);
+    expect(stackReady({ health: { ...up, reachable: false }, services: all, services_error: null })).toBe(false);
+    expect(stackReady({ health: up, services: [...all.slice(0, 4), svc("worker", "restarting")], services_error: null })).toBe(false);
+    expect(stackReady({ health: { ...up, status: "degraded" }, services: all, services_error: null })).toBe(false);
     expect(stackReady(null)).toBe(false);
   });
 

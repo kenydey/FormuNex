@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..domain.schemas import Formulation
@@ -53,6 +54,8 @@ class VersionDiff:
     metric_deltas: dict[str, dict] = field(default_factory=dict)
     change_summary: str = ""
     renamed: tuple[str, str] | None = None
+    # P1-C14: rows whose share field is neither pct nor weight_pct.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def topology_changed(self) -> bool:
@@ -72,34 +75,56 @@ def _ingredients_by_name(snapshot: dict) -> dict[str, dict]:
     }
 
 
+def _pct_of(ing: dict) -> float | None:
+    # P1-C13: snapshots come in two shapes — legacy "pct" and current
+    # "weight_pct". weight_pct wins when both are present; neither means
+    # the row's share is unrecognisable (warned, not silently zeroed).
+    if ing.get("weight_pct") is not None:
+        return float(ing["weight_pct"])
+    if ing.get("pct") is not None:
+        return float(ing["pct"])
+    return None
+
+
 def diff_snapshots(before: dict, after: dict, *, from_version: int = 0, to_version: int = 0) -> VersionDiff:
     """Compare two formulation snapshots."""
     old = _ingredients_by_name(before)
     new = _ingredients_by_name(after)
 
     changes: list[IngredientChange] = []
+    warnings: list[str] = []
     for name in sorted(set(old) | set(new)):
         old_ing, new_ing = old.get(name), new.get(name)
         if old_ing is None:
+            after_pct = _pct_of(new_ing)
+            if after_pct is None:
+                warnings.append(f"成分 {name} 的含量字段无法识别（需 pct 或 weight_pct）")
+                after_pct = 0.0
             changes.append(
                 IngredientChange(
                     name=name, change="added",
-                    after_pct=float(new_ing.get("weight_pct") or 0.0),
+                    after_pct=after_pct,
                     role=str(new_ing.get("role") or ""),
                 )
             )
         elif new_ing is None:
+            before_pct = _pct_of(old_ing)
+            if before_pct is None:
+                warnings.append(f"成分 {name} 的含量字段无法识别（需 pct 或 weight_pct）")
+                before_pct = 0.0
             changes.append(
                 IngredientChange(
                     name=name, change="removed",
-                    before_pct=float(old_ing.get("weight_pct") or 0.0),
+                    before_pct=before_pct,
                     role=str(old_ing.get("role") or ""),
                 )
             )
         else:
-            before_pct = float(old_ing.get("weight_pct") or 0.0)
-            after_pct = float(new_ing.get("weight_pct") or 0.0)
-            if abs(after_pct - before_pct) > _WEIGHT_EPSILON:
+            before_pct = _pct_of(old_ing)
+            after_pct = _pct_of(new_ing)
+            if before_pct is None or after_pct is None:
+                warnings.append(f"成分 {name} 的含量字段无法识别（需 pct 或 weight_pct）")
+            elif abs(after_pct - before_pct) > _WEIGHT_EPSILON:
                 changes.append(
                     IngredientChange(
                         name=name, change="adjusted",
@@ -133,12 +158,13 @@ def diff_snapshots(before: dict, after: dict, *, from_version: int = 0, to_versi
         ingredient_changes=changes,
         metric_deltas=metric_deltas,
         renamed=(old_name, new_name) if old_name != new_name else None,
+        warnings=warnings,
     )
 
 
 def describe_diff(diff: VersionDiff) -> str:
     """One-line summary, for when no author-written note was supplied."""
-    if not diff.ingredient_changes and not diff.renamed:
+    if not diff.ingredient_changes and not diff.renamed and not diff.warnings:
         return "无成分变化"
     parts: list[str] = []
     for kind, label in (("added", "新增"), ("removed", "移除"), ("adjusted", "调整")):
@@ -148,6 +174,8 @@ def describe_diff(diff: VersionDiff) -> str:
             parts.append(f"{label} {len(names)} 项（{shown}）")
     if diff.renamed:
         parts.append(f"重命名：{diff.renamed[0]} → {diff.renamed[1]}")
+    if diff.warnings:
+        parts.append("；".join(diff.warnings))
     return "；".join(parts)
 
 
@@ -180,45 +208,69 @@ class FormulationHistoryStore:
                 if parent_version_id
                 else None
             )
+            # P3-C18: 传入了 parent_version_id 但查不到时报错 —— 旧代码
+            # 静默建新谱系，调用方以为是分支、实际成了新根。
+            if parent_version_id and parent is None:
+                raise ValueError(f"父版本 {parent_version_id} 不存在")
             if parent is not None:
                 lineage = parent.lineage_id
+                parent_id = parent.id
             else:
                 lineage = lineage_id or str(uuid.uuid4())
-
-            next_version = (
-                session.query(func.coalesce(func.max(FormulationVersion.version), 0))
-                .filter(FormulationVersion.lineage_id == lineage)
-                .scalar()
-                or 0
-            ) + 1
+                parent_id = None
 
             summary = change_summary
             if not summary and parent is not None:
                 summary = describe_diff(diff_snapshots(parent.snapshot or {}, snapshot))
 
-            row = FormulationVersion(
-                id=str(uuid.uuid4()),
-                lineage_id=lineage,
-                version=next_version,
-                parent_version_id=parent.id if parent is not None else None,
-                project_id=project_id,
-                name=formulation.name[:255],
-                domain=formulation.domain.value,
-                snapshot=snapshot,
-                change_summary=summary,
-                created_by=created_by[:80],
-                created_at=_utcnow(),
-            )
-            session.add(row)
-            session.flush()
+            # P3-C17: max(version)+1 并发重试一次。commit_session 每次调用
+            # 都是全新单用途会话（本函数内除本行外无其他待写对象），故
+            # IntegrityError 后 rollback + 重算再插是安全的 —— 这与
+            # AGENTS.md 的教训不冲突（该教训针对同会话内已有先前写入
+            # 的情形）。不按约束名过滤：SQLite 的 IntegrityError 文本
+            # 不带约束名（只列列名），按名过滤在 SQLite 下永不重试；
+            # 本 flush 点唯一可行的完整性失败就是版本唯一约束，第二次
+            # 失败照常重抛。
+            row = None
+            for _attempt in range(2):
+                next_version = (
+                    session.query(func.coalesce(func.max(FormulationVersion.version), 0))
+                    .filter(FormulationVersion.lineage_id == lineage)
+                    .scalar()
+                    or 0
+                ) + 1
+                row = FormulationVersion(
+                    id=str(uuid.uuid4()),
+                    lineage_id=lineage,
+                    version=next_version,
+                    parent_version_id=parent_id,
+                    project_id=project_id,
+                    name=formulation.name[:255],
+                    domain=formulation.domain.value,
+                    snapshot=snapshot,
+                    change_summary=summary,
+                    created_by=created_by[:80],
+                    created_at=_utcnow(),
+                )
+                session.add(row)
+                try:
+                    session.flush()
+                    break
+                except IntegrityError:
+                    session.rollback()
+                    if _attempt == 1:
+                        raise
+                    row = None
+                    continue
+            assert row is not None
             # Phase 2D (2-22): formulation lineage edges (same transaction, fail-open).
             from .provenance import link_many_in_session
 
             edges: list[tuple[str, str, str, str, str]] = [
                 ("formulation", lineage, "formulation_version", row.id, "has_version"),
             ]
-            if parent is not None:
-                edges.append(("formulation_version", parent.id, "formulation_version", row.id, "versioned_to"))
+            if parent_id is not None:
+                edges.append(("formulation_version", parent_id, "formulation_version", row.id, "versioned_to"))
             if project_id:
                 edges.append(("project", project_id, "formulation_version", row.id, "has_formulation"))
             link_many_in_session(session, edges, created_by=created_by or None)
@@ -267,8 +319,10 @@ class FormulationHistoryStore:
         from ..db.models import FormulationVersion
 
         with self._session_factory() as session:
+            # P2-C26: the lineage root is the parentless row, not the
+            # version-1 row — imported lineages may start at version 3+.
             query = session.query(FormulationVersion).filter(
-                FormulationVersion.version == 1
+                FormulationVersion.parent_version_id.is_(None)
             )
             if name:
                 query = query.filter(FormulationVersion.name == name)

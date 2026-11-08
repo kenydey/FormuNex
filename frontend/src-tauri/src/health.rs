@@ -36,7 +36,9 @@ pub fn interpret(http_status: u16, body: &str) -> Health {
 pub async fn probe(base: &str) -> Health {
     let client = match reqwest::Client::builder().timeout(Duration::from_secs(4)).build() {
         Ok(c) => c,
-        Err(e) => return Health::down(e.to_string()),
+        // P3-E16: reqwest error strings embed the request URL; the UI
+        // shows Health.error verbatim, so only generic text may leave here.
+        Err(_) => return Health::down("无法创建 HTTP 客户端"),
     };
     match client.get(health_url(base)).send().await {
         Ok(resp) => {
@@ -46,7 +48,7 @@ pub async fn probe(base: &str) -> Health {
         }
         Err(e) if e.is_timeout() => Health::down("连接超时"),
         Err(e) if e.is_connect() => Health::down("无法连接（服务未启动或地址错误）"),
-        Err(e) => Health::down(e.to_string()),
+        Err(_) => Health::down("请求失败"),
     }
 }
 

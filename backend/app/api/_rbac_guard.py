@@ -119,15 +119,24 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/plm/labels/batch$"), "plm.document.read"),
     # 整合方案 §4: batch export persists an export row (not document content) → document write.
     (re.compile(r"^/api/plm/documents/batch-export$"), "plm.document.write"),
+    # P1-C1 (batch 3): the substance lock is an EHS action (regulatory.review),
+    # not a knowledge write — it must precede the generic substances rule
+    # below, or ehs_regulatory (which holds no knowledge.write) could never
+    # lock. First match wins in required_permission().
+    (re.compile(r"^/api/plm/substances/[^/]+/lock$"), "regulatory.review"),
     (re.compile(r"^/api/plm/substances(/|$)"), "knowledge.write"),
     (re.compile(r"^/api/plm/regulatory/ask$"), "knowledge.read"),
     # P1-1: regulatory update packages — staging, approval and rollback
     # are EHS-reviewed actions, never open writes.
     (re.compile(r"^/api/plm/regulatory/updates(/|$)"), "regulatory.review"),
     (re.compile(r"^/api/plm/regulatory/releases(/|$)"), "regulatory.review"),
-    # Wiki — report / export / lint / preflight-review generate a view;
+    # Wiki — report / export / preflight-review generate a view;
     # everything else persists wiki state or rebuilds an index.
-    (re.compile(r"^/api/wiki/(dossier/report|storm/report|export|lint/run|preflight/review)"), "knowledge.read"),
+    # Deep-review P3-E6: /lint/run persists flags (lint_and_persist), so
+    # it is a write even though the run itself only scans; /lint/sweep
+    # was already covered by the generic wiki write rule below.
+    (re.compile(r"^/api/wiki/lint/run$"), "knowledge.write"),
+    (re.compile(r"^/api/wiki/(dossier/report|storm/report|export|preflight/review)"), "knowledge.read"),
     (re.compile(r"^/api/wiki(/|$)"), "knowledge.write"),
 ]
 
@@ -142,8 +151,18 @@ _SENSITIVE_READS: list[tuple[re.Pattern[str], str]] = [
     # released packages and attachments.
     (re.compile(r"^/api/plm/documents/[^/]+$"), "plm.document.read"),
     (re.compile(r"^/api/plm/documents/[^/]+/file/[^/]+$"), "plm.document.read"),
+    # P1-A1 (2026-11-04 deep review): the field-level diff was missing
+    # from this table (the single-segment pattern above does not match
+    # the /diff suffix), so any bearer holder could reconstruct the
+    # original values of changed fields, partly bypassing SR-005.
+    (re.compile(r"^/api/plm/documents/[^/]+/diff$"), "plm.document.read"),
     (re.compile(r"^/api/plm/packages/[^/]+/delivery$"), "plm.document.read"),
     (re.compile(r"^/api/plm/documents/batch-export/[^/]+/download$"), "plm.document.read"),
+    # P1-A2 (2026-11-04 deep review): ingested source files are as
+    # sensitive as PLM files / delivery ZIPs, but this download was
+    # ungated. The frontend reaches it via PdfPreview/fetchBlobUrl
+    # (Bearer), not window.open, so gating here breaks no flow.
+    (re.compile(r"^/api/documents/[^/]+/file$"), "knowledge.read"),
 ]
 
 # (path pattern, permission-or-note). The endpoint itself enforces these —
@@ -226,6 +245,12 @@ ENDPOINT_ENFORCED: list[tuple[re.Pattern[str], str]] = [
 # Endpoint-enforced sensitive reads (the endpoint itself calls require()).
 ENDPOINT_SENSITIVE_READS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^/api/plm/audit$"), "audit.read"),
+    # P1-A4 (2026-11-04 deep review): project export download enforces
+    # project.write (global or project-scoped) or project membership in
+    # the endpoint itself; the middleware sensitive-read table cannot
+    # express the project-scoped OR-membership rule.
+    (re.compile(r"^/api/projects/[^/]+/exports/[^/]+$"),
+     "project.write (global or project-scoped) OR project membership"),
     # Stage 2 / SR-041: policy list is admin-only (_require_admin).
     (re.compile(r"^/api/mcp/approvals/policies$"), "admin.connectors"),
     # MCP pending list: personal (current_user + attribution filter).

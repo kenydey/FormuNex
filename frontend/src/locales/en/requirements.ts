@@ -250,6 +250,7 @@ const en: Record<string, string> = {
   "struct_editor.load_to_canvas": "Load to canvas",
   "struct_editor.loading": "Loading structure editor…",
   "struct_editor.read_failed": "Failed to read the canvas structure: {{msg}}",
+  "struct_editor.read_failed_plain": "Failed to read the canvas structure. Please try again.",
   "struct_editor.read_from_canvas": "Read canvas",
   "struct_editor.smiles_ph": "Or enter SMILES text here (e.g. CCO for ethanol), then click “Load to canvas” to sync it to the canvas",
   "struct_editor.title": "Draw a molecular structure",

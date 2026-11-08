@@ -1,17 +1,34 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain ESM helper without types
-import { extract } from "../scripts/i18n-keys.mjs";
+import { extract, extractAll } from "../scripts/i18n-keys.mjs";
 import en from "./locales/en-US";
 import { NAV, type NavItem } from "./app/nav";
 import { STATUS_ZH } from "./shared/tags";
 
 const navKeys = (items: NavItem[]): string[] => items.flatMap((i) => [i.key, ...navKeys(i.children ?? [])]);
 
+const placeholders = (s: string): string[] => [...new Set([...s.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))].sort();
+
 describe("i18n", () => {
   it("every static key in the code has an English string", () => {
     const keys = [...(extract("src") as Map<string, string>).keys()];
     expect(keys.length).toBeGreaterThan(400);
     expect(keys.filter((k) => !(k in en))).toEqual([]);
+  });
+
+  it("one key, one default; English placeholders match the Chinese default (P1-E10)", () => {
+    const all = extractAll("src") as Map<string, Set<string>>;
+    const multi = [...all.entries()].filter(([, defaults]) => defaults.size > 1);
+    expect(multi.map(([k]) => k)).toEqual([]);
+    const mismatch = [...all.entries()].flatMap(([k, defaults]) => {
+      const zh = [...defaults][0];
+      const enStr = (en as Record<string, string>)[k];
+      if (enStr === undefined) return [];
+      const a = placeholders(zh);
+      const b = placeholders(enStr);
+      return JSON.stringify(a) === JSON.stringify(b) ? [] : [`${k}: zh ${JSON.stringify(a)} vs en ${JSON.stringify(b)}`];
+    });
+    expect(mismatch).toEqual([]);
   });
 
   it("dynamic keys (navigation, statuses) are translated", () => {
@@ -46,6 +63,9 @@ describe("i18n", () => {
       "ia.sub": ["knowledge", "qa", "research", "search"],
       // Group-home next-step hints (app/GroupHome.tsx NEXT_HINTS).
       "ia.next": ["cockpit", "data", "lab", "materials", "product", "spec"],
+      // Test-record route / group codes (materials/TestRecordsPage.tsx).
+      "mat.route": ["oral", "dermal", "inhalation", "other"],
+      "mat.group": ["fish", "daphnia", "algae"],
     };
     const missing = Object.entries(families).flatMap(([family, members]) =>
       members.map((m) => `${family}.${m}`).filter((k) => !(k in en)),

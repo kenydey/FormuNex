@@ -20,3 +20,7 @@ xvfb-run -a node e2e-desktop/smoke.mjs              # FX_API / FX_APP / FX_USER 
 The local-stack mode (Docker Desktop orchestration) needs a Docker engine and is covered by the shell's unit
 tests with a fake `docker` executable (`cargo test`); a real install / start / export smoke on Windows and macOS
 is a release checklist item (docs/desktop.md).
+
+> P2-E20: this smoke test is a **pre-release manual gate, not a CI job**. It needs tauri-driver, a display
+> server (or xvfb) and a real backend, all of which are flaky in CI runners; wiring it into CI would produce
+> red builds for environment reasons, not product regressions. Run it by hand before a desktop release.

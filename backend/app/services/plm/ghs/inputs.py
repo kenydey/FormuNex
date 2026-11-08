@@ -55,7 +55,7 @@ def _hazards(
             hazard_class=r.hazard_class, category=r.category, h_code=r.h_code, scl=r.scl,
             m_factor_acute=r.m_factor_acute, m_factor_chronic=r.m_factor_chronic,
             ate_value=r.ate_value, ate_unit=r.ate_unit, qualifier=r.qualifier or "", source=r.source,
-            conditional="条件" in (r.qualifier or ""),
+            conditional="条件" in (r.qualifier or ""), is_minimum=bool(r.is_minimum),
         ))
     return out
 
@@ -166,7 +166,21 @@ def _explode_material(look: _Lookup, built: BuiltInputs, material_id: str, name:
         for row in comps:
             share = _range_value(row, mode)
             sub = look.substance_by_id(row.substance_id)
-            if share is None or sub is None:
+            if share is None:
+                continue
+            if sub is None:
+                # P3-C10: 组成行指向已删物质时旧代码直接 continue —— 该行
+                # 份额既不进 covered（其余行合计 ≥99.5% 时连“未申报组分”
+                # 都不产生），也不留缺口，等于静默丢失。按本函数其余缺
+                # 失路径（material_not_found / substance_not_found）一致
+                # 处理：计入 covered（已作为未知量入账，不再进余量），
+                # 以未知组分入账并记 gap。
+                covered += share
+                built.components.append(Component(name=f"{label} 未知组分", pct=pct * share / 100.0,
+                                                  assessed=False, via=[label]))
+                built.gaps.append(DataGap("material_component_substance_not_found", None,
+                                          f"原料 {label} 的组成行（物质 {row.substance_id}）不在物质库中，"
+                                          f"按“危害未知”计入。"))
                 continue
             covered += share
             comp = look.component(sub, sub.name_zh or sub.name_en, pct * share / 100.0, [label])
