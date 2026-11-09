@@ -80,7 +80,14 @@ jobs:
             echo "::error::origin/main not found; migration-discipline check cannot run without full history (fetch-depth: 0 required). Refusing to skip."
             exit 1
           fi
-          mapfile -t modified < <(git diff --name-only --diff-filter=M origin/main...HEAD -- backend/app/db/alembic/versions/)
+          # One-time repair exemption (approved by Cheng, 2026-11-09): 0078's
+          # duplicate guard used a FROM subquery without an alias, which
+          # PostgreSQL 15 rejects at upgrade time on any fresh database.
+          # The repair only adds the alias (zero semantic change) and cannot
+          # ship as a new migration — the failure happens inside 0078's own
+          # upgrade. Note this exemption is file-scoped: a future edit to
+          # 0078 for any other reason would also pass this check.
+          mapfile -t modified < <(git diff --name-only --diff-filter=M origin/main...HEAD -- backend/app/db/alembic/versions/ | grep -v '^backend/app/db/alembic/versions/0078_w1_concurrency\.py$')
           if [ "${#modified[@]}" -gt 0 ]; then
             echo "::error::Existing migration file(s) modified on this branch. Migration history is frozen; ship the fix as a new migration instead."
             printf '%s\n' "${modified[@]}"

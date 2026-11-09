@@ -348,7 +348,8 @@ pub async fn create_admin(app: AppHandle, username: String, display_name: String
 pub fn reset_config(state: State<'_, AppState>) -> Result<()> {
     let path = state.config_dir.join(crate::config::CONFIG_FILE);
     match std::fs::remove_file(&path) {
-        Ok(()) | Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(DesktopError::Config(e.to_string())),
     }
 }

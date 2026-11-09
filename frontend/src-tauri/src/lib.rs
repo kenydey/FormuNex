@@ -63,7 +63,7 @@ pub fn run() {
             let state = commands::AppState::new(app.handle())?;
             app.manage(state);
             // Signed shell updates only when a public key was configured at build time (tauri.conf / CI).
-            if commands::updater_configured(app.handle()) {
+            if commands::updater_configured(app.handle().clone()) {
                 app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             }
             #[cfg(any(windows, target_os = "linux"))]

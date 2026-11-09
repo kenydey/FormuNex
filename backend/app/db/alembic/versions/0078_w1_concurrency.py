@@ -34,7 +34,7 @@ def _guard_duplicates() -> None:
     row = bind.execute(text(
         "SELECT COUNT(*) FROM ("
         "SELECT step_id, user_id, meaning FROM e_signatures "
-        "WHERE step_id IS NOT NULL GROUP BY step_id, user_id, meaning HAVING COUNT(*) > 1)"
+        "WHERE step_id IS NOT NULL GROUP BY step_id, user_id, meaning HAVING COUNT(*) > 1) AS dup"
     )).first()
     dup_steps = int(row[0]) if row else 0
     if dup_steps:
@@ -44,7 +44,7 @@ def _guard_duplicates() -> None:
     row = bind.execute(text(
         "SELECT COUNT(*) FROM ("
         "SELECT revision_id FROM release_packages WHERE status = 'under_review' "
-        "GROUP BY revision_id HAVING COUNT(*) > 1)"
+        "GROUP BY revision_id HAVING COUNT(*) > 1) AS dup"
     )).first()
     dup_pkgs = int(row[0]) if row else 0
     if dup_pkgs:
