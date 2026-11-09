@@ -306,6 +306,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake = dir.path().join(exe_name());
         std::fs::write(&fake, "").unwrap();
+        // P3-E13: an override must be executable on unix, so the fixture
+        // needs the execute bit (a plain fs::write leaves 0644).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         assert_eq!(find_docker(Some(fake.to_str().unwrap()), None), Some(fake.clone()));
         assert_eq!(find_docker(Some("/nope/docker"), None), None);
         assert_eq!(find_docker(None, Some(dir.path().as_os_str().to_owned())), Some(fake));
