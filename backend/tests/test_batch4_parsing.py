@@ -376,6 +376,19 @@ def _make_batch_sdk(batch_results):
     module.TimeoutError = TimeoutError_
     module.TaskNotFoundError = TaskNotFoundError
 
+    # The real SDK (0.2.5) exports FileParam at the top level; the batch
+    # path passes one data_id per page. A fake without it makes every batch
+    # submission die with AttributeError before extract_batch is reached.
+    from dataclasses import dataclass
+
+    @dataclass
+    class FileParam:
+        pages: str = ""
+        ocr: bool | None = None
+        data_id: str = ""
+
+    module.FileParam = FileParam
+
     class _Client:
         def __init__(self, token=None, base_url=None):
             pass
@@ -544,3 +557,45 @@ def test_p1_b7_get_shard_validates_parser_and_range(_tables):
 def test_p1_b7_put_shard_refuses_empty_markdown(_tables):
     assert parse_shards.put_shard("sha1", 0, 1, 10, "markitdown", "   ", "{}") is False
     assert parse_shards.get_shard("sha1", 0) is None
+
+
+# ── batch 4 (MinerU): .html/.htm uploads run MinerU-HTML first ─────────────
+
+
+def _html_doc(markdown: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(markdown=markdown)
+
+
+def test_mineru_html_tier_wins_for_html_upload(monkeypatch: pytest.MonkeyPatch):
+    """MinerU available → an .html upload is parsed by MinerU-HTML, and the
+    tier name records it."""
+    monkeypatch.setattr(parsing, "_mineru_usable", lambda: True)
+    monkeypatch.setattr(
+        mineru_cloud, "parse_bytes", lambda *a, **k: _html_doc("# From MinerU\n\nbody")
+    )
+    result = parsing.parse_document(b"<html><body><h1>Hi</h1></body></html>", "html")
+    assert result.parser == "mineru_html"
+    assert "From MinerU" in result.markdown
+
+
+def test_mineru_html_tier_falls_back_when_unavailable(monkeypatch: pytest.MonkeyPatch):
+    """MinerU off → the local text tier converts the HTML, unchanged."""
+    monkeypatch.setattr(parsing, "_mineru_usable", lambda: False)
+    result = parsing.parse_document(
+        b"<html><body><h1>Hi</h1><p>local text</p></body></html>", "html"
+    )
+    assert result.parser == "text"
+    assert "local text" in result.markdown
+
+
+def test_mineru_html_tier_falls_back_when_mineru_fails(monkeypatch: pytest.MonkeyPatch):
+    """MinerU returning nothing → the local text tier, not an empty parse."""
+    monkeypatch.setattr(parsing, "_mineru_usable", lambda: True)
+    monkeypatch.setattr(mineru_cloud, "parse_bytes", lambda *a, **k: None)
+    result = parsing.parse_document(
+        b"<html><body><h1>Hi</h1><p>local text</p></body></html>", "htm"
+    )
+    assert result.parser == "text"
+    assert "local text" in result.markdown

@@ -514,6 +514,11 @@ class Settings(BaseSettings):
     # 这里默认全开并在调用时打日志，关掉必须是有意为之。
     mineru_formula_enabled: bool = True
     mineru_table_enabled: bool = True
+    # 显式指定 MinerU 模型：SDK 不传 model 时按扩展名推断，非 HTML 一律 vlm
+    # （与云端文档默认 pipeline 不同）。这里钉死选择，默认 vlm 保持当前行为；
+    # pipeline 更轻，是否用于文本层页由 A/B 评测结论定。只接受 pipeline/vlm，
+    # 其他值记警告并回落 vlm（.html 不在 SUPPORTED_EXTS 内，不走 MinerU）。
+    mineru_model: str = "vlm"
     # ── Phase 1：mineru_cloud 一等后端的按页质量自适应 ────────────────
     # 整份文档的页面都有可用文本层时跳过云端调用（省配额）；False = 显式
     # 指定 mineru_cloud 时也全量走云端。

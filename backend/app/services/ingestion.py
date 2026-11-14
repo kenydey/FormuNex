@@ -515,6 +515,26 @@ def _html_to_text(html: str) -> str:
     return html_to_markdown(html)
 
 
+def _crawl_page_text(url: str) -> str:
+    """A page through MinerU crawl, or "" when MinerU cannot do it.
+
+    Fail-open by design: any crawl problem (disabled, no token, network,
+    timeout, non-done state) returns "" and the caller keeps the local
+    conversion result. The SSRF pre-flight lives in ``ingest_url`` — this
+    helper never sees an unvetted URL.
+    """
+    try:
+        from .mineru_cloud import crawl_url
+
+        document = crawl_url(url)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ingest_url: MinerU crawl failed for %s: %s", url, exc)
+        return ""
+    if document is None:
+        return ""
+    return (document.markdown or "").strip()
+
+
 def ingest_url(url: str, *, persist: bool = True) -> IngestOutcome:
     """Fetch a web page and convert to Evidence chunks."""
     if not is_safe_url(url):
@@ -624,6 +644,16 @@ def ingest_url(url: str, *, persist: bool = True) -> IngestOutcome:
         except Exception:  # noqa: BLE001
             _html = body.decode("utf-8", errors="replace")
         text = _html_to_text(_html)
+        if not text.strip():
+            # A JS-rendered page: the local conversion found nothing to
+            # convert. MinerU's server renders the page, so a crawl can
+            # still read it. Only the empty case escalates — pages the local
+            # path already reads keep their current result and cost no
+            # quota. Fail-open: a crawl that returns nothing leaves text
+            # empty and the existing "cannot extract text" outcome stands.
+            text = _crawl_page_text(url)
+            if text:
+                logger.info("ingest_url: %s parsed by MinerU crawl", url)
     elif is_pdf:
         # v7 解析-4: 无 PDF 解析器时给出可操作的 hint（与 ingest_file 同口径）。
         from .parsing import can_parse, parse_document

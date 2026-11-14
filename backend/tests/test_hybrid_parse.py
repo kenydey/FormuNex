@@ -175,6 +175,112 @@ def test_a_failed_escalation_keeps_the_local_page(
     assert "LOCAL" in hybrid_parse.parse(b"%PDF")
 
 
+def test_a_scanned_page_is_escalated_with_ocr_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A scanned page in a mixed document has no text layer: escalating it
+    without OCR returns nothing and the page is lost (the adoption gate can
+    only keep local text, which for a scan is empty)."""
+    seen: dict = {}
+    monkeypatch.setattr(pdf_local, "page_as_pdf", lambda c, n: b"%PDF one page")
+
+    def _fake_parse_bytes(content, **kw):
+        seen.update(kw)
+        return mineru_cloud.MinerUDocument(
+            blocks=[_block("text", text="SCANNED TEXT")], markdown="scanned"
+        )
+
+    monkeypatch.setattr(mineru_cloud, "parse_bytes", _fake_parse_bytes)
+
+    result = hybrid_parse._escalate_page(b"%PDF", _page(1, chars=0, markdown=""))
+
+    assert seen.get("ocr") is True
+    assert result is not None and "SCANNED TEXT" in result
+
+
+def test_a_text_page_is_escalated_without_ocr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page with a text layer escalates without OCR: MinerU reads the
+    characters, and OCR-ing pixels would only cost accuracy."""
+    seen: dict = {}
+    monkeypatch.setattr(pdf_local, "page_as_pdf", lambda c, n: b"%PDF one page")
+
+    def _fake_parse_bytes(content, **kw):
+        seen.update(kw)
+        return mineru_cloud.MinerUDocument(
+            blocks=[_block("text", text="CLOUD TEXT")], markdown="cloud"
+        )
+
+    monkeypatch.setattr(mineru_cloud, "parse_bytes", _fake_parse_bytes)
+
+    result = hybrid_parse._escalate_page(b"%PDF", _page(1))
+
+    assert seen.get("ocr") is False
+    assert result is not None and "CLOUD TEXT" in result
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("这是一个中文文档，用于测试语言检测功能。", "ch"),
+        ("This is an English document for testing.", "en"),
+        ("Dieses Dokument beschreibt die Verfahren der Oberflächenbehandlung.", "latin"),
+        ("Ce document décrit les procédures de traitement de surface.", "latin"),
+        ("この文書は表面処理の手順を説明しています。", "japan"),
+        ("이 문서는 표면 처리 절차를 설명합니다.", "korean"),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_mineru_language_detection(text, expected) -> None:
+    assert hybrid_parse._mineru_language_for_text(text) == expected
+
+
+def test_a_scanned_page_escalation_passes_detected_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local OCR text doubles as the language hint for the cloud OCR pass."""
+    seen: dict = {}
+    monkeypatch.setattr(pdf_local, "page_as_pdf", lambda c, n: b"%PDF one page")
+
+    def _fake_parse_bytes(content, **kw):
+        seen.update(kw)
+        return mineru_cloud.MinerUDocument(
+            blocks=[_block("text", text="SCANNED TEXT")], markdown="scanned"
+        )
+
+    monkeypatch.setattr(mineru_cloud, "parse_bytes", _fake_parse_bytes)
+
+    hybrid_parse._escalate_page(
+        b"%PDF", _page(1, chars=0, markdown=""),
+        ocr_text="Dieses Dokument beschreibt die Verfahren der Oberflächenbehandlung.",
+    )
+
+    assert seen.get("ocr") is True
+    assert seen.get("language") == "latin"
+
+
+def test_a_text_page_escalation_passes_no_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Language only matters on OCR paths; a text-layer page sends none."""
+    seen: dict = {}
+    monkeypatch.setattr(pdf_local, "page_as_pdf", lambda c, n: b"%PDF one page")
+
+    def _fake_parse_bytes(content, **kw):
+        seen.update(kw)
+        return mineru_cloud.MinerUDocument(
+            blocks=[_block("text", text="CLOUD TEXT")], markdown="cloud"
+        )
+
+    monkeypatch.setattr(mineru_cloud, "parse_bytes", _fake_parse_bytes)
+
+    hybrid_parse._escalate_page(b"%PDF", _page(1))
+
+    assert seen.get("language") is None
+
+
 def test_no_local_extraction_means_the_cascade_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

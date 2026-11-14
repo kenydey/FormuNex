@@ -14,6 +14,8 @@ path (not bytes), returns an `ExtractResult` with `state`/`markdown`/
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 import types
 from dataclasses import dataclass, field
@@ -72,14 +74,52 @@ def _make_sdk(*, result=None, raise_name: str | None = None,
     module.TimeoutError = TimeoutError_
     module.TaskNotFoundError = TaskNotFoundError
     module._Unexpected = ValueError          # not a MinerUError at all
+
+    @dataclass
+    class FileParam:
+        pages: str = ""
+        ocr: bool | None = None
+        data_id: str = ""
+
+    module.FileParam = FileParam
     module.calls = []
     module.sources_existed = []
     module.batch_calls = []                  # list[list[str]] — 每次 extract_batch 的源
     module.batch_sources_existed = []        # list[list[bool]]
+    module.submit_calls = []                 # list[str] — 每次 submit 的源
+    module.get_batch_calls = []              # list[str] — 每次 get_batch 的 batch_id
+    module.submit_batch_id = "b-1"
+    module.get_batch_script = None           # list["processing" | "done" | Exception]
 
     class _Client:
         def __init__(self, token=None, base_url=None):
             module.calls.append({"token": token, "base_url": base_url})
+
+        def submit(self, source, **kwargs):
+            import os
+
+            module.sources_existed.append(os.path.isfile(source))
+            module.last_kwargs = kwargs
+            module.last_source = source
+            module.submit_calls.append(source)
+            if raise_name is not None:
+                raise getattr(module, raise_name)("simulated failure")
+            return module.submit_batch_id
+
+        def get_batch(self, batch_id):
+            module.get_batch_calls.append(batch_id)
+            if module.get_batch_script is not None:
+                if not module.get_batch_script:
+                    return [result if result is not None else _FakeResult()]
+                step = module.get_batch_script.pop(0)
+                if isinstance(step, Exception):
+                    raise step
+                if step == "processing":
+                    return [_FakeResult(state="processing")]
+                return [_FakeResult()]
+            if raise_name is not None:
+                raise getattr(module, raise_name)("simulated failure")
+            return [result if result is not None else _FakeResult()]
 
         def extract(self, source, **kwargs):
             import os
@@ -265,6 +305,162 @@ def test_ocr_flag_is_forwarded(sdk) -> None:
     assert sdk.last_kwargs["ocr"] is True
 
 
+def test_batch_ocr_flag_is_forwarded(sdk) -> None:
+    mineru_cloud.parse_pages_batch([b"%PDF-1.4"], ocr=True)
+    assert sdk.last_batch_kwargs["ocr"] is True
+
+
+def test_batch_without_ocr_sends_no_ocr_flag(sdk) -> None:
+    mineru_cloud.parse_pages_batch([b"%PDF-1.4"])
+    assert sdk.last_batch_kwargs["ocr"] is None
+
+
+def test_model_is_pinned_to_vlm_by_default(sdk) -> None:
+    mineru_cloud.parse_bytes(b"%PDF-1.4", ext="pdf")
+    assert sdk.last_kwargs["model"] == "vlm"
+
+
+def test_model_setting_is_honoured(sdk, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "mineru_model", "pipeline", raising=False)
+    mineru_cloud.parse_bytes(b"%PDF-1.4", ext="pdf")
+    assert sdk.last_kwargs["model"] == "pipeline"
+
+
+def test_unknown_model_falls_back_to_vlm(sdk, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "mineru_model", "turbo", raising=False)
+    mineru_cloud.parse_bytes(b"%PDF-1.4", ext="pdf")
+    assert sdk.last_kwargs["model"] == "vlm"
+
+
+def test_batch_model_is_pinned_to_vlm_by_default(sdk) -> None:
+    mineru_cloud.parse_pages_batch([b"%PDF-1.4"])
+    assert sdk.last_batch_kwargs["model"] == "vlm"
+
+
+def test_language_is_forwarded_when_given(sdk) -> None:
+    mineru_cloud.parse_bytes(b"%PDF-1.4", ext="pdf", language="latin")
+    assert sdk.last_kwargs["language"] == "latin"
+
+
+def test_language_is_not_sent_when_not_given(sdk) -> None:
+    mineru_cloud.parse_bytes(b"%PDF-1.4", ext="pdf")
+    assert "language" not in sdk.last_kwargs
+
+
+def test_batch_language_is_forwarded_when_given(sdk) -> None:
+    mineru_cloud.parse_pages_batch([b"%PDF-1.4"], language="latin")
+    assert sdk.last_batch_kwargs["language"] == "latin"
+
+
+def test_data_id_is_the_content_hash(sdk) -> None:
+    content = b"%PDF-1.4 data id"
+    mineru_cloud.parse_bytes(content, ext="pdf")
+    file_params = sdk.last_kwargs["file_params"]
+    assert len(file_params) == 1
+    param = next(iter(file_params.values()))
+    assert param.data_id == hashlib.sha256(content).hexdigest()
+
+
+def test_batch_data_id_is_per_page_content_hash(sdk) -> None:
+    contents = [b"%PDF page one", b"%PDF page two"]
+    mineru_cloud.parse_pages_batch(contents)
+    file_params = sdk.last_batch_kwargs["file_params"]
+    assert len(file_params) == 2
+    assert sorted(p.data_id for p in file_params.values()) == sorted(
+        hashlib.sha256(c).hexdigest() for c in contents
+    )
+
+
+def test_successful_parse_is_counted(sdk) -> None:
+    assert mineru_cloud.daily_usage_summary() is None
+    mineru_cloud.parse_bytes(b"%PDF-1.4", ext="pdf")
+    assert mineru_cloud.daily_usage_summary() == {
+        "pages": 1, "calls": 1, "failed": 0, "quota_errors": 0,
+    }
+
+
+def test_quota_rejection_is_counted_without_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch, _make_sdk(raise_name="QuotaExceededError"))
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mineru_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "mineru_api_key", "t", raising=False)
+    assert mineru_cloud.parse_bytes(b"%PDF-1.4", ext="pdf") is None
+    assert mineru_cloud.daily_usage_summary() == {
+        "pages": 0, "calls": 1, "failed": 1, "quota_errors": 1,
+    }
+
+
+def test_timeout_is_counted_as_failed_with_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch, _make_sdk(raise_name="TimeoutError"))
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mineru_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "mineru_api_key", "t", raising=False)
+    assert mineru_cloud.parse_bytes(b"%PDF-1.4", ext="pdf") is None
+    assert mineru_cloud.daily_usage_summary() == {
+        "pages": 1, "calls": 1, "failed": 1, "quota_errors": 0,
+    }
+
+
+# ── async resume: a timed-out submission is picked up, not resubmitted ───────
+
+
+def test_timeout_leaves_pending_and_resume_picks_it_up(sdk) -> None:
+    """First call times out (processing past a tiny budget) and saves the
+    pending batch; the second call resumes it and submits nothing new."""
+    from pathlib import Path
+
+    sdk.get_batch_script = ["processing", "done"]
+    assert mineru_cloud.parse_bytes(b"%PDF resume", ext="pdf", timeout=0.1) is None
+    assert len(sdk.submit_calls) == 1
+    cache_dir = Path(get_settings().mineru_cache_dir)
+    assert len(list((cache_dir / "pending").glob("*.json"))) == 1
+
+    doc = mineru_cloud.parse_bytes(b"%PDF resume", ext="pdf")
+    assert doc is not None
+    assert len(sdk.submit_calls) == 1
+    assert sdk.get_batch_calls[-1] == "b-1"
+    assert list((cache_dir / "pending").glob("*.json")) == []
+
+
+def test_expired_pending_batch_resubmits(sdk) -> None:
+    """The server no longer has the pending batch (-60012): the stale record
+    is dropped and the document is submitted fresh."""
+    sdk.get_batch_script = ["processing"]
+    assert mineru_cloud.parse_bytes(b"%PDF expire", ext="pdf", timeout=0.1) is None
+    assert len(sdk.submit_calls) == 1
+
+    sdk.get_batch_script = [sdk.TaskNotFoundError("gone"), "done"]
+    doc = mineru_cloud.parse_bytes(b"%PDF expire", ext="pdf")
+    assert doc is not None
+    assert len(sdk.submit_calls) == 2
+
+
+def test_stale_pending_record_is_ignored(sdk) -> None:
+    """A pending record older than 24h is dead (upload link and server task
+    are both gone): the next call submits fresh instead of resuming it."""
+    import json as _json
+
+    from pathlib import Path
+
+    sdk.get_batch_script = ["processing"]
+    assert mineru_cloud.parse_bytes(b"%PDF stale", ext="pdf", timeout=0.1) is None
+    cache_dir = Path(get_settings().mineru_cache_dir)
+    pending_files = list((cache_dir / "pending").glob("*.json"))
+    assert len(pending_files) == 1
+    payload = _json.loads(pending_files[0].read_text(encoding="utf-8"))
+    payload["submitted_at"] = 0
+    pending_files[0].write_text(_json.dumps(payload), encoding="utf-8")
+
+    sdk.get_batch_script = ["done"]
+    doc = mineru_cloud.parse_bytes(b"%PDF stale", ext="pdf")
+    assert doc is not None
+    assert len(sdk.submit_calls) == 2
+
+
 def test_unfinished_task_is_not_treated_as_a_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -324,11 +520,17 @@ def test_prune_cache_default_skips_cache(sdk, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_prune_cache_writes_nothing(sdk, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """prune 时不写缓存目录（不累积磁盘）。"""
+    """prune 时不写缓存条目（不累积解析结果）。
+
+    The daily usage counter still writes its single bounded usage.json and
+    the resume path may leave an empty pending/ directory — neither is a
+    parse result, and neither accumulates.
+    """
     monkeypatch.setattr(get_settings(), "prune_mineru_cache", True, raising=False)
     mineru_cloud.parse_bytes(b"%PDF-1.4 prune2", ext="pdf")
     cache_root = tmp_path / "cache"
-    assert not cache_root.exists() or not any(cache_root.iterdir())
+    docs = list(cache_root.rglob("doc.json")) if cache_root.exists() else []
+    assert docs == []
 
 
 def test_cached_images_survive_the_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -370,6 +572,16 @@ def test_ocr_and_non_ocr_are_cached_separately(sdk) -> None:
     the other would be silently wrong."""
     mineru_cloud.parse_bytes(b"%PDF same", ext="pdf", ocr=False)
     mineru_cloud.parse_bytes(b"%PDF same", ext="pdf", ocr=True)
+    assert len(sdk.calls) == 2
+
+
+def test_models_are_cached_separately(sdk, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same page parsed with a different model is a different result;
+    serving a cached vlm result for a pipeline request (or vice versa)
+    would be silently wrong."""
+    mineru_cloud.parse_bytes(b"%PDF same", ext="pdf")
+    monkeypatch.setattr(get_settings(), "mineru_model", "pipeline", raising=False)
+    mineru_cloud.parse_bytes(b"%PDF same", ext="pdf")
     assert len(sdk.calls) == 2
 
 
@@ -522,9 +734,15 @@ def test_a_rejected_token_during_a_parse_still_degrades(
 def test_a_document_uses_the_document_timeout(
     sdk, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(get_settings(), "mineru_timeout_s", 300.0, raising=False)
-    mineru_cloud.parse_bytes(b"%PDF whole doc", ext="pdf")
-    assert sdk.last_kwargs["timeout"] == 300
+    """The document timeout bounds how long a call waits for the cloud.
+
+    Mechanism change (batch 3): `submit` takes no timeout — the budget now
+    bounds the poll loop, not an SDK argument. A task that is still
+    processing past a zero budget returns None; the pending record stays
+    for the next call to resume.
+    """
+    sdk.get_batch_script = ["processing"]
+    assert mineru_cloud.parse_bytes(b"%PDF whole doc", ext="pdf", timeout=0) is None
 
 
 def test_an_explicit_timeout_overrides_the_document_default(
@@ -533,11 +751,13 @@ def test_an_explicit_timeout_overrides_the_document_default(
     """The caller escalating twenty pages sequentially needs its own budget.
 
     Without this the per-page loop inherits the whole-document allowance, and
-    an unreachable service is charged that allowance once per page.
+    an unreachable service is charged that allowance once per page. The
+    budget is the poll deadline: a task that finishes within it is returned,
+    whatever the document default is.
     """
     monkeypatch.setattr(get_settings(), "mineru_timeout_s", 300.0, raising=False)
-    mineru_cloud.parse_bytes(b"%PDF one page", ext="pdf", timeout=90.0)
-    assert sdk.last_kwargs["timeout"] == 90
+    sdk.get_batch_script = ["processing", "done"]
+    assert mineru_cloud.parse_bytes(b"%PDF one page", ext="pdf", timeout=90.0) is not None
 
 
 def test_a_timeout_is_reported_with_the_budget_that_was_actually_used(
@@ -632,3 +852,74 @@ def test_parse_pages_batch_uses_the_batch_timeout(
     monkeypatch.setattr(get_settings(), "mineru_batch_timeout_s", 1800.0, raising=False)
     mineru_cloud.parse_pages_batch([b"%PDF one"])
     assert sdk.last_batch_kwargs["timeout"] == 1800
+
+
+# ── batch 4: crawl (F) + MinerU-HTML for .html/.htm uploads (G) ─────────────
+
+
+def test_crawl_url_submits_the_url_with_the_html_model(sdk, tmp_path) -> None:
+    """A crawl is a URL submission, not a file upload, and it always runs
+    MinerU-HTML — the mineru_model setting does not apply."""
+    url = "https://example.com/docs/tds.html"
+    document = mineru_cloud.crawl_url(url)
+    assert document is not None
+    assert document.markdown == "# Parsed\n\nbody"
+    assert sdk.submit_calls == [url]
+    assert sdk.last_kwargs["model"] == "html"
+    assert sdk.last_kwargs["formula"] is True
+    assert sdk.last_kwargs["table"] is True
+    expected_data_id = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    assert sdk.last_kwargs["file_params"][url].data_id == expected_data_id
+    usage = json.loads((tmp_path / "cache" / "usage.json").read_text(encoding="utf-8"))
+    today = usage[next(iter(usage))]
+    assert today["pages"] == 1 and today["calls"] == 1 and today["failed"] == 0
+
+
+def test_crawl_url_is_not_cached(sdk) -> None:
+    """A page can change, so a crawl result is never served from the parse
+    cache — the same URL twice submits twice."""
+    url = "https://example.com/changing"
+    assert mineru_cloud.crawl_url(url) is not None
+    assert mineru_cloud.crawl_url(url) is not None
+    assert len(sdk.submit_calls) == 2
+
+
+def test_crawl_url_timeout_leaves_pending_and_resumes(sdk) -> None:
+    """Same resume contract as the file path: a spent budget leaves a pending
+    record, and the next call resumes it instead of resubmitting."""
+    url = "https://example.com/slow"
+    sdk.get_batch_script = ["processing"]
+    assert mineru_cloud.crawl_url(url, timeout=0) is None
+    sdk.get_batch_script = ["done"]
+    document = mineru_cloud.crawl_url(url)
+    assert document is not None
+    assert len(sdk.submit_calls) == 1, "the resume must not submit again"
+
+
+def test_crawl_url_expired_pending_resubmits(sdk) -> None:
+    """A pending record the server no longer has is dropped and the crawl is
+    submitted fresh."""
+    url = "https://example.com/expired"
+    sdk.get_batch_script = ["processing"]
+    assert mineru_cloud.crawl_url(url, timeout=0) is None
+    sdk.get_batch_script = [sdk.TaskNotFoundError("expired"), "done"]
+    assert mineru_cloud.crawl_url(url) is not None
+    assert len(sdk.submit_calls) == 2
+
+
+def test_crawl_url_disabled_means_no_call(sdk, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "mineru_enabled", False, raising=False)
+    assert mineru_cloud.crawl_url("https://example.com/page") is None
+    assert sdk.calls == []
+
+
+@pytest.mark.parametrize("ext", ["html", "htm"])
+def test_html_upload_forces_the_html_model(
+    sdk, monkeypatch: pytest.MonkeyPatch, ext: str
+) -> None:
+    """An HTML file always runs MinerU-HTML, even when the mineru_model
+    setting pins pipeline — the model is a property of the file type."""
+    monkeypatch.setattr(get_settings(), "mineru_model", "pipeline", raising=False)
+    document = mineru_cloud.parse_bytes(b"<html><body>hi</body></html>", ext=ext)
+    assert document is not None
+    assert sdk.last_kwargs["model"] == "html"

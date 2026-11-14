@@ -411,9 +411,20 @@ def probe_secret(secret_id: str) -> dict:
     if secret_id == "mineru_api_key":
         # MinerU publishes no token-validation or quota endpoint, so the probe
         # asks for a task that cannot exist and reads the answer.
-        from .mineru_cloud import probe_token
+        from .mineru_cloud import daily_usage_summary, probe_token
 
         ok, message = probe_token()
+        usage = daily_usage_summary()
+        if usage is not None:
+            # The cloud offers no usage endpoint; this client-side count is
+            # the only number the operator can see, so it rides on the
+            # probe message shown next to the test button.
+            extra = f"（今日已提交 {usage['pages']} 页，{usage['calls']} 次调用"
+            if usage["failed"]:
+                extra += f"，{usage['failed']} 次失败"
+            if usage["quota_errors"]:
+                extra += f"，{usage['quota_errors']} 次配额不足"
+            message = f"{message}{extra}）"
         return {"ok": ok, "message": message}
 
     if secret_id == "serpapi_api_key":

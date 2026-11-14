@@ -375,18 +375,104 @@ def _adopt_upgraded(page_no: int, local_text: str, upgraded_text: str) -> tuple[
     return upgraded, True
 
 
-def _escalate_page(content: bytes, page: pdf_local.LocalPage) -> str | None:
+# Stopwords that separate the Latin-script languages MinerU's `latin` pack
+# covers from plain English (`en`). Kept deliberately short: the detector
+# only needs a family judgment, and any miss falls back to `en`, which is
+# the safe default for Latin script.
+_LATIN_STOPWORDS = (
+    # German
+    " und ", " der ", " die ", " das ", " ist ", " von ", " mit ", " für ",
+    " ein ", " eine ", " nicht ", " sich ",
+    # French
+    " le ", " la ", " les ", " des ", " une ", " est ", " pour ", " dans ",
+    " qui ", " que ", " aux ",
+    # Spanish
+    " el ", " los ", " las ", " una ", " es ", " para ", " con ", " del ",
+    # Italian
+    " il ", " che ", " di ", " per ", " una ", " sono ", " del ",
+    # Portuguese
+    " o ", " os ", " uma ", " para ", " com ", " dos ", " que ", " não ",
+)
+
+
+def _mineru_language_for_text(text: str | None) -> str | None:
+    """MinerU `language` code for OCR, from already-available text.
+
+    Only a family judgment: CJK-dominant text -> "ch"; Hangul -> "korean";
+    kana -> "japan"; Latin script with a continental stopword -> "latin";
+    other Latin script -> "en". Returns None when the text says nothing —
+    the caller then leaves the parameter unset and the server default
+    applies. Detection is best-effort by design: a wrong guess only picks a
+    different OCR language pack, and the fallback is always today's
+    behaviour (server default).
+    """
+    if not text or not text.strip():
+        return None
+    lowered = f" {text.strip().lower()} "
+    if re.search(r"[\uAC00-\uD7A3]", lowered):
+        return "korean"
+    if re.search(r"[\u3040-\u30FF]", lowered):
+        return "japan"
+    from . import tesseract_local
+
+    if tesseract_local.cjk_ratio(text) >= 0.3:
+        return "ch"
+    if any(word in lowered for word in _LATIN_STOPWORDS):
+        return "latin"
+    if re.search(r"[a-z]", lowered):
+        return "en"
+    return None
+
+
+def _sample_document_language(content: bytes) -> str | None:
+    """Detect the OCR language from the first page, or None.
+
+    Used by the whole-document scan path, which has no local text to judge
+    from: one page through local RapidOCR is enough for a family judgment.
+    Fail-open — any failure returns None and the server default applies.
+    The mixed-document path does not need this: its scanned pages were
+    already OCR'd locally, so the text is passed in as a hint instead.
+    """
+    try:
+        from . import rapidocr_local
+
+        if not get_settings().rapidocr_enabled:
+            return None
+        png = pdf_local.page_as_png(
+            content, 1, dpi=get_settings().rapidocr_dpi
+        )
+        if not png:
+            return None
+        text, _conf = rapidocr_local.ocr_png_scored(png)
+        return _mineru_language_for_text(text)
+    except Exception:
+        return None
+
+
+def _escalate_page(content: bytes, page: pdf_local.LocalPage, *, ocr_text: str | None = None) -> str | None:
     """One page through MinerU, or None to keep the local text.
 
     Sliced as a single-page PDF rather than rendered: the text layer survives,
     so MinerU reads characters instead of OCR-ing pixels, and it costs the same
     one page of quota either way.
+
+    A scanned page has no text layer to read, so it goes up with OCR on —
+    without it MinerU returns nothing and the page is lost (the adoption gate
+    can only keep local text, which for a scan is empty). When the caller
+    already OCR'd the page locally (`ocr_text`), the text doubles as the
+    language hint for the cloud OCR pass.
     """
     page_pdf = pdf_local.page_as_pdf(content, page.page_no)
     if not page_pdf:
         return None
+    language = (
+        _mineru_language_for_text(ocr_text)
+        if page.looks_scanned and ocr_text
+        else None
+    )
     document = mineru_cloud.parse_bytes(
-        page_pdf, ext="pdf", timeout=get_settings().mineru_page_timeout_s
+        page_pdf, ext="pdf", ocr=page.looks_scanned, language=language,
+        timeout=get_settings().mineru_page_timeout_s,
     )
     if document is None or not document.blocks:
         # v16 P3-4: MinerU 空结果不再静默 —— 写用户可见 note。
@@ -467,7 +553,10 @@ def _parse_scanned(content: bytes, pages: list[pdf_local.LocalPage]) -> str | No
         return None
 
     logger.info("hybrid: no text layer, sending %d pages to MinerU with OCR", len(pages))
-    document = mineru_cloud.parse_bytes(content, ext="pdf", ocr=True)
+    document = mineru_cloud.parse_bytes(
+        content, ext="pdf", ocr=True,
+        language=_sample_document_language(content),
+    )
     if document is None or not document.blocks:
         # v16 P3-4: MinerU 空结果不再静默 —— 写用户可见 note。
         from .parse_notices import note
@@ -859,6 +948,7 @@ def parse(content: bytes) -> str | None:
     # 逐页串行 + 熔断保留——扫描页在本语料里罕见。
     for page in scanned_sel:
         attempted += 1
+        ocr_text = None
         if get_settings().rapidocr_enabled:
             from . import rapidocr_local
 
@@ -867,6 +957,7 @@ def parse(content: bytes) -> str | None:
             )
             if png:
                 text, conf = rapidocr_local.ocr_png_scored(png)
+                ocr_text = text
                 del png
                 if text and conf >= min_conf:
                     upgraded[page.page_no] = text
@@ -876,7 +967,7 @@ def parse(content: bytes) -> str | None:
                         page.page_no, conf, min_conf,
                     )
                     continue
-        rendered = _escalate_page(content, page)
+        rendered = _escalate_page(content, page, ocr_text=ocr_text)
         if rendered:
             upgraded[page.page_no] = rendered
             consecutive_failures = 0

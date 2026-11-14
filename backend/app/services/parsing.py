@@ -1151,6 +1151,11 @@ def _inject_approximate_page_markers(
 # latin-1 and returns the text untouched. Binary formats (docx/xlsx) fall
 # through the text tier (ext not in _ALWAYS_PARSEABLE) to markitdown unchanged.
 _DOC_TIERS: tuple[tuple[str, object], ...] = (
+    # Batch 4: uploaded .html/.htm files run MinerU-HTML first when it is
+    # available — the dedicated HTML model reads structure (tables, headings)
+    # the local converter flattens. Unavailable or failed → the text tier
+    # below, unchanged.
+    ("mineru_html", lambda c, e: _parse_mineru_html(c) if e in ("html", "htm") else None),
     ("text", lambda c, e: _parse_text_file(c, e) if e in _ALWAYS_PARSEABLE else None),
     ("openpyxl", lambda c, e: _parse_xlsx_tables(c) if e in ("xlsx", "xlsm") else None),
     # B-2: 原生 docx walker 优先 —— markitdown 对嵌套表输出畸形（管道符嵌套
@@ -1170,6 +1175,30 @@ def _mineru_usable() -> bool:
     from .mineru_cloud import mineru_available
 
     return mineru_available()[0]
+
+
+def _parse_mineru_html(content: bytes) -> str | None:
+    """An uploaded .html/.htm file through MinerU-HTML.
+
+    Returns None when MinerU cannot run (disabled / no token / no SDK) or
+    the call fails — the caller falls through to the local text tier, which
+    is the behaviour this replaces. The MinerU-HTML model is forced by the
+    file type (see mineru_cloud._model_for_ext); the mineru_model setting
+    does not apply here.
+    """
+    if not _mineru_usable():
+        return None
+    from .mineru_cloud import parse_bytes
+
+    try:
+        document = parse_bytes(content, ext="html")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mineru_html tier failed: %s", exc)
+        return None
+    if document is None:
+        return None
+    markdown = (document.markdown or "").strip()
+    return markdown or None
 
 
 def _pdf_tier_order(prefer: str) -> list[tuple[str, object]]:

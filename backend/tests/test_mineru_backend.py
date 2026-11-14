@@ -152,6 +152,10 @@ def _fake_mineru_module(calls: list):
         markdown = ""
         images = []
 
+    class FakeFileParam:
+        def __init__(self, data_id=None):
+            self.data_id = data_id
+
     class FakeClient:
         def __init__(self, token=None, base_url=None):
             pass
@@ -160,13 +164,24 @@ def _fake_mineru_module(calls: list):
             calls.append(kw)
             return FakeResult()
 
+        def submit(self, path, **kw):
+            # Batch 3: _extract now submits then polls instead of calling
+            # extract() — the recorded kwargs are the same contract.
+            calls.append(kw)
+            return "batch-1"
+
+        def get_batch(self, batch_id):
+            return [FakeResult()]
+
     mod.MinerU = FakeClient
+    mod.FileParam = FakeFileParam
     mod.MinerUError = type("MinerUError", (Exception,), {})
     mod.AuthError = type("AuthError", (mod.MinerUError,), {})
     mod.QuotaExceededError = type("QuotaExceededError", (mod.MinerUError,), {})
     mod.FileTooLargeError = type("FileTooLargeError", (mod.MinerUError,), {})
     mod.PageLimitError = type("PageLimitError", (mod.MinerUError,), {})
     mod.TimeoutError = type("TimeoutError", (mod.MinerUError,), {})
+    mod.TaskNotFoundError = type("TaskNotFoundError", (mod.MinerUError,), {})
     return mod
 
 
@@ -179,7 +194,7 @@ def test_extract_sends_formula_and_table_explicitly(
     p = tmp_path / "d.pdf"
     p.write_bytes(b"%PDF fake")
     mineru_cloud._extract(b"%PDF fake", ext="pdf", ocr=False)
-    assert calls, "SDK extract was not called"
+    assert calls, "SDK submit was not called"
     # The trap: the SDK only sends these when explicitly set. We always set.
     assert calls[0].get("formula") is True
     assert calls[0].get("table") is True
