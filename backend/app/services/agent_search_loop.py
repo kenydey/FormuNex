@@ -198,6 +198,12 @@ def agent_search(
 
     ``retrieve_fn`` defaults to the single-shot ``kb_index.retrieve_evidence``
     (signature ``(query, k, *, project_id, include_global)``).
+
+    Follow-up 3 (2-6) semantics: multi-round evidence is merged + deduped,
+    then re-ranked by each round's own hybrid score (``Evidence.relevance``,
+    the same scale single-shot retrieval uses), then truncated to top-k.
+    Ties keep first-seen order (``sorted`` is stable, so round 1 wins ties).
+    Any round error keeps the evidence gathered so far (fail-open).
     """
     if max_iters is None:
         max_iters = int(_agent_cfg(settings, "agent_search_max_iters", 3))
@@ -263,8 +269,15 @@ def agent_search(
         current_query = rewrite_query(query, uncovered)
 
     covered = [f for f in facets if f not in assess_fn(facets, merged)]
+    # Follow-up 3 (2-6): 合并去重 → 按各轮证据自带的 hybrid 分数
+    # (``Evidence.relevance``，与单次检索同一口径）重排 → 截断取 top-k。
+    # 旧语义直接取 ``merged[:k]``：merged 按首次出现顺序排列，首轮恒满 k 条时
+    # 前 k 条恒等于首轮 top-k，第 2/3 轮的新命中永远进不了计分窗口。
+    # 去重保留首次出现的副本（其分数来自原始查询）；``sorted`` 是稳定排序，
+    # 分数相等时保持首次出现顺序（首轮优先）。
+    ranked = sorted(merged, key=lambda e: (e.relevance or 0.0), reverse=True)
     return AgentSearchResult(
-        evidence=merged[:k] if k > 0 else merged,
+        evidence=ranked[:k] if k > 0 else ranked,
         rounds=len(queries_issued),
         queries_issued=queries_issued,
         facets=facets,

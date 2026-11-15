@@ -23,9 +23,9 @@ from app.services.agent_search_loop import (
 )
 
 
-def _ev(identifier: str, title: str = "", snippet: str = "") -> Evidence:
+def _ev(identifier: str, title: str = "", snippet: str = "", relevance: float = 0.5) -> Evidence:
     return Evidence(source="t", identifier=identifier, title=title or identifier,
-                   snippet=snippet, relevance=0.5)
+                   snippet=snippet, relevance=relevance)
 
 
 # ── facet 提取 ──────────────────────────────────────────────
@@ -103,6 +103,31 @@ def test_agent_search_iterates_on_gap():
     assert [e.identifier for e in res.evidence] == ["d1", "d2"]
     # 改写是幂等的（"附着力"已在原查询中），第二轮按调用次数推进
     assert len(calls) == 2
+
+
+def test_agent_search_reranks_merged_by_relevance_before_truncate():
+    """Follow-up 3（2-6）：多轮证据按 relevance 重排后再截断取 top-k。
+
+    旧语义 ``merged[:k]`` 下前 k 条恒等于首轮 top-k：第 2 轮的高分新命中
+    永远进不了计分窗口。新语义下第 2 轮 relevance 0.8 的 d3 应挤掉首轮
+    relevance 0.1 的 d2。分数相等时保持首次出现顺序（见
+    test_agent_search_iterates_on_gap：全 0.5 时仍为 [d1, d2]）。
+    """
+    calls = []
+
+    def fake(q, k, **kw):
+        calls.append(q)
+        if len(calls) == 1:
+            return [
+                _ev("d1", snippet="盐雾内容", relevance=0.9),
+                _ev("d2", snippet="无关内容", relevance=0.1),
+            ]
+        return [_ev("d3", snippet="附着力划格内容", relevance=0.8)]
+
+    res = agent_search("盐雾 附着力", fake, k=2, max_iters=3)
+    assert res.rounds == 2
+    assert res.stopped_reason == "covered"
+    assert [e.identifier for e in res.evidence] == ["d1", "d3"]
 
 
 def test_agent_search_dedups_across_rounds():
@@ -287,6 +312,13 @@ def test_ab_golden_agent_does_not_regress_single_shot():
 
     实测（2026-09-28）：single_cov == agent_cov（0.188），第二轮触发 2/32。
     若未来 heuristic/语料变化导致 agent 显著优于 single，可据此翻转默认开关。
+
+    Follow-up 3（2-6）语义变更说明：本测试原注释“循环永不返回比单发更差的
+    证据集（只做追加式合并+去重）”描述的是旧语义 ``merged[:k]``；新语义为
+    合并去重 → 按 relevance 重排 → 截断取 top-k，第 2/3 轮高分新命中可以挤掉
+    首轮低分证据，因此“永不更差”不再是结构保证，下面的断言改为回归守卫
+    （agent 覆盖率不低于 single − 0.01）。本合成语料里全部 relevance 均为
+    0.5，稳定排序保持原顺序，数值期望不变。
     """
     from app.resources.golden_rigor import golden_rigor_pairs
 
@@ -298,7 +330,7 @@ def test_ab_golden_agent_does_not_regress_single_shot():
         tot_s += _coverage(pair, single_shot(q, 6))
         res = agent_search(q, single_shot, k=6, max_iters=3)
         tot_a += _coverage(pair, res.evidence)
-        # 循环永不返回比单发更差的证据集（只做追加式合并+去重）
+        # 回归守卫（Follow-up 3 语义变更后不再是结构保证，见本测试 docstring）。
         assert res.rounds >= 1
     n = len(golden_rigor_pairs)
     assert tot_a / n >= tot_s / n - 0.01
