@@ -21,6 +21,7 @@ from .citation_binder import (
     _FOOTNOTE_DEF_RE,
     extract_citation_indices_validated,
 )
+from ._fsutil import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -234,8 +235,9 @@ def run_checks(
 
     # 第 1 批 1-6：citation_date_guard 主路径接线 —— validate_llm_citation_dates
     # 此前零生产调用（模块 docstring 称"供 preflight / reviewer 调用"但无人调用）。
-    # 未来年份脚注几乎一定是编造/元数据错误，记 major（与 numeric 检查同级，
-    # 不拦导出；只有 blocking 会拦导出）。升 blocking 须另行决定。
+    # 未来年份脚注几乎一定是编造/元数据错误，记 blocking（与引用越界、
+    # 残留占位符等既有 blocking 检查同级）：open blocking finding 会拦
+    # 导出（export_allowed / assert_ready），须人工 override/resolve 后放行。
     try:
         from .citation_date_guard import validate_llm_citation_dates
 
@@ -245,7 +247,7 @@ def run_checks(
                 Finding(
                     id=uuid.uuid4().hex[:12],
                     check="citation_date",
-                    severity="major",
+                    severity="blocking",
                     status="open",
                     title=f"引用脚注含未来年份 {d['year']} 年",
                     detail=(
@@ -390,7 +392,9 @@ def _save_state(state: PreflightState) -> None:
         "updated_at": state.updated_at,
     }
     with _LOCK:
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(
+            path, json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
 
 def _finding_key(f: Finding) -> tuple[str, str, str]:

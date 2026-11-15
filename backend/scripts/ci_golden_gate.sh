@@ -6,6 +6,9 @@
 #   1. alembic upgrade head → fresh DB (migration integrity check)
 #   2. Ingest 2-3 sample documents (ingest pipeline validation)
 #   3. pytest tests/test_golden_eval.py (retrieval + citation eval)
+#   4. python scripts/rigor_gate.py (rigor three metrics, hard gate:
+#      citation_veracity / coverage / numeric_consistency must meet the
+#      thresholds in config.evals_rigor_thresholds; thresholds untouched here)
 #
 # Exit code ≠ 0 → CI blocked.
 #
@@ -45,14 +48,14 @@ if ! python3 -c "import alembic, pytest" 2>/dev/null; then
     exit 1
 fi
 
-echo "=== [1/3] alembic upgrade head (fresh DB) ==="
+echo "=== [1/4] alembic upgrade head (fresh DB) ==="
 rm -f "$GOLDEN_DB"
 cd "$BACKEND_DIR"
 python3 -m alembic upgrade head
 echo "OK: migrations applied cleanly"
 
 echo ""
-echo "=== [2/3] ingest sample documents ==="
+echo "=== [2/4] ingest sample documents ==="
 python3 -c "
 import json
 from fastapi.testclient import TestClient
@@ -92,7 +95,7 @@ print('OK: sample documents ingested')
 echo "OK"
 
 echo ""
-echo "=== [3/3] pytest tests/test_golden_eval.py ==="
+echo "=== [3/4] pytest tests/test_golden_eval.py ==="
 cd "$BACKEND_DIR"
 # --timeout needs pytest-timeout (dev extra). Skip the flag when unavailable so
 # lean local runs still exercise the gate; CI installs .[dev] and keeps the cap.
@@ -103,6 +106,18 @@ fi
 python3 -m pytest tests/test_golden_eval.py "${PYTEST_ARGS[@]}" 2>&1 || {
     echo ""
     echo "FAIL: golden eval gate did not pass — CI blocked."
+    exit 1
+}
+
+echo ""
+echo "=== [4/4] rigor gate (scripts/rigor_gate.py) ==="
+cd "$BACKEND_DIR"
+# Hard gate: exit 1 on any rigor metric below threshold or any missed
+# adversarial trap, exit 2 on infra failure; thresholds come from
+# config.evals_rigor_thresholds and are not changed here.
+python3 scripts/rigor_gate.py 2>&1 || {
+    echo ""
+    echo "FAIL: rigor gate did not pass — CI blocked."
     exit 1
 }
 

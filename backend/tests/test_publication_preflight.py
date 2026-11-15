@@ -292,8 +292,8 @@ def test_audit_hook_maps_fail_to_major(tmp_data):
     assert not any(f.check == "audit" for f in findings3)
 
 
-def test_citation_date_future_year_major(tmp_data):
-    """第 1 批 1-6：脚注含未来年份 → citation_date major finding（不拦导出）。"""
+def test_citation_date_future_year_blocking(tmp_data):
+    """第 1 批 1-6 + 追加项 2a：脚注含未来年份 → citation_date blocking finding（拦导出）。"""
     from datetime import datetime, timezone
 
     future_year = datetime.now(timezone.utc).year + 2
@@ -304,12 +304,12 @@ def test_citation_date_future_year_major(tmp_data):
     findings = pf.run_checks(md, total_anchors=1)
     dated = [f for f in findings if f.check == "citation_date"]
     assert dated, "未来年份脚注应产生 citation_date finding"
-    assert all(f.severity == "major" and f.status == "open" for f in dated)
+    assert all(f.severity == "blocking" and f.status == "open" for f in dated)
     assert str(future_year) in dated[0].title
 
 
 def test_citation_date_current_year_clean(tmp_data):
-    """第 1 批 1-6：脚注年份为当年 → 无 citation_date finding。"""
+    """第 1 批 1-6 + 追加项 2a：脚注年份为当年 → 无 citation_date finding。"""
     from datetime import datetime, timezone
 
     year = datetime.now(timezone.utc).year
