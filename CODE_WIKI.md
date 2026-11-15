@@ -369,10 +369,9 @@ hybrid(pymupdf4llm，版面感知) → docling → marker → mineru → rapidoc
 
 - **RapidOCR**（`rapidocr_enabled`）：扫描件无文字层时本地读字，约 2 s/页，
   模型随 wheel 分发、不联网、不耗配额。
-- **MinerU**（`mineru_enabled`，**默认关**）：把本地解析不好的单页（密集表格 /
+- **MinerU**（`mineru_enabled`，**默认开**，2026-11-16 Cheng 令）：把本地解析不好的单页（密集表格 /
   公式 / 图表）升级到云端。
-  ⚠️ **被升级的页面会上传到 mineru.net（第三方）并消耗配额**，所以必须显式开启，
-  需要 Token + `mineru-open-sdk`。
+  ⚠️ **被升级的页面会上传到 mineru.net（第三方）并消耗配额**，需要 Token + `mineru-open-sdk`；无 Token 时不上传、自动降级。关闭用 `FORMUNEX_MINERU_ENABLED=false`。
   开启后图表 block 会路由到**视觉模型**（见 §7.1 的文本/视觉角色分离）；没配视觉
   模型时降级但不丢内容。
 - 每篇文档的日志会写出实际胜出的层名；MinerU 真正升级过页面时显示
@@ -665,7 +664,7 @@ def molar_mass(formula: str) -> float:
 | `patent_prefer_html` | true | 专利用落地页正文，不下 PDF |
 | `arxiv_prefer_source` | true | arXiv 用 LaTeX 源码，不下 PDF |
 | `rapidocr_enabled` | true | 本地 OCR（扫描件），不联网不耗配额 |
-| `mineru_enabled` | **false** | 云端解析，⚠️ 上传第三方 + 耗配额 |
+| `mineru_enabled` | **true** | 云端解析，⚠️ 上传第三方 + 耗配额 |
 | `embedding_model` | 空 | 向量模型，空=英文默认；换了要重建索引 |
 | `rag_backend` | auto | 检索后端显式覆盖 |
 

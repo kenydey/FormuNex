@@ -467,7 +467,8 @@ class Settings(BaseSettings):
 
     # ── MinerU 云端解析 ──────────────────────────────────────────────────
     # 把本地解析不好的**单页**（密集表格、公式、图表）升级到 MinerU 云端。
-    # ⚠️ 被升级的页面会上传至 mineru.net（第三方），故默认关闭，必须显式开启。
+    # ⚠️ 被升级的页面会上传至 mineru.net（第三方）。默认开启（2026-11-16 Cheng 令）；
+    # 未配 Token 时不上传、自动降级本地解析；关闭需显式设 FORMUNEX_MINERU_ENABLED=false。
     # 本地 OCR（RapidOCR / ONNX Runtime，纯 CPU，模型随 wheel 分发无需下载）。
     # 扫描件没有文字层，此前只能靠 MinerU 云端 OCR；未配置 MinerU 时整篇无法入库。
     rapidocr_enabled: bool = True
@@ -483,7 +484,7 @@ class Settings(BaseSettings):
     # 否则回退 MinerU 结构化解析。0 = 永远用本地（不校验质量）。
     rapidocr_min_confidence: float = 0.75
 
-    mineru_enabled: bool = False
+    mineru_enabled: bool = True
     mineru_api_key: str | None = None
     mineru_base_url: str = "https://mineru.net/api/v4"
     # SDK 侧等待任务完成的上限。解析在线程池里跑，不会阻塞事件循环。
@@ -588,7 +589,7 @@ class Settings(BaseSettings):
     #   3. `itemprop="abstract|description|claims"` 是结构化分段，比从 PDF 版面
     #      重建的 Markdown 干净；中日文专利还白拿一份英文机器翻译对照。
     # PDF 唯一的优势是图表/化学结构图，而那要靠 MinerU 才能送进视觉模型
-    # （`mineru_enabled` 默认关），所以今天从 PDF 拿不到 HTML 拿不到的东西。
+    # （`mineru_enabled` 默认开），所以今天从 PDF 拿不到 HTML 拿不到的东西。
     # 设为 false 则优先下载 PDF，落地页无 PDF 时仍回落到 HTML 正文。
     patent_prefer_html: bool = True
 

@@ -190,9 +190,11 @@ def _install(monkeypatch: pytest.MonkeyPatch, module) -> None:
 # ── gating: nothing reaches the network unless it should ─────────────────────
 
 
-def test_disabled_by_default() -> None:
-    """Pages are uploaded to a third party, so this is opt-in."""
-    assert get_settings().mineru_enabled is False
+def test_enabled_by_default() -> None:
+    """Pages are uploaded to a third party, but the default is on since
+    2026-11-16 (Cheng's order): without a token nothing is uploaded and the
+    chain degrades to local parsing — see mineru_available()."""
+    assert get_settings().mineru_enabled is True
 
 
 def test_flag_off_means_no_call(sdk, monkeypatch: pytest.MonkeyPatch) -> None:
