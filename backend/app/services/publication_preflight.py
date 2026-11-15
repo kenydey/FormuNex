@@ -232,6 +232,33 @@ def run_checks(
             )
         )
 
+    # 第 1 批 1-6：citation_date_guard 主路径接线 —— validate_llm_citation_dates
+    # 此前零生产调用（模块 docstring 称"供 preflight / reviewer 调用"但无人调用）。
+    # 未来年份脚注几乎一定是编造/元数据错误，记 major（与 numeric 检查同级，
+    # 不拦导出；只有 blocking 会拦导出）。升 blocking 须另行决定。
+    try:
+        from .citation_date_guard import validate_llm_citation_dates
+
+        for d in validate_llm_citation_dates(text):
+            n = d["footnote"]
+            findings.append(
+                Finding(
+                    id=uuid.uuid4().hex[:12],
+                    check="citation_date",
+                    severity="major",
+                    status="open",
+                    title=f"引用脚注含未来年份 {d['year']} 年",
+                    detail=(
+                        f"[^{n}] 脚注标注 {d['year']} 年，晚于当前年份 "
+                        f"（可能为编造或元数据错误）"
+                    ),
+                    evidence=[d["excerpt"]],
+                    location={"line": _line_of(text, f"[^{n}]:")},
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 — 日期校验 fail-open，不炸预检
+        logger.debug("citation date check skipped: %s", exc)
+
     for i, line in enumerate(body_wo_defs.splitlines(), start=1):
         if not _NUMERIC_LINE_RE.search(line):
             continue

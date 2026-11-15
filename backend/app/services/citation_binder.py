@@ -9,7 +9,7 @@ specific KB chunks with page/paragraph/offset provenance.
 from __future__ import annotations
 
 import re
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from ..domain.citations import CitationAnchor
 
@@ -103,6 +103,73 @@ class CitationHandleRegistry:
     def is_evidence(self, n: int) -> bool:
         """True only for registered, evidence-kind handles."""
         return self.resolve(n) is not None and self._kinds[n - 1] == "evidence"
+
+
+# ── Anchors from chat evidence ──────────────────────────────────────────────
+
+
+def _source_id_from_identifier(identifier: str) -> str:
+    """``kb:{source_id}#c{ord}`` → ``{source_id}``; plain ids unchanged.
+
+    Same stripping as ``wiki/storm_polish.evidence_to_anchors``: the
+    ``chunk_id`` keeps the full identifier (for ``references`` round-trip),
+    the human-readable ``source_id`` drops the ``kb:`` prefix and chunk suffix.
+    """
+    s = (identifier or "").strip()
+    if s.startswith("kb:") and "#" in s:
+        return s[3:].split("#", 1)[0]
+    if s.startswith("kb:"):
+        return s[3:]
+    return s
+
+
+def _field(item: Any, *names: str) -> Any:
+    """Read a field from an Evidence object or a plain dict, first hit wins."""
+    if isinstance(item, dict):
+        for name in names:
+            if item.get(name) is not None:
+                return item.get(name)
+        return None
+    for name in names:
+        val = getattr(item, name, None)
+        if val is not None:
+            return val
+    return None
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def evidence_to_citation_anchors(evidence: list) -> list[CitationAnchor]:
+    """Build binder anchors from a chat path ``citations`` list (1-1 wiring).
+
+    Numbering follows ``llm._build_context``: list order is ``[^n]`` order
+    (index 0 → ``[^1]``), so the anchors must be built from the exact
+    citations list the answer was generated against — never re-sorted or
+    re-filtered. ``Evidence`` objects and plain dicts are both accepted;
+    entries without any identifier/title are skipped (they cannot be cited).
+    """
+    anchors: list[CitationAnchor] = []
+    for item in evidence or []:
+        identifier = _field(item, "identifier", "id") or _field(item, "title") or ""
+        identifier = str(identifier).strip()
+        if not identifier:
+            continue
+        text = _field(item, "snippet", "text") or _field(item, "title") or identifier
+        anchors.append(
+            CitationAnchor(
+                chunk_id=identifier,
+                source_id=_source_id_from_identifier(identifier),
+                text=str(text)[:200],
+                page=_as_int(_field(item, "page", "page_no")),
+                paragraph=_as_int(_field(item, "paragraph", "paragraph_idx")),
+            )
+        )
+    return anchors
 
 
 # ── Formatting ────────────────────────────────────────────────────────────────
@@ -446,6 +513,7 @@ __all__ = [
     "CitationHandleRegistry",
     "build_citation_prompt",
     "build_footnotes_section",
+    "evidence_to_citation_anchors",
     "format_citation_list",
     "extract_citation_indices",
     "extract_citation_indices_validated",

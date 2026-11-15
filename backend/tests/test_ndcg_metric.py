@@ -71,11 +71,18 @@ def test_graded_relevance_falls_back_to_binary() -> None:
     assert graded_relevance_for(entry) == {"a": 1, "b": 1}
 
 
-def test_golden_first_twenty_are_graded() -> None:
+def test_golden_questions_are_graded() -> None:
+    """RAG upgrade batch 0 (2026-11-15): gold set expanded 53 -> 250 questions
+    and every entry now carries graded_keywords (was: only the first 20
+    graded, the rest fell back to binary grades). The binary fallback itself
+    is still covered by test_graded_relevance_falls_back_to_binary."""
     from app.resources.golden_retrieval import golden_questions
 
+    assert len(golden_questions) == 250
     graded = [e for e in golden_questions if e.get("graded_keywords")]
-    assert len(graded) == 20
+    assert len(graded) == len(golden_questions)
+    # Original invariant preserved: the first 20 entries are graded.
+    assert all(e.get("graded_keywords") for e in golden_questions[:20])
     for e in graded:
         grades = e["graded_keywords"]
         assert set(grades) == set(e["expected_keywords"])

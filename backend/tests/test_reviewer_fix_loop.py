@@ -279,10 +279,27 @@ def test_finalize_evidence_fields_returns_rebound_citations(monkeypatch):
         "q", "原答案 [^1][^2]", old_citations,
         settings=S(), mode="evidence", selected_skills=None,
     )
-    assert len(out) == 6, "必须返回 6 元组（含 citations）"
-    answer, _d, _r, _rf, _ce, citations = out
+    # 1-1：_finalize_evidence_fields 返回 7 元组（新增 citation_binding）
+    assert len(out) == 7, "必须返回 7 元组（含 citations + citation_binding）"
+    answer, _d, _r, _rf, _ce, citations, citation_binding = out
     assert answer == new_answer
     assert citations == new_citations, "重绑后的 citations 必须返回，不用旧表"
+    # 1-1：fix-loop 后的答案按重绑后的 citations 再 scrub 一次，
+    # stats 以最终答案为准（1 条引用、用了 1 条、越界 0 条）。
+    assert citation_binding == {
+        "stats": {"total_anchors": 1, "used": 1, "dropped_out_of_range": 0},
+        "references": [
+            {
+                "index": 1,
+                "chunk_id": "newA",
+                "source_id": "newA",
+                "page": None,
+                "paragraph": None,
+                "offset_start": None,
+                "offset_end": None,
+            }
+        ],
+    }
 
 
 def test_finalize_evidence_fields_empty_rebind_not_dropped(monkeypatch):
@@ -313,11 +330,21 @@ def test_finalize_evidence_fields_empty_rebind_not_dropped(monkeypatch):
     class S:
         pass
 
-    *_, citations = chat_mod._finalize_evidence_fields(
-        "q", "原答案 [^1]", old_citations,
-        settings=S(), mode="evidence", selected_skills=None,
+    # 1-1：_finalize_evidence_fields 返回 7 元组（新增 citation_binding，
+    # 在最后一位；旧的 *_, citations 解包会错取 citation_binding）
+    answer, _d, _r, _rf, _ce, citations, citation_binding = (
+        chat_mod._finalize_evidence_fields(
+            "q", "原答案 [^1]", old_citations,
+            settings=S(), mode="evidence", selected_skills=None,
+        )
     )
+    assert answer == "无引用答案"
     assert citations == [], "空重绑结果必须生效，不能回退旧表"
+    # 1-1：fix-loop 后的答案无引用标记，anchors 为空表 → stats 全零
+    assert citation_binding == {
+        "stats": {"total_anchors": 0, "used": 0, "dropped_out_of_range": 0},
+        "references": [],
+    }
 
 
 def test_citation_coords_remap_drops_filtered(monkeypatch):

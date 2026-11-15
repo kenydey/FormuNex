@@ -74,9 +74,35 @@ def test_bad_entries_are_skipped_and_the_good_ones_survive(caplog):
 # ── the schedule ─────────────────────────────────────────────────────────────
 
 
-def test_the_radar_is_off_by_default():
-    assert _settings().topic_radar_enabled is False
-    assert build_beat_schedule(_settings(topic_radar_topics=_topics({"query": "q"}))) == {}
+def test_the_radar_is_on_by_default():
+    # 第 3 批（2026-11-15）：雷达默认开启，配三个主题（法规 / 标准 / 新文献）。
+    settings = _settings()
+    assert settings.topic_radar_enabled is True
+    topics = parse_topics(settings.topic_radar_topics)
+    assert [t["query"] for t in topics] == [
+        "GB 30000 GHS 化学品分类标签 法规修订",
+        "GB/T 1771 盐雾试验 涂层 标准换版",
+        "镁合金 无铬钝化 转化膜 耐蚀",
+    ]
+    assert all(t["cron"] == DEFAULT_CRON for t in topics)  # 每周一 01:00
+    assert build_beat_schedule(_settings(topic_radar_enabled=False)) == {}
+
+
+def test_default_topics_become_three_beat_entries():
+    schedule = build_beat_schedule(_settings())
+    assert list(schedule) == [
+        "topic-radar-0-gb-30000-ghs",
+        "topic-radar-1-gb-t-1771",
+        "topic-radar-2-topic",
+    ]
+    for entry in schedule.values():
+        assert entry["task"] == "formunex.topic_sweep"
+        assert entry["schedule"].minute == {0}
+        assert entry["schedule"].hour == {1}
+        assert entry["schedule"].day_of_week == {1}  # Mondays 01:00
+        assert entry["args"][0]["total_limit"] == 100
+        assert entry["args"][0]["per_source_cap"] == 30
+        assert entry["args"][0]["project_id"] is None  # 全局语料，不占项目配额
 
 
 def test_enabled_topics_become_beat_entries():

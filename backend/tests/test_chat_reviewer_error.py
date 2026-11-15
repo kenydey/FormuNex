@@ -63,8 +63,8 @@ def test_finalize_evidence_fields_reviewer_error_no_fix_loop(monkeypatch):
 
     monkeypatch.setattr(rfl, "run_fix_loop", _must_not_run)
 
-    # v14-1: 6 元组解包（a61c5d1 漏改）
-    answer, doi_results, reviewer, reviewer_fix, citation_expand, citations = (
+    # 1-1：_finalize_evidence_fields 返回 7 元组（新增 citation_binding）
+    answer, doi_results, reviewer, reviewer_fix, citation_expand, citations, citation_binding = (
         chat_mod._finalize_evidence_fields(
             "q?",
             "原始答案",
@@ -81,3 +81,8 @@ def test_finalize_evidence_fields_reviewer_error_no_fix_loop(monkeypatch):
     assert isinstance(reviewer, dict)
     assert reviewer["status"] == "error"
     assert "timeout" in reviewer["reviewer_error"]
+    # 1-1：无引用标记的答案绑定 stats 全零（total_anchors=0, used=0, dropped=0）
+    assert citation_binding == {
+        "stats": {"total_anchors": 0, "used": 0, "dropped_out_of_range": 0},
+        "references": [],
+    }

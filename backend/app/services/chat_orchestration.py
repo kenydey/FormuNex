@@ -86,6 +86,45 @@ def _reviewer_notices(reviewer) -> list[str]:
 
 
 
+def _bind_citations(answer: str, citations: list) -> tuple[str, dict | None]:
+    """1-1：postprocess 之后接 ``bind_citations``（fail-closed  scrub）。
+
+    从问答路径已有的 ``citations``（与答案 ``[^n]`` 同序，见
+    ``llm._build_context``）构造 anchors；越界 ``[^n]`` 被清除并计数。
+    返回 ``(answer, citation_binding)``，其中 ``citation_binding`` 为
+    ``{"stats": {...}, "references": [...]}``，供响应元数据携带；
+    绑定本身永不抛错——任何异常都 fail-open 返回原答案 + ``None``。
+    """
+    try:
+        from ..services.citation_binder import (
+            bind_citations,
+            evidence_to_citation_anchors,
+        )
+
+        binding = bind_citations(
+            answer or "",
+            evidence_to_citation_anchors(citations or []),
+            strict=True,
+        )
+        stats = dict(binding["stats"])
+        if stats.get("dropped_out_of_range"):
+            logger.info(
+                "citation binder: dropped %d out-of-range [^n] marker(s) "
+                "(total_anchors=%d, used=%d)",
+                stats["dropped_out_of_range"],
+                stats.get("total_anchors", 0),
+                stats.get("used", 0),
+            )
+        return binding["answer"], {
+            "stats": stats,
+            "references": binding["references"],
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("citation binder skipped: %s", exc)
+        return answer, None
+
+
+
 def clamp_relevance(value: float) -> float:
     """Clamp a relevance score to [0, 1] (stage 4 / SR-054 public API; routes reuse it)."""
     try:
@@ -753,12 +792,15 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
         evidence_provenance = None
         evidence_reviewer = None
         reviewer_fix = None
+        citation_binding = None
         mcp_permission_required = None
         mcp_tool_results = None
         if use_evidence or req.selected_skills or req.selected_mcp_servers:
             answer, emeta = postprocess_evidence_answer(answer, settings=settings)
             doi_results = emeta.get("doi_results")
             citation_expand = emeta.get("citation_expand") or None
+            # 1-1：postprocess 之后接 bind_citations（fail-closed scrub）。
+            answer, citation_binding = _bind_citations(answer, citations)
             # v24-fix: reviewer 坐标对齐 —— 重写答案 [^n] 到过滤后空间。
             _rev_answer, _rev_evidence = _reviewer_view(answer, citations)
             evidence_reviewer = _run_evidence_review(
@@ -800,6 +842,13 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
                     # v13-1: 空列表也是合法重绑结果，用 is not None。
                     if reviewer_fix and reviewer_fix.get("citations") is not None:
                         citations = reviewer_fix["citations"]
+                    # 1-1：repair 重生成的答案可能带新的越界 [^n]（fix-loop 内
+                    # 的重绑刻意保留它们供 reviewer 标记）；review 已结束，
+                    # 最终答案再 scrub 一次，stats 以最终答案为准。
+                    if reviewer_fix is not None:
+                        answer, _rebound = _bind_citations(answer, citations)
+                        if _rebound is not None:
+                            citation_binding = _rebound
                     # v17-3: 同步 structured.summary —— fix-loop 重生成了 answer，
                     # structured 对象仍是旧文本，两张皮。
                     # v18-2: 同步补全 —— key_findings 等文本字段清空（迫使
@@ -913,6 +962,7 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             evidence_provenance=evidence_provenance,
             evidence_reviewer=evidence_reviewer,
             reviewer_fix=reviewer_fix,
+            citation_binding=citation_binding,
             mcp_permission_required=mcp_permission_required,
             mcp_tool_results=mcp_tool_results,
             data_sources=data_sources,
@@ -1155,7 +1205,9 @@ def _finalize_evidence_fields(
     """DOI annotate + optional reviewer + 1-round fix-loop.
 
     Returns (answer, doi_results, reviewer, reviewer_fix, citation_expand,
-    citations). citations is the possibly re-bound table after fix-loop.
+    citations, citation_binding). citations is the possibly re-bound table
+    after fix-loop; citation_binding is the 1-1 binder metadata
+    (``{"stats", "references"}``) or None when the evidence path was skipped.
     """
     from ..services.evidence_synthesis import evidence_mode_active, postprocess_evidence_answer
 
@@ -1163,10 +1215,13 @@ def _finalize_evidence_fields(
     citation_expand = None
     reviewer = None
     reviewer_fix = None
+    citation_binding = None
     if evidence_mode_active(mode, settings) or selected_skills:
         answer, emeta = postprocess_evidence_answer(answer, settings=settings)
         doi_results = emeta.get("doi_results")
         citation_expand = emeta.get("citation_expand") or None
+        # 1-1：postprocess 之后接 bind_citations（fail-closed scrub）。
+        answer, citation_binding = _bind_citations(answer, citations)
         # v24-fix: reviewer 坐标对齐 —— 重写答案 [^n] 到过滤后空间。
         _rev_answer, _rev_evidence = _reviewer_view(answer, citations)
         reviewer = _run_evidence_review(
@@ -1208,9 +1263,15 @@ def _finalize_evidence_fields(
                 # v13-1: 空列表也是合法重绑结果，用 is not None。
                 if reviewer_fix and reviewer_fix.get("citations") is not None:
                     citations = reviewer_fix["citations"]
+                # 1-1：repair 重生成的答案可能带新的越界 [^n]；review 已结束，
+                # 最终答案再 scrub 一次，stats 以最终答案为准。
+                if reviewer_fix is not None:
+                    answer, _rebound = _bind_citations(answer, citations)
+                    if _rebound is not None:
+                        citation_binding = _rebound
             except Exception as exc:  # noqa: BLE001
                 logger.debug("stream fix-loop skipped: %s", exc)
-    return answer, doi_results, reviewer, reviewer_fix, citation_expand, citations
+    return answer, doi_results, reviewer, reviewer_fix, citation_expand, citations, citation_binding
 
 def stream_chat_events(req: "ChatRequest", request: Request = None):
     # Stage 4 / SR-021: extracted from the route. Returns the event
@@ -1349,7 +1410,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                     # Crossref + LLM reviewer + repair loop: seconds of blocking
                     # I/O — never on the event loop.
                     # v13-1: 取回重绑后的 citations，后续 claims/gates/done 用新表。
-                    answer, doi_results, reviewer, reviewer_fix, citation_expand, citations = (
+                    answer, doi_results, reviewer, reviewer_fix, citation_expand, citations, citation_binding = (
                         await asyncio.to_thread(
                             _finalize_evidence_fields,
                             question,
@@ -1418,6 +1479,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                             "evidence_provenance": evidence_provenance,
                             "evidence_reviewer": reviewer,
                             "reviewer_fix": reviewer_fix,
+                            "citation_binding": citation_binding,
                             # P1-j: 补 degradation notices（与其他路径对齐）
                             "notices": list(_retrieval_degradation_notices(kb_used, req) or [])
                             + list(gate_notices or [])
@@ -1723,7 +1785,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                             for c in plan["relevant"]
                         ]
                         # v16: chem-tools 路径接入 reviewer+fix-loop+DOI（与主 token 流对齐）。
-                        answer, doi_results, reviewer, reviewer_fix, citation_expand, cites = (
+                        answer, doi_results, reviewer, reviewer_fix, citation_expand, cites, citation_binding = (
                             await asyncio.to_thread(
                                 _finalize_evidence_fields,
                                 question,
@@ -1781,6 +1843,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                             "citation_expand": citation_expand,
                             "evidence_reviewer": reviewer,
                             "reviewer_fix": reviewer_fix,
+                            "citation_binding": citation_binding,
                             # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
                             "notices": (
                                 list(_retrieval_degradation_notices(kb_used, req) or [])
@@ -1935,7 +1998,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                 sanitize_evidence(c) for c in plan["relevant"]
             ]
             # v13-1: 取回重绑后的 citations，后续 claims/gates/done 用新表。
-            answer, doi_results, reviewer, reviewer_fix, citation_expand, citations = (
+            answer, doi_results, reviewer, reviewer_fix, citation_expand, citations, citation_binding = (
                 await asyncio.to_thread(
                     _finalize_evidence_fields,
                     question,
@@ -2015,6 +2078,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                     "evidence_provenance": evidence_provenance,
                     "evidence_reviewer": reviewer,
                     "reviewer_fix": reviewer_fix,
+                    "citation_binding": citation_binding,
                     # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
                     "notices": (
                         list(_retrieval_degradation_notices(kb_used, req) or [])

@@ -639,13 +639,21 @@ class Settings(BaseSettings):
     # 并发只决定一个卡死的任务会占住几个 worker 槽位，不决定单个任务能跑多久。
     celery_soft_time_limit_s: int = 14400  # 4 小时：抛 SoftTimeLimitExceeded，任务可自报
     celery_hard_time_limit_s: int = 18000  # 5 小时：强杀，防止卡死的任务永久占槽（须 < task_stream_timeout_s 21600）
-    # 主题雷达（Celery Beat）：按计划周期性检索并把相关文献回填知识库。默认关闭；
-    # 需要单独的 beat 进程（compose: `--profile radar`，或 `celery … worker -B`）。
+    # 主题雷达（Celery Beat）：按计划周期性检索并把相关文献回填知识库。
+    # 第 3 批（2026-11-15）默认开启：每周一 01:00 扫三个主题（法规 / 标准 /
+    # 新文献），扫到后经 kb_ingest 相关性门 + 主题过滤回填入库。
+    # 仍需要单独的 beat 进程（compose: `--profile radar`，或 `celery … worker -B`）。
     # topics 为 JSON 数组，每项：{"query": "...", "project_id": "...", "cron": "0 1 * * 1",
     # "total_limit": 100, "source_types": ["literature"]}；cron 为 5 段（分 时 日 月 周），缺省
     # 每周一 01:00。非法项会被跳过并记入日志，不影响 worker 启动。
-    topic_radar_enabled: bool = False
-    topic_radar_topics: str = ""
+    # project_id 缺省 = 全局语料（不占用每项目 300 配额）；部署时若绑定到具体
+    # 项目，三主题每周合计上限 300 篇，首周即可能触顶配额，需另行评估。
+    topic_radar_enabled: bool = True
+    topic_radar_topics: str = (
+        "[{\"query\": \"GB 30000 GHS 化学品分类标签 法规修订\"}, "
+        "{\"query\": \"GB/T 1771 盐雾试验 涂层 标准换版\"}, "
+        "{\"query\": \"镁合金 无铬钝化 转化膜 耐蚀\"}]"
+    )
     kb_ingest_min_relevance: float = 0.45  # 0 = off; e.g. 0.5 filters low-relevance rows
     # Top-5 #2（2026-09-25）：检索期负向收缩。True=合并 DomainSearchProfile.search_deny
     # 与扩展 negative_terms，命中且 allow 不足时打 domain_match=none / 排序惩罚。

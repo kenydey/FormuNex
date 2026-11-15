@@ -129,6 +129,10 @@ class ChatResponse(BaseModel):
     evidence_provenance: dict | None = None
     evidence_reviewer: dict | None = None
     reviewer_fix: dict | None = None
+    # 1-1 — citation binder 接线元数据：{"stats": {total_anchors, used,
+    # dropped_out_of_range}, "references": [...]}；非 evidence 路径或
+    # 绑定 fail-open 时为 None。
+    citation_binding: dict | None = None
     mcp_permission_required: dict | None = None
     mcp_tool_results: list[dict] | None = None
     # Phase 4 — which data sources contributed to the answer, for the
