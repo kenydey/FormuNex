@@ -145,6 +145,46 @@ class TestCitationDateGuard:
         assert validate_llm_citation_dates(md) == []
         assert validate_llm_citation_dates("") == []
 
+    def test_validate_llm_citation_dates_ignores_bare_numbers(self):
+        # 2026-11-16 CI 误报回归：脚注来源标识里的裸四位数不是年份。
+        cur = date.today().year
+        future = cur + 86  # 2112（相对当年仍为未来年份）
+        md = (
+            "正文[^5]。\n\n"
+            f"[^5]: Source: {future} 6ce-261b-4fd7-a031-bd1754498b5e — "
+            f"kb:{future} 6ce-261b-4fd7-a031-bd1754498b5e\n"
+            f"[^6]: Source: {future}ab34-5678-90ab-cdef-1234567890ab — "
+            f"kb:{future}ab34-5678-90ab-cdef-1234567890ab#c3\n"
+            f"[^7]: 依据 GB {future} 标准，pp. {future}\n"
+            f"[^8]: 某论文 {cur + 2}.\n"
+        )
+        assert validate_llm_citation_dates(md) == []
+
+    def test_validate_llm_citation_dates_date_contexts_flagged(self):
+        # 带日期语境的未来年份仍须检出；带日期语境的过去年份不报。
+        cur = date.today().year
+        md = (
+            "正文[^1][^2][^3][^4][^5][^6][^7]。\n\n"
+            f"[^1]: 某论文，{cur + 2}年发表。\n"
+            f"[^2]: 另一篇 ({cur + 3}).\n"
+            f"[^3]: 报告 {cur + 4}-03-15 发布。\n"
+            f"[^4]: 发表于 {cur + 5}。\n"
+            f"[^5]: March {cur + 6}.\n"
+            f"[^6]: 某论文，{cur - 3}年。\n"
+            f"[^7]: Author et al. {cur + 7}, Journal of Coatings, 12(3), 45-52\n"
+        )
+        findings = validate_llm_citation_dates(md)
+        assert [f["footnote"] for f in findings] == [1, 2, 3, 4, 5, 7]
+        assert [f["year"] for f in findings] == [
+            cur + 2,
+            cur + 3,
+            cur + 4,
+            cur + 5,
+            cur + 6,
+            cur + 7,
+        ]
+        assert all(f["reason"] == "future_dated_citation" for f in findings)
+
     def test_future_pub_date_penalty(self):
         cur = date.today().year
         assert future_pub_date_penalty(_ev(pub_year=cur + 2)) == FUTURE_DATE_PENALTY
