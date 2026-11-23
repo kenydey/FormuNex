@@ -153,7 +153,11 @@ def rerun_review(run_id: str, body: RerunRequest) -> dict:
         )
     settings = get_settings()
     try:
-        from ..services.evidence_reviewer import ReviewerModelError, review_answer
+        from ..services.evidence_reviewer import (
+            ReviewerModelError,
+            log_reviewer_shadow,
+            review_answer,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("reviewer import failed: %s", exc)
         raise HTTPException(
@@ -169,6 +173,9 @@ def rerun_review(run_id: str, body: RerunRequest) -> dict:
         raise HTTPException(
             status_code=503, detail="reviewer model failed"
         ) from exc
+
+    # 批 G：手动重审的非 pass 结果也记一条浸泡采集日志行。
+    log_reviewer_shadow(review, source="manual")
 
     answer_snapshot = body.answer
 

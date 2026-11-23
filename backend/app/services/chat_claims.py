@@ -57,10 +57,9 @@ def verify_answer_claims(
     if not claims:
         return []
 
-    # v27 P2-16: 记录验证覆盖率（实际验证句数 / 答案总句数）。
-    _total_sentences = len(
-        [p for p in _SENTENCE_SPLIT.split(answer or "") if p.strip()]
-    )
+    # v27 P2-16: 记录验证覆盖率（实际验证句数 / 答案总句数）。分母与
+    # _extract_claims 同源（过滤后句数），否则孤立 [^n] 等伪影会虚增分母。
+    _total_sentences = _claim_sentence_count(answer, structured)
     if _total_sentences:
         logger.info(
             "chat claim coverage: %d/%d sentences sampled for verification",
@@ -200,6 +199,68 @@ def build_sources_audit(
     return {"schema_version": 1, "rows": rows, "summary": summary}
 
 
+# 孤立引用标记（如 [^1]、[^1][^2] 连写）。
+_MARKER_RE = re.compile(r"\[\^\d+\]")
+# 澄清提示 boilerplate（run_chat 在 review 之前追加进答案，见
+# chat_orchestration 追加模板 "（默认按「{hint}」理解；如需其他含义请说明。）"）。
+_CLARIFICATION_RE = re.compile(r"^（默认按「[^」]*」理解；如需其他含义请说明。?）?$")
+# 纯标点 / 纯括号片段判定用字符集（含空白）。
+_PUNCT_ONLY_CHARS = frozenset("。！？!?，、；：·…—-（）()「」『』《》〈〉[] \t\n\r")
+
+
+def _is_non_propositional(fragment: str) -> bool:
+    """True when a split fragment carries no proposition and must not be
+    verified as a claim: only citation markers, only punctuation/brackets,
+    or the clarification boilerplate run_chat appends before review.
+    Batch 1-3 shadow run: all 35 flagged claims were such fragments
+    (100% false positives), so they are filtered here, not in the
+    verifier — the verdict thresholds stay untouched.
+    """
+    s = (fragment or "").strip()
+    if not s:
+        return True
+    # 剥离引用标记后看剩余内容。
+    s = _MARKER_RE.sub("", s).strip()
+    if not s:
+        return True  # 孤立 [^n]（含 [^1][^2] 连写）
+    if all(ch in _PUNCT_ONLY_CHARS for ch in s):
+        return True  # 空 / 纯标点 / 纯括号片段（如孤立 "）"）
+    return _CLARIFICATION_RE.match(s) is not None
+
+
+def _claim_sections(
+    answer: str, structured: StructuredAnswer | None
+) -> list[list[str]]:
+    """Split an answer into per-section claim sentences, dropping
+    non-propositional fragments. Shared by _extract_claims and the
+    coverage / unverified counters so all three count the same
+    sentences (batch B). Structured answers use key_findings verbatim.
+    """
+    if structured and structured.key_findings:
+        return [[c.strip() for c in structured.key_findings if c.strip()]]
+    from ..pipeline.claim_checker import _SECTION_HEADING_RE
+
+    sections = [
+        p for p in _SECTION_HEADING_RE.split(answer or "") if (p or "").strip()
+    ] or [answer or ""]
+    out: list[list[str]] = []
+    for sec in sections:
+        sentences = [
+            p.strip()
+            for p in _SENTENCE_SPLIT.split(sec)
+            if p.strip() and not _is_non_propositional(p)
+        ]
+        out.append(sentences)
+    return out
+
+
+def _claim_sentence_count(
+    answer: str, structured: StructuredAnswer | None
+) -> int:
+    """Total filtered claim sentences, before the _MAX_CLAIMS cap."""
+    return sum(len(s) for s in _claim_sections(answer, structured))
+
+
 def _extract_claims(answer: str, structured: StructuredAnswer | None) -> list[str]:
     if structured and structured.key_findings:
         return [c.strip() for c in structured.key_findings if c.strip()]
@@ -207,18 +268,15 @@ def _extract_claims(answer: str, structured: StructuredAnswer | None) -> list[st
     # 每 section 最多 8 句、总共最多 20 条，不再硬截前 8 句。
     # （check_claims 侧按行切分适合 markdown 报告；问答答案是散文体，
     # 这里按句切分，但采样策略一致，避免长答案尾部逃逸验证。）
-    from ..pipeline.claim_checker import _MAX_CLAIMS, _SECTION_HEADING_RE
+    from ..pipeline.claim_checker import _MAX_CLAIMS
 
     max_total = _MAX_CLAIMS  # 20
-    sections = [
-        p for p in _SECTION_HEADING_RE.split(answer or "") if (p or "").strip()
-    ] or [answer or ""]
+    sections = _claim_sections(answer, structured)
     # 多 section 时每段最多 8 句（防头部偏置）；单段答案允许到总上限，
     # 否则 12 句的单段答案尾部仍然逃逸。
     per_section = 8 if len(sections) > 1 else max_total
     out: list[str] = []
-    for sec in sections:
-        sentences = [p.strip() for p in _SENTENCE_SPLIT.split(sec) if p.strip()]
+    for sentences in sections:
         for s in sentences[:per_section]:
             out.append(s)
             if len(out) >= max_total:

@@ -84,3 +84,65 @@ def test_conflicting_verdict_structured_passthrough():
     assert conflict.raw_verdict == "conflicting"
     assert ok.status == "supported"
     assert ok.raw_verdict == "supported"
+
+
+# ── 批 C（Reviewer 切分修复）：非命题片段过滤与计数对齐 ──
+
+
+def test_trailing_marker_is_not_a_claim():
+    """批 A：答案尾 "…表现。[^1]" 不产出 [^1] claim，实句保留。"""
+    out = cc._extract_claims("环氧涂层耐盐雾 1000 小时。[^1]", None)
+    assert out == ["环氧涂层耐盐雾 1000 小时。"]
+
+
+def test_clarification_boilerplate_is_not_a_claim():
+    """批 A：澄清提示整段（含 [^1] 前缀与尾部 ））→ 零 claim。"""
+    answer = "表现优异。[^1]\n\n（默认按「双酚A型环氧树脂」理解；如需其他含义请说明。）"
+    assert cc._extract_claims(answer, None) == ["表现优异。"]
+
+
+def test_isolated_bracket_and_punctuation_are_not_claims():
+    """批 A：孤立 ）、空片段、纯标点片段 → 零 claim。"""
+    assert cc._extract_claims("句一。[^1][^2]", None) == ["句一。"]
+    assert cc._extract_claims("句一。", None) == ["句一。"]
+    assert cc._extract_claims("[^1]", None) == []
+    assert cc._extract_claims("。", None) == []
+    assert cc._extract_claims("（默认按「X」理解；如需其他含义请说明。）", None) == []
+
+
+def test_mid_sentence_marker_survives():
+    """批 A 回归保护：句中标记 "pH 4.0[^1]。" 仍为 1 条 claim。"""
+    assert cc._extract_claims("pH 4.0[^1]。", None) == ["pH 4.0[^1]。"]
+
+
+def test_claim_sentence_count_matches_filtered_claims():
+    """批 B：计数与过滤后 claim 数同源。"""
+    assert cc._claim_sentence_count("第一句。第二句。[^1]", None) == 2
+    assert cc._claim_sentence_count("[^1]", None) == 0
+
+
+def test_unverified_count_excludes_artifacts(monkeypatch):
+    """批 B：过滤后 _total 与 len(verified) 一致，n_unverified 不虚增。
+    修复前：_total 按原始分句计为 3（含孤立 [^1]），n_unverified 虚增为 1。"""
+    from app.services import chat_orchestration as co
+
+    def fake_llm(question, claims, sources):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(cc, "verify_claims_llm", fake_llm)
+    settings = type(
+        "S",
+        (),
+        {
+            "chat_claim_check_enabled": True,
+            "sources_audit_enabled": True,
+            "wiki_claim_confidence_cap": 1.0,
+        },
+    )()
+    _sc, audit, verified = co._claims_and_audit(
+        "问题?", "第一句。第二句。[^1]", [], settings=settings
+    )
+    assert verified is not None and len(verified) == 2
+    assert audit is not None
+    assert audit["summary"]["unverified"] == 0
+    assert len(audit["rows"]) == 2

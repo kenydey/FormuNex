@@ -440,9 +440,11 @@ def maybe_auto_review(
         st["pending"] = None
         st["ts"] = time.time()  # 最后活跃
     try:
-        from .evidence_reviewer import review_answer
+        from .evidence_reviewer import log_reviewer_shadow, review_answer
 
         review = review_answer(question, answer, citations, settings=settings)
+        # 批 G：turn-stop 自动审计的非 pass 结果记一条浸泡采集日志行。
+        log_reviewer_shadow(review, source="auto_audit")
     except Exception as exc:  # noqa: BLE001
         logger.debug("auto review skipped: %s", exc)
         return None

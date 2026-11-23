@@ -17,6 +17,66 @@ def llm_rubric_enabled(settings: Any) -> bool:
     return bool(getattr(settings, "evidence_reviewer_llm_enabled", False))
 
 
+# ---------------------------------------------------------------------------
+# 批 G：浸泡采集 —— 结构化日志行（warning-only 上线后的误报模式采集）。
+#
+# 每条非 pass 的 reviewer 结果记一行；只含计数与类别，绝不含问题原文、
+# 答案原文、证据文本。每周汇总时按 marker "reviewer_shadow" grep 即可。
+# 本函数永不抛错（日志钩子不得影响问答主路径）。
+# ---------------------------------------------------------------------------
+REVIEWER_SHADOW_LOG_MARKER = "reviewer_shadow"
+
+
+def _shadow_count(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _shadow_domain(domain: str | None) -> str:
+    """问题类别（请求自带的 domain；无则 unknown）。做空白/换行清洗，
+    保证单行 `k=v` 可 grep 解析。"""
+    if not domain or not str(domain).strip():
+        return "unknown"
+    text = re.sub(r"\s+", "_", str(domain).strip())[:40]
+    return text or "unknown"
+
+
+def log_reviewer_shadow(
+    review: dict[str, Any] | None,
+    *,
+    source: str,
+    domain: str | None = None,
+) -> None:
+    """记一条 reviewer 浸泡采集日志行（仅非 pass 结果）。
+
+    字段：status / weak / unsupported / difficulty / source / domain。
+    pass / None 不记。source 标识调用点：chat_sync / chat_stream /
+    chat_structured / manual / auto_audit。fix-loop 内部重审不调本函数，
+    故同一问答最多记一行。
+    """
+    try:
+        if not isinstance(review, dict):
+            return
+        status = review.get("status") or "pass"
+        if status == "pass":
+            return
+        difficulty = review.get("difficulty")
+        logger.info(
+            "%s status=%s weak=%s unsupported=%s difficulty=%s source=%s domain=%s",
+            REVIEWER_SHADOW_LOG_MARKER,
+            status,
+            _shadow_count(review.get("weak_count")),
+            _shadow_count(review.get("unsupported_count")),
+            f"{difficulty:.2f}" if isinstance(difficulty, (int, float)) else "n/a",
+            source,
+            _shadow_domain(domain),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("reviewer shadow log skipped: %s", exc)
+
+
 class ReviewerModelError(Exception):
     """reviewer 专用模型（evidence_reviewer_model）调用失败。
 

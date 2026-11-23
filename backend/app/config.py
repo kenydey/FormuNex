@@ -765,7 +765,9 @@ class Settings(BaseSettings):
     literature_oa_enrich_enabled: bool = True
     # Wave D2 — lightweight RO-Crate steel-stamp export (default off; soak then enable).
     ro_crate_export_enabled: bool = False
-    evidence_reviewer_enabled: bool = False
+    # 批 H：warning-only 默认开（只记分 + 浸泡采集；fix-loop/LLM 仍关；
+    # 回答永不拦截；failure 门另案，见批 I）。
+    evidence_reviewer_enabled: bool = True
     # Bounded reviewer→LLM repair loop after evidence_reviewer (default off).
     evidence_reviewer_fix_loop_enabled: bool = False
     # Wave 1 — LLM rubric reviewer (default off; falls back to heuristics).

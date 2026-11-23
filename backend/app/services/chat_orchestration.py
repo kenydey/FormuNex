@@ -44,20 +44,27 @@ logger = logging.getLogger(__name__)
 # 捕获并返回显式的 reviewer error 状态，绝不 debug-only 吞掉。
 
 
-def _run_evidence_review(question, answer, evidence, settings):
+def _run_evidence_review(question, answer, evidence, settings, source="chat", domain=None):
     """调用 evidence_reviewer.review_answer，B-7 显错封装。
 
     - ReviewerModelError → ``{"status": "error", "reviewer_error": ...}``
       （配置专用 reviewer 模型后失败必须显错，客户端绝不能误以为"已审"）；
     - 其他异常 → None（fail-open，沿用旧行为）。
+    - 批 G：返回的非 pass 结果记一条浸泡采集日志行（source 标识调用点，
+      domain 为请求自带的领域类别）。fix-loop 内部重审不走本函数，
+      故同一问答最多记一行。
     """
-    from ..services.evidence_reviewer import ReviewerModelError, review_answer
+    from ..services.evidence_reviewer import (
+        ReviewerModelError,
+        log_reviewer_shadow,
+        review_answer,
+    )
 
     try:
-        return review_answer(question, answer, evidence, settings=settings)
+        result = review_answer(question, answer, evidence, settings=settings)
     except ReviewerModelError as exc:
         logger.error("reviewer 模型失败: %s", exc)
-        return {
+        result = {
             "status": "error",
             "reviewer_error": str(exc)[:500],
             "notes": [],
@@ -66,6 +73,8 @@ def _run_evidence_review(question, answer, evidence, settings):
     except Exception as exc:  # noqa: BLE001
         logger.debug("reviewer skipped: %s", exc)
         return None
+    log_reviewer_shadow(result, source=source, domain=domain)
+    return result
 
 
 
@@ -329,10 +338,12 @@ def _claims_and_audit(
     sources_audit = None
     if verified is not None and settings.sources_audit_enabled:
         try:
-            # P1-l: 计算未验证 claim 数（答案总句数 - 实际验证数）
-            from ..services.chat_claims import _SENTENCE_SPLIT
+            # P1-l: 计算未验证 claim 数（答案总句数 - 实际验证数）。
+            # _total 与 _extract_claims 同源（过滤后句数），否则孤立 [^n]
+            # 等伪影被过滤后 _total 不变、n_unverified 会虚增（批 B）。
+            from ..services.chat_claims import _claim_sentence_count
 
-            _total = len([p for p in _SENTENCE_SPLIT.split(answer or "") if p.strip()])
+            _total = _claim_sentence_count(answer, structured)
             _n_unverified = max(0, _total - len(verified))
             sources_audit = build_sources_audit(
                 evidence, verified=verified, enabled=True, n_unverified=_n_unverified
@@ -804,7 +815,12 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             # v24-fix: reviewer 坐标对齐 —— 重写答案 [^n] 到过滤后空间。
             _rev_answer, _rev_evidence = _reviewer_view(answer, citations)
             evidence_reviewer = _run_evidence_review(
-                question, _rev_answer, _rev_evidence, settings
+                question,
+                _rev_answer,
+                _rev_evidence,
+                settings,
+                source="chat_sync",
+                domain=req.domain,
             )
             if (
                 evidence_reviewer
@@ -1225,7 +1241,12 @@ def _finalize_evidence_fields(
         # v24-fix: reviewer 坐标对齐 —— 重写答案 [^n] 到过滤后空间。
         _rev_answer, _rev_evidence = _reviewer_view(answer, citations)
         reviewer = _run_evidence_review(
-            question, _rev_answer, _rev_evidence, settings
+            question,
+            _rev_answer,
+            _rev_evidence,
+            settings,
+            source="chat_stream",
+            domain=domain,
         )
         if (
             reviewer
@@ -1561,6 +1582,8 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                                 _rev_answer,
                                 _rev_evidence,
                                 settings,
+                                "chat_structured",
+                                req.domain,
                             )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("chat/stream structured reviewer: %s", exc)

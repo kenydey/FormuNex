@@ -93,7 +93,7 @@ FLAG_REGISTRY: tuple[EnvFlag, ...] = (
             "导出 report + 冻结 Manifest + preflight 的 lightweight RO-Crate zip（默认关）。",
             "agent"),
     EnvFlag("evidence_reviewer_enabled", "Evidence 轻量 Reviewer",
-            "Evidence/问答结束后做断言↔引用复核（默认关）。",
+            "Evidence/问答结束后做断言↔引用复核（默认开，warning-only 只记分）。",
             "agent"),
     EnvFlag("evidence_reviewer_fix_loop_enabled", "Evidence Reviewer 修正循环",
             "Reviewer 未通过时附 [Auditor] 反馈并有界重试（同步最多 3 轮；默认关）。",
