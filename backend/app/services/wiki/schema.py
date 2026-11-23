@@ -127,6 +127,13 @@ def dump_page(
     bounds: list[dict] | None = None,
     forbidden: list[str] | None = None,
     extra_meta: dict[str, Any] | None = None,
+    # 批 5-2 OKF 对齐：type 取 kind；owner 无数据来源时为空串（未知，
+    # 不编团队名）；tags 默认 [kind, norm_key]；version 由 upsert_page
+    # 按 DB revision 列统一写（此处显式传时才落盘，默认省略）。
+    page_type: str | None = None,
+    owner: str | None = None,
+    tags: list[str] | None = None,
+    version: int | None = None,
 ) -> str:
     """Serialize a wiki markdown page with YAML-ish front matter (no PyYAML dep)."""
     import json
@@ -137,16 +144,22 @@ def dump_page(
     forbidden = forbidden or []
     src_list = ", ".join(f'"{s}"' for s in source_ids)
     flag_list = ", ".join(f'"{f}"' for f in flags)
+    tag_list = ", ".join(f'"{t}"' for t in _default_tags(kind, norm_key, tags))
     lines = [
         "---",
         f"kind: {kind}",
+        f"type: {_yaml_escape(page_type or kind)}",
         f"title: {_yaml_escape(title)}",
+        f"owner: {_yaml_escape(owner if owner is not None else '')}",
         f"entity_id: {entity_id}",
         f"norm_key: {norm_key}",
         f"source_ids: [{src_list}]",
         f"flags: [{flag_list}]",
-        f"updated_at: {utcnow_iso()}",
+        f"tags: [{tag_list}]",
     ]
+    if version is not None:
+        lines.append(f"version: {int(version)}")
+    lines.append(f"updated_at: {utcnow_iso()}")
     if bounds:
         lines.append(f"bounds_json: {json.dumps(bounds, ensure_ascii=False)}")
     if forbidden:
@@ -176,6 +189,90 @@ def dump_page(
         lines.append("_No evidence segments yet._")
     lines.append("")
     return "\n".join(lines)
+
+
+def _default_tags(kind: str, norm_key: str, tags: list[str] | None) -> list[str]:
+    """OKF tags: explicit tags win; default is [kind, norm_key] (deduped)."""
+    if tags is not None:
+        return [str(t) for t in tags if str(t or "").strip()]
+    out: list[str] = []
+    for t in (kind, norm_key):
+        t = (t or "").strip()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def extract_summary(body: str) -> str:
+    """Summary paragraph under ``## Summary`` (up to the next H2)."""
+    if "## Summary" not in body:
+        return ""
+    after = body.split("## Summary", 1)[1]
+    if "\n## " in after:
+        after = after.split("\n## ", 1)[0]
+    return after.strip()
+
+
+def normalize_okf_front_matter(
+    text: str,
+    *,
+    kind: str,
+    version: int,
+    default_tags: list[str] | None = None,
+    title: str = "",
+) -> str:
+    """Ensure OKF front-matter fields on a page (批 5-2).
+
+    Sets ``type`` (= kind), ``owner`` ("" when absent — unknown, never
+    invented), ``tags`` (default [kind, norm_key]) and ``version`` (= DB
+    revision) without touching the body or any other front-matter key.
+    Missing front matter is prepended. Existing values are preserved
+    except ``version`` (always the DB revision) and ``type`` when it
+    disagrees with ``kind`` (type is defined as kind).
+    """
+    import json
+
+    raw = text or ""
+    meta, body = parse_front_matter(raw)
+    if not raw.startswith("---") or "\n---" not in raw[3:]:
+        header_lines = [
+            "---",
+            f"kind: {kind}",
+            f"type: {_yaml_escape(kind)}",
+            f"title: {_yaml_escape(title)}",
+            'owner: ""',
+            f"tags: [{', '.join(json.dumps(t, ensure_ascii=False) for t in (default_tags or [kind]))}]",
+            f"version: {int(version)}",
+            f"updated_at: {utcnow_iso()}",
+            "---",
+            "",
+        ]
+        return "\n".join(header_lines) + raw
+
+    end = raw.find("\n---", 3)
+    header = raw[3:end]
+    rest = raw[end:]  # starts with "\n---"
+    lines = header.strip("\n").splitlines() if header.strip() else []
+    seen: dict[str, int] = {}
+    for i, ln in enumerate(lines):
+        if ":" in ln:
+            seen.setdefault(ln.split(":", 1)[0].strip(), i)
+    tags = _default_tags(kind, str(meta.get("norm_key") or ""), default_tags)
+    tag_list = ", ".join(json.dumps(t, ensure_ascii=False) for t in tags)
+
+    def _set(key: str, value: str) -> None:
+        if key in seen:
+            lines[seen[key]] = f"{key}: {value}"
+        else:
+            lines.append(f"{key}: {value}")
+
+    _set("type", _yaml_escape(kind))
+    if "owner" not in seen:
+        _set("owner", '""')
+    if "tags" not in seen:
+        _set("tags", f"[{tag_list}]")
+    _set("version", str(int(version)))
+    return "---\n" + "\n".join(lines) + rest
 
 
 def _yaml_escape(s: str) -> str:
@@ -216,6 +313,12 @@ def parse_front_matter(text: str) -> tuple[dict[str, Any], str]:
                     if p:
                         parts.append(p)
                 meta[key] = parts
+        elif key == "version":
+            # 批 5-2: version is an int (DB revision); keep it numeric.
+            try:
+                meta[key] = int(val.strip('"').strip("'"))
+            except ValueError:
+                meta[key] = val.strip('"').strip("'")
         else:
             meta[key] = val.strip('"').strip("'")
     return meta, body
@@ -246,3 +349,85 @@ def extract_evidence_blocks(body: str) -> list[str]:
 def has_source_block(blocks: list[str], source_id: str) -> bool:
     needle = f"### Source `{source_id}`"
     return any(needle in b or b.startswith(f"### Source {source_id}") for b in blocks)
+
+
+_SOURCE_HASH_RE = re.compile(r"^- source_hash:\s*(\S+)\s*$", re.M)
+
+
+def source_block_hash(block: str) -> str | None:
+    """Recorded ``- source_hash: <hex>`` of one ``### Source`` block (批 5-3)."""
+    m = _SOURCE_HASH_RE.search(block or "")
+    return m.group(1) if m else None
+
+
+def remove_source_block(body: str, source_id: str) -> tuple[str, bool]:
+    """Remove the ``### Source`` block for ``source_id`` (批 6: 删源清理).
+
+    Drops the heading line through the next ``### `` / ``## `` heading
+    (or end of body). Returns ``(new_body, removed)``; the body is
+    untouched when no block for the source exists. Blank-run collapse
+    keeps the Evidence section tidy after the cut.
+    """
+    lines = (body or "").splitlines()
+    start = -1
+    for i, ln in enumerate(lines):
+        if not ln.startswith("### Source"):
+            continue
+        if f"`{source_id}`" in ln or ln.startswith(f"### Source {source_id}"):
+            start = i
+            break
+    if start < 0:
+        return body, False
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("### ") or lines[j].startswith("## "):
+            end = j
+            break
+    out = "\n".join([*lines[:start], *lines[end:]])
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    if out:
+        out += "\n"
+    return out, True
+
+
+def find_source_block(blocks: list[str], source_id: str) -> int:
+    """Index of the ``### Source`` block for ``source_id`` (-1 when absent)."""
+    needle = f"### Source `{source_id}`"
+    for i, b in enumerate(blocks or []):
+        if needle in b or b.startswith(f"### Source {source_id}"):
+            return i
+    return -1
+
+
+def upsert_source_block(
+    blocks: list[str],
+    source_id: str,
+    lines: list[str],
+    source_hash: str,
+    *,
+    drift_enabled: bool,
+) -> tuple[list[str], bool]:
+    """Append or refresh one ``### Source`` block (批 5-3).
+
+    The new block always records ``- source_hash: <hash>`` so a later
+    drift-enabled run can tell whether the source changed. Returns
+    ``(blocks, refreshed)``; ``refreshed`` is True only when an existing
+    block was replaced because its recorded hash differs (or is absent)
+    while drift refresh is on. Drift off preserves the old behavior
+    (existing block ⇒ skip), except the hash line is now recorded on
+    newly appended blocks.
+    """
+    block_lines = list(lines or [])
+    if source_hash:
+        block_lines = [*block_lines, f"- source_hash: {source_hash}"]
+    block = "\n".join(block_lines)
+    idx = find_source_block(blocks, source_id)
+    if idx < 0:
+        return [*list(blocks or []), block], False
+    if not drift_enabled:
+        return list(blocks or []), False
+    if source_hash and source_block_hash(blocks[idx]) == source_hash:
+        return list(blocks or []), False
+    out = list(blocks or [])
+    out[idx] = block
+    return out, True

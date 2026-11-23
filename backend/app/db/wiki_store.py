@@ -14,6 +14,7 @@ from ..config import get_settings
 from ..domain.pure import content_hash, wiki_root_from_db_url
 from ..services.wiki.embed import embed_wiki_page
 from ..services.wiki.fts import index_page
+from ..services.wiki.schema import normalize_okf_front_matter, utcnow_iso
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,10 @@ class WikiStore:
         abs_path = self._abs(rel)
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         scoped_project = (project_id or "").strip() or None
+        # 批 5-2 OKF 对齐（默认关）：归一化 front matter（version 取最终
+        # DB revision）并维护 index.md / log.md；关时行为与此前一致。
+        okf = bool(getattr(get_settings(), "wiki_okf_enabled", False))
+        log_entry: tuple[str, int] | None = None
 
         with commit_session(self._session_factory) as session:
             row = (
@@ -81,6 +86,9 @@ class WikiStore:
                 .one_or_none()
             )
             if row is None:
+                if okf:
+                    body = normalize_okf_front_matter(body, kind=kind, version=1, title=title)
+                    digest = content_hash(body)
                 row = WikiPage(
                     id=str(uuid.uuid4()),
                     path=rel,
@@ -101,6 +109,8 @@ class WikiStore:
                 session.flush()
                 session.expunge(row)
                 out = row
+                if okf:
+                    log_entry = ("created", 1)
             else:
                 incoming = list(source_ids or [])
                 if replace_source_ids:
@@ -122,7 +132,57 @@ class WikiStore:
                         f"not {scoped_project!r}; refusing to overwrite"
                     )
 
-                if row.content_hash == digest:
+                if okf:
+                    # 先按当前 revision 归一化再比 hash：已含 OKF 字段且
+                    # 内容未变时走 unchanged 分支（revision 不 bump）。
+                    provisional = normalize_okf_front_matter(
+                        body,
+                        kind=kind,
+                        version=int(row.revision or 1),
+                        title=title,
+                    )
+                    if content_hash(provisional) == row.content_hash:
+                        body = provisional
+                        changed = False
+                        if merged_sources != list(row.source_ids or []):
+                            row.source_ids = merged_sources
+                            changed = True
+                        if flags is not None and list(flags) != list(row.flags or []):
+                            row.flags = list(flags)
+                            changed = True
+                        if changed:
+                            row.updated_at = _utcnow()
+                        # 批 5：先 flush 再 expunge——否则仅改 source_ids /
+                        # flags（内容不变）时，expunge 会把未落库的改动
+                        # 随对象一起丢掉，返回的行与库里不一致。
+                        session.flush()
+                        session.expunge(row)
+                        out = row
+                    else:
+                        new_revision = int(row.revision or 1) + 1
+                        body = normalize_okf_front_matter(
+                            body,
+                            kind=kind,
+                            version=new_revision,
+                            title=title,
+                        )
+                        digest = content_hash(body)
+                        row.title = title[:512]
+                        row.kind = kind
+                        row.norm_key = (norm_key or "")[:200]
+                        row.entity_id = entity_id or row.entity_id
+                        row.content_hash = digest
+                        row.source_ids = merged_sources
+                        if flags is not None:
+                            row.flags = list(flags)
+                        row.revision = new_revision
+                        row.updated_at = _utcnow()
+                        abs_path.write_text(body, encoding="utf-8")
+                        session.flush()
+                        session.expunge(row)
+                        out = row
+                        log_entry = ("updated", new_revision)
+                elif row.content_hash == digest:
                     changed = False
                     if merged_sources != list(row.source_ids or []):
                         row.source_ids = merged_sources
@@ -132,6 +192,10 @@ class WikiStore:
                         changed = True
                     if changed:
                         row.updated_at = _utcnow()
+                    # 批 5：先 flush 再 expunge——否则仅改 source_ids /
+                    # flags（内容不变）时，expunge 会把未落库的改动随对象
+                    # 一起丢掉，返回的行与库里不一致（同秒重写必现）。
+                    session.flush()
                     session.expunge(row)
                     out = row
                 else:
@@ -168,7 +232,89 @@ class WikiStore:
             embed_wiki_page(rel)
         except Exception as exc:  # noqa: BLE001
             logger.debug("wiki embed sync skipped: %s", exc)
+        # Best-effort OKF index / log maintenance (never breaks compile).
+        if okf and log_entry is not None:
+            try:
+                self._append_okf_log(rel, kind, log_entry[0], log_entry[1])
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("wiki OKF log skipped: %s", exc)
+            try:
+                self._refresh_okf_indexes()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("wiki OKF index refresh skipped: %s", exc)
         return out
+
+    def _append_okf_log(self, rel: str, kind: str, action: str, revision: int) -> None:
+        """Append one line to the wiki root ``log.md`` (批 5-2)."""
+        root = self.root()
+        log_path = root / "log.md"
+        if not log_path.exists():
+            log_path.write_text("# Wiki Change Log\n\n", encoding="utf-8")
+        line = (
+            f"- {utcnow_iso()} {rel} ({kind}, revision {revision}, {action})\n"
+        )
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+
+    def append_invalidation_log(self, source_id: str, reason: str, detail: str = "") -> bool:
+        """Append one source-invalidation line to the wiki root ``log.md`` (批 6).
+
+        The log is the change history for the unified invalidation protocol:
+        one line per ``invalidate_source`` run, independent of the OKF
+        switch (the file is created here when absent). Never raises;
+        returns False when the write failed.
+        """
+        try:
+            root = self.root()
+            log_path = root / "log.md"
+            if not log_path.exists():
+                log_path.write_text("# Wiki Change Log\n\n", encoding="utf-8")
+            suffix = f" ({detail})" if (detail or "").strip() else ""
+            line = f"- {utcnow_iso()} source {source_id} {reason}{suffix}\n"
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+            return True
+        except Exception as exc:  # noqa: BLE001 — log must never break invalidation
+            logger.debug("wiki invalidation log skipped: %s", exc)
+            return False
+
+    def _refresh_okf_indexes(self) -> None:
+        """Regenerate root ``index.md`` + per-directory ``index.md`` (批 5-2)."""
+        rows = self.list_pages(limit=500)
+        by_dir: dict[str, list] = {}
+        for r in rows:
+            d = (r.path or "").rsplit("/", 1)[0] if "/" in (r.path or "") else ""
+            by_dir.setdefault(d, []).append(r)
+        for rs in by_dir.values():
+            rs.sort(key=lambda r: r.path or "")
+        root = self.root()
+
+        def _entry(r, *, link: str) -> str:
+            title = (r.title or "").strip() or (r.path or "")
+            return (
+                f"- [{title}]({link}) — {r.kind or 'page'}, "
+                f"revision {int(r.revision or 1)}\n"
+            )
+
+        root_lines = ["# Wiki Index\n", "\n"]
+        for d in sorted(by_dir):
+            label = f"{d}/" if d else "(root)"
+            root_lines.append(f"## {label}\n\n")
+            for r in by_dir[d]:
+                root_lines.append(_entry(r, link=r.path or ""))
+            root_lines.append("\n")
+        (root / "index.md").write_text("".join(root_lines), encoding="utf-8")
+        for d, rs in by_dir.items():
+            if not d:
+                continue
+            sub = root / d
+            sub.mkdir(parents=True, exist_ok=True)
+            sub_lines = [f"# Index: {d}/\n", "\n"]
+            for r in rs:
+                sub_lines.append(
+                    _entry(r, link=(r.path or "").rsplit("/", 1)[-1])
+                )
+            (sub / "index.md").write_text("".join(sub_lines), encoding="utf-8")
 
     def get(self, page_id: str) -> WikiPage | None:
         with self._session_factory() as session:

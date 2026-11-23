@@ -121,6 +121,44 @@ def page_marker(page_no: int) -> str:
     return f"<!-- page:{page_no} -->"
 
 
+# 批 1-1：无页码 marker 文本的近似分页密度（字符/页）。
+# 专利 HTML 入库、Wiki 影子 chunk 等文本源没有 PDF 页概念，解析器也无从
+# 发射 <!-- page:N -->；chunk.page_no 因此全为 NULL，PageIndex 树
+# page_count 全 0，Stage 2 自动模式被整批挡住。真实 PDF 页无从恢复，
+# 这里只给近似页码（与 parsing._inject_approximate_page_markers 同一思路，
+# 但按 chunk 偏移算，不改文本）：3000 字符/页是专利/长文抽取文本的中间估计，
+# 页码只用于树页数统计与引用页码显示，不作精确页码断言。
+APPROX_CHARS_PER_PAGE = 3000
+
+
+def assign_approximate_page_numbers(
+    chunks: list["Chunk"], *, chars_per_page: int = APPROX_CHARS_PER_PAGE
+) -> list["Chunk"]:
+    """Fill ``page_no``/``page_end`` for marker-less chunk lists (in place).
+
+    Only runs when NO chunk carries a real page number: marker-bearing lists
+    are left untouched so real provenance is never overwritten by estimates.
+    Position is the chunk's stored offset (``offset_start``/``offset_end``)
+    when present, else the running character cursor over chunk texts — the
+    backfill script reuses exactly this rule against stored offsets, so
+    re-ingest and backfill agree. Single-page chunks keep ``page_end=None``
+    (chunking convention: None = same page as ``page_no``).
+    """
+    if not chunks or any(c.page_no is not None for c in chunks):
+        return chunks
+    cpp = int(chars_per_page) if chars_per_page and int(chars_per_page) > 0 else APPROX_CHARS_PER_PAGE
+    cursor = 0
+    for c in chunks:
+        start = c.offset_start if c.offset_start is not None else cursor
+        end = c.offset_end if c.offset_end is not None else start + len(c.text or "")
+        page_no = int(start // cpp) + 1
+        page_end = int(max(end - 1, start) // cpp) + 1
+        c.page_no = page_no
+        c.page_end = page_end if page_end != page_no else None
+        cursor = max(cursor, end)
+    return chunks
+
+
 def block_marker(kind: str) -> str:
     """Block-kind marker layout-aware parsers emit (MinerU tier, Phase 1).
 

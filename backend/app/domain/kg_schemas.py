@@ -150,6 +150,10 @@ class KGRetrieveStats(BaseModel):
     semantic_hits: int = 0
     truncated: bool = False
     trade_only: bool = False
+    # 批 5-1：wikilink 一跳扩展（与实体边分开度量；实体侧恒为空时此二
+    # 项即 wikilink 侧的全部度量）。
+    wikilink_seeds: int = 0
+    wikilink_hits: int = 0
 
 
 class KGRetrieveResponse(BaseModel):

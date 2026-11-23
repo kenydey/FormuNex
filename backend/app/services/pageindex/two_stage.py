@@ -108,7 +108,9 @@ def _settings_snapshot() -> str:
     s = get_settings()
     return "|".join(str(getattr(s, k, None)) for k in (
         "pageindex_enabled", "pageindex_colbert_rerank", "pageindex_min_pages",
-        "pageindex_max_hops", "pageindex_max_input_chars", "pageindex_max_input_tokens"))
+        "pageindex_max_hops", "pageindex_max_input_chars", "pageindex_max_input_tokens",
+        "pageindex_version_check_enabled", "pageindex_heuristic_escalation_enabled",
+        "pageindex_escalation_min_share", "pageindex_escalation_max_coverage"))
 
 
 def _cache_key(query: str, *, top_k: int, max_docs: int, project_id: str | None,
@@ -412,6 +414,99 @@ def _colbert_rerank_stage1(query: str, stage1: list[Any]) -> tuple[list[Any], bo
         return stage1, False
 
 
+def _tree_version_current(row: Any, source_id: str) -> tuple[bool, str]:
+    """3-1: per-source tree consistency — builder version + live page span.
+
+    The global ``toc_tree_store.fingerprint()`` hashes *all* trees, so it
+    cannot attribute staleness to one source; the per-source check reuses
+    the same two signals it hashes for this row (``builder_version`` + tree
+    content, the latter approximated by the live chunk page span — the
+    tree's ``page_count`` derives from chunk ``page_no``). This is the same
+    check ``nav_layer.ensure_tree_current`` applies on the general path;
+    ``deepen_documents`` never goes through ``ensure_tree`` (verified
+    2026-11-23: its only tree read is ``get_many`` below), so the check
+    lives here. A chunk-store error fails open (returns current).
+    """
+    if (getattr(row, "builder_version", "") or "") != BUILDER_VERSION:
+        return False, f"builder_version {getattr(row, 'builder_version', None)!r} != {BUILDER_VERSION!r}"
+    try:
+        from ...db.chunk_store import get_chunk_store
+
+        chunks = get_chunk_store().get_by_source(source_id) or []
+    except Exception:
+        return True, ""
+    live_pages = max((int(getattr(c, "page_no", 0) or 0) for c in chunks), default=0)
+    if live_pages and row.page_count and int(row.page_count) != live_pages:
+        return False, f"page_count {row.page_count} != live chunk span {live_pages}"
+    return True, ""
+
+
+def _ensure_tree_version_current(source_id: str, row: Any) -> tuple[Any | None, str]:
+    """3-1: rebuild a stale tree once; return ``(fresh row or None, reason)``.
+
+    ``None`` means the tree is unusable after the rebuild attempt — the
+    caller degrades to Stage 1 (fail-open, never raises).
+    """
+    ok, why = _tree_version_current(row, source_id)
+    if ok:
+        return row, ""
+    log.warning("pageindex: tree for %s stale (%s); rebuilding", source_id, why)
+    try:
+        from ...db.toc_tree_store import get_toc_tree_store
+
+        build_tree_for_source(source_id)
+        fresh = get_toc_tree_store().get(source_id)
+    except Exception as exc:  # noqa: BLE001 - rebuild failure must never break retrieval
+        log.warning("pageindex: tree rebuild failed for %s: %s", source_id, exc)
+        return None, why
+    if fresh is None:
+        return None, why
+    ok2, why2 = _tree_version_current(fresh, source_id)
+    if not ok2:
+        log.warning("pageindex: rebuilt tree for %s still stale (%s); degrading to stage1", source_id, why2)
+        return None, why2
+    return fresh, ""
+
+
+def _heuristic_escalation(query: str, source_id: str, doc_hit_ids: list[str],
+                          stage1: list[Any] | None, row: Any) -> str | None:
+    """3-2: classifier-rejected query whose Stage 1 hits concentrate in one
+    long document with low top-k coverage → escalate to heuristic Stage 2.
+
+    Condition: the document holds at least ``pageindex_escalation_min_share``
+    of all Stage 1 hits, while those hits cover at most
+    ``pageindex_escalation_max_coverage`` of the document's chunks — the
+    tree likely holds relevant sections Stage 1 never saw. Returns a reason
+    string, or ``None`` when the condition does not hold. Pure read path
+    (one chunk-count query); never raises.
+    """
+    settings = get_settings()
+    if not (query or "").strip():
+        return None
+    if (row.page_count or 0) < settings.pageindex_min_pages:
+        return None
+    total_hits = len(stage1 or [])
+    if total_hits == 0 or not doc_hit_ids:
+        return None
+    share = len(doc_hit_ids) / total_hits
+    if share < float(settings.pageindex_escalation_min_share or 0):
+        return None
+    try:
+        from ...db.chunk_store import get_chunk_store
+
+        total_chunks = len(get_chunk_store().get_by_source(source_id) or [])
+    except Exception:
+        return None
+    if total_chunks == 0:
+        return None
+    coverage = len(doc_hit_ids) / total_chunks
+    if coverage > float(settings.pageindex_escalation_max_coverage or 0):
+        return None
+    return (f"share={share:.2f} coverage={coverage:.3f} "
+            f"hits={len(doc_hit_ids)}/{total_hits} chunks={len(doc_hit_ids)}/{total_chunks} "
+            f"pages={row.page_count}")
+
+
 def deepen_documents(
     query: str,
     source_ids: list[str],
@@ -449,20 +544,42 @@ def deepen_documents(
             out.append(DocumentDepth(sid, "stage1", "no toc tree", ids,
                                      fallback="children_retrieval", fallback_chunk_ids=fb))
             continue
+        if settings.pageindex_version_check_enabled:
+            # 3-1: version consistency at the deepen entry (this path never
+            # goes through nav_layer.ensure_tree). Stale → rebuild once;
+            # still stale → fail-open degrade to Stage 1 with a notice.
+            row, stale_reason = _ensure_tree_version_current(sid, row)
+            if row is None:
+                fb = _children_fallback(query, [c for c in (stage1 or []) if c.source_id == sid])
+                out.append(DocumentDepth(
+                    sid, "stage1", f"tree stale ({stale_reason}); degraded to stage1", ids,
+                    fallback="children_retrieval", fallback_chunk_ids=fb))
+                continue
         if deep is None and row.page_count < settings.pageindex_min_pages:
             out.append(DocumentDepth(sid, "stage1", f"{row.page_count} pages < {settings.pageindex_min_pages}", ids))
             continue
+        # Navigation model: LLM when available, except an escalated document
+        # (3-2) always walks heuristically — LLM navigation stays reserved
+        # for explicit deep=True.
+        nav_llm = model
+        reason = "deep=true" if deep else f"{row.page_count} pages"
         if deep is None and query_kind == "auto":
             eligible, why = classify_pageindex_query(query)
             if not eligible:
-                out.append(DocumentDepth(sid, "stage1", f"not eligible: {why}", ids))
-                continue
+                esc = None
+                if settings.pageindex_heuristic_escalation_enabled:
+                    esc = _heuristic_escalation(query, sid, ids, stage1, row)
+                if esc is None:
+                    out.append(DocumentDepth(sid, "stage1", f"not eligible: {why}", ids))
+                    continue
+                nav_llm = None
+                reason = f"heuristic escalation: {esc}"
         nav = navigate(
-            sid, row.tree, query, _NodeText(sid), llm=model,
+            sid, row.tree, query, _NodeText(sid), llm=nav_llm,
             max_hops=settings.pageindex_max_hops, max_chars=settings.pageindex_max_input_chars,
             max_tokens=settings.pageindex_max_input_tokens,
         )
-        depth = DocumentDepth(sid, "pageindex", "deep=true" if deep else f"{row.page_count} pages", ids, nav)
+        depth = DocumentDepth(sid, "pageindex", reason, ids, nav)
         if nav.stopped == "budget":
             # Budget-exhausted navigation may have missed the best section:
             # children rerank over stage-1 chunks is the supplementary signal.

@@ -5,6 +5,7 @@ Deterministic merge (no LLM rewrite in this slice): union source_ids and append
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -19,7 +20,6 @@ from .schema import (
     chemical_path,
     dump_page,
     extract_evidence_blocks,
-    has_source_block,
     material_entity_id,
     material_path,
     mechanism_path,
@@ -27,6 +27,7 @@ from .schema import (
     pitfall_path,
     safe_key,
     system_path,
+    upsert_source_block,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,16 +35,25 @@ logger = logging.getLogger(__name__)
 _CAS_RE = re.compile(r"^\d{2,7}-\d{2}-\d$")
 
 
-def compile_source(source_id: str) -> dict[str, Any]:
-    """Merge one ingested source into wiki pages. Never raises to callers."""
+def compile_source(source_id: str, *, source_hash: str | None = None) -> dict[str, Any]:
+    """Merge one ingested source into wiki pages. Never raises to callers.
+
+    ``source_hash`` (批 6) overrides the recorded propagation key: pass
+    the hash of the new content when the caller just re-indexed the
+    source, because ``SourceDocument.content_hash`` is only written at
+    create/revive time and goes stale on ``index_source`` re-index
+    (it is provenance write-protected, see ``source_store.update_fields``).
+    When omitted, the stored row hash is used, falling back to a hash of
+    the current chunk texts.
+    """
     try:
-        return _compile_source_impl(source_id)
+        return _compile_source_impl(source_id, source_hash=source_hash)
     except Exception as exc:  # noqa: BLE001 — compile must never break ingest
         logger.exception("wiki compile_source failed for %s: %s", source_id, exc)
         return {"ok": False, "reason": "error", "error": str(exc), "pages": []}
 
 
-def _compile_source_impl(source_id: str) -> dict[str, Any]:
+def _compile_source_impl(source_id: str, *, source_hash: str | None = None) -> dict[str, Any]:
     settings = get_settings()
     if not settings.wiki_enabled:
         return {"ok": False, "reason": "wiki_disabled", "pages": []}
@@ -62,6 +72,22 @@ def _compile_source_impl(source_id: str) -> dict[str, Any]:
 
     guide = sources.get_source_guide(sid)
     chunks = get_chunk_store().get_by_source(sid)
+
+    # 批 5-3：源内容 hash（SourceDocument.content_hash；缺失时退化为
+    # chunk 文本 hash）。drift 开关只决定"hash 不同时是否刷新"，hash
+    # 行本身新建块即记录，供日后启用时比对。批 6：调用方传入的
+    # source_hash 优先——重入库后的行 hash 已 stale，不能再用它当新
+    # 内容的传播键（行 hash 是来源写保护字段，不由失效路径改写）。
+    source_hash = (source_hash or "").strip()
+    if not source_hash:
+        source_hash = (getattr(doc, "content_hash", "") or "").strip()
+    if not source_hash:
+        source_hash = hashlib.sha256(
+            "\n".join((getattr(c, "text", "") or "") for c in (chunks or [])).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+    drift_enabled = bool(settings.wiki_drift_refresh_enabled)
 
     materials: dict[str, dict[str, Any]] = {}
     chemicals: dict[str, dict[str, Any]] = {}
@@ -167,6 +193,7 @@ def _compile_source_impl(source_id: str) -> dict[str, Any]:
             summary += f" Supplier: {info['supplier']}."
         if info.get("role"):
             summary += f" Role: {info['role']}."
+        fresh_summary = summary
 
         if existing_md:
             meta, body = parse_front_matter(existing_md)
@@ -182,15 +209,19 @@ def _compile_source_impl(source_id: str) -> dict[str, Any]:
                 if prev and prev != "_No summary yet._":
                     summary = prev
 
-        if not has_source_block(evidence, sid):
-            lines = [
-                f"### Source `{sid}`",
-                f"- document: {title_hint}",
-                f"- origin: {doc.origin_url or ''}",
-            ]
-            for n in info.get("notes") or []:
-                lines.append(f"- note: {n}")
-            evidence.append("\n".join(lines))
+        lines = [
+            f"### Source `{sid}`",
+            f"- document: {title_hint}",
+            f"- origin: {doc.origin_url or ''}",
+        ]
+        for n in info.get("notes") or []:
+            lines.append(f"- note: {n}")
+        evidence, _refreshed = upsert_source_block(
+            evidence, sid, lines, source_hash, drift_enabled=drift_enabled
+        )
+        if _refreshed:
+            # 批 5-3：源内容变了，Summary 按当前输入重算，不沿用旧摘要。
+            summary = fresh_summary
 
         md = dump_page(
             kind="material",
@@ -227,6 +258,7 @@ def _compile_source_impl(source_id: str) -> dict[str, Any]:
         flags: list[str] = []
         evidence: list[str] = []
         summary = f"Chemical entity CAS **{cas}**."
+        fresh_summary = summary
 
         if existing_md:
             meta, body = parse_front_matter(existing_md)
@@ -241,15 +273,19 @@ def _compile_source_impl(source_id: str) -> dict[str, Any]:
                 if prev and prev != "_No summary yet._":
                     summary = prev
 
-        if not has_source_block(evidence, sid):
-            lines = [
-                f"### Source `{sid}`",
-                f"- document: {title_hint}",
-                f"- origin: {doc.origin_url or ''}",
-            ]
-            for n in info.get("notes") or []:
-                lines.append(f"- note: {n}")
-            evidence.append("\n".join(lines))
+        lines = [
+            f"### Source `{sid}`",
+            f"- document: {title_hint}",
+            f"- origin: {doc.origin_url or ''}",
+        ]
+        for n in info.get("notes") or []:
+            lines.append(f"- note: {n}")
+        evidence, _refreshed = upsert_source_block(
+            evidence, sid, lines, source_hash, drift_enabled=drift_enabled
+        )
+        if _refreshed:
+            # 批 5-3：源内容变了，Summary 按当前输入重算，不沿用旧摘要。
+            summary = fresh_summary
 
         md = dump_page(
             kind="chemical",
@@ -315,17 +351,18 @@ def _compile_source_impl(source_id: str) -> dict[str, Any]:
                             bounds = list(by.values())
                     except Exception:
                         pass
-            if not has_source_block(evidence, sid):
-                evidence.append(
-                    "\n".join(
-                        [
-                            f"### Source `{sid}`",
-                            f"- document: {title_hint}",
-                            f"- parameter_space: {pname} "
-                            f"[{bound.min_value}–{bound.max_value} {bound.unit}]",
-                        ]
-                    )
-                )
+            evidence, _refreshed = upsert_source_block(
+                evidence,
+                sid,
+                [
+                    f"### Source `{sid}`",
+                    f"- document: {title_hint}",
+                    f"- parameter_space: {pname} "
+                    f"[{bound.min_value}–{bound.max_value} {bound.unit}]",
+                ],
+                source_hash,
+                drift_enabled=drift_enabled,
+            )
             # Tight max as soft forbidden note
             if bound.max_value is not None:
                 forbidden.append(f"{pname} > {bound.max_value} {bound.unit}".strip())
@@ -378,16 +415,17 @@ def _compile_source_impl(source_id: str) -> dict[str, Any]:
                     prev = prev.strip()
                     if prev and prev != "_No summary yet._" and summary not in prev:
                         summary = f"{prev}\n\n---\n\n{summary}"
-            if not has_source_block(evidence, sid):
-                evidence.append(
-                    "\n".join(
-                        [
-                            f"### Source `{sid}`",
-                            f"- document: {title_hint}",
-                            "- note: from source_guide.summary",
-                        ]
-                    )
-                )
+            evidence, _refreshed = upsert_source_block(
+                evidence,
+                sid,
+                [
+                    f"### Source `{sid}`",
+                    f"- document: {title_hint}",
+                    "- note: from source_guide.summary",
+                ],
+                source_hash,
+                drift_enabled=drift_enabled,
+            )
             try:
                 row = store.upsert_page(
                     path=path,
@@ -432,16 +470,17 @@ def _compile_source_impl(source_id: str) -> dict[str, Any]:
                 source_ids = list(dict.fromkeys([*(meta.get("source_ids") or []), sid]))
                 flags = list(meta.get("flags") or [])
                 evidence = extract_evidence_blocks(body)
-            if not has_source_block(evidence, sid):
-                evidence.append(
-                    "\n".join(
-                        [
-                            f"### Source `{sid}`",
-                            f"- document: {title_hint}",
-                            f"- faq: {text}",
-                        ]
-                    )
-                )
+            evidence, _refreshed = upsert_source_block(
+                evidence,
+                sid,
+                [
+                    f"### Source `{sid}`",
+                    f"- document: {title_hint}",
+                    f"- faq: {text}",
+                ],
+                source_hash,
+                drift_enabled=drift_enabled,
+            )
             try:
                 row = store.upsert_page(
                     path=path,

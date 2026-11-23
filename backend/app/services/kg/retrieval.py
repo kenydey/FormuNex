@@ -91,7 +91,18 @@ def retrieve(
 
     semantic = bilingual_search(query, k=sem_k, project_id=project_id)
 
+    # 批 5-1：Wiki 页间链接一跳扩展（wikilink 边与实体边同等对待，同受
+    # 1 跳上限；开关默认关）。种子是问句命中的稳定概念页，邻居页以
+    # wiki Evidence 进池；实体侧扩展仍在 resolve_query 内（边表空时恒为空）。
+    wikilink_evs: list[tuple[float, Evidence, str]] = []
+    wikilink_seeds = 0
+    if getattr(settings, "wiki_graph_expansion_enabled", False):
+        wikilink_evs, wikilink_seeds = _wikilink_expansion(
+            query, project_id=project_id
+        )
+
     pool: list[tuple[float, Evidence, str]] = list(mention_evs)
+    pool.extend(wikilink_evs)
     for ev in semantic:
         pool.append((float(ev.relevance), ev, _chunk_id_from_identifier(ev.identifier)))
 
@@ -127,9 +138,85 @@ def retrieve(
         semantic_hits=len(semantic),
         truncated=truncated,
         trade_only=resolved.trade_only,
+        wikilink_seeds=wikilink_seeds,
+        wikilink_hits=len(wikilink_evs),
     )
 
     return KGRetrieveResponse(plan=plan, evidence=evidence, stats=stats)
+
+
+_WIKILINK_EXPANSION_RELEVANCE = 0.5
+
+
+def _wikilink_expansion(
+    query: str, *, project_id: str | None = None
+) -> tuple[list[tuple[float, Evidence, str]], int]:
+    """批 5-1：Wiki 页间链接一跳扩展。
+
+    种子 = 问句命中的稳定概念页（与批 4 路由器同一信号
+    ``_wiki_blend_hits`` + 同一 kind 白名单 ``STABLE_WIKI_KINDS``）；
+    扩展 = 每颗种子在 [[wikilink]] 图上的 1 跳邻居（无向），邻居页以
+    wiki Evidence（relevance 0.5，低于直接命中）进检索池。实体侧不
+    在此函数内——它仍在 ``resolve_query`` 的 ``linked_dst_ids`` 一跳
+    扩展里，两路在探针中分开度量。任一步失败即 fail-open 返回空。
+    """
+    try:
+        from ..query_router import STABLE_WIKI_KINDS
+        from ...db.wiki_store import get_wiki_store
+        from ..wiki.page_graph import wikilink_neighbors
+        from ..wiki.retrieve import _wiki_blend_hits
+        from ..wiki.schema import extract_summary, parse_front_matter
+    except Exception:  # noqa: BLE001 - fail-open: no expansion
+        return [], 0
+    try:
+        seed_hits = _wiki_blend_hits(query, k=5, project_id=project_id)
+    except Exception:  # noqa: BLE001 - fail-open: no expansion
+        return [], 0
+    try:
+        store = get_wiki_store()
+        seed_paths: list[str] = []
+        for ev in seed_hits:
+            path = (ev.identifier or "").removeprefix("wiki:")
+            if not path or path in seed_paths:
+                continue
+            row = store.get_by_path(path)
+            if row is None or (row.kind or "") not in STABLE_WIKI_KINDS:
+                continue
+            seed_paths.append(path)
+        if not seed_paths:
+            return [], 0
+        neighbors = wikilink_neighbors(seed_paths, project_id=project_id)
+        seen = {f"wiki:{p}" for p in seed_paths}
+        out: list[tuple[float, Evidence, str]] = []
+        for seed in seed_paths:
+            for nbr in neighbors.get(seed, []):
+                ident = f"wiki:{nbr}"
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                row = store.get_by_path(nbr)
+                if row is None or (row.kind or "") not in STABLE_WIKI_KINDS:
+                    continue
+                md = store.read_markdown(nbr) or ""
+                _, body = parse_front_matter(md)
+                summary = extract_summary(body) or (row.title or nbr)
+                out.append(
+                    (
+                        _WIKILINK_EXPANSION_RELEVANCE,
+                        Evidence(
+                            source="wiki",
+                            identifier=ident,
+                            title=f"[Wiki/{row.kind}] {(row.title or nbr).strip()}",
+                            snippet=summary[:800],
+                            relevance=_WIKILINK_EXPANSION_RELEVANCE,
+                            url=None,
+                        ),
+                        "",
+                    )
+                )
+        return out, len(seed_paths)
+    except Exception:  # noqa: BLE001 - fail-open: no expansion
+        return [], 0
 
 
 def build_resolution_summary(query: str, resolved=None) -> EntityResolutionSummary:

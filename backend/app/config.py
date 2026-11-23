@@ -689,7 +689,7 @@ class Settings(BaseSettings):
     # kg_link_on_ingest 保留为兼容别名；新逻辑用下面两个字段。
     kg_link_on_ingest: bool = True
     kg_entities_on_ingest: bool = True
-    kg_relations_on_ingest: bool = False
+    kg_relations_on_ingest: bool = True  # 批 1-2：规则关系模板开启（LLM 抽取仍关）
     kg_enumerative_scan_limit: int = 500
     kg_enumerative_chunk_cap: int = 200
     kg_enumerative_llm_cap: int = 32
@@ -700,8 +700,8 @@ class Settings(BaseSettings):
     kg_llm_product_hint: bool = False
     kg_chat_entity_refs_on_evidence: bool = True
     kg_element_map_path: str = "app/resources/kg_elements.json"
-    kg_relation_extract_enabled: bool = False
-    kg_llm_relation_extract: bool = False
+    kg_relation_extract_enabled: bool = True  # 批 1-2：规则关系模板开启（LLM 抽取仍关）
+    kg_llm_relation_extract: bool = False  # 批 1-2：保持关，绝不开 LLM 抽取
     kg_relation_min_confidence: float = 0.55
     # WeKnora 第一批 2.5 A 线：查询时关系权重（PMI + 强度），默认关：
     # 权重改变排序，先在固定实体集上跑开关对比再开。两系数之和须为 1，
@@ -916,6 +916,17 @@ class Settings(BaseSettings):
     # 关闭后 API/编译全停，chat/DOE 行为与升级前一致（W3/W4 另旗标默认关）。
     wiki_enabled: bool = True
     wiki_compile_on_ingest: bool = True
+    # 批 5-3：源内容漂移刷新——compile 时比对源内容 hash，变化则刷新
+    # 该源的 ### Source 块与 Summary。默认关（关时沿用 has_source_block
+    # 的旧行为：已有块即跳过）。0 LLM 调用。
+    wiki_drift_refresh_enabled: bool = False
+    # 融合升级批 6：统一失效协议（默认关，灰度开）。开时源内容变更 /
+    # 删除走同一失效函数（services/kb_invalidation.invalidate_source），
+    # 依次处理 chunk 校验、KG 提及与边删除/重链接、Wiki 同步重编译、
+    # 树重建，并记 log.md；关时各层保持此前分散的钩子行为不变。
+    # 失效只在入库/删除路径（离线/后台）跑，不占问答延迟；任一层失败
+    # 只记 notice，不阻断入库/删除与问答（读侧另有批 3-1 版本校验兜底）。
+    kb_invalidation_enabled: bool = False
     wiki_chat_blend: bool = True
     # Chat 双轨权重：balanced | wiki_first | raw_first（Batch 2 起 Claims 可引 wiki，见 wiki_retrieval_enabled）
     wiki_chat_mode: str = Field(
@@ -929,6 +940,11 @@ class Settings(BaseSettings):
     wiki_retrieval_enabled: bool = True
     wiki_evidence_weight: float = 0.7
     wiki_claim_confidence_cap: float = 0.6
+    # 批 5-4：lint-flagged 页处理——off（现状）| downweight（按
+    # wiki_flagged_weight 降权）| exclude（排除，直到 flag 清除）。
+    # 模式与系数由实施前金标 A/B 定（见批 5 报告）；默认 off。
+    wiki_flagged_mode: str = "off"
+    wiki_flagged_weight: float = 0.5
     wiki_doe_constraints: bool = True
     wiki_lint_on_compile: bool = True
     wiki_neo4j_project: bool = False
@@ -990,6 +1006,13 @@ class Settings(BaseSettings):
     # Wiki page [[wikilink]] graph for Hub canvas (not materials KG).
     # Top-5‴ #5（2026-09-25）：默认 ON（可关；≠ 材料 KG / Neo4j）。
     wiki_page_graph_enabled: bool = True
+    # 批 5-1：Wiki 页间链接进 KG 一跳扩展——wikilink 边与实体边同等
+    # 对待，同受 1 跳上限。默认关；关时 kg.retrieve 不做 wikilink 扩展。
+    wiki_graph_expansion_enabled: bool = False
+    # 批 5-2：OKF 对齐——upsert_page 写页时补 front matter version /
+    # owner / tags / type，并维护根目录 index.md + log.md 与各子目录
+    # index.md。默认关；关时 upsert 行为与此前一致。
+    wiki_okf_enabled: bool = False
     # S2: inject deterministic wiki catalog snippet into L2 theme compile. Default OFF.
     wiki_catalog_inject_themes: bool = False
     # S4: allow Chat/Deep Research 「存为 Wiki 草稿」→ queries/.
@@ -1081,6 +1104,25 @@ class Settings(BaseSettings):
     pageindex_max_input_chars: int = 48000
     pageindex_max_input_tokens: int = 16000  # plan §5.1.1 budget: 16k input tokens per document walk
     pageindex_colbert_rerank: bool = True  # plan §5.1.1: stage 1 = hybrid_search + ColBERT rerank
+    # 融合升级批 3-1：deepen_documents 入口版本一致性校验（默认关，灰度开）。
+    # 开时校验 tree.builder_version == BUILDER_VERSION 且树页数与现存 chunk
+    # 页跨度一致；不一致先重建树，重建后仍不一致则 fail-open 降级 Stage 1。
+    pageindex_version_check_enabled: bool = False
+    # 融合升级批 3-2：启发式升级（默认关，灰度开）。分类器拒绝后，若 Stage 1
+    # 命中集中在同一长文档（≥ min_pages）且 top-k 覆盖度低，升级 Stage 2，
+    # 只走启发式导航（navigate_heuristic），LLM 导航仅 deep=True 时用。
+    pageindex_heuristic_escalation_enabled: bool = False
+    # 升级条件：该文档占 Stage 1 命中的比例下限；命中 chunk 占该文档全部
+    # chunk 的比例上限（覆盖度低 = 命中只触及文档的一小片）。
+    pageindex_escalation_min_share: float = 0.5
+    pageindex_escalation_max_coverage: float = 0.2
+    # 融合升级批 4：确定性查询路由器 v1（默认关，灰度开）。开时 run_chat 在
+    # _augment_with_kb 之前按路由表选管道：显式 deep 最高优先；结构化信号 →
+    # text2sql hybrid；萃取/深度类 → PageIndex Stage 2（自动模式）；稳定概念
+    # 命中 Wiki 页 → Wiki-first；其余 → hybrid RAG。关时回退当前顺序叠加管线。
+    # 路由器只决定管道，不改变各管道内部行为（Wiki 权重 0.7 与置信度封顶 0.6
+    # 不变，KG/hybrid 分支不动，text2sql 分类本身不动）。
+    query_router_enabled: bool = False
     # PLM documents (方案 §5.5.4-5.5.9): rendered PDF / Word files and uploaded templates.
     plm_storage_dir: str = "./data/plm"
     # TrueType CJK font embedded in generated PDFs; empty = search system fonts (see render/fonts.py).

@@ -82,6 +82,23 @@ def delete_kb_source(source_id: str) -> dict[str, Any]:
 
     store.delete(sid)
 
+    # 融合升级批 6：统一失效协议（默认关）。删源后复核四层：chunk/KG/
+    # 树幂等再删（0 行也是可断言的行为）、Wiki 页内该源的 ### Source
+    # 证据块移除 + stale 标记、log.md 记一行。任一层失败只记 notice，
+    # 不影响删除结果（失效函数本身永不抛错）。注意：方案 §3 批 6 写
+    # "删源时不碰 kb_mentions/kb_entity_links"是旧结论——当前代码
+    # 上方已删提及与边，本函数只是复核 + 补 Wiki 块移除与 log 两项缺口。
+    try:
+        from ..config import get_settings as _get_settings
+
+        if _get_settings().kb_invalidation_enabled:
+            from .kb_invalidation import invalidate_source
+
+            _inv = invalidate_source(sid, reason="deleted")
+            logger.info("kb delete: invalidation for %s: %s", sid, _inv)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("kb delete: invalidation skipped: %s", exc)
+
     return {
         "ok": True,
         "source_id": sid,

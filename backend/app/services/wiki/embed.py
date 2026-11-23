@@ -172,6 +172,9 @@ def embed_wiki_page(path: str) -> dict[str, Any]:
                 {
                     "text": blob,
                     "heading_path": f"wiki/{kind}",
+                    # 批 1-1：Wiki 影子 chunk 是单页摘要，页码恒为 1；此前缺省
+                    # 致 page_no NULL，Wiki 源的树 page_count 全 0。
+                    "page_no": 1,
                     "meta": {
                         "wiki": True,
                         "wiki_path": rel,

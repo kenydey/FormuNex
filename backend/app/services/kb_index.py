@@ -564,6 +564,12 @@ def prepare_chunk_rows(
             overlap=settings.ingest_chunk_overlap,
             example_aware=_is_patent_source(source_id),
         )
+        # 批 1-1：无页码 marker 的文本（专利 HTML 入库等）切分后 page_no 全为
+        # NULL，致 PageIndex 树 page_count 全 0。近似页码只补全空情形，
+        # 带真实 marker 的 chunk 不动；回填脚本复用同一规则。
+        from .chunking import assign_approximate_page_numbers
+
+        assign_approximate_page_numbers(chunks)
         from .kb_retrieval_gate import chunk_floor, is_formula_text
 
         # A formula is atomic and short by nature (``$$k = A e^{-E_a / (RT)}$$`` is 24 characters), so it is held to
@@ -811,6 +817,20 @@ def index_source(
         settings = get_settings()
         # v17-5: _old_counts 前移 —— 提前 return 分支清空旧 chunk 时也需要扣减覆盖率。
         _old_counts = _count_source_chunks(source_id)
+        # 批 6：传播键——重入库前读行 hash（旧内容）与新文本 hash。
+        # 行 hash 只在建行/复活时写，重入库不刷新（来源写保护字段），故
+        # 这里读到的就是"旧内容"的键；新键由当前 full_text 现算。
+        _old_doc_hash = ""
+        try:
+            from ..db.source_store import get_source_store as _get_src_store
+
+            _old_doc = _get_src_store().get(source_id)
+            _old_doc_hash = (getattr(_old_doc, "content_hash", "") or "").strip()
+        except Exception:  # noqa: BLE001 — 读不到旧 hash 时失效函数自行退化
+            pass
+        from .kb_invalidation import source_content_hash as _src_hash
+
+        _new_doc_hash = _src_hash(full_text)
         # Ingest-time quality gate (same rules as hybrid #111): blocked origin
         # never becomes document_chunks — clear any prior rows and stop early.
         if ingest_block_reason_for_source(source_id):
@@ -860,21 +880,51 @@ def index_source(
                 pass
         # v16 P2-7: DB 写成功后再 bump 覆盖率（写失败不虚增）。
         _bump_kb_coverage_for_rows(rows, _old_counts)
-        # PageIndex: ToC tree for stage-2 retrieval (fail-open; never blocks indexing).
-        from .pageindex.two_stage import build_tree_on_ingest
-
-        build_tree_on_ingest(source_id, tables)
-        # ``kg_link_on_ingest`` is the legacy master switch kept as a compat
-        # alias: False still disables linking even if the split flags are on.
-        if n and settings.kg_enabled and settings.kg_link_on_ingest and (
-            settings.kg_entities_on_ingest or settings.kg_relations_on_ingest
-        ):
+        # 融合升级批 6：统一失效协议（默认关）。开时 chunk 校验、KG 重链接、
+        # Wiki 同步重编译、树重建走同一失效函数（任一层失败只记 notice，
+        # 不阻断入库）；开时取代下面三处分散钩子（树/KG/Wiki 异步分发），
+        # 关时行为与此前一字不差。失效是离线/后台任务，不占问答延迟。
+        if n and settings.kb_invalidation_enabled:
             try:
-                from .kg.entity_linker import link_source
+                from .kb_invalidation import invalidate_source
 
-                link_source(source_id, settings=settings)
-            except Exception as link_exc:
-                degrade_return(logger, link_exc, "kg link_on_ingest failed", None)
+                invalidate_source(
+                    source_id,
+                    reason="content_changed",
+                    old_content_hash=_old_doc_hash,
+                    new_content_hash=_new_doc_hash,
+                    prior_chunk_count=_old_counts[0],
+                )
+            except Exception as inv_exc:  # noqa: BLE001 — 失效函数本身永不抛错，此处纯防御
+                degrade_return(logger, inv_exc, "kb invalidation failed", None)
+        else:
+            # PageIndex: ToC tree for stage-2 retrieval (fail-open; never blocks indexing).
+            from .pageindex.two_stage import build_tree_on_ingest
+
+            build_tree_on_ingest(source_id, tables)
+            # ``kg_link_on_ingest`` is the legacy master switch kept as a compat
+            # alias: False still disables linking even if the split flags are on.
+            if n and settings.kg_enabled and settings.kg_link_on_ingest and (
+                settings.kg_entities_on_ingest or settings.kg_relations_on_ingest
+            ):
+                try:
+                    from .kg.entity_linker import link_source
+
+                    link_source(source_id, settings=settings)
+                except Exception as link_exc:
+                    degrade_return(logger, link_exc, "kg link_on_ingest failed", None)
+            # W2: after successful chunk write, enqueue LLM Wiki compile (best-effort).
+            if (
+                n
+                and settings.wiki_enabled
+                and settings.wiki_compile_on_ingest
+            ):
+                try:
+                    from ..worker.tasks import dispatch_wiki_compile
+
+                    dispatch_wiki_compile(source_id)
+                except Exception as wiki_exc:
+                    degrade_return(logger, wiki_exc, "wiki compile dispatch failed", None)
         if n and settings.prune_source_fulltext:
             # 入库收尾：切块成功 → full_text 冗余，清空省空间（保留行元数据）。
             try:
@@ -883,18 +933,6 @@ def index_source(
                 get_source_store().clear_full_text(source_id)
             except Exception as exc:
                 degrade_return(logger, exc, "prune full_text failed", None)
-        # W2: after successful chunk write, enqueue LLM Wiki compile (best-effort).
-        if (
-            n
-            and settings.wiki_enabled
-            and settings.wiki_compile_on_ingest
-        ):
-            try:
-                from ..worker.tasks import dispatch_wiki_compile
-
-                dispatch_wiki_compile(source_id)
-            except Exception as wiki_exc:
-                degrade_return(logger, wiki_exc, "wiki compile dispatch failed", None)
         # P4.2: optional project-dossier S2 patch (default OFF via wiki_dossier_auto_patch).
         if n and settings.wiki_enabled and settings.wiki_project_dossier_enabled:
             try:

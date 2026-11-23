@@ -199,21 +199,62 @@ def _wiki_blend_hits(
     return merged[: max(1, k)]
 
 
+def flagged_wiki_paths(project_id: str | None = None) -> set[str]:
+    """Wiki page paths carrying a lint flag (批 5-4).
+
+    Flag set = lint-managed flags (stale / conflict / broken / orphan /
+    missing). Best-effort: empty set on any failure (caller keeps the
+    old behavior).
+    """
+    try:
+        from .lint import _LINT_MANAGED_FLAGS
+
+        store = get_wiki_store()
+        rows = store.list_pages(limit=500, project_id=project_id)
+        return {
+            (r.path or "")
+            for r in rows
+            if (r.path or "") and set(r.flags or []) & set(_LINT_MANAGED_FLAGS)
+        }
+    except Exception:
+        return set()
+
+
+def flagged_wiki_source_ids(project_id: str | None = None) -> set[str]:
+    """Shadow-chunk source ids of lint-flagged wiki pages (批 5-4).
+
+    The wiki shadow chunk per page has the deterministic uuid5 source id
+    ``wiki_source_id(path)`` (see ``wiki/embed.py``), so the flagged
+    paths map to chunk source ids without a source-table lookup.
+    """
+    try:
+        from .embed import wiki_source_id
+
+        return {wiki_source_id(p) for p in flagged_wiki_paths(project_id)}
+    except Exception:
+        return set()
+
+
 def blend_wiki_evidence(
     question: str,
     sources: list[Evidence],
     *,
     k: int | None = None,
     project_id: str | None = None,
+    mode: str | None = None,
 ) -> tuple[list[Evidence], int]:
     """Merge wiki hits (deduped). Ordering depends on ``wiki_chat_mode``.
+
+    ``mode`` (批 4 路由器用)：本次调用的 chat mode 覆盖（仅 ``wiki_first``
+    一档由路由器传入）；不传时沿用 ``settings.wiki_chat_mode``。覆盖只改
+    混入条数与排序（wiki_first k=8 前置），权重 0.7 与置信度封顶 0.6 不变。
 
     Returns (merged, wiki_added_count). Claims still use ``filter_raw_evidence``.
     """
     settings = get_settings()
     if not settings.wiki_enabled or not settings.wiki_chat_blend:
         return sources, 0
-    mode = _normalize_chat_mode(settings.wiki_chat_mode)
+    mode = _normalize_chat_mode(mode) if mode is not None else _normalize_chat_mode(settings.wiki_chat_mode)
     if mode == "raw_first":
         default_k = min(2, max(1, settings.kb_chat_top_k // 8 or 1))
     elif mode == "wiki_first":
@@ -222,6 +263,38 @@ def blend_wiki_evidence(
         default_k = min(5, max(2, settings.kb_chat_top_k // 4 or 2))
     top_k = k if k is not None else default_k
     hits = _wiki_blend_hits(question, k=top_k, project_id=project_id)
+    # 批 5-4：lint-flagged 页处理——exclude 直接去掉，downweight 按
+    # wiki_flagged_weight 降相关度并重排；off（默认）保持现状。flag
+    # 清除前 flagged 页不再（或更难）支撑答案。
+    flagged_mode = (settings.wiki_flagged_mode or "off").strip().lower()
+    if flagged_mode in ("downweight", "exclude") and hits:
+        flagged = flagged_wiki_paths(project_id=project_id)
+        if flagged:
+            if flagged_mode == "exclude":
+                hits = [
+                    h
+                    for h in hits
+                    if (h.identifier or "").removeprefix("wiki:") not in flagged
+                ]
+            else:
+                weight = float(settings.wiki_flagged_weight or 0.5)
+                adjusted: list[Evidence] = []
+                for h in hits:
+                    if (h.identifier or "").removeprefix("wiki:") in flagged:
+                        adjusted.append(
+                            h.model_copy(
+                                update={
+                                    "relevance": round(
+                                        float(h.relevance or 0) * weight, 4
+                                    )
+                                }
+                            )
+                        )
+                    else:
+                        adjusted.append(h)
+                hits = sorted(
+                    adjusted, key=lambda e: float(e.relevance or 0), reverse=True
+                )
     if not hits:
         return sources, 0
     seen = {ev.identifier for ev in sources}

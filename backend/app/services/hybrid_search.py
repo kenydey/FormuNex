@@ -741,6 +741,30 @@ def hybrid_search_scored(
             except Exception:  # noqa: BLE001 - fail-open: weight skipped
                 logger.debug("hybrid wiki weight skipped (fail-open)", exc_info=True)
 
+        # 批 5-4：lint-flagged 页的影子 chunk 降权或排除（直到 flag 清除）。
+        # downweight 再乘 wiki_flagged_weight；exclude 置 0（并在下方的
+        # 空结果 fallback 里同样排除，避免 fallback 把已排除的块捞回来）。
+        # off（默认）时零成本：不查 flag、不动分数。
+        _flagged_mode = (getattr(settings, "wiki_flagged_mode", "off") or "off").strip().lower()
+        _flagged_ids: set[str] = set()
+        if _flagged_mode in ("downweight", "exclude"):
+            try:
+                from .wiki.retrieve import flagged_wiki_source_ids
+
+                _flagged_ids = flagged_wiki_source_ids()
+            except Exception:  # noqa: BLE001 - fail-open: flagged handling skipped
+                logger.debug("hybrid flagged wiki lookup skipped (fail-open)", exc_info=True)
+            if _flagged_ids:
+                if _flagged_mode == "exclude":
+                    for i, ch in enumerate(chunks):
+                        if getattr(ch, "source_id", "") in _flagged_ids:
+                            combined[i] = 0.0
+                else:
+                    _fw = float(getattr(settings, "wiki_flagged_weight", 0.5) or 0.5)
+                    for i, ch in enumerate(chunks):
+                        if getattr(ch, "source_id", "") in _flagged_ids:
+                            combined[i] = float(combined[i]) * _fw
+
         order = [i for i in range(n) if float(combined[i]) > 0.0]
         order.sort(key=lambda i: float(combined[i]), reverse=True)
 
@@ -750,6 +774,12 @@ def hybrid_search_scored(
             qtoks = set(_tokenize(query))
             _overlap = [(len(qtoks & set(corpus_tokens[i])), i) for i in range(n)]
             _overlap = [(ov, i) for ov, i in _overlap if ov > 0]
+            if _flagged_mode == "exclude" and _flagged_ids:
+                _overlap = [
+                    (ov, i)
+                    for ov, i in _overlap
+                    if getattr(chunks[i], "source_id", "") not in _flagged_ids
+                ]
             _overlap.sort(reverse=True)
             order = [i for _, i in _overlap]
             from_fallback = True

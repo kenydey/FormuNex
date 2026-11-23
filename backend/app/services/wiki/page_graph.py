@@ -274,6 +274,39 @@ def _node_for(r, data) -> dict[str, Any]:
     }
 
 
+def wikilink_neighbors(
+    seed_paths: list[str],
+    *,
+    kinds: list[str] | None = None,
+    project_id: str | None = None,
+) -> dict[str, list[str]]:
+    """One-hop undirected [[wikilink]] neighbors for seed pages (批 5-1).
+
+    Retrieval-side helper: returns ``{seed_path: [neighbor_path, ...]}``
+    (sorted, 1 hop only — same bound as the entity-edge expansion).
+    Fail-open: empty dict when the page graph is disabled or the scan
+    fails; callers must not let this break retrieval. Seeds with no
+    neighbors are absent from the result.
+    """
+    if not page_graph_enabled():
+        return {}
+    try:
+        store = get_wiki_store()
+        rows, _scan_capped = _scan_pages(
+            store, scan_cap=2000, kinds=kinds, project_id=project_id
+        )
+        data = _graph_data(store, rows)
+        neigh = data["neigh"]
+        out: dict[str, list[str]] = {}
+        for seed in seed_paths or []:
+            nbrs = sorted(neigh.get(seed, set()))
+            if nbrs:
+                out[seed] = nbrs
+        return out
+    except Exception:
+        return {}
+
+
 def build_page_graph(
     *,
     limit: int = 500,

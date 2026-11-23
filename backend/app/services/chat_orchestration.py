@@ -169,6 +169,7 @@ def _augment_with_kb(
     *,
     project_id: str | None = None,
     include_entity_resolution: bool = False,
+    wiki_mode: str | None = None,
 ) -> tuple[list[Evidence], int, EntityResolutionSummary | None, KGRetrieveStats | None]:
     from ..config import get_settings
 
@@ -178,11 +179,14 @@ def _augment_with_kb(
     wiki_added = 0
 
     # W3: blend Wiki condensed pages (flag-gated; prepended).
+    # wiki_mode（批 4 路由器用）：仅 "wiki_first" 一档由调用方传入，透传给
+    # blend（只改混入条数与排序，不改权重/封顶）；不传时沿用 settings。
+    # KG/hybrid 分支以下一字未动（批 2 已阻塞，KG 扩展仍是空壳）。
     try:
         from ..services.wiki.retrieve import blend_wiki_evidence
 
         sources, wiki_added = blend_wiki_evidence(
-            question, sources, project_id=project_id
+            question, sources, project_id=project_id, mode=wiki_mode
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("wiki chat blend skipped: %s", exc)
@@ -624,6 +628,40 @@ def _with_deep_evidence(req: ChatRequest, query: str, sources: list) -> tuple[li
     seen = {ev.identifier for ev in deep}
     return (deep + [ev for ev in sources if ev.identifier not in seen])[:50], []
 
+
+def _with_routed_deep_evidence(req: ChatRequest, query: str, sources: list) -> tuple[list, list[dict]]:
+    """批 4 路由器 deep 臂：PageIndex Stage 2 自动模式（deep=None）。
+
+    与 ``_with_deep_evidence``（显式 deep=True）同构，只差一点：自动模式
+    不绕页数门与分类器——分类器放行已由路由器判定，页数门与批 3-2 启发式
+    升级在 ``two_stage_retrieve(deep=None)`` 内部再生效；LLM 导航只在
+    分类器放行且有 LLM 时用（与 deepen_documents 既有规则一致）。
+    fail-open，失败/无证据时返回原 sources + 可见 notice。
+    """
+    from ..config import get_settings
+
+    if not get_settings().pageindex_enabled:
+        return sources, [{"code": "routed_deep_unavailable", "message": "深度模式未启用（pageindex_enabled 关闭），已按普通检索回答"}]
+    try:
+        from ..db.source_store import get_source_store
+        from ..services.pageindex.two_stage import navigation_evidence, two_stage_retrieve
+
+        result = two_stage_retrieve(query, project_id=req.project_id, deep=None)
+        store = get_source_store()
+        titles = {}
+        for d in result.documents:
+            doc = store.get(d.source_id)
+            titles[d.source_id] = (doc.title if doc else "") or d.source_id
+        deep = [sanitize_evidence(ev) for ev in navigation_evidence(result.documents, titles=titles)]
+    except Exception as exc:  # noqa: BLE001 — fail-open, but say so
+        log_handled_exception(logger, exc, "chat routed deep mode: PageIndex retrieval failed")
+        return sources, [{"code": "routed_deep_failed", "message": "深度检索失败，已按普通检索回答"}]
+    if not deep:
+        return sources, [{"code": "routed_deep_empty", "message": "路由深度检索未找到可导航的长文档，已按普通检索回答"}]
+    seen = {ev.identifier for ev in deep}
+    return (deep + [ev for ev in sources if ev.identifier not in seen])[:50], []
+
+
 def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
     """POST /api/chat orchestration, extracted from the route (stage 4 / SR-021).
 
@@ -660,11 +698,41 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
 
         sources = [sanitize_evidence(ev) for ev in req.sources]
         sources, req._deep_notices = _with_deep_evidence(req, retrieval_query, sources)
+        # 批 4 确定性路由器（默认关，query_router_enabled）：在 _augment_with_kb
+        # 之前选管道。显式 deep=true 已在上面走完（最高优先，不经路由）；
+        # deep 臂调自动模式 Stage 2 并置顶导航证据，wiki_first 臂只把 blend
+        # 切到已有的 wiki_first 模式（k=8 前置，权重/封顶不变），structured /
+        # hybrid 臂不改现状（hybrid_answer 本就无条件调用、内部分类）。
+        # 流式路径（_stream_answer_plan）本次不接路由器，保持现状叠加管线。
+        wiki_mode: str | None = None
+        if settings.query_router_enabled and not getattr(req, "deep", False):
+            try:
+                from ..services.query_router import route_query
+
+                _decision = route_query(retrieval_query, project_id=req.project_id)
+                logger.info(
+                    "query router: route=%s reason=%s intent=%s pageindex=%s wiki_stable=%s",
+                    _decision.route,
+                    _decision.reason,
+                    _decision.intent_route,
+                    _decision.pageindex_allowed,
+                    _decision.wiki_stable_hit,
+                )
+                if _decision.route == "deep":
+                    sources, _routed_notices = _with_routed_deep_evidence(
+                        req, retrieval_query, sources
+                    )
+                    req._deep_notices = list(req._deep_notices or []) + _routed_notices
+                elif _decision.route == "wiki_first":
+                    wiki_mode = "wiki_first"
+            except Exception as exc:  # noqa: BLE001 — 路由失败即回退现状管线
+                logger.debug("query router skipped: %s", exc)
         sources, kb_used, entity_resolution, kg_stats = _augment_with_kb(
             retrieval_query,
             sources,
             project_id=req.project_id,
             include_entity_resolution=req.include_entity_resolution,
+            wiki_mode=wiki_mode,
         )
         # @-referenced KB documents restrict the KB half of the evidence (fail-open).
         sources, _ref_added = _apply_ref_docs(
