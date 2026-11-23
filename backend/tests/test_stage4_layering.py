@@ -45,6 +45,9 @@ PINNED_DB_SERVICES_EDGES = {
     ("app.db.store", "app.services._fsutil"),
     ("app.db.wiki_store", "app.services.wiki.embed"),
     ("app.db.wiki_store", "app.services.wiki.fts"),
+    # 已批准的行为变更：OKF 接线（批 5）新增 db -> services 边，
+    # Cheng 2026-11-23 定更新钉死测试。
+    ("app.db.wiki_store", "app.services.wiki.schema"),
 }
 
 SUNK_FUNCTIONS = (
@@ -155,7 +158,14 @@ def test_db_imports_the_sunk_functions_from_domain_pure():
     assert "services.kb_dedup import" not in chunk
     wiki = (DB / "wiki_store.py").read_text(encoding="utf-8")
     assert "from ..domain.pure import content_hash, wiki_root_from_db_url" in wiki
-    assert "services.wiki.schema import" not in wiki
+    # 已批准的行为变更：OKF 接线（批 5）允许 wiki_store 导入
+    # services.wiki.schema 的 normalize_okf_front_matter / utcnow_iso，
+    # Cheng 2026-11-23 定更新钉死测试；除该特定 import 外仍禁。
+    assert wiki.count("services.wiki.schema import") == 1
+    assert (
+        "from ..services.wiki.schema import normalize_okf_front_matter, utcnow_iso"
+        in wiki
+    )
 
 
 def test_no_function_local_service_or_api_imports_in_db():

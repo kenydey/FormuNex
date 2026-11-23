@@ -33,8 +33,10 @@ def test_wiki_grayscale_product_defaults_on():
     assert s.auto_loop_on_sync is False
     assert s.auto_adopt_next_doe_on_loop is False
     assert Settings.model_fields["prediction_bias_soft_correct"].default is False
-    assert s.kg_relations_on_ingest is False
-    assert s.kg_relation_extract_enabled is False
+    # 已批准的行为变更：批 1-2 规则关系模板开启，kg_relations_on_ingest
+    # 由 False 翻为 True，Cheng 2026-11-23 定更新钉死测试。
+    assert s.kg_relations_on_ingest is True
+    assert s.kg_relation_extract_enabled is True
 
 
 def test_native_backends_are_defaults():
