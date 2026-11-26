@@ -201,8 +201,9 @@ def apply_nav(
     parsed: list[tuple[int, str, int]] = []  # (evidence idx, sid, ord)
     by_sid: dict[str, list[int]] = {}
     for idx, ev in enumerate(evidence):
-        # QA-06: nav: 标识有意跳过——导航证据不是 chunk，无 ord 可解析；
-        # 它仍保留在 boosted 列表中，只是不参与本循环的 boost 解析。
+        # 裸导航标识（{source_id}#{node_id}）有意跳过——导航证据不是
+        # chunk，无 ord 可解析；它仍保留在 boosted 列表中，只是不参与
+        # 本循环的 boost 解析。
         m = _IDENT_RE.match(getattr(ev, "identifier", "") or "")
         if not m:
             continue

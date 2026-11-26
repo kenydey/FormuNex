@@ -111,9 +111,6 @@ class CitationHandleRegistry:
 def _source_id_from_identifier(identifier: str) -> str:
     """``kb:{source_id}#c{ord}`` → ``{source_id}``; plain ids unchanged.
 
-    ``nav:{source_id}#{node_id}`` → ``{source_id}`` (QA-06 navigation
-    evidence namespace; the ``chunk_id`` keeps the full identifier).
-
     Same stripping as ``wiki/storm_polish.evidence_to_anchors``: the
     ``chunk_id`` keeps the full identifier (for ``references`` round-trip),
     the human-readable ``source_id`` drops the ``kb:`` prefix and chunk suffix.
@@ -123,10 +120,6 @@ def _source_id_from_identifier(identifier: str) -> str:
         return s[3:].split("#", 1)[0]
     if s.startswith("kb:"):
         return s[3:]
-    if s.startswith("nav:") and "#" in s:
-        return s[4:].split("#", 1)[0]
-    if s.startswith("nav:"):
-        return s[4:]
     return s
 
 

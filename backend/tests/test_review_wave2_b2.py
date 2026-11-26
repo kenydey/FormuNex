@@ -83,22 +83,24 @@ def test_identifier_spec_accepts_all_producer_namespaces():
     assert validate_evidence_identifier("doi:10.1000/xyz123")
     assert validate_evidence_identifier("chemlit:abcdef123456")
     assert validate_evidence_identifier("seed:epoxy-basics")
-    assert validate_evidence_identifier("nav:src-1#node-7")
+    assert validate_evidence_identifier("src-1#node-7")
 
 
 def test_identifier_spec_rejects_legacy_shapes():
     from app.services.kb_index import validate_evidence_identifier
 
-    # 旧形状（QA-06 的三条产出路径 + #p 变体）：规范之外。
+    # 旧形状（QA-06 的三条产出路径 + #p 变体）与已废弃的 nav: 前缀
+    # （Cheng 2026-11-27 定：导航证据标识用裸格式，不要 nav: 前缀）：
+    # 规范之外。
     assert not validate_evidence_identifier("kb:550e8400-e29b-41d4-a716-446655440000")
     assert not validate_evidence_identifier("kb:src-1#p03-01")
-    assert not validate_evidence_identifier("src-1#node-7")
+    assert not validate_evidence_identifier("nav:src-1#node-7")
     assert not validate_evidence_identifier("kb:src-1")
     assert not validate_evidence_identifier("")
     assert not validate_evidence_identifier(None)
 
 
-def test_navigation_evidence_uses_nav_namespace():
+def test_navigation_evidence_uses_bare_identifier():
     from app.services.pageindex import two_stage
 
     nav = SimpleNamespace(
@@ -109,7 +111,7 @@ def test_navigation_evidence_uses_nav_namespace():
     )
     depths = [SimpleNamespace(source_id="s1", navigation=nav)]
     out = two_stage.navigation_evidence(depths, titles={"s1": "Doc"})
-    assert [e.identifier for e in out] == ["nav:s1#n1", "nav:s1#n2"]
+    assert [e.identifier for e in out] == ["s1#n1", "s1#n2"]
     from app.services.kb_index import validate_evidence_identifier
 
     assert all(validate_evidence_identifier(e.identifier) for e in out)

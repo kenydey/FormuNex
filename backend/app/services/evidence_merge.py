@@ -78,8 +78,6 @@ def _scope_of(ev) -> str:
     if src is not None:
         return f"kb:{src}"
     ident = getattr(ev, "identifier", "") or getattr(ev, "source", "") or ""
-    if ident.startswith("nav:") and "#" in ident:
-        return f"nav:{ident[4:].split('#', 1)[0]}"
     return ident
 
 

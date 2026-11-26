@@ -699,11 +699,11 @@ def navigation_evidence(depths: list[DocumentDepth], *, titles: dict[str, str] |
             title = (titles or {}).get(d.source_id) or d.source_id
             out.append(Evidence(
                 source="kb_pageindex",
-                # QA-06：导航证据标识进 nav: 命名空间（规范见
-                # kb_index.EVIDENCE_IDENTIFIER_RE）。节点非 chunk，无法
-                # 写成 kb:{source_id}#c{ord}；_IDENT_RE 有意不匹配 nav:，
+                # 导航证据标识为裸格式 ``{source_id}#{node_id}``（Cheng
+                # 2026-11-27 定：不进 nav: 命名空间）。节点非 chunk，无法
+                # 写成 kb:{source_id}#c{ord}；_IDENT_RE 有意不匹配它，
                 # 需要 chunk ord 的代码跳过它是正确的。
-                identifier=f"nav:{d.source_id}#{ev['node_id']}",
+                identifier=f"{d.source_id}#{ev['node_id']}",
                 title=f"{title} · {ev.get('title') or ''}".strip(" ·"),
                 snippet=(ev.get("text") or "")[:snippet_chars],
                 # Visit order is the navigator's own ranking: earlier reads matter more.

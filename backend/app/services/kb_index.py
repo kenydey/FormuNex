@@ -1790,13 +1790,13 @@ _IDENT_RE = re.compile(r"^kb:([^#]+)#c(\d+)$")
 #:   ``wiki:{path}`` —— Wiki 页（wiki/retrieve.py）
 #:   ``doi:{doi}`` / ``chemlit:{hash}`` —— 文献证据（literature.py）
 #:   ``seed:{name}`` —— 种子语料（colbert_store.py）
-#:   ``nav:{source_id}#{node_id}`` —— PageIndex 导航节点证据
-#:     （pageindex/two_stage.navigation_evidence；节点非 chunk，故不走
-#:     ``#c{ord}``，``_IDENT_RE`` 有意不匹配 nav:——需要 chunk ord 的
-#:     代码（stitch / nav_layer / evidence_merge）跳过它是正确的，
-#:     不是解析失败）。
+#:   ``{source_id}#{node_id}`` —— PageIndex 导航节点证据（裸格式，
+#:     Cheng 2026-11-27 定：不进 nav: 命名空间；pageindex/two_stage
+#:     .navigation_evidence；节点非 chunk，故不走 ``#c{ord}``，
+#:     ``_IDENT_RE`` 有意不匹配它——需要 chunk ord 的代码（stitch /
+#:     nav_layer / evidence_merge）跳过它是正确的，不是解析失败）。
 EVIDENCE_IDENTIFIER_RE = re.compile(
-    r"^(kb:[^#]+#c\d+|wiki:.+|doi:.+|chemlit:.+|seed:.+|nav:[^#]+#.+)$"
+    r"^(kb:[^#]+#c\d+|wiki:.+|doi:.+|chemlit:.+|seed:.+|[^:#]+#[^#]+)$"
 )
 
 
@@ -1860,8 +1860,8 @@ def _stitch_patent_siblings(
         if not m:
             # QA-06：_IDENT_RE 解析失败不再静默——kb: 前缀的非规范标识
             # （旧 kb:<uuid> / kb:{table_id}）会使去重作用域回退、定位器
-            # 取不到 page/paragraph。非 kb: 命名空间（wiki:/nav:/doi:…）
-            # 本就不匹配，不告警。
+            # 取不到 page/paragraph。非 kb: 命名空间（wiki:/doi:…）
+            # 与裸导航标识（{source_id}#{node_id}）本就不匹配，不告警。
             if (ev.identifier or "").startswith("kb:"):
                 logger.warning(
                     "patent stitch: non-canonical kb identifier %r, skipping",
