@@ -242,6 +242,7 @@ def _persist_loop_history(campaign_id: int | None, report, task_id: str | None =
         "at": datetime.now(UTC).isoformat(),
         "converged": report.converged,
         "rmse_by_metric": report.rmse_by_metric,
+        "rmse_generation": getattr(report, "rmse_generation", None),
         "engine": report.engine,
         "loop_message": report.loop_message,
         "doe_plan_id": doe_plan_id,
@@ -322,6 +323,7 @@ def run_loop_iterate_impl(task_id: str, payload: dict) -> dict:
             workbench_campaign_id=payload.get("workbench_campaign_id"),
             campaign_state=payload.get("campaign_state"),
             prior_rmse_history=payload.get("prior_rmse_history") or [],
+            prior_rmse_generations=payload.get("prior_rmse_generations"),
             prior_optimization=_parse_optional_model(
                 payload.get("prior_optimization"), OptimizationResult
             ),

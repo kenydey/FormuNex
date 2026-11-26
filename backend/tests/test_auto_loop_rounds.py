@@ -70,7 +70,9 @@ def test_converged_campaign_does_not_consume_round(monkeypatch):
     monkeypatch.setattr(wl, "should_trigger_loop_after_sync", lambda *a, **k: True)
     monkeypatch.setattr(wl, "is_doecycle_paused", lambda cid: False)
     monkeypatch.setattr(
-        wl, "_campaign_loop_context", lambda cid: ([], True, "已收敛")
+        wl, "_campaign_loop_context",
+        # 2026-11-26 review P2-3：返回 4 元组（prior_rmse, prior_gens, converged, msg）。
+        lambda cid, req=None: ([], [], True, "已收敛")
     )
 
     class FakeStore:

@@ -174,6 +174,27 @@ def design(components: list[Component], *, total: float = 100.0, n_runs: int | N
                   continuous=process, process_order=process_order, categorical=categorical, cross=cross)
     F, terms = model.matrix(cands)
     p = F.shape[1]
+    span = total - sum(c.low for c in comps)
+    if span <= TOL and len(cands) == 1:
+        # D6-4：span==0 即全部组分钉死在一点（P1-C16 只修了 pseudo 的
+        # 除零，design 仍走 select，默认 n=8 对 1 个候选点报 422）。
+        # 候选集只剩唯一可行点时，在默认 n 计算之前短路，直接返回
+        # 单点设计，不经过 select；模型参数不可估，在 model 与 notes
+        # 中同时注明。len(cands)==1 的守卫：若还交叉了 process /
+        # categorical 因子，候选集不止一个，仍走正常 D-最优选择。
+        run = dict(cands[0])
+        run["_run"] = 1
+        run["_kind"] = run.pop("_kind")
+        for nme in names:
+            run[nme] = round(float(run[nme]), 6)
+        return MixtureDesign(
+            runs=[run], candidates=1, vertices=n_vertices,
+            model={"mixture_order": mixture_order, "process_order": process_order, "cross": cross,
+                   "parameters": p, "terms": terms, "runs": 1, "estimable": False},
+            bounds={c.name: [c.low, c.high] for c in comps},
+            notes=["组分已全部钉死：唯一可行配方",
+                   f"模型参数不可估：仅 1 个候选点，无法估计 {p} 个模型参数"],
+        )
     n = n_runs or (p + max(5, p // 2))  # parameters + a few degrees of freedom for lack of fit / error
     capped = False
     if n_runs is None and n > len(cands):

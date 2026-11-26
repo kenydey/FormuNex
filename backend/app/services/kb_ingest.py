@@ -260,7 +260,7 @@ def select_ingest_targets(
     threshold = float(settings.kb_ingest_min_relevance or 0.45)
     if threshold <= 0:
         threshold = 0.45
-    from .literature import _keywords
+    from .literature import _evidence_key, _keywords
 
     query_has_kws = bool(_keywords(query or ""))
     targets: list[tuple[Evidence, str]] = []
@@ -320,7 +320,13 @@ def select_ingest_targets(
                 )
             continue
         ident = (ev.identifier or "").strip()
-        if not ident or ident in seen:
+        if not ident:
+            continue
+        # P3-7 (2026-11-26 review): 目标去重用归一化键 `_evidence_key`
+        #（DOI 前缀剥离 + casefold），与终态 `_merge_filter_rank` 同口径 ——
+        # 旧代码按原始 identifier 去重，同一论文两种 DOI 写法占两个目标位。
+        dedup_key = _evidence_key(ev)
+        if dedup_key in seen:
             continue
         kind = ff.classify(ev)
         if kind:
@@ -350,7 +356,7 @@ def select_ingest_targets(
                         )
                     continue
             targets.append((ev, kind))
-            seen.add(ident)
+            seen.add(dedup_key)
             if write_audit:
                 write_ingest_audit(
                     project_id=project_id,
@@ -523,11 +529,13 @@ def _fetch_one(
     fetch_reason: str | None = None
     try:
         with timing.span("fetch"):
-            _hit = ff._dispatch_fetch(kind, ev, timeout)
+            # P3-1 (2026-11-26 review): 跨模块调公开 API，不再直调
+            # fulltext_fetcher 私有函数。
+            _hit = ff.dispatch_fetch(kind, ev, timeout)
             text = _hit.text if _hit else None
             pdf_bytes = _hit.pdf_bytes if _hit else None
             tables = _hit.tables if _hit else None
-            doc["acquisition"] = ff._last_acquisition()
+            doc["acquisition"] = ff.last_acquisition()
     except ff.FetchError as fe:
         text = None
         pdf_bytes = None
@@ -568,15 +576,27 @@ def _index_one(
 
     doc["status"] = "indexing"
     emit(doc)
-    source_id = ff._persist_fulltext(  # hash-dedup + chunk + embed inside
+    # P3-1 (2026-11-26 review): 跨模块调公开 API。
+    # P2-10: 写路径配额复核的拒绝经 refusal 区分 —— 配额拒绝记 skipped
+    #（skip_reason=project_quota_full，不进失败落盘、不新建失败行），
+    # 而非 failed；真正的存储/索引异常仍记 failed。
+    refusal: dict = {}
+    source_id = ff.persist_fulltext(  # hash-dedup + chunk + embed inside
         text, ev, kind,
         project_id=project_id,
         acquisition=doc.get("acquisition"),
         pdf_bytes=pdf_bytes,
         tables=tables,
+        refusal=refusal,
     )
     if source_id:
         doc.update(status="indexed", source_id=source_id)
+    elif refusal.get("reason") == "project_quota_full":
+        doc.update(
+            status="skipped",
+            skip_reason="project_quota_full",
+            error="项目配额已满，写路径拒绝入库",
+        )
     else:
         doc.update(status="failed", error="入库失败（存储或索引异常）")
     emit(doc)

@@ -121,7 +121,8 @@ def test_prepare_search_queries_includes_cas_in_patent_query(monkeypatch):
 def test_split_no_doi_keeps_legacy_single_blob():
     out = split_lit_answer("An answer with no citations.", query="epoxy")
     assert len(out) == 1
-    assert out[0].source == "ChemCrow-Lit"
+    # P3-3 (2026-11-26 review): 来源名由退役的 `ChemCrow-Lit` 改为 `LitSearch`。
+    assert out[0].source == "LitSearch"
     assert out[0].identifier.startswith("chemlit:")
     assert out[0].relevance == 0.92
 

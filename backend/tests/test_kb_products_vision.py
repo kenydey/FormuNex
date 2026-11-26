@@ -143,7 +143,12 @@ def test_chem_extract_flag_disables_meta(stores, monkeypatch):
 
     kb_index.index_source("src-off", "Epon 828 与 CAS 7779-90-0。" + "x" * 100, embed=False)
     rows = chunks.get_by_source("src-off")
-    assert all(r.meta is None for r in rows)
+    # 2026-11-26 review B3：meta 现可带页码来源（page_no_source，与化学
+    # 提取无关）；化学提取关闭的断言只应是无 chem/patent_tags 键。
+    assert all(
+        not (r.meta or {}).get("chem") and not (r.meta or {}).get("patent_tags")
+        for r in rows
+    )
     assert not products.search("epon")
 
 

@@ -141,12 +141,12 @@ def enrich_manifest_oa(
     def _fetch_job(job: tuple[dict[str, Any], Evidence, str]):
         it, ev, kind = job
         try:
-            _hit = _ff._dispatch_fetch(kind, ev, timeout)
+            _hit = _ff.dispatch_fetch(kind, ev, timeout)
             # 2026-10-11 Phase 1 P0-1c: 透传完整 FetchedFulltext，不再只取 .text
             text = _hit.text if _hit else None
             pdf_bytes = _hit.pdf_bytes if _hit else None
             tables = _hit.tables if _hit else None
-            acquisition = _ff._last_acquisition()
+            acquisition = _ff.last_acquisition()
         except Exception as exc:  # noqa: BLE001
             logger.debug("OA enrich fetch failed %s: %s", it.get("id"), exc)
             return (it, ev, kind, None, None, None, None, f"error:{str(exc)[:100]}")
@@ -178,7 +178,7 @@ def enrich_manifest_oa(
             by_id[str(it.get("id"))] = it
             continue
         try:
-            source_id = _ff._persist_fulltext(
+            source_id = _ff.persist_fulltext(
                 text, ev, kind, project_id=project_id, acquisition=acquisition,
                 pdf_bytes=pdf_bytes, tables=tables,
             )

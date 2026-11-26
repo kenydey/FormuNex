@@ -33,6 +33,7 @@ def ingest_document_tx(
     text: str,
     title: str = "",
     metadata: dict | None = None,
+    parser: str | None = None,
 ) -> IngestTxResult:
     """Atomic full-document ingest: SourceDocument + chunks + outbox, one commit.
 
@@ -130,7 +131,9 @@ def ingest_document_tx(
                 source_id,
                 embed=_embedding_probe(),
                 session=session,
-                gate_fn=lambda r: gate_ingest_rows(r, source_id=source_id),
+                gate_fn=lambda r: gate_ingest_rows(
+                    r, source_id=source_id, mineru_structured=(parser == "mineru")
+                ),
             )
             # v8: 0-chunk 不提交空 SourceDocument —— 标记 failed，避免僵尸行
             #（与 v7 KB-1 的上传路径同口径）。

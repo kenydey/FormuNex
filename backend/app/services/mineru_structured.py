@@ -66,6 +66,12 @@ class MinerUStructured:
     # them structurally (e.g. ParseResult.table_stats in parsing.py —
     # wiring there is a follow-up, outside this wave's files).
     missing_pages: list[int] = field(default_factory=list)
+    # P1-3 (review 2026-11-26): MinerU's own full.md, kept when the
+    # block rendering fell back to it (see full_md_fallback). Empty when
+    # the rendered blocks were used as-is.
+    full_markdown: str = ""
+    # True when `markdown` is full.md, not the block rendering.
+    used_full_md_fallback: bool = False
 
     @property
     def tables(self) -> list[StructuredBlock]:
@@ -542,6 +548,49 @@ def _insert_missing_page_placeholders(
     return out
 
 
+# ── full.md fallback (P1-3, review 2026-11-26) ──────────────────────────
+#
+# MinerU returns a whole-document `full.md` alongside the block list, and
+# until now no production caller ever read it: only the per-block rendering
+# reached chunking and ingest. Block rendering can come back empty or
+# sparse — figure-only pages, blocks whose text MinerU dropped — while
+# full.md still holds the prose. The fallback below is the (a) arm of the
+# P1-3 fix; the (b) arm (a lower gate floor for structured short chunks)
+# lives in kb_retrieval_gate.py.
+
+_FULL_MD_FALLBACK_RATIO = 0.5
+
+
+def _strip_markers(text: str) -> str:
+    """Rendered markdown minus page/block markers: the content the blocks
+    actually carried. Markers are structure, not prose — counting them
+    would let a marker-only rendering look substantial."""
+    text = re.sub(r"<!-- page:\d+ -->", "", text or "")
+    text = re.sub(r"<!-- block:[a-z]+ -->", "", text)
+    return text.strip()
+
+
+def full_md_fallback(rendered: str, full_md: str) -> str | None:
+    """MinerU's full.md when block rendering came back empty or sparse.
+
+    Returns the stripped full.md when it is non-empty and the rendered
+    content (markers removed) is empty or under half its length; otherwise
+    None (keep the rendering). The 0.5 ratio is a judgment call, not a
+    measured point: full.md and the block rendering describe the same
+    document, so a healthy rendering stays within ~2x of full.md, while a
+    rendering that lost whole blocks falls far below it. Callers keep any
+    missing-page placeholders the rendering carried — this function only
+    decides, it does not rewrite.
+    """
+    full = (full_md or "").strip()
+    if not full:
+        return None
+    content = _strip_markers(rendered or "")
+    if not content or len(content) < _FULL_MD_FALLBACK_RATIO * len(full):
+        return full
+    return None
+
+
 # ── entry point ────────────────────────────────────────────────────────────
 
 
@@ -570,8 +619,27 @@ def parse_structured(content: bytes) -> MinerUStructured | None:
     except Exception as exc:
         log_handled_exception(logger, exc, "mineru_cloud structured parse failed")
         return None
-    if document is None or not document.blocks:
+    if document is None:
         return None
+    if not document.blocks:
+        # P1-3 (review 2026-11-26): no blocks at all but a non-empty full.md
+        # is exactly "block rendering failed" — use full.md instead of
+        # returning None and letting the cascade fall through to a weaker
+        # tier. Block-level page coverage is unknowable here (there are no
+        # blocks to attribute), so missing_pages stays empty; the markdown
+        # itself is the coverage.
+        full = (document.markdown or "").strip()
+        if not full:
+            return None
+        logger.info("mineru_cloud: no blocks returned, using full.md fallback")
+        structured = MinerUStructured(
+            markdown=full,
+            blocks=[],
+            full_markdown=full,
+            used_full_md_fallback=True,
+        )
+        formula_gatekeeper(structured)  # count-only unless explicitly enabled
+        return structured
     blocks = _normalise_blocks(document)
     # P2-4 (review 2026-11-26): mirror hybrid `_parse_scanned`'s all-zero
     # detection (P2-B12, hybrid-only until now). MinerU's `_normalise`
@@ -640,8 +708,40 @@ def parse_structured(content: bytes) -> MinerUStructured | None:
             except Exception:
                 pass
             blocks = _insert_missing_page_placeholders(blocks, missing_pages, n_pages)
+    rendered = render_markdown(blocks)
+    # P1-3 (review 2026-11-26): full.md fallback — the block rendering is
+    # only kept when it actually carries the document. When it is empty or
+    # sparse next to MinerU's own full.md, the full text wins. Missing-page
+    # placeholders (P1-2, wave 1) are re-appended after the swap so the
+    # fallback cannot silently un-mark a page the rendering had flagged.
+    full = (document.markdown or "").strip()
+    used_fallback = False
+    fallback = full_md_fallback(rendered, full)
+    if fallback is not None:
+        logger.info(
+            "mineru_cloud: block rendering sparse (%d chars) vs full.md "
+            "(%d chars) — using full.md fallback",
+            len(_strip_markers(rendered)),
+            len(full),
+        )
+        try:
+            from .parse_notices import note
+
+            note("MinerU 逐块解析内容稀疏，已用全文 Markdown 回退补全")
+        except Exception:
+            pass
+        rendered = fallback
+        used_fallback = True
+        if missing_pages:
+            rendered = rendered + "\n\n" + "\n\n".join(
+                f"> _（第 {n} 页 MinerU 未返回内容）_" for n in missing_pages
+            )
     structured = MinerUStructured(
-        markdown=render_markdown(blocks), blocks=blocks, missing_pages=missing_pages
+        markdown=rendered,
+        blocks=blocks,
+        missing_pages=missing_pages,
+        full_markdown=full,
+        used_full_md_fallback=used_fallback,
     )
     formula_gatekeeper(structured)  # count-only unless explicitly enabled
     return structured

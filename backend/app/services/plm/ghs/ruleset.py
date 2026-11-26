@@ -72,7 +72,16 @@ class RuleSet:
 # take effect. The cache below is validated against the file's mtime and
 # size on every load: a stat call is cheap, a re-parse happens only when
 # the file actually changed.
-_RULESET_CACHE: dict[str, tuple[int, int, RuleSet]] = {}
+# P2-1 (review 2026-11-26, SR-059): (mtime_ns, size) alone is not a
+# content key — ``cp -p`` restores and coarse-timestamp filesystems can
+# rewrite same-size content under an identical mtime, and the old cache
+# would keep serving the stale rule set. The cache key now also carries
+# the sha256 of the raw file bytes, computed after every read; a hit
+# requires the content hash to match, so same-mtime/same-size rewrites
+# are detected. The file is small (a few KB of YAML), so reading it on
+# every load costs far less than a re-parse; parsing is still skipped
+# when the hash matches.
+_RULESET_CACHE: dict[str, tuple[int, int, str, RuleSet]] = {}
 
 
 def _ruleset_cache_clear() -> None:
@@ -96,13 +105,23 @@ def load_ruleset(name: str = DEFAULT_RULESET) -> RuleSet:
         _RULESET_CACHE.pop(name, None)
         raise FileNotFoundError(f"unknown GHS rule set {name!r}")
     cached = _RULESET_CACHE.get(name)
-    if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
-        return cached[2]
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    # P2-1: hash the bytes actually read — the stat values above may
+    # already be stale if the file changed mid-load, but the hash is
+    # authoritative for what was parsed, so a torn/stat race can only
+    # cause one extra re-parse, never a stale hit.
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        _RULESET_CACHE.pop(name, None)
+        raise FileNotFoundError(f"unknown GHS rule set {name!r}")
+    content_hash = hashlib.sha256(raw).hexdigest()
+    if cached is not None and cached[2] == content_hash:
+        return cached[3]
+    data = yaml.safe_load(raw.decode("utf-8"))
     if data.get("version") != name:
         raise ValueError(f"rule set file {path.name} declares version {data.get('version')!r}")
     rs = RuleSet(data)
-    _RULESET_CACHE[name] = (stat.st_mtime_ns, stat.st_size, rs)
+    _RULESET_CACHE[name] = (stat.st_mtime_ns, stat.st_size, content_hash, rs)
     return rs
 
 

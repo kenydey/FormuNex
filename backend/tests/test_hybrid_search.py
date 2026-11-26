@@ -115,6 +115,17 @@ def test_hybrid_ranks_by_relevance(stores, monkeypatch):
         full_text="巧克力蛋糕配方 面粉 糖 鸡蛋 黄油",
         content_hash="h2",
     )
+    # Doc 3: irrelevant distractor — 必须有第 3 篇：2 篇语料下 rank_bm25
+    # 的 IDF 在 df=N/2 时恰为 0（查询词只在 1/2 篇中出现），BM25 通道
+    # 恒为 0，combined 只剩 cosine×(1−alpha)≈0.05，会被 QA-08 校准后
+    # 的 0.10 阈值误滤；3 篇时 df=1/3，IDF>0，BM25 正常工作。
+    sid3 = src.create(
+        filename="d3.md",
+        title="点蚀检测",
+        source_kind="local",
+        full_text="不锈钢点蚀检测用电化学工作站做动电位极化扫描",
+        content_hash="h3",
+    )
 
     chk.replace_for_source(
         sid1,
@@ -131,6 +142,16 @@ def test_hybrid_ranks_by_relevance(stores, monkeypatch):
         [
             {
                 "text": "巧克力蛋糕配方需要面粉糖和鸡蛋黄油混合烘烤。",
+                "embedding": [0.0, 1.0],
+                "embedding_model": "m",
+            }
+        ],
+    )
+    chk.replace_for_source(
+        sid3,
+        [
+            {
+                "text": "不锈钢点蚀检测用电化学工作站做动电位极化扫描。",
                 "embedding": [0.0, 1.0],
                 "embedding_model": "m",
             }

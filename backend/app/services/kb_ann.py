@@ -675,13 +675,19 @@ def search(model: str, query_vec: list[float], k: int) -> list[tuple[str, float]
 
 
 def invalidate() -> None:
-    """Drop the in-memory index (forces rebuild on next ensure_index)."""
+    """Drop the in-memory index (forces rebuild on next ensure_index).
+
+    B6（2026-11-26 全面审查）：此前全仓无生产调用方，同模型重嵌后
+    旧向量桶继续被服务。现由 ``embedding_reindex._finalize_reindex``
+    在重嵌收尾调用；另见 chunk 删除/替换路径的失效协议（批 6）。
+    """
     global _buckets, _manifest, _last_error, _generation
     with _lock:
         _buckets, _manifest, _last_error = {}, None, None
         # A running background job keeps its generation and therefore
         # cannot publish over this fresh state (see _rebuild_job).
         _generation += 1
+        logger.info("kb_ann invalidated (generation=%d)", _generation)
 
 
 def index_stats() -> dict[str, Any]:

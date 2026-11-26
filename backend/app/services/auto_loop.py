@@ -69,6 +69,7 @@ from .convergence import (  # noqa: F401  (re-exports: tests import them from he
     best_objective_value,
     evaluate_convergence,
     primary_objective_spec,
+    rmse_generation_stamp,
     rmse_plateau_detected,
     target_achieved,
 )
@@ -88,33 +89,26 @@ def _stub_optimization(req: Requirement) -> OptimizationResult:
 
 
 def _stub_doe(req: Requirement, reason: str = "rmse_plateau") -> DOEPlan:
-    from ..domain.schemas import DOERun
+    """P3-2: 收敛 hold 计划 —— 已收敛即"无需新实验"，返回空 run。
 
-    levers = req.levers or []
-    # v7 DOE-2: 用 levers_to_doe_factors，与主链路一致（保留 kind/levels）。
+    此前这里以"保留上一轮 DOE"名义返回一个从未存在过的合成中点单点
+    计划；下游若把它当待执行实验消费，会调度一个无意义的中点实验。
+    空计划 + 如实 notes 才是"无需新实验"。设计名 ``converged-hold``
+    与 ``plan_id="converged"`` 保留（调用方与既有测试依赖该信号）。
+    """
     from ..domain.project_spec import levers_to_doe_factors
 
+    levers = req.levers or []
     factors = levers_to_doe_factors(levers[:6])
-
-    def _stub_natural(lev):
-        # v9: 离散因子取中间水平 —— (low+high)/2 会产生无效值（如 0.5 不是合法水平）。
-        if getattr(lev, "kind", "") == "discrete" and getattr(lev, "levels", None):
-            return lev.levels[len(lev.levels) // 2]
-        return round((lev.low + lev.high) / 2, 3)
-
-    natural = {lev.name: _stub_natural(lev) for lev in levers}
     notes = (
-        "目标已达成 — 保留上一轮 DOE，无需新实验建议"
+        "目标已达成 — 已收敛，未生成新实验"
         if reason == "target_achieved"
-        else "模型 RMSE 已收敛 — 保留上一轮 DOE，无需新实验建议"
+        else "模型 RMSE 已收敛 — 已收敛，未生成新实验"
     )
-    # G P2-4: 空 levers 时不加"共 0 个因子"后缀。
-    if levers:
-        notes += f"（共 {len(levers)} 个因子，取各因子中点）"
     return DOEPlan(
         design="converged-hold",
         factors=factors,
-        runs=[DOERun(run_id=1, coded={}, natural=natural)] if natural else [],
+        runs=[],
         notes=notes,
         plan_id="converged",
         domain=req.domain,
@@ -136,6 +130,9 @@ def loop_iterate(
     prior_next_doe: DOEPlan | None = None,
     budget_remaining: int | None = None,
     seed: int | None = None,
+    # P2-3: 与 prior_rmse_history 并行的训练代际戳（见
+    # convergence.rmse_generation_stamp）；调用方未传时沿用旧语义。
+    prior_rmse_generations: list[str | None] | None = None,
 ) -> LoopReport:
     """Run one full turn of the self-driving loop and bundle the result."""
     from . import active_learning
@@ -148,6 +145,9 @@ def loop_iterate(
         progress_cb(0.05, "loading lab history")
     records = registry.records_for(req.domain)
     model_info, rmse = _rmse_by_metric(req.domain)
+    # P2-3: 当前训练代际戳（随 LoopReport 透传；LoopReport.rmse_generation
+    # 字段由协调员在 doe.py 落盘后生效，在此之前该 kwarg 被 pydantic 忽略）。
+    current_generation = rmse_generation_stamp(model_info)
 
     history = list(prior_rmse_history or [])
     # B-7: 收敛判定统一走 services/convergence.evaluate_convergence
@@ -161,6 +161,8 @@ def loop_iterate(
         enabled=settings.loop_convergence_enabled,
         eps=settings.loop_convergence_eps,
         patience=settings.loop_convergence_patience,
+        prior_generations=prior_rmse_generations,
+        current_generation=current_generation,
     )
     best_measured = best_objective_value(
         records, obj_spec.metric, obj_spec.direction
@@ -187,6 +189,7 @@ def loop_iterate(
             total_records=len(records),
             model_info=model_info,
             rmse_by_metric=rmse,
+            rmse_generation=current_generation,
             optimization=optimization,
             next_doe=next_doe,
             engine=optimization.engine,
@@ -256,6 +259,7 @@ def loop_iterate(
         total_records=len(records),
         model_info=model_info,
         rmse_by_metric=rmse,
+        rmse_generation=current_generation,
         optimization=optimization,
         next_doe=next_result.plan,
         engine=optimization.engine,

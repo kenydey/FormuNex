@@ -127,6 +127,23 @@ async def try_paperqa_answer_async(
         return None
 
 
+def memory_block_for_prompt(query_text: str, project_id: str | None) -> str:
+    """QA-13：会话内存召回的同步/流式共享调用点（project → global 回退）。
+
+    流式 ``enrich_chat_prompt`` 与同步 ``run_chat`` 共用此函数，两路对
+    同一记忆返回同一 block。fail-open：开关关 / 无命中 / 异常均返回 ""。
+    """
+    try:
+        from .agent_memory import build_memory_block
+
+        mem_block = build_memory_block("project", project_id, (query_text or "")[:2000])
+        if not mem_block:
+            mem_block = build_memory_block("global", None, (query_text or "")[:2000])
+        return mem_block or ""
+    except Exception:
+        return ""
+
+
 def enrich_chat_prompt(
     base_prompt: str,
     *,
@@ -139,15 +156,8 @@ def enrich_chat_prompt(
     # W1-3: 项目级指示在非 evidence 模式下也应生效(早退前先拼接)。
     project_block = _project_instructions_block(project_id)
     # W2-4 (P1-1): agent memory recall — project scope, then global fallback.
-    # build_memory_block is fail-open and returns "" when disabled/empty.
-    try:
-        from .agent_memory import build_memory_block
-
-        mem_block = build_memory_block("project", project_id, base_prompt[:2000])
-        if not mem_block:
-            mem_block = build_memory_block("global", None, base_prompt[:2000])
-    except Exception:
-        mem_block = ""
+    # QA-13：走共享函数 memory_block_for_prompt，与同步 run_chat 同源。
+    mem_block = memory_block_for_prompt(base_prompt, project_id)
     if (
         not evidence_mode_active(mode, settings)
         and not skill_ids

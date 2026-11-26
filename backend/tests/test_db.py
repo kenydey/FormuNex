@@ -20,12 +20,14 @@ def _sql_store(engine=None):
 
 
 def _record(zinc: float = 8.0, salt_spray: float = 840.0) -> ExperimentRecord:
+    # 2026-11-26 review P2-6：训练 registry 白名单只接受 REAL_SOURCES
+    #（lab/workbench/csv-import）；旧夹具用的 "test" 源会被拒，改用 lab。
     return ExperimentRecord(
         domain=ProductDomain.anticorrosion_coating,
         factors={"Zinc phosphate": zinc, "Bisphenol-A epoxy (DGEBA)": 38.0, "Polyamide hardener": 14.0},
         cure_temperature_c=80.0,
         measured={"salt_spray_hours": salt_spray},
-        source="test",
+        source="lab",
     )
 
 

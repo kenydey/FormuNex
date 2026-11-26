@@ -78,6 +78,23 @@ def _run_evidence_review(question, answer, evidence, settings, source="chat", do
 
 
 
+def _citation_date_notices(answer: str) -> list[dict]:
+    """QA-06：聊天收尾的 citation_date guard（提示级，不拦截）。
+
+    扫描最终答案正文里的脚注定义，对带日期语境的未来年份（如 LLM 编造
+    的"2028 年发表"）各发一条 notice；无问题返回 []。fail-open：任何
+    异常都返回 []，不阻断问答。同步 run_chat 与流式三条收尾（经
+    _stream_done_payload 与两处整包 inline done）共用。
+    """
+    try:
+        from ..services.citation_date_guard import future_dated_citation_notices
+
+        return future_dated_citation_notices(answer or "")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("citation date guard skipped: %s", exc)
+        return []
+
+
 def _reviewer_failed(review) -> bool:
     """reviewer 是否处于显错状态（B-7）；是则跳过 fix-loop 与 auto-review。"""
     return isinstance(review, dict) and bool(review.get("reviewer_error"))
@@ -427,7 +444,29 @@ def _retrieval_degradation_notices(kb_used: int, req: ChatRequest | None = None)
     deep = list(getattr(req, "_deep_notices", None) or [])
     if not kb_used or kb_used <= 0:
         return deep
-    return deep + _vector_degradation_notices()
+    notices = deep + _vector_degradation_notices()
+    # QA-10：检索扫描触顶进 notices（与 BM25-only 退化提示同级，用户可见）。
+    # hybrid_search_scored 每次扫描后刷新 _LAST_SCAN（见 last_scan_info）；
+    # 此处只读最近一次扫描：本请求的 KB 检索刚跑过，读到的即本次扫描。
+    # fail-open：读不到/异常时不追加，不阻断问答。
+    try:
+        from ..services.hybrid_search import last_scan_info
+
+        scan = last_scan_info() or {}
+        if scan.get("truncated"):
+            notices.append(
+                {
+                    "code": "retrieval_scan_truncated",
+                    "message": (
+                        f"知识库扫描已达上限（已扫 {scan.get('scanned')}/"
+                        f"{scan.get('limit')} 条），较早入库的内容可能未参与"
+                        "本次检索，结果可能不完整。"
+                    ),
+                }
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("scan truncation notice skipped: %s", exc)
+    return notices
 
 
 
@@ -627,6 +666,33 @@ def _apply_answer_gates(
             n_unsupported,
             threshold,
         )
+
+    # QA-12：Wiki 封顶的消费方——仅由 Wiki 支撑的 supported 论断（confidence
+    # 被封顶到 wiki_claim_confidence_cap 之下）进 notices，提示用户弱支撑；
+    # 否则封顶只是无人消费的数字。supported 默认 0.9，封顶值 0.6，故
+    # status == "supported" 且 confidence <= cap（< 0.9）即被封顶过的论断。
+    # 拒答时 claims 已清空，不会误报。
+    try:
+        cap = float(getattr(settings, "wiki_claim_confidence_cap", 1.0) or 1.0)
+        if sourced_claims and cap < 0.9:
+            n_capped = sum(
+                1
+                for sc in sourced_claims
+                if sc.status == "supported"
+                and 0 < float(sc.confidence or 0) <= cap
+            )
+            if n_capped:
+                notices.append(
+                    {
+                        "code": "wiki_only_support_capped",
+                        "message": (
+                            f"{n_capped} 条论断仅由 Wiki 内容支撑，置信度已封顶"
+                            f"为 {cap}，请结合原始文献复核后再采信。"
+                        ),
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("wiki cap notice skipped: %s", exc)
 
     return gated_answer, sourced_claims, abstained, notices
 
@@ -854,6 +920,21 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             )
         data_sources = _answer_data_sources(hybrid_out, sources)
 
+        # QA-13：会话内存与流式共享同一调用（project → global 回退，见
+        # evidence_synthesis.memory_block_for_prompt）。不挂在上面的
+        # chat_skills_runtime_enabled 门下——流式 enrich_chat_prompt 内
+        # mem_block 同样不依赖该门（只 enrich 本身受门控）。
+        try:
+            from ..services.evidence_synthesis import memory_block_for_prompt
+
+            _mem_block = memory_block_for_prompt(question, req.project_id)
+            if _mem_block:
+                prompt_prefix = (
+                    f"{prompt_prefix}\n\n{_mem_block}" if prompt_prefix else _mem_block
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("sync memory block skipped: %s", exc)
+
         # QA-05：同步 paperqa 答案同样跳过数值门（与流式对齐，二选一之②）。
         is_paperqa_answer = False
         if req.response_format == "structured" and settings.chat_structured_enabled:
@@ -1078,10 +1159,12 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             is_paperqa=is_paperqa_answer,
         )
         # QA-01：reviewer 状态（warning/failure/跳过/异常）进 notices，用户可见。
+        # QA-06：citation_date guard 收尾（提示级）——答案脚注里的未来年份。
         notices = (
             list(retrieval_notices)
             + list(gate_notices or [])
             + _reviewer_notices(evidence_reviewer)
+            + _citation_date_notices(answer)
         )
         try:
             from ..services.scholar_helpers import build_evidence_provenance
@@ -1524,10 +1607,13 @@ def _stream_done_payload(
         "reviewer_fix": reviewer_fix,
         "citation_binding": citation_binding,
         # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
+        # QA-06：citation_date guard 收尾（提示级）——答案脚注里的未来年份。
+        # QA-10：扫描截断提示由 _retrieval_degradation_notices 内含。
         "notices": (
             list(_retrieval_degradation_notices(kb_used, req) or [])
             + list(gate_notices or [])
             + _reviewer_notices(reviewer)
+            + _citation_date_notices(answer)
         ) or None,
     }
     if tools_used is not None:
@@ -1745,9 +1831,11 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                             "reviewer_fix": reviewer_fix,
                             "citation_binding": citation_binding,
                             # P1-j: 补 degradation notices（与其他路径对齐）
+                            # QA-06：citation_date guard 收尾（提示级）。
                             "notices": list(_retrieval_degradation_notices(kb_used, req) or [])
                             + list(gate_notices or [])
-                            + _reviewer_notices(reviewer) or None,
+                            + _reviewer_notices(reviewer)
+                            + _citation_date_notices(answer) or None,
                         }
                     )
                     return
@@ -1959,7 +2047,8 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                             "sources_audit": _audit,
                             # B-1: BM25-only 退化提示位 + P1-4 门 notices 合并。
                             # v16 P3-11: reviewer fail-open 提示位。
-                            "notices": list(_degr_notices) + list(gate_notices or []) + _reviewer_notices(evidence_reviewer) or None,
+                            # QA-06：citation_date guard 收尾（提示级）。
+                            "notices": list(_degr_notices) + list(gate_notices or []) + _reviewer_notices(evidence_reviewer) + _citation_date_notices(answer) or None,
                         }
                     )
                     return

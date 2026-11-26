@@ -15,6 +15,35 @@ _METRIC_ALIASES: dict[str, str] = {
     "salt spray": "salt_spray_nss",
     "盐雾": "salt_spray_nss",
     "neutral salt spray": "salt_spray_nss",
+    # B4（2026-11-26 全面审查）：常用中文指标补齐 —— 未收录项此前一律
+    # 坍缩为 metric:_（字符集把全部 CJK 替换为 "_"）。别名命中仍优先。
+    "耐盐雾性": "salt_spray_nss",
+    "salt spray resistance": "salt_spray_nss",
+    "耐水性": "water_resistance",
+    "water resistance": "water_resistance",
+    "耐冲击性": "impact_resistance",
+    "impact resistance": "impact_resistance",
+    "耐候性": "weathering_resistance",
+    "weathering resistance": "weathering_resistance",
+    "耐化学性": "chemical_resistance",
+    "chemical resistance": "chemical_resistance",
+    "耐磨性": "abrasion_resistance",
+    "abrasion resistance": "abrasion_resistance",
+    "耐腐蚀性": "corrosion_resistance",
+    "corrosion resistance": "corrosion_resistance",
+    "耐温性": "heat_resistance",
+    "heat resistance": "heat_resistance",
+    "硬度": "hardness",
+    "hardness": "hardness",
+    "光泽度": "gloss",
+    "柔韧性": "flexibility",
+    "flexibility": "flexibility",
+    "粘度": "viscosity",
+    "viscosity": "viscosity",
+    "固含量": "solids_content",
+    "solids content": "solids_content",
+    "干燥时间": "drying_time",
+    "drying time": "drying_time",
     "附着力": "adhesion",
     "adhesion": "adhesion",
     "铅笔硬度": "pencil_hardness",
@@ -54,7 +83,14 @@ def _metric_entity_id(metric: str) -> tuple[str, str]:
     key = (metric or "").strip().lower()
     normalized = _METRIC_ALIASES.get(key)
     if not normalized:
-        normalized = re.sub(r"[^a-z0-9]+", "_", key)[:48] or "unknown_metric"
+        # B4：与 _substrate_entity_id 同款字符集 —— 保留 CJK（此前
+        # [^a-z0-9] 把"耐盐雾性"这类未收录中文指标全坍缩为 metric:_）。
+        # 仍为空（如纯标点）时回退到 unknown_metric:<sha1 前 8>，不同
+        # 输入不再共用同一 id。
+        normalized = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", "_", key).strip("_")[:48]
+        if not normalized:
+            digest = hashlib.sha1(key.encode()).hexdigest()[:8]
+            normalized = f"unknown_metric:{digest}"
     return f"metric:{normalized}", metric.strip() or normalized
 
 

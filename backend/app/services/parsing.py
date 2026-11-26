@@ -1126,7 +1126,7 @@ def _inject_approximate_page_markers(
     buf: list[str] = []
     acc = 0
     idx = 1
-    parts.append(page_marker(start_page))
+    parts.append(page_marker(start_page, approx=True))
     for ln in lines:
         buf.append(ln)
         acc += len(ln)
@@ -1134,7 +1134,7 @@ def _inject_approximate_page_markers(
             parts.append("".join(buf))
             buf = []
             idx += 1
-            parts.append(page_marker(start_page + idx - 1))
+            parts.append(page_marker(start_page + idx - 1, approx=True))
     if buf:
         parts.append("".join(buf))
     return "\n".join(parts)
@@ -1228,7 +1228,6 @@ def _pdf_tier_order(prefer: str) -> list[tuple[str, object]]:
 
 
 # v2 路由层与质量门（仅 auto 模式生效；显式 pin 是操作员的明确选择，不覆盖）。
-_BLANK_PAGE_CHARS = 20
 _TABLE_CAPTION_RE = re.compile(r"(表\s*\d+|附表|Table\s*\d+)", re.IGNORECASE)
 _MD_TABLE_SEP_RE = re.compile(r"^\s*\|[\s:|-]+\|\s*$", re.MULTILINE)
 
@@ -1244,6 +1243,8 @@ def _pdf_page_text_stats(content: bytes) -> tuple[int, int] | None:
     except ImportError:
         return None
     try:
+        from . import pdf_local
+
         doc = fitz.open(stream=content, filetype="pdf")
     except Exception:
         return None
@@ -1257,7 +1258,12 @@ def _pdf_page_text_stats(content: bytes) -> tuple[int, int] | None:
                 text = doc.load_page(i).get_text()
             except Exception:
                 continue
-            if len(text.strip()) < _BLANK_PAGE_CHARS:
+            # P2-6 (review 2026-11-26): blank 判定改用词结构口径，与
+            # pdf_local.has_word_run / LocalPage.looks_scanned 同款——
+            # 旧 20 字符 floor 把 1–19 字符的真实文本层页判为空白，整篇
+            # 皆短页时 fully_scanned 分流会把正常文本文档当扫描件走 OCR。
+            # 孤数字/标点仍判空白（has_word_run 要求 2 字符以上词 run）。
+            if not pdf_local.has_word_run(text):
                 blank += 1
         return (n_pages, blank)
     except Exception:
@@ -1518,6 +1524,19 @@ def _parse_pdf_sharded(
     if budget > 0:
         budget_token = _MINERU_BUDGET.set((budget, [0]))
 
+    # P2-5 (review 2026-11-26): pass the pinned tier to the shard cache so
+    # a shard cached under another parser is a miss, not a merge. Only a
+    # pinned tier has a "current parser": under auto the winning tier is
+    # content-dependent per shard and unknowable before parsing, so the
+    # check stays off (None) there — same as before. A shard that fell back
+    # to a lighter tier under a pin is conservatively re-parsed on resume
+    # rather than merged under the pinned name.
+    _prefer_resolved = prefer if prefer is not None else settings.pdf_parser
+    _tier_names = {n for n, _ in _PDF_TIERS}
+    expected_parser = (
+        _prefer_resolved if _prefer_resolved in _tier_names else None
+    )
+
     # Stage 3 / SR-064 (3-11): windowed inter-shard parallelism + streaming
     # merge. Shards used to parse strictly serially, and every shard's full
     # markdown string coexisted in `parts` until a final join doubled peak
@@ -1585,8 +1604,16 @@ def _parse_pdf_sharded(
                     # P1-B7: the page-range check now lives in get_shard
                     # (a row under another window is a miss); the nonempty
                     # check stays here as defence for legacy empty rows.
+                    # P2-5: the pinned tier (if any) is passed too, so a
+                    # shard cached under another parser is a miss.
                     cached = (
-                        get_shard(sha, idx, page_start=start, page_end=end)
+                        get_shard(
+                            sha,
+                            idx,
+                            parser=expected_parser,
+                            page_start=start,
+                            page_end=end,
+                        )
                         if resume
                         else None
                     )
@@ -2090,6 +2117,11 @@ def format_availability() -> dict[str, bool]:
                 _local_ocr_installed(),
                 _markitdown_can("pdf"),
                 optional_import("pypdf"),
+                # P2-3 (review 2026-11-26): the MinerU cloud tier parses PDF
+                # too — a deployment with only MinerU configured used to
+                # report can_parse("pdf") == False. parser_availability()
+                # already folds "SDK importable AND enabled" into "mineru".
+                parser_availability()["mineru"],
             )
         ),
         "docx": _markitdown_can("docx") or optional_import("docx"),

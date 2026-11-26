@@ -38,7 +38,21 @@ logger = logging.getLogger(__name__)
 # Ring buffer of recent hybrid_search wall times (ms). Process-local only.
 _LATENCY_MS: deque[float] = deque(maxlen=128)
 _LATENCY_LOCK = threading.Lock()
-# Stage 3 / SR-028 (3-5): last completed scan vs the kb_search_scan_limit
+# QA-08（2026-11-26 审查第二波 Q2）：上一次重排策略层的结果摘要
+# （阈值/降级/过滤计数），与 _LAST_SCAN 同款进程内观测位。
+# apply_rerank_policy 每次返回前刷新；fail-open 旁路（策略层异常）
+# 不刷新，保留上一次成功策略的摘要。
+_LAST_RERANK: dict[str, Any] = {
+    "threshold": None,
+    "final_threshold": None,
+    "degraded": False,
+    "threshold_dropped": 0,
+    "threshold_kept": 0,
+    "selected": 0,
+    "explicit_scope_fallback": False,
+    "fusion": None,
+    "scale": 1.0,
+}
 # cap. ``truncated`` means the scan hit the cap (len == limit): more rows
 # may exist beyond it, so recall may silently drop older chunks. Recorded
 # on every scan that gets past the initial load (both branches), so the
@@ -93,6 +107,54 @@ def last_scan_info() -> dict[str, Any]:
     """Copy of the last completed scan's cap diagnostics (see _LAST_SCAN)."""
     with _LATENCY_LOCK:
         return dict(_LAST_SCAN)
+
+
+def last_rerank_meta() -> dict[str, Any]:
+    """Copy of the last rerank-policy summary (see _LAST_RERANK)."""
+    with _LATENCY_LOCK:
+        return dict(_LAST_RERANK)
+
+
+def resolve_hybrid_alpha(
+    query: str,
+    alpha: float | None = None,
+    *,
+    settings=None,
+) -> float:
+    """QA-09：BM25/向量权重 alpha 的唯一解析点（探针与生产共用）。
+
+    ``alpha is None`` → 取 ``kb_hybrid_alpha``；调用方显式传入静态默认
+    值（== ``kb_hybrid_alpha``）同样视为"未指定"，仍可动态调优——此前
+    ``search_chunks_hybrid`` 在调 ``hybrid_search_scored`` 之前已把 alpha
+    解析为静态值再显式传入，``hybrid_search_scored`` 内的动态分支
+    （只在 ``alpha is None`` 时执行）在生产链路上永不可达。显式传入与
+    默认不同的 alpha 则原样尊重（调用方覆盖）。
+
+    动态规则（S-4，原 ``hybrid_search_scored`` 内联逻辑，原样迁移）：
+    中文查询 +0.1（偏向量）、短查询（≤3 词）−0.15（偏 BM25）、长查询
+    （≥10 词）+0.1（偏向量）；结果钳制到 [0, 1]。开关关时返回静态值。
+    """
+    settings = settings or get_settings()
+    base = float(settings.kb_hybrid_alpha)
+    if alpha is None:
+        alpha = base
+        dynamic = True
+    else:
+        dynamic = float(alpha) == base
+    if dynamic and settings.dynamic_alpha_enabled:
+        try:
+            q = (query or "").strip()
+            words = len(q.split())
+            has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in q)
+            if has_cjk:
+                alpha = min(1.0, alpha + 0.1)
+            elif words <= 3:
+                alpha = max(0.0, alpha - 0.15)
+            elif words >= 10:
+                alpha = min(1.0, alpha + 0.1)
+        except Exception:
+            pass
+    return float(alpha)
 
 
 def hybrid_latency_stats() -> dict[str, Any]:
@@ -382,6 +444,7 @@ def apply_rerank_policy(
     top_k: int = 10,
     explicit_scope: bool = False,
     scale: float = 1.0,
+    fusion: str | None = None,
 ) -> list[int]:
     """WeKnora 第一批 2.2：纯分数重排策略层（阈值 + 降级 + 保底 + MMR）。
 
@@ -394,68 +457,103 @@ def apply_rerank_policy(
     以 ``scale`` 传入）。阈值直接作用于原始值会在 RRF 路径下清空一切；
     而除以 batch 最大值则会让最高分恒为 1.0，使降级与保底永远触发不了，
     因此不用 batch 最大值归一化。
+
+    QA-08：每次调用把摘要写进模块级 ``_LAST_RERANK``（``last_rerank_meta()``
+    读取）：阈值、降级后阈值、是否降级、阈值滤掉/保留条数、是否走
+    explicit_scope 保底、fusion/scale。调用方（hybrid_search_scored）
+    按 fusion 传不同的阈值（weighted 用 ``kb_rerank_threshold``，
+    RRF 用 ``kb_rerank_threshold_rrf``）。
     """
-    if not order or top_k <= 0:
-        return []
-    if not scale or scale <= 0:
-        scale = 1.0
-    norm = {i: float(combined[i]) / scale for i in order}
-    if max(norm.values()) <= 0.0:
-        return list(order)
-
-    def _filter(thr: float) -> list[int]:
-        return [i for i in order if norm[i] >= thr]
-
-    kept = _filter(threshold)
-    # 降级重试：逐级乘 degrade_factor，直到地板为止（最多 10 级防浮点死循环）。
-    thr = threshold
-    for _ in range(10):
-        if kept or thr <= degrade_floor:
-            break
-        thr = max(thr * degrade_factor, degrade_floor)
-        kept = _filter(thr)
-    if not kept and explicit_scope:
-        kept = [max(order, key=lambda i: norm[i])]
-    if not kept:
-        return []
-
-    pool = kept[: max(1, int(max_candidates))]
-    if len(pool) <= 1:
-        return pool
-
-    def _tokens(text: str) -> set[str]:
-        try:
-            return {t for t in _tokenize(text or "") if t}
-        except Exception:  # noqa: BLE001 - fail-open: tokenize failure = no overlap
-            return set()
-
-    token_sets = {i: _tokens(getattr(chunks[i], "text", "") or "") for i in pool}
+    meta: dict[str, Any] = {
+        "threshold": float(threshold),
+        "final_threshold": float(threshold),
+        "degraded": False,
+        "threshold_dropped": 0,
+        "threshold_kept": 0,
+        "selected": 0,
+        "explicit_scope_fallback": False,
+        "fusion": fusion,
+        "scale": float(scale) if scale else 1.0,
+    }
     selected: list[int] = []
-    remaining = list(pool)
-    while remaining and len(selected) < top_k:
-        best_i: int | None = None
-        best_val = float("-inf")
-        for i in remaining:
-            if selected:
-                sim = max(
-                    (
-                        len(token_sets[i] & token_sets[j])
-                        / len(token_sets[i] | token_sets[j])
-                        if (token_sets[i] | token_sets[j])
-                        else 0.0
+    try:
+        if not order or top_k <= 0:
+            return []
+        if not scale or scale <= 0:
+            scale = 1.0
+            meta["scale"] = 1.0
+        norm = {i: float(combined[i]) / scale for i in order}
+        if max(norm.values()) <= 0.0:
+            selected = list(order)
+            meta["threshold_kept"] = len(selected)
+            return selected
+
+        def _filter(thr: float) -> list[int]:
+            return [i for i in order if norm[i] >= thr]
+
+        kept = _filter(threshold)
+        # 降级重试：逐级乘 degrade_factor，直到地板为止（最多 10 级防浮点死循环）。
+        thr = threshold
+        for _ in range(10):
+            if kept or thr <= degrade_floor:
+                break
+            thr = max(thr * degrade_factor, degrade_floor)
+            kept = _filter(thr)
+        meta["final_threshold"] = float(thr)
+        meta["degraded"] = bool(thr < threshold)
+        meta["threshold_kept"] = len(kept)
+        meta["threshold_dropped"] = len(order) - len(kept)
+        if not kept and explicit_scope:
+            kept = [max(order, key=lambda i: norm[i])]
+            meta["explicit_scope_fallback"] = True
+            meta["threshold_kept"] = len(kept)
+            meta["threshold_dropped"] = len(order) - len(kept)
+        if not kept:
+            return []
+
+        pool = kept[: max(1, int(max_candidates))]
+        if len(pool) <= 1:
+            selected = pool
+            return selected
+
+        def _tokens(text: str) -> set[str]:
+            try:
+                return {t for t in _tokenize(text or "") if t}
+            except Exception:  # noqa: BLE001 - fail-open: tokenize failure = no overlap
+                return set()
+
+        token_sets = {i: _tokens(getattr(chunks[i], "text", "") or "") for i in pool}
+        picked: list[int] = []
+        remaining = list(pool)
+        while remaining and len(picked) < top_k:
+            best_i: int | None = None
+            best_val = float("-inf")
+            for i in remaining:
+                if picked:
+                    sim = max(
+                        (
+                            len(token_sets[i] & token_sets[j])
+                            / len(token_sets[i] | token_sets[j])
+                            if (token_sets[i] | token_sets[j])
+                            else 0.0
+                        )
+                        for j in picked
                     )
-                    for j in selected
-                )
-            else:
-                sim = 0.0
-            val = mmr_lambda * norm[i] - (1.0 - mmr_lambda) * sim
-            if val > best_val:
-                best_val = val
-                best_i = i
-        assert best_i is not None
-        selected.append(best_i)
-        remaining.remove(best_i)
-    return selected
+                else:
+                    sim = 0.0
+                val = mmr_lambda * norm[i] - (1.0 - mmr_lambda) * sim
+                if val > best_val:
+                    best_val = val
+                    best_i = i
+            assert best_i is not None
+            picked.append(best_i)
+            remaining.remove(best_i)
+        selected = picked
+        return selected
+    finally:
+        meta["selected"] = len(selected)
+        with _LATENCY_LOCK:
+            _LAST_RERANK.update(meta)
 
 
 def hybrid_search_scored(
@@ -481,24 +579,10 @@ def hybrid_search_scored(
     """
     global _LAST_ANN_ACTIVE, _LAST_ANN_MATRIX, _LAST_ANN_FAISS, _ANN_STREAK, _ANN_STICKY_REMAINING
     settings = get_settings()
-    if alpha is None:
-        alpha = settings.kb_hybrid_alpha
-        # S-4: 按查询特征动态调优 alpha
-        # 短查询（≤3 词）偏 BM25（精确匹配）；长查询偏向量（语义）
-        # 中文查询偏向量（分词噪声大）
-        if settings.dynamic_alpha_enabled:
-            try:
-                q = (query or "").strip()
-                words = len(q.split())
-                has_cjk = any('\u4e00' <= ch <= '\u9fff' for ch in q)
-                if has_cjk:
-                    alpha = min(1.0, alpha + 0.1)
-                elif words <= 3:
-                    alpha = max(0.0, alpha - 0.15)
-                elif words >= 10:
-                    alpha = min(1.0, alpha + 0.1)
-            except Exception:
-                pass
+    # QA-09：alpha 解析走唯一共享函数（动态调优见 resolve_hybrid_alpha）。
+    # 此前这里只在 alpha is None 时动态调优，而生产调用方（search_chunks_hybrid
+    # / hybrid_search）总把静态默认值显式传入，动态分支永不可达。
+    alpha = resolve_hybrid_alpha(query, alpha, settings=settings)
     if alpha < 0.0 or alpha > 1.0:
         raise ValueError(f"alpha must be in [0, 1], got {alpha}")
 
@@ -792,15 +876,25 @@ def hybrid_search_scored(
 
         # WeKnora 第一批 2.2：重排策略层。v7 fallback 路径旁路（不把已降级
         # 路径再降级一遍）；策略层异常 fail-open 回门禁后原 order。
+        # QA-08：分 fusion 给阈值（weighted 用 kb_rerank_threshold，
+        # RRF 用 kb_rerank_threshold_rrf，见 config 注释的金标校准）；
+        # 策略摘要（过滤条数/是否降级）由 apply_rerank_policy 写进
+        # _LAST_RERANK，本函数取一份记入检索日志（见 finally）。
+        rerank_meta: dict[str, Any] | None = None
         if getattr(settings, "kb_rerank_enabled", True) and not from_fallback:
             try:
                 # RRF 理论上限 2 / (k + 1)，k=60；weighted 理论上限约 1。
                 _scale = (2.0 / 61.0) if fusion == "rrf" else 1.0
+                _thr = (
+                    float(settings.kb_rerank_threshold_rrf)
+                    if fusion == "rrf"
+                    else float(settings.kb_rerank_threshold)
+                )
                 order = apply_rerank_policy(
                     order,
                     combined,
                     chunks,
-                    threshold=float(settings.kb_rerank_threshold),
+                    threshold=_thr,
                     degrade_factor=float(settings.kb_rerank_degrade_factor),
                     degrade_floor=float(settings.kb_rerank_degrade_floor),
                     mmr_lambda=float(settings.kb_mmr_lambda),
@@ -808,7 +902,9 @@ def hybrid_search_scored(
                     top_k=top_k,
                     explicit_scope=bool(explicit_scope),
                     scale=_scale,
+                    fusion=fusion,
                 )
+                rerank_meta = last_rerank_meta()
             except Exception:  # noqa: BLE001 - fail-open: policy never blocks retrieval
                 logger.debug("hybrid rerank policy skipped (fail-open)", exc_info=True)
 
@@ -837,7 +933,7 @@ def hybrid_search_scored(
                 return 0.0
         logger.debug(
             "hybrid_search query=%r n=%d top_bm25=%.4f top_cosine=%.4f top_hybrid=%.4f "
-            "fusion=%s ann=%s elapsed_ms=%.1f",
+            "fusion=%s ann=%s rerank=%s elapsed_ms=%.1f",
             (query or "")[:80],
             _loc.get("n", 0),
             _top("bm25_scores"),
@@ -845,6 +941,7 @@ def hybrid_search_scored(
             _top("combined"),
             (settings.kb_hybrid_fusion or "weighted"),
             _loc.get("ann_active", False),
+            _loc.get("rerank_meta"),
             elapsed_ms,
         )
         # v29 Phase4: 慢查询告警 —— 单次超 2s 打 warning
@@ -890,6 +987,10 @@ def hybrid_search(
 
     Note: this is **not** the session-level ``rag.BM25FAISSStore`` used by chat.
     """
+    # QA-09：wrapper 只在 alpha 省略时补静态默认值（旧行为）；动态调优
+    # 由下游 hybrid_search_scored 内的 resolve_hybrid_alpha 统一做——
+    # 它把"显式传入静态默认值"也视为未指定，故生产链路与探针共用同一
+    # 解析函数，wrapper 在此提前解析会改变传给 scored 的观测值。
     if alpha is None:
         alpha = get_settings().kb_hybrid_alpha
     if alpha < 0.0 or alpha > 1.0:

@@ -59,6 +59,17 @@ _SCANNED_CHARS_PER_PAGE = 80
 _WORD_RUN_RE = re.compile(r"[A-Za-z0-9]{2,}|[\u4e00-\u9fff]{2,}")
 
 
+def has_word_run(text: str) -> bool:
+    """Whether *text* contains a word run (P2-6, review 2026-11-26).
+
+    The shared yardstick for "this page has a real text layer", same as
+    ``LocalPage.looks_scanned`` uses below: a 2+ character Latin/digit or
+    CJK run. A lone digit or punctuation mark does not count, so a page
+    holding only a page number or a stray glyph still reads as blank.
+    """
+    return bool(_WORD_RUN_RE.search(text or ""))
+
+
 @dataclass
 class LocalPage:
     """One page as extracted locally, plus what it would cost to give up."""
@@ -269,10 +280,13 @@ def extract_pages(content: bytes, *, ocr: bool | None = None) -> list[LocalPage]
                     markdown = (chunk.get("text") or "").strip()
                     text_layer = doc[index].get_text().strip()
                     n_tables, n_images, area_ratio = _page_signals(doc[index])
-                    # B-1: layout 丢弃稀疏页文本时回退到 text-layer。
+                    # B-1 (P2-6, review 2026-11-26): layout 丢弃稀疏页文本时回退到 text-layer。
                     # 单行文本页经 layout 返回空 markdown，若直接返回空，
                     # 上游 cascade 会落到 OCR，把完美文本层读成垃圾。
-                    if not markdown and len(text_layer) >= 20:
+                    # 旧口径是 20 字符 floor：1–19 字符的真实文本层页既无回退
+                    # 又无 marker，直接消失。现改用词结构口径（与 looks_scanned
+                    # 同款 has_word_run）：一个 2 字符以上的词即证明文本层存在。
+                    if not markdown and has_word_run(text_layer):
                         logger.debug(
                             "pdf_local: 第 %d 页 layout 返回空，用 text-layer 回退（%d 字符）",
                             index + 1, len(text_layer),

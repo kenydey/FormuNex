@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -300,6 +301,17 @@ def _count_pages(content: bytes, ext: str) -> int:
         return 1
 
 
+# P2-1/P3-6 (review 2026-11-26): _record_usage is a read-modify-write on a
+# shared file, and the batch path runs shards in parallel — two threads
+# could read the same counters and one increment would be lost. The lock
+# serialises the read-modify-write within this process (the old docstring
+# called that loss "acceptable"; it no longer is). Cross-process races
+# remain possible — two workers sharing a cache dir can still lose an
+# increment — but the counter is observability, not billing, and that
+# residual is out of scope.
+_USAGE_LOCK = threading.Lock()
+
+
 def _record_usage(*, pages: int, ok: bool, quota: bool = False) -> None:
     """Add one MinerU submission to the daily counter.
 
@@ -312,10 +324,15 @@ def _record_usage(*, pages: int, ok: bool, quota: bool = False) -> None:
     an event with no pages (nothing was consumed), and auth/size
     rejections are not counted at all — they never reached the server and
     the probe already surfaces them. `failed` counts submissions that
-    returned no usable result. Best-effort throughout: a lost increment
-    from two threads writing at once is acceptable, and a failure here
+    returned no usable result. Best-effort throughout: a failure here
     must never break a parse.
     """
+    with _USAGE_LOCK:
+        _record_usage_locked(pages=pages, ok=ok, quota=quota)
+
+
+def _record_usage_locked(*, pages: int, ok: bool, quota: bool = False) -> None:
+    """The _record_usage body; callers hold _USAGE_LOCK."""
     try:
         from . import _fsutil
 
@@ -571,6 +588,9 @@ def parse_pages_batch(
     results: list[MinerUDocument | None] = [None] * len(contents)
     accepted: list[int] = []
     paths: list[str] = []
+    # P2-1 (review 2026-11-26): the per-page cache keys, kept so the batch
+    # pending key below identifies this exact (contents, options) batch.
+    page_keys: dict[int, str] = {}
 
     for i, content in enumerate(contents):
         if len(content) > limit:
@@ -581,6 +601,7 @@ def parse_pages_batch(
             continue
         key = _cache_key(content, ext=ext, ocr=ocr, formula=eff_formula, table=eff_table,
                          language=language, model=model)
+        page_keys[i] = key
         if not settings.prune_mineru_cache:
             cached = _cache_load(key)
             if cached is not None:
@@ -617,13 +638,59 @@ def parse_pages_batch(
             # The SDK only sends `language` when explicitly set; passing None
             # would send a null to the server, so it is omitted, not passed.
             batch_kwargs["language"] = language
-        documents = list(
-            client.extract_batch(
-                paths, model=model, ocr=ocr or None,
-                formula=eff_formula, table=eff_table, timeout=int(wait),
-                **batch_kwargs,
+        # P2-1 (review 2026-11-26): async resume for the batch path, mirroring
+        # _extract/crawl_url. The pending key is the hash of the per-page
+        # cache keys, so it identifies this exact (contents, options) batch:
+        # a timed-out batch is resumed by the next call instead of being
+        # resubmitted (quota double-spend). The record goes down *before*
+        # polling, so a timeout below leaves it for the next call.
+        # submit_batch exists in mineru-open-sdk 0.2.5; a client without it
+        # (older SDK, or a test double mirroring one) falls back to the
+        # blocking extract_batch — same behaviour as before, just without
+        # resume.
+        batch_key = hashlib.sha256(
+            "\n".join(page_keys[idx] for idx in accepted).encode("utf-8")
+        ).hexdigest()
+        submit_batch = getattr(client, "submit_batch", None)
+        if submit_batch is None:
+            documents = list(
+                client.extract_batch(
+                    paths, model=model, ocr=ocr or None,
+                    formula=eff_formula, table=eff_table, timeout=int(wait),
+                    **batch_kwargs,
+                )
             )
-        )
+        else:
+            pending = _pending_load(batch_key)
+            if pending is not None:
+                logger.info(
+                    "mineru: resuming pending batch %s (submitted %.0fs ago)",
+                    pending["batch_id"],
+                    time.time() - float(pending.get("submitted_at", 0) or 0),
+                )
+                try:
+                    documents = _poll_batch(client, pending["batch_id"], timeout=int(wait))
+                except mineru.TaskNotFoundError:
+                    # The server no longer has this batch (expired) — drop
+                    # the stale record and submit fresh below.
+                    logger.warning(
+                        "mineru: pending batch %s expired server-side — resubmitting",
+                        pending["batch_id"],
+                    )
+                    _pending_clear(batch_key)
+                    pending = None
+            if pending is None:
+                batch_id = submit_batch(
+                    paths, model=model, ocr=ocr or None,
+                    formula=eff_formula, table=eff_table,
+                    **batch_kwargs,
+                )
+                _pending_save(batch_key, batch_id, batch_key)
+                documents = _poll_batch(client, batch_id, timeout=int(wait))
+            # The poll only returns once every task is done/failed, so the
+            # batch is terminal: the record is done. A timeout raises out of
+            # _poll_batch above and the record stays for the next call.
+            _pending_clear(batch_key)
     except mineru.AuthError as exc:
         logger.error("mineru: token rejected (%s) — check 设置 → API 配置", exc)
         return results

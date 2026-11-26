@@ -96,7 +96,8 @@ def test_dispatch_failure_becomes_a_loop_not_started_message(monkeypatch):
     monkeypatch.setattr(workbench_loop, "is_doecycle_paused", lambda campaign_id: False)
     monkeypatch.setattr(
         workbench_loop, "_campaign_loop_context",
-        lambda campaign_id, req: ([], False, ""),
+        # 2026-11-26 review P2-3：返回 4 元组（prior_rmse, prior_gens, converged, msg）。
+        lambda campaign_id, req: ([], [], False, ""),
     )
     monkeypatch.setattr(workbench_loop, "_start_loop_task", lambda *a, **k: None)
     task_id, message = workbench_loop.dispatch_loop_after_sync(

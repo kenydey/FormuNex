@@ -6,7 +6,7 @@ GET  /api/kb/search   — direct chunk retrieval (debug / power users)
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import logging
 
@@ -74,6 +74,12 @@ class KBStats(BaseModel):
     embedding_model_configured: str | None = None
     embedding_catalog: list[dict[str, str]] = Field(default_factory=list)
     reindex_hint: str = ""
+    #: B9（2026-11-26 全面审查）：Wiki 治理三开关只读展示（不改默认值）。
+    #: 默认关 + 无告警时，治理关闭态在此可见而非静默。
+    wiki_governance: dict[str, bool] = Field(default_factory=dict)
+    #: B10：上次 Wiki lint 覆盖快照（scanned/total_pages/flagged/...）；
+    #: lint 未跑过时为空 dict。
+    wiki_lint: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReindexResult(BaseModel):

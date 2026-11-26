@@ -263,6 +263,20 @@ def build_toc_tree(
     _propagate_pages(b.root)
     _resolve_refs(b)
     stats = _stats(b.root)
+    # B3 双口径：page_count 是页码跨度（max-min+1，缺页也计入）；
+    # page_count_distinct 是实际出现过的不同页码数；page_count_approx
+    # 说明页码本身是估计值（Stage 2 门控与引用据此注明，不另改跨度口径）。
+    distinct_pages: set[int] = set()
+    for c in rows:
+        page = _get(c, "page_no")
+        if page is None:
+            continue
+        try:
+            distinct_pages.add(int(page))
+        except (TypeError, ValueError):
+            continue
+    stats["page_count_distinct"] = len(distinct_pages)
+    stats["page_count_approx"] = any(_chunk_page_is_approx(c) for c in rows)
     return {"tree": b.root.to_dict(), "stats": stats, "doc_kind": _doc_kind(title, "\n".join(full_text))}
 
 
@@ -302,6 +316,19 @@ def _resolve_refs(b: _Builder) -> None:
                 continue
             seen.add(label)
             node.refs.append({"to": target.node_id, "label": label, "text": m.group(0)})
+
+
+def _chunk_page_is_approx(c: Any) -> bool:
+    """B3（2026-11-26 全面审查）：该 chunk 的页码是否为近似值。
+
+    读内存 ``Chunk.page_no_source``，或入库后 ``DocumentChunk.meta`` 的
+    ``page_no_source``（缺省即 real）。dict/ORM 两种形态都认。
+    """
+    src = _get(c, "page_no_source")
+    if src:
+        return src == "approx"
+    meta = _get(c, "meta", None)
+    return isinstance(meta, dict) and meta.get("page_no_source") == "approx"
 
 
 def _stats(root: TocNode) -> dict[str, int]:

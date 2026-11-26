@@ -15,6 +15,7 @@ from .provider_health import (
 )
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -25,6 +26,9 @@ from ..services.runtime_secrets import effective_setting
 from .http_safe import make_client
 
 logger = logging.getLogger(__name__)
+
+# P2-9: OpenAlex 多臂并行时多个线程同时向同一 stats dict 累加 non_oa 计数。
+_OPENALEX_STATS_LOCK = threading.Lock()
 
 _TIMEOUT_SEC = 25.0
 # OpenAlex broad-boolean 429s (queries with >5 OR/AND/NOT) carry retryAfter.
@@ -352,12 +356,20 @@ def search_openalex(
     taxonomy_source: str = "openalex",
     arm: str | None = None,
     arm_delta: float = 0.0,
+    stats: dict | None = None,
 ) -> list[Evidence]:
     """OpenAlex works search (requires mailto for polite pool).
 
     ``source_id`` (e.g. ChemRxiv ``S4393918830``) appends
     ``primary_location.source.id`` to the filter. ``preferred_source_ids``
     soft-boosts matching venues without hard-filtering.
+
+    ``stats`` (P2-9, 2026-11-26 review): optional out-param dict; when given,
+    ``stats["non_oa_dropped"]`` accumulates the rows skipped by the
+    ``is_oa`` hard filter below. Previously those rows vanished silently and
+    no FilterReport ever saw them, so "检索到 N 条" could not be reconciled
+    with OpenAlex's actual hit count. Callers merge the count into the
+    search FilterReport (`dropped_by_reason["non_oa"]`).
     """
     settings = settings or get_settings()
     if not settings.openalex_enabled:
@@ -421,6 +433,7 @@ def search_openalex(
         base_params["api_key"] = _api_key
     try:
         out: list[Evidence] = []
+        non_oa_dropped = 0
         page = 1 + offset // 25
         skip_in_page = offset % 25
         global_idx = 0
@@ -438,6 +451,9 @@ def search_openalex(
                     # 强制过滤无 OA 文献：无法下载全文的资料源不进检索结果。
                     oa = w.get("open_access") or {}
                     if not oa.get("is_oa"):
+                        # P2-9: 非 OA 行计入 stats（调用方进 FilterReport），
+                        # 不再静默丢弃。
+                        non_oa_dropped += 1
                         continue
                     out.append(
                         _openalex_work_to_evidence(
@@ -464,6 +480,13 @@ def search_openalex(
             } else "openalex"
             for _ev in out:
                 tag_evidence_domain(_ev, domain, taxonomy_source=tax, match="strong")  # type: ignore[arg-type]
+        if stats is not None:
+            with _OPENALEX_STATS_LOCK:
+                stats["non_oa_dropped"] = stats.get("non_oa_dropped", 0) + non_oa_dropped
+        if non_oa_dropped:
+            logger.info(
+                "OpenAlex dropped %d non-OA rows (kept %d)", non_oa_dropped, len(out)
+            )
         record_provider_success("openalex", _t0)
         return out
     except Exception as exc:
@@ -484,7 +507,12 @@ def _serpapi_search(
         "engine": engine,
         "q": query,
         "api_key": api_key,
-        "num": min(20, limit + offset),
+        # P2-1 (2026-11-26 review): 服务端分页 —— `start` 是 SerpAPI 的
+        # 分页游标（google_scholar / google / google_patents 均支持），`num`
+        # 单次上限 20。旧代码只传 `num=min(20, limit+offset)` 且无 `start`，
+        # 深翻页时客户端切片 `[offset:offset+limit]` 恒为空，该源静默终结。
+        "num": min(20, max(limit, 1)),
+        "start": max(offset, 0),
     }
     if extra_params:
         params.update(extra_params)
@@ -492,6 +520,42 @@ def _serpapi_search(
         resp = client.get("https://serpapi.com/search.json", params=params)
         resp.raise_for_status()
         return resp.json()
+
+
+def _serpapi_items(
+    engine: str,
+    query: str,
+    api_key: str,
+    limit: int,
+    offset: int,
+    result_keys: tuple[str, ...] = ("organic_results",),
+    extra_params: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch up to ``limit`` SerpAPI result dicts starting at ``offset``.
+
+    P2-1 (2026-11-26 review): 单次 ``num`` 上限 20，但调用方页大小可达
+    50（``search_limit_per_source`` 默认 50）—— 一次只取 20 行会让
+    ``iter_search`` 的游标步进（page_size）跳过 20~49 行。改为服务端步进
+    循环：每次 ``start`` 前进 20，直到凑满 ``limit`` 或某页短缺（到顶）。
+    调用方拿到的已是本页行，不再做 ``[offset:offset+limit]`` 客户端切片。
+    """
+    if limit <= 0:
+        return []
+    out: list[dict[str, Any]] = []
+    start = max(offset, 0)
+    while len(out) < limit:
+        page_num = min(20, limit - len(out))
+        data = _serpapi_search(engine, query, api_key, page_num, start, extra_params=extra_params)
+        items: list[dict[str, Any]] = []
+        for key in result_keys:
+            items = data.get(key) or []
+            if items:
+                break
+        out.extend(items)
+        if len(items) < page_num:
+            break  # 短页 = 已到结果末尾
+        start += len(items)
+    return out[:limit]
 
 
 def search_serpapi_scholar(
@@ -511,10 +575,9 @@ def search_serpapi_scholar(
         return []
     _t0 = time.monotonic()
     try:
-        data = _serpapi_search("google_scholar", q, key, limit, offset)
-        items = data.get("organic_results") or []
+        items = _serpapi_items("google_scholar", q, key, limit, offset)
         out: list[Evidence] = []
-        for i, r in enumerate(items[offset : offset + limit]):
+        for i, r in enumerate(items):
             out.append(
                 Evidence(
                     source="SerpAPI Scholar",
@@ -570,17 +633,17 @@ def search_serpapi_patents(
         return []
     _t0 = time.monotonic()
     try:
-        data = _serpapi_search(
+        items = _serpapi_items(
             "google_patents",
             q,
             key,
             limit,
             offset,
+            result_keys=("organic_results", "patents"),
             extra_params={"hl": hl},
         )
-        items = data.get("organic_results") or data.get("patents") or []
         out: list[Evidence] = []
-        for i, r in enumerate(items[offset : offset + limit]):
+        for i, r in enumerate(items):
             pub = r.get("publication_number") or r.get("patent_id") or ""
             out.append(
                 Evidence(
@@ -649,21 +712,25 @@ def search_epo_patents(
                 begin += epo_ops.PAGE_SIZE
             if hits or len(epo_ops.query_terms(query, limit=6)) <= 3:
                 break
+        # P2-2 (2026-11-26 review): 按页内下标 + offset 计 relevance ——
+        # 旧代码 `_ranked(i, 0)` 让第 2 页行 relevance 回到 1.0，在合并排序里
+        # 系统性压过别源第 1 页行。`i` 是页内下标（与 S2/Tavily 同口径），
+        # 故先对 `hits` 切片再 enumerate。
         out = [
             Evidence(
                 source="EPO",
                 identifier=hit.publication_number,
                 title=hit.title or hit.publication_number,
                 snippet=(hit.abstract or hit.title)[:400],
-                relevance=_ranked(i, 0),
+                relevance=_ranked(i, offset),
                 assignee=hit.applicant or None,
                 pub_date=hit.pub_date,
                 pub_year=hit.pub_year,
             )
-            for i, hit in enumerate(hits[:want])
+            for i, hit in enumerate(hits[offset : offset + limit])
         ]
         record_provider_success("epo_ops", _t0)
-        return out[offset : offset + limit]
+        return out
     except Exception as exc:
         threshold, cooldown = _breaker_settings(settings)
         record_provider_failure("epo_ops", exc, threshold=threshold, cooldown_sec=cooldown)
@@ -709,6 +776,16 @@ def search_tavily(
     if _guard_provider("tavily", settings):
         return []
     _t0 = time.monotonic()
+    # P2-1 (2026-11-26 review): Tavily 没有服务端分页参数（`max_results`
+    # 上限 20，且无 offset/start）—— offset >= 20 的深页无法由服务端提供，
+    # 旧代码静默返回空切片、该源被判枯竭。改为明示：深页直接返回 [] 并记
+    # warning（调用方 `iter_search` 据此终结该源是有据可依的终结，不是静默丢数）。
+    if offset >= 20:
+        logger.warning(
+            "Tavily has no server-side pagination (max 20 results); page at offset=%d unavailable",
+            offset,
+        )
+        return []
     try:
         with make_client(timeout=_TIMEOUT_SEC) as client:
             resp = client.post(
@@ -765,8 +842,7 @@ def search_serpapi_web(
         return []
     _t0 = time.monotonic()
     try:
-        payload = _serpapi_search("google", q, key, limit, offset)
-        results = (payload.get("organic_results") or [])[offset : offset + limit]
+        items = _serpapi_items("google", q, key, limit, offset)
         out = [
             Evidence(
                 # "(web)" is load-bearing, following the existing `CNIPA (web)`
@@ -782,7 +858,7 @@ def search_serpapi_web(
                 snippet=(r.get("snippet") or "")[:600],
                 relevance=_ranked(i, offset),
             )
-            for i, r in enumerate(results)
+            for i, r in enumerate(items)
             if r.get("link")
         ]
         record_provider_success("serpapi_web", _t0)
@@ -845,7 +921,7 @@ def search_cnipa_parallel(
             return []
         _t0 = time.monotonic()
         try:
-            data = _serpapi_search(
+            items = _serpapi_items(
                 "google",
                 cn_query,
                 effective_setting(settings, "serpapi_api_key"),
@@ -853,9 +929,8 @@ def search_cnipa_parallel(
                 offset,
                 extra_params={"hl": "zh-CN", "gl": "cn"},
             )
-            items = data.get("organic_results") or []
             out: list[Evidence] = []
-            for i, r in enumerate(items[offset : offset + limit]):
+            for i, r in enumerate(items):
                 out.append(
                     Evidence(
                         source="CNIPA (web)",

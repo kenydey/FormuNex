@@ -189,7 +189,7 @@
    "tolerance": 0.03
   },
   "qa/production/context_precision@5": {
-   "value": 0.2399,
+   "value": 0.2539,
    "direction": "higher",
    "tolerance": 0.03
   },
@@ -224,7 +224,7 @@
    "tolerance": 0.03
   },
   "retrieval/abstention/production/auroc": {
-   "value": 0.5,
+   "value": 0.5237,
    "direction": "higher",
    "tolerance": 0.03
   },

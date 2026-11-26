@@ -120,8 +120,11 @@ def test_ingest_tx_gate_all_filtered_returns_failed(monkeypatch):
     from app.services.ingest_tx import ingest_document_tx
 
     # gate 在 ingest_document_tx 函数内导入 —— patch 源模块
+    # 2026-11-26 review B1/A2：gate_fn 现传 mineru_structured，桩签名须
+    # 与真实 gate_ingest_rows 对齐。
     monkeypatch.setattr(
-        gate_mod, "gate_ingest_rows", lambda rows, source_id=None: ([], "test_block")
+        gate_mod, "gate_ingest_rows",
+        lambda rows, source_id=None, mineru_structured=False: ([], "test_block"),
     )
     text = "这是一段足够长的中文文本，用于通过 chunking 的最小长度过滤。" * 10
     result = ingest_document_tx(_tx_factory(), source_id="v10-gate", text=text, title="t")

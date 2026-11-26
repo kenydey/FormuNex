@@ -441,7 +441,10 @@ class Settings(BaseSettings):
     pdf_shard_stale_days: int = 7
     # MinerU 分片预算：单篇分片解析中 MinerU tier 的调用上限，0 = 不限。
     # 按 tier 调用次数计；自适应跳过不产生云调用但仍计次，属保守口径。
-    mineru_shard_budget: int = 0
+    # P2-2（review 2026-11-26）：默认值与 mineru_max_pages_per_doc 对齐（10）——
+    # 0（不限）会让整篇配额 cap 被分片乘大：一份多分片文档的 MinerU 调用数
+    # 不再受单篇上限约束。显式设 0 仍可恢复不限。
+    mineru_shard_budget: int = 10
     # 版面分析（pymupdf4llm 的 hybrid 层）。实测代价与收益：
     #   开：~350MB 峰值、~176ms/页；关：~150MB、~12ms/页
     # 关掉快 25 倍且省一半内存，单栏页面输出完全一致——但**双栏页面会左右
@@ -675,7 +678,7 @@ class Settings(BaseSettings):
     # Closed-loop RMSE plateau detection (Phase C L-2): skip optimize+DOE when flat.
     loop_convergence_enabled: bool = True
     loop_convergence_eps: float = 0.01
-    loop_convergence_patience: int = 2
+    loop_convergence_patience: int = 3
 
     # Optional Neo4j graph-store adapter (sibling to SQLite KG). Must be a
     # Settings field so Settings UI / env_flags promote it into os.environ —
@@ -1077,13 +1080,17 @@ class Settings(BaseSettings):
     # WeKnora 第一批 2.2：重排策略层总开关与参数（阈值作用于按理论上限
     # 归一化后的 combined 分数，与 weighted / RRF 融合尺度无关；降级地板
     # 是下限，不是把阈值改低——不放宽门禁）。
-    # 注意：默认阈值不用 WeKnora 的 0.2——FormuNex 的 weighted 融合是
-    # alpha 加权的，单通道命中会被压到 (1-alpha) 量级（默认 alpha 0.95
-    # 时纯 cosine 命中最高仅 0.05）；0.2 会把这类命中全部滤空（集成测试
-    # 实证）。0.02 低于单通道上限、高于噪声（约 0.005），是按本融合校准
-    # 的起点，生产调优仍需评测集 A/B。
+    # QA-08（2026-11-26 审查第二波 Q2）：旧默认 0.02 经金标分布实测为
+    # no-op——BM25-only 条件下 weighted 归一化分上真命中/噪声命中在
+    # 0.02 处保留率均为 100%（250 题探针，见汇报）；分 fusion 重定：
+    # weighted 0.10（真命中保留 98.0%、噪声保留 90.7%，最弱真命中
+    # p1=0.077）；RRF 归一化分压缩在 [0.73, 1.0]（真命中 min p0=0.735），
+    # 绝对阈值无法区分真/噪，0.70 只是护栏（低于实测真命中下限，不作
+    # 判别器），向量启用后须重标定。阈值过滤情况见
+    # hybrid_search.last_rerank_meta()。
     kb_rerank_enabled: bool = True
-    kb_rerank_threshold: float = 0.02
+    kb_rerank_threshold: float = 0.10
+    kb_rerank_threshold_rrf: float = 0.70
     kb_rerank_degrade_factor: float = 0.7
     kb_rerank_degrade_floor: float = 0.3
     kb_mmr_lambda: float = 0.7

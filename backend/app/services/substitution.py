@@ -293,6 +293,87 @@ def _kg_evidence(original: str, candidate: str) -> list[dict]:
         return []
 
 
+def _mark_advisory(rows: list[dict] | None) -> list[dict]:
+    """P2-2 (review 2026-11-26): stamp every non-catalog row as unscreened.
+
+    Non-catalog layers (external / literature / SureChEMBL / LLM) carry
+    similarity or textual evidence only — no feasibility verdict, no
+    red-line check, no GHS preview. ``screened: false`` /
+    ``advisory: true`` makes that explicit in the response so no consumer
+    can mistake these rows for screened catalog candidates. Any
+    ``feasible`` / ``blocking_reasons`` key a fetcher may have attached
+    is dropped: only the L1 catalog path may assert feasibility.
+    """
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        row["screened"] = False
+        row["advisory"] = True
+        row.pop("feasible", None)
+        row.pop("blocking_reasons", None)
+    return rows or []
+
+
+def _light_screen_rows(rows: list[dict] | None) -> None:
+    """P2-2 optional light screen: CAS-only RoHS/SVHC presence check.
+
+    For rows carrying a CAS, reuse the deterministic
+    :func:`compliance_rules.check_compliance` on a synthetic
+    single-ingredient formulation at 100 wt% (pure-substance basis): a
+    hit means the candidate material itself is a listed restricted
+    substance, so it cannot be used above the limit. The result lands in
+    ``light_screen`` (``checked`` / ``status`` / ``rohs_hits`` /
+    ``svhc_hits`` / ``reasons``); rows without a CAS get
+    ``checked: false`` with reason ``no_cas``. This is *not* full
+    screening — there is no swapped-formulation GHS preview for
+    non-catalog materials (no substance record to classify) — so rows
+    keep ``screened: false`` / ``advisory: true`` regardless of the
+    light-screen outcome. Fail-open: any error leaves a
+    ``checked: false`` record and never blocks the report.
+    """
+    if not rows:
+        return
+    try:
+        from types import SimpleNamespace
+
+        from .compliance_rules import check_compliance
+    except Exception as exc:
+        logger.debug("substitution light screen unavailable ({})", exc)
+        for row in rows:
+            if isinstance(row, dict):
+                row["light_screen"] = {"checked": False, "reason": f"screen_unavailable:{exc}"}
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cas = str(row.get("cas_no") or "").strip()
+        if not cas:
+            row["light_screen"] = {"checked": False, "reason": "no_cas"}
+            continue
+        try:
+            form = SimpleNamespace(
+                ingredients=[
+                    SimpleNamespace(
+                        name=str(row.get("name") or ""),
+                        cas_no=cas,
+                        weight_pct=100.0,
+                    )
+                ]
+            )
+            result = check_compliance(form)
+            row["light_screen"] = {
+                "checked": True,
+                "basis": "pure_substance_100pct",
+                "status": result.status,
+                "rohs_hits": list(result.rohs_hits),
+                "svhc_hits": list(result.svhc_hits),
+                "reasons": list(result.reasons),
+            }
+        except Exception as exc:
+            logger.debug("substitution light screen failed for {} ({})", row.get("name"), exc)
+            row["light_screen"] = {"checked": False, "reason": f"screen_error:{exc}"}
+
+
 def find_substitutes(
     genome: FormulationGenome,
     slot_index: int,
@@ -325,6 +406,14 @@ def find_substitutes(
     前 N 个库内候选做替换后配方 GHS 重分类预览（``classification_before`` /
     ``classification_after`` / ``classification_changed`` / ``classification_upgraded``）。
     分类失败 fail-open（不附加预览键，候选照常返回）。
+
+    P2-2 (review 2026-11-26): 筛查契约 —— 只有 ``candidates``（库内 L1）
+    是已筛查候选（``screened: true``，带 ``feasible`` / ``blocking_reasons``，
+    有 session 时另带红线与 GHS 重分类预览）；``external`` / ``literature`` /
+    ``surechembl`` / ``llm`` 四层一律 ``screened: false`` / ``advisory: true``，
+    不带 ``feasible``，仅对有 CAS 的行附加 ``light_screen``（纯物质口径的
+    RoHS/SVHC 存在性检查，见 ``_light_screen_rows``），不作 GHS 预览。
+    调用方不得把外部行与已筛查候选等同采纳。
     """
     from ..domain import knowledge
     from ..pipeline import reconstruct
@@ -402,6 +491,10 @@ def find_substitutes(
             "evidence": _kg_evidence(original, name),
             "score_after": form.score,
             "source": "catalog",
+            # P2-2: catalog candidates passed feasibility (+ red-line /
+            # GHS preview when a session is supplied) — screened, not advisory.
+            "screened": True,
+            "advisory": False,
         }
         # Post-A′ #1: annotate stale/missing price; light demotion only.
         try:
@@ -687,6 +780,16 @@ def find_substitutes(
             "mode": llm_mode,
             "providers": [],
         }
+
+    # P2-2: every non-catalog layer is advisory-only — stamp the
+    # screened/advisory markers and run the CAS light screen (RoHS/SVHC
+    # presence) on each layer's rows. Markers are applied here, at the
+    # funnel exit, so they hold even for rows produced by a fetcher that
+    # does not stamp them itself (literature / SureChEMBL / LLM fetchers
+    # are outside this change's file scope).
+    for _rows in (external, literature, surechembl_rows, llm_rows):
+        _mark_advisory(_rows)
+        _light_screen_rows(_rows)
 
     return {
         "original": original,

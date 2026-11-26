@@ -449,7 +449,9 @@ def test_embed_texts_receives_every_chunk_it_is_asked_about(stores, monkeypatch)
         "app.services.kb_index._embed_texts", side_effect=fake_embed
     ), mock.patch(
         "app.services.kb_retrieval_gate.gate_ingest_rows",
-        side_effect=lambda rows, source_id=None: (rows, None),
+        # 2026-11-26 review B1/A2：gate_fn 现传 mineru_structured，桩签名须
+        # 与真实 gate_ingest_rows 对齐，否则 TypeError 被 fail_soft 吞掉。
+        side_effect=lambda rows, source_id=None, mineru_structured=False: (rows, None),
     ):
         kb_index.index_source(sid, text)
 

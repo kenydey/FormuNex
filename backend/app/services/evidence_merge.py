@@ -77,7 +77,10 @@ def _scope_of(ev) -> str:
     src, _ = _ident_of(ev)
     if src is not None:
         return f"kb:{src}"
-    return getattr(ev, "identifier", "") or getattr(ev, "source", "") or ""
+    ident = getattr(ev, "identifier", "") or getattr(ev, "source", "") or ""
+    if ident.startswith("nav:") and "#" in ident:
+        return f"nav:{ident[4:].split('#', 1)[0]}"
+    return ident
 
 
 def _join_texts(a: str, b: str, overlap_chars: int) -> str:

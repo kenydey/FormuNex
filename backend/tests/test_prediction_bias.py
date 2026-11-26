@@ -58,6 +58,8 @@ def test_bias_computed_before_retrain(monkeypatch, tmp_path):
 
     settings = get_settings()
     n = settings.min_train_samples
+    # 2026-11-26 review P2-6：训练 registry 白名单只接受 REAL_SOURCES；
+    # 种子用 lab 源（旧 "test" 源会被拒）。
     seeds = [
         ExperimentRecord(
             domain=ProductDomain.anticorrosion_coating,
@@ -65,7 +67,7 @@ def test_bias_computed_before_retrain(monkeypatch, tmp_path):
             factors={"Zinc phosphate": 8.0 + i},
             cure_temperature_c=80.0,
             measured={"salt_spray_hours": 700.0 + i * 5},
-            source="test",
+            source="lab",
             label=f"seed-{i}",
         )
         for i in range(n)
@@ -107,6 +109,7 @@ def test_ingest_writes_loop_history_when_bias(tmp_path, monkeypatch):
 
     settings = get_settings()
     n = settings.min_train_samples
+    # 2026-11-26 review P2-6：同上，种子用 lab 源。
     seeds = [
         ExperimentRecord(
             domain=ProductDomain.anticorrosion_coating,
@@ -114,7 +117,7 @@ def test_ingest_writes_loop_history_when_bias(tmp_path, monkeypatch):
             factors={"Zinc phosphate": 8.0 + i},
             cure_temperature_c=80.0,
             measured={"salt_spray_hours": 700.0 + i * 5},
-            source="test",
+            source="lab",
             label=f"seed-{i}",
         )
         for i in range(n)

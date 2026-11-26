@@ -214,6 +214,33 @@ def validate_llm_citation_dates(markdown: str) -> list[dict[str, Any]]:
     return findings
 
 
+def future_dated_citation_notices(markdown: str) -> list[dict[str, Any]]:
+    """QA-06：把 ``validate_llm_citation_dates`` 的 findings 转为聊天
+    notices（提示级，不拦截）。
+
+    供同步 ``run_chat`` 与流式 ``_stream_done_payload`` 在收尾时调用：
+    答案正文里出现带日期语境的未来年份脚注（如 LLM 编造"2028 年发表"）
+    时，用户可见一条提示；无问题返回 []。纯函数，不抛错。
+    """
+    notices: list[dict[str, Any]] = []
+    try:
+        for d in validate_llm_citation_dates(markdown or ""):
+            notices.append(
+                {
+                    "code": "future_dated_citation",
+                    "message": (
+                        f"引用 [^{d['footnote']}] 标注了 {d['year']} 年发表"
+                        "（晚于当前年份），可能是模型编造的年份，请核对后再采信。"
+                    ),
+                    "footnote": d["footnote"],
+                    "year": d["year"],
+                }
+            )
+    except Exception:
+        return notices
+    return notices
+
+
 def future_pub_date_penalty(ev: Any) -> float:
     """出版年份在未来 → 降权（防元数据错误/幻觉污染排序）；否则 0.0。"""
     try:

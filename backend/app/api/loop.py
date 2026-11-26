@@ -25,6 +25,7 @@ def iterate_loop(payload: LoopRequest, request: Request) -> JSONResponse:
                 "workbench_campaign_id",
                 "campaign_state",
                 "prior_rmse_history",
+                "prior_rmse_generations",
                 "prior_optimization",
                 "prior_next_doe",
                 "budget_remaining",
@@ -41,6 +42,7 @@ def iterate_loop(payload: LoopRequest, request: Request) -> JSONResponse:
         "workbench_campaign_id": payload.workbench_campaign_id,
         "campaign_state": payload.campaign_state,
         "prior_rmse_history": payload.prior_rmse_history,
+        "prior_rmse_generations": payload.prior_rmse_generations,
         "prior_optimization": payload.prior_optimization.model_dump()
         if payload.prior_optimization
         else None,

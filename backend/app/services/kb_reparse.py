@@ -117,6 +117,7 @@ def reparse_source(
         text,
         fail_soft=False,
         tables=list(getattr(parsed, "tables", None) or []) or None,
+        parser=parser,
     )
     if n_chunks:
         store.update_fields(source_id, ingest_status="indexed", ingest_error=None)

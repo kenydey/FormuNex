@@ -436,8 +436,13 @@ def dispatch_kb_ingest(
         return None
     try:
         rows = [Evidence.model_validate(e) for e in evidence_dicts]
+        # P2-8 (2026-11-26 review): 审计单写 —— 分发侧只做目标选择、不写
+        # 审计行（write_audit=False）；执行侧 `ingest_evidence_docs` 内
+        # `select_ingest_targets` 的默认 True 保留为唯一审计写点。旧代码两
+        # 边都默认 True，每条 accept/skip 审计行写两遍、拒收率翻倍。
         targets = kb_ingest.select_ingest_targets(
-            rows, project_id=project_id, query=query, domain=domain
+            rows, project_id=project_id, query=query, domain=domain,
+            write_audit=False,
         )
     except Exception as exc:
         return degrade_return(logger, exc, "kb_ingest target selection failed", None)
@@ -546,13 +551,15 @@ def retry_fulltext_fetch(self, payload: dict) -> dict:
             relevance=0.9,
             url=payload.get("url"),
         )
-        hit = ff._dispatch_fetch(kind, ev, timeout=30.0)
+        # P3-1 (2026-11-26 review): 跨模块调公开 API，不再直调
+        # fulltext_fetcher 私有函数。
+        hit = ff.dispatch_fetch(kind, ev, timeout=30.0)
         if not hit or not (hit.text or "").strip():
             raise RuntimeError("retry fetch returned empty")
-        source_id = ff._persist_fulltext(
+        source_id = ff.persist_fulltext(
             hit.text, ev, kind,
             project_id=payload.get("project_id"),
-            acquisition=ff._last_acquisition(),
+            acquisition=ff.last_acquisition(),
             pdf_bytes=hit.pdf_bytes,
             tables=hit.tables,
         )

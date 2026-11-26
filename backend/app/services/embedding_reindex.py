@@ -35,6 +35,61 @@ def _configured_db_path() -> Path:
     return Path(url[len(prefix):]).resolve()
 
 
+def _finalize_reindex(
+    *, total: int, migrated: int, elapsed_s: float, backup: str
+) -> dict:
+    """B6（2026-11-26 全面审查）：重嵌收尾的失效信号。
+
+    重嵌用原始 sqlite 直连改 ``document_chunks``，绕过了 chunk 写入路径，
+    此前不推进任何失效信号：同模型重嵌后 kb_ann 指纹（count /
+    max_created_at）不变、继续服务旧向量桶；L2 语料矩阵缓存键与向量
+    内容无关、继续用旧空间算余弦。收尾依次做：
+
+    ① ``chunk_store.bump_generation()`` —— L2 缓存键失效；
+    ② ``kb_ann.invalidate()`` —— 内存索引桶丢弃，下次重建；
+    ③ 清空 ``kb_dedup`` 的 L2 矩阵缓存；
+    ④ 返回 dict 带 ``ann_invalidated: true``。
+
+    每步 fail-open（记 warning，不推翻已完成的重嵌），返回 dict 如实
+    记录每步是否成功。由 ``reindex_for_model`` 收尾调用；单测直接调
+    本函数（全量重嵌本身须 sentence_transformers 环境）。
+    """
+    from ..db.chunk_store import get_chunk_store
+    from . import kb_ann, kb_dedup
+
+    generation_bumped = False
+    try:
+        get_chunk_store().bump_generation()
+        generation_bumped = True
+    except Exception as exc:  # noqa: BLE001 - fail-open, 见 docstring
+        logger.warning("重建收尾: bump_generation 失败: %s", exc)
+    ann_invalidated = False
+    try:
+        kb_ann.invalidate()
+        ann_invalidated = True
+    except Exception as exc:  # noqa: BLE001 - fail-open, 见 docstring
+        logger.warning("重建收尾: kb_ann.invalidate() 失败: %s", exc)
+    l2_cleared = False
+    try:
+        kb_dedup.clear_l2_cache()
+        l2_cleared = True
+    except Exception as exc:  # noqa: BLE001 - fail-open, 见 docstring
+        logger.warning("重建收尾: 清空 L2 缓存失败: %s", exc)
+    logger.info(
+        "重建收尾失效信号: generation_bumped=%s ann_invalidated=%s l2_cleared=%s",
+        generation_bumped, ann_invalidated, l2_cleared,
+    )
+    return {
+        "total": total,
+        "migrated": migrated,
+        "elapsed_s": round(elapsed_s, 1),
+        "backup": backup,
+        "ann_invalidated": ann_invalidated,
+        "generation_bumped": generation_bumped,
+        "l2_cache_cleared": l2_cleared,
+    }
+
+
 def reindex_for_model(
     model_id: str,
     db_path: str | Path | None = None,
@@ -149,4 +204,8 @@ def reindex_for_model(
 
     el = time.time() - t0
     logger.info("重建完成: %d chunks, %.0fs, 备份 %s", total, el, bak)
-    return {"total": total, "migrated": migrated, "elapsed_s": round(el, 1), "backup": str(bak)}
+    # B6：收尾推进失效信号（bump generation + kb_ann.invalidate() +
+    # 清空 L2 缓存），否则同模型重嵌后检索/去重继续服务旧向量。
+    return _finalize_reindex(
+        total=total, migrated=migrated, elapsed_s=el, backup=str(bak)
+    )

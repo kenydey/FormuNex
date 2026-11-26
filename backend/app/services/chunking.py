@@ -90,7 +90,7 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
         return level, trimmed[0]
     return level, ""
 
-PAGE_MARKER_RE = re.compile(r"^\s*<!--\s*page:(\d+)\s*-->\s*$")
+PAGE_MARKER_RE = re.compile(r"^\s*<!--\s*page:(\d+)\s*(approx)?\s*-->\s*$")
 # v2 P0-9: 视觉解析占位符 —— vision 失败/跳过时的降级文本，入库即检索噪声。
 # 保知识库质量：chunking 时直接丢弃，不进入索引。
 # P2-B54: 半角括号与“失败”变体一并认（上游是否真发“失败”文案未确认，
@@ -116,9 +116,14 @@ BLOCK_MARKER_RE = re.compile(
 )
 
 
-def page_marker(page_no: int) -> str:
-    """The canonical inter-page marker PDF parsers emit (chunker strips it)."""
-    return f"<!-- page:{page_no} -->"
+def page_marker(page_no: int, *, approx: bool = False) -> str:
+    """The canonical inter-page marker PDF parsers emit (chunker strips it).
+
+    ``approx=True`` emits ``<!-- page:N approx -->`` for estimated page
+    numbers (B3, 2026-11-26 review): the chunker then stamps those chunks
+    ``page_no_source="approx"`` instead of ``"real"``.
+    """
+    return f"<!-- page:{page_no} approx -->" if approx else f"<!-- page:{page_no} -->"
 
 
 # 批 1-1：无页码 marker 文本的近似分页密度（字符/页）。
@@ -155,7 +160,26 @@ def assign_approximate_page_numbers(
         page_end = int(max(end - 1, start) // cpp) + 1
         c.page_no = page_no
         c.page_end = page_end if page_end != page_no else None
+        # B3（2026-11-26 全面审查）：3000 字符/页是估计值，不是真实页码。
+        # 打标后入库（meta.page_no_source）与引用（"约 p.N"）才能区分。
+        c.page_no_source = "approx"
         cursor = max(cursor, end)
+    return chunks
+
+
+def _stamp_page_source(chunks: list["Chunk"], *, approx: bool) -> list["Chunk"]:
+    """B3: stamp marker-derived page numbers with their provenance.
+
+    Chunks whose ``page_no`` came from a ``<!-- page:N -->`` marker are
+    ``"real"``; those from a ``<!-- page:N approx -->`` marker are
+    ``"approx"``. Chunks already stamped (e.g. by
+    ``assign_approximate_page_numbers``) are left untouched, and
+    page-less chunks keep ``page_no_source=None``.
+    """
+    source = "approx" if approx else "real"
+    for c in chunks:
+        if c.page_no is not None and c.page_no_source is None:
+            c.page_no_source = source
     return chunks
 
 
@@ -202,6 +226,11 @@ class Chunk:
     # None = 非硬切段（旧调用路径默认值）。第一阶段只存在于 Chunk
     # 与 dict 透传层，不进 DB 列、不进 dedup_key（另案决定）。
     parent_key: str | None = None
+    # B3（2026-11-26 全面审查）：页码来源 —— "real"（解析器 <!-- page:N -->
+    # 真实 marker）|"approx"（3000 字符/页估计或 parsing 的近似 marker）。
+    # None = 无页码。持久化只写 meta.page_no_source（见 kb_index），
+    # 缺省即 real（旧行无标记时按 real 解释，回填脚本除外）。
+    page_no_source: str | None = None
 
 
 # ── WeKnora 第一批 2.6：受保护 span 注册表 ──────────────────────────────
@@ -1053,6 +1082,15 @@ def chunk_markdown(
     if example_aware:
         md = mark_example_boundaries(md)
 
+    # B3: 本篇页码 marker 是否为近似值（parsing 的近似注入路径发
+    # <!-- page:N approx -->）。marker 来自同一注入源，全篇口径一致；
+    # 无 marker 时为 False，页码由 assign_approximate_page_numbers 补
+    # 并另行打标 approx。
+    _markers_approx = any(
+        (m := PAGE_MARKER_RE.match(line)) and m.group(2)
+        for line in md.split("\n")
+    )
+
     # PageIndex 借鉴 A2: 书签按页区间展开（只需算一次）
     _bm_map: dict[int, str] = {}
     if bookmarks:
@@ -1108,7 +1146,7 @@ def chunk_markdown(
                         block_type=_classify_block_type(c),
                     ))
                     para_idx += 1
-            return chunks
+            return _stamp_page_source(chunks, approx=_markers_approx)
         chunks: list[Chunk] = []
         md = _strip_block_markers(md)
         # P1-3: 用真实偏移，不再 char_pos += len(c)（overlap 下会漂移）。
@@ -1122,7 +1160,7 @@ def chunk_markdown(
                 offset_end=off + len(c),
                 block_type=_classify_block_type(c),
             ))
-        return chunks
+        return _stamp_page_source(chunks, approx=_markers_approx)
 
     chunks: list[Chunk] = []
     page: int | None = None
@@ -1411,4 +1449,4 @@ def chunk_markdown(
                 page_end=_pe, block_pages=current_pages,
             ))
             pending_block = None
-    return chunks
+    return _stamp_page_source(chunks, approx=_markers_approx)

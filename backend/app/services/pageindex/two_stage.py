@@ -507,6 +507,25 @@ def _heuristic_escalation(query: str, source_id: str, doc_hit_ids: list[str],
             f"pages={row.page_count}")
 
 
+def _source_pages_are_approx(source_id: str) -> bool:
+    """B3（2026-11-26 全面审查）：该源 chunk 的页码是否为近似值。
+
+    读 live chunk 行的 ``meta.page_no_source``（入库时由
+    ``prepare_chunk_rows`` 写，缺省即 real）。只在 Stage 2 门控挡住时
+    调用（注明拦截原因），失败时 fail-open 为 False。
+    """
+    try:
+        from ...db.chunk_store import get_chunk_store
+
+        for chunk in get_chunk_store().get_by_source(source_id) or []:
+            meta = getattr(chunk, "meta", None)
+            if isinstance(meta, dict) and meta.get("page_no_source") == "approx":
+                return True
+    except Exception:  # noqa: BLE001 - fail-open: 门控原因注明失败不影响门控本身
+        log.debug("pageindex: approx check failed for %s", source_id, exc_info=True)
+    return False
+
+
 def deepen_documents(
     query: str,
     source_ids: list[str],
@@ -556,7 +575,14 @@ def deepen_documents(
                     fallback="children_retrieval", fallback_chunk_ids=fb))
                 continue
         if deep is None and row.page_count < settings.pageindex_min_pages:
-            out.append(DocumentDepth(sid, "stage1", f"{row.page_count} pages < {settings.pageindex_min_pages}", ids))
+            # B3：门控本身维持页数口径（不擅自放宽），但拦截原因须注明
+            # 页码是否近似 —— 近似页数下"不满 20 页"实际由字符数决定，
+            # 不是真实篇幅不足。行级 page_count_approx 列须迁移，另案；
+            # 此处以 live chunk 的 meta 标记为准。
+            _approx_note = (
+                " (approx page count)" if _source_pages_are_approx(sid) else ""
+            )
+            out.append(DocumentDepth(sid, "stage1", f"{row.page_count} pages < {settings.pageindex_min_pages}{_approx_note}", ids))
             continue
         # Navigation model: LLM when available, except an escalated document
         # (3-2) always walks heuristically — LLM navigation stays reserved
@@ -658,7 +684,11 @@ def navigation_evidence(depths: list[DocumentDepth], *, titles: dict[str, str] |
             title = (titles or {}).get(d.source_id) or d.source_id
             out.append(Evidence(
                 source="kb_pageindex",
-                identifier=f"{d.source_id}#{ev['node_id']}",
+                # QA-06：导航证据标识进 nav: 命名空间（规范见
+                # kb_index.EVIDENCE_IDENTIFIER_RE）。节点非 chunk，无法
+                # 写成 kb:{source_id}#c{ord}；_IDENT_RE 有意不匹配 nav:，
+                # 需要 chunk ord 的代码跳过它是正确的。
+                identifier=f"nav:{d.source_id}#{ev['node_id']}",
                 title=f"{title} · {ev.get('title') or ''}".strip(" ·"),
                 snippet=(ev.get("text") or "")[:snippet_chars],
                 # Visit order is the navigator's own ranking: earlier reads matter more.

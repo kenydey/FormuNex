@@ -28,7 +28,16 @@ from ..db.campaign_types import WorkbenchRow
 from ..db.doe_pause_store import MAX_TTL_HOURS as MAX_PAUSE_TTL_HOURS
 from ..db.doe_pause_store import CampaignNotFoundError, campaign_owner
 from ..db.models import Campaign
-from ..domain.schemas import DOEPlan, ExperimentSubmission, ModelInfo, ProductDomain, Requirement, TrainingReport
+from ..domain.schemas import (
+    REAL_SOURCES,
+    VIRTUAL_SOURCES,
+    DOEPlan,
+    ExperimentSubmission,
+    ModelInfo,
+    ProductDomain,
+    Requirement,
+    TrainingReport,
+)
 from ..services import io_export
 from ..services.training import registry
 from ._uploads import read_upload_capped
@@ -207,9 +216,47 @@ def _pinned_note(models: list[ModelInfo]) -> str:
     )
 
 
+def _validate_experiment_sources(records) -> None:
+    """P2-6: POST /api/experiments 只接受已知来源；未知 source 422。
+
+    允许 ``REAL_SOURCES``（lab/workbench）与 ``VIRTUAL_SOURCES``
+    （baybe_opt/predictor_virtual）—— 虚拟源不 422，由 registry.add
+    再拦（不入库、不训练、记 warning，并在响应里如实汇报）；未知字符串
+    直接 422，避免未来调用方把任意标签写进 registry。空 source 按
+    ``"lab"`` 计（ExperimentRecord 默认值）。
+    """
+    allowed = REAL_SOURCES | VIRTUAL_SOURCES
+    bad = sorted({(getattr(r, "source", None) or "lab") for r in records} - allowed)
+    if bad:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown experiment source(s): {', '.join(bad)}; "
+                f"allowed: {', '.join(sorted(allowed))}"
+            ),
+        )
+
+
+def _rejected_sources_note() -> str:
+    """P2-6: registry.add 最近一次拒绝的来源计数 → 响应附言。
+
+    registry.add 拒绝虚拟/未知来源时不入库；调用方不得再谎报
+    "Accepted N record(s)"。无拒绝时返回空串。
+    """
+    rejected = getattr(registry, "last_rejected_sources", None) or {}
+    if not rejected:
+        return ""
+    parts = ", ".join(f"{s}×{n}" for s, n in sorted(rejected.items()))
+    return (
+        f" {sum(rejected.values())} record(s) from non-trainable "
+        f"source(s) ({parts}) were rejected: not stored, not used for training."
+    )
+
+
 @router.post("/experiments", response_model=TrainingReport)
 def submit_experiments(submission: ExperimentSubmission) -> TrainingReport:
     """Ingest measured DOE results and (optionally) retrain models."""
+    _validate_experiment_sources(submission.records)
     before = registry.total_records
     retrained = registry.add(submission.records, retrain=submission.retrain)
     trained = registry.info()
@@ -224,6 +271,7 @@ def submit_experiments(submission: ExperimentSubmission) -> TrainingReport:
         f"{len(trained)} model(s) active."
     )
     msg += _retrain_note(submission.retrain, retrained) + _pinned_note(trained)
+    msg += _rejected_sources_note()
     if not trained:
         msg += f" Need >= {get_settings().min_train_samples} samples per metric to train."
     return TrainingReport(trained=trained, total_records=registry.total_records, message=msg)
@@ -257,6 +305,7 @@ async def import_experiments_csv(
             f"{len(trained)} model(s) active."
         )
         msg += _retrain_note(retrain, retrained) + _pinned_note(trained)
+        msg += _rejected_sources_note()
         if not trained:
             msg += f" Need >= {get_settings().min_train_samples} samples per metric to train."
         return TrainingReport(trained=trained, total_records=registry.total_records, message=msg)

@@ -35,8 +35,17 @@ def _title_for_chunk(chunk, source_meta: dict) -> str:
 
 
 def _parse_kb_identifier(identifier: str) -> tuple[str | None, int | None]:
-    """Parse ``kb:{source_id}#c{ord}`` → (source_id, ord)."""
-    if not identifier or not str(identifier).startswith("kb:"):
+    """Parse ``kb:{source_id}#c{ord}`` → (source_id, ord).
+
+    ``nav:{source_id}#{node_id}`` → (source_id, None): navigation evidence
+    has no chunk ord (QA-06).
+    """
+    if not identifier:
+        return None, None
+    if str(identifier).startswith("nav:"):
+        body = str(identifier)[4:]
+        return body.split("#", 1)[0] or None, None
+    if not str(identifier).startswith("kb:"):
         return None, None
     body = str(identifier)[3:]
     if "#c" in body:

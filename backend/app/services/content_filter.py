@@ -66,6 +66,21 @@ class FilterReport:
         if len(self.dropped_examples) < 8:
             self.dropped_examples.append(f"[{reason}] {ev.title[:60]}")
 
+    def record_provider_drop(self, reason: str, count: int) -> None:
+        """Count rows dropped *before* the filter by a provider (P2-9).
+
+        Provider-side pre-filter drops (e.g. OpenAlex ``non_oa`` rows, which
+        never enter the merged list) only enter ``dropped_by_reason`` — they
+        must not inflate ``dropped``, whose denominator is "rows that reached
+        the filter". Callers surface the same count top-level in the filter
+        payload (``filter_payload["non_oa_dropped"]``).
+        """
+        if count <= 0:
+            return
+        self.dropped_by_reason[reason] = (
+            self.dropped_by_reason.get(reason, 0) + int(count)
+        )
+
     def merge(self, other: "FilterReport") -> None:
         """Combine drop stats from another pass (rule tier + LLM judge)."""
         self.dropped += other.dropped
@@ -167,6 +182,11 @@ def _is_weblike(ev: Evidence) -> bool:
     phenomenon, while patents & literature carry authoritative unique IDs
     (patent family members legitimately share abstracts)."""
     src = (ev.source or "").lower()
+    # P2-12 (2026-11-26 review): CNIPA 豁免，与 literature._is_weblike 同
+    # 口径 —— `CNIPA (web)` 内容是专利，同族行共享摘要是合法的，不得折叠。
+    # 豁免必须在 URL 回退之前：CNIPA 行的 identifier 本身就是专利页 URL。
+    if "cnipa" in src:
+        return False
     if any(w in src for w in _WEBLIKE_SOURCES):
         return True
     return (ev.identifier or "").lower().startswith(("http://", "https://"))

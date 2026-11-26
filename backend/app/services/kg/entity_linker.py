@@ -212,6 +212,17 @@ def _link_chunk(session: Session, chunk, source_id: str, settings: Settings) -> 
             touched.add(eid)
             mention_count += 1
         elif etype == "formula":
+            # B5（2026-11-26 全面审查）：与 chem_extract 同款拒绝规则 ——
+            # 专利号/IPC 形态的 token 不建实体（31/176 提及为此类噪声）。
+            # 只记 debug 日志，不建实体、不计提及；存量清理须 Cheng 定。
+            from ..chem_extract import is_patent_or_ipc_token
+
+            if is_patent_or_ipc_token(value):
+                logger.debug(
+                    "entity_linker: rejected patent/IPC-like formula %r (source %s)",
+                    value, source_id,
+                )
+                continue
             eid = f"chem:formula:{value}"
             symbols = _element_symbols_from_formula(value)
             store.upsert_entity(

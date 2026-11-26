@@ -19,6 +19,39 @@ _ORPHAN_SKIP_PREFIXES = ("themes/project-", "reports/", "queries/")
 _LINT_MANAGED_FLAGS = frozenset({"stale", "conflict", "orphan", "missing", "broken"})
 _FUZZY_MIN_SCORE = 0.48
 
+# B10（2026-11-26 全面审查）：上次 lint 覆盖快照（进程内，供 /api/kb/stats
+# 的 wiki_lint 字段读取）。lint 跑过后含 kind/scanned/flagged/broken_count/
+# orphan_count/total_pages；无记录时为空 dict。
+_LAST_LINT: dict[str, Any] | None = None
+
+
+def last_lint_summary() -> dict[str, Any]:
+    """Return the last lint-pass/sweep summary ({} when never run)."""
+    return dict(_LAST_LINT) if _LAST_LINT else {}
+
+
+def _record_lint_summary(summary: dict[str, Any]) -> None:
+    global _LAST_LINT
+    _LAST_LINT = dict(summary)
+
+
+def _iter_all_pages(*, step: int = 200):
+    """B10：分页遍历全部 Wiki 页（``list_pages`` 单次上限 500）。
+
+    offset 步进直至扫完；读侧不写库，分页稳定。调用方在收集完成后再写
+    （upsert 会改 ``updated_at``，边读边写下 offset 分页会跳页）。
+    """
+    store = get_wiki_store()
+    offset = 0
+    while True:
+        rows = store.list_pages(limit=step, offset=offset)
+        if not rows:
+            return
+        yield from rows
+        offset += len(rows)
+        if len(rows) < step:
+            return
+
 
 def _bounds_from_meta(meta: dict[str, Any]) -> list[dict[str, Any]]:
     raw = meta.get("bounds_json")
@@ -65,11 +98,16 @@ def _page_aliases(row) -> set[str]:
     return {a for a in aliases if a}
 
 
-def build_alias_to_path(*, limit: int = 500) -> dict[str, str]:
-    store = get_wiki_store()
-    rows = store.list_pages(limit=min(500, max(50, limit)))
+def build_alias_to_path(*, limit: int | None = None) -> dict[str, str]:
+    """B10：别名表分页建全库（此前单次 list_pages 上限 500，超限后旧页
+    的别名缺失、其 [[wikilink]] 会被误判 broken）。``limit`` 是行数上限
+    （旧语义），默认扫全库。"""
     alias_to_path: dict[str, str] = {}
-    for r in rows:
+    seen = 0
+    for r in _iter_all_pages():
+        if limit is not None and seen >= limit:
+            break
+        seen += 1
         for a in _page_aliases(r):
             alias_to_path.setdefault(a, r.path)
     return alias_to_path
@@ -479,10 +517,18 @@ def lint_page(path: str, *, alias_to_path: dict[str, str] | None = None) -> list
     return list(dict.fromkeys(flags))
 
 
-def detect_orphans(*, limit: int = 500) -> set[str]:
-    """Paths with no inbound [[wikilink]] from other pages (best-effort)."""
+def detect_orphans(*, limit: int | None = None) -> set[str]:
+    """Paths with no inbound [[wikilink]] from other pages (best-effort).
+
+    B10：此前单次 list_pages 上限 500，超限后旧页既不进 inbound 统计、
+    也不进孤儿判定。现分页扫全库（``limit`` 给定时为显式行数上限）。
+    """
     store = get_wiki_store()
-    rows = store.list_pages(limit=min(500, max(50, limit)))
+    rows: list = []
+    for r in _iter_all_pages():
+        if limit is not None and len(rows) >= limit:
+            break
+        rows.append(r)
     if len(rows) < 2:
         return set()
 
@@ -590,31 +636,57 @@ def lint_paths(paths: list[str], *, detect_orphan: bool = False) -> dict[str, li
     return out
 
 
-def run_lint_pass(*, limit: int = 200, detect_orphan: bool = True) -> dict[str, Any]:
-    """Lint up to ``limit`` pages; optionally mark orphans. Returns summary."""
+def run_lint_pass(*, limit: int | None = None, detect_orphan: bool = True) -> dict[str, Any]:
+    """Lint pages; ``limit=None`` (default) scans the whole wiki.
+
+    B10：此前单次 ``list_pages(limit=min(500, limit))``（默认 200），超限
+    后最旧的页（``updated_at desc`` 排序的尾部）永不被扫。现分页循环直
+    至扫完，``limit`` 给定时为显式工作上限；摘要含 ``total_pages``（覆盖
+    分母）并记入健康统计（``last_lint_summary`` → /api/kb/stats）。
+    """
     store = get_wiki_store()
-    rows = store.list_pages(limit=min(500, max(1, limit)))
-    paths = [r.path for r in rows if r.path]
+    paths: list[str] = []
+    total_pages = 0
+    for row in _iter_all_pages():
+        total_pages += 1
+        if limit is not None and len(paths) >= limit:
+            continue
+        if row.path:
+            paths.append(row.path)
     orphans = detect_orphans(limit=limit) if detect_orphan else set()
     by_path = lint_paths(paths, detect_orphan=detect_orphan)
     flagged = sum(1 for fl in by_path.values() if fl)
     broken_n = sum(1 for fl in by_path.values() if "broken" in fl)
-    return {
+    summary = {
         "ok": True,
+        "kind": "lint",
         "scanned": len(paths),
+        "total_pages": total_pages,
         "flagged": flagged,
         "orphan_count": len(orphans),
         "broken_count": broken_n,
         "results": by_path,
     }
+    _record_lint_summary(summary)
+    return summary
 
 
 def sweep_flagged_pages(*, limit: int = 200, detect_orphan: bool = True) -> dict[str, Any]:
-    """Re-lint currently flagged pages so obsolete lint flags are cleared (S1)."""
+    """Re-lint currently flagged pages so obsolete lint flags are cleared (S1).
+
+    B10：此前单次 ``list_pages(limit=min(500, limit * 3))`` 再截断，超限
+    后 500 页外的被 flag 页永不复核。现分页收集被 flag 页直至 ``limit``
+    条（显式工作上限）或扫完。
+    """
     store = get_wiki_store()
-    rows = store.list_pages(limit=min(500, max(1, limit * 3)))
-    flagged_paths = [r.path for r in rows if r.path and (r.flags or [])]
-    flagged_paths = flagged_paths[: max(1, limit)]
+    flagged_paths: list[str] = []
+    pages_seen = 0
+    for row in _iter_all_pages():
+        pages_seen += 1
+        if len(flagged_paths) >= max(1, limit):
+            break
+        if row.path and (row.flags or []):
+            flagged_paths.append(row.path)
     orphans = detect_orphans(limit=limit) if detect_orphan else set()
     aliases = build_alias_to_path(limit=limit)
     cleared = 0
@@ -630,19 +702,30 @@ def sweep_flagged_pages(*, limit: int = 200, detect_orphan: bool = True) -> dict
             cleared += 1
         if managed_after:
             still += 1
-    return {
+    summary = {
         "ok": True,
+        "kind": "sweep",
         "scanned": len(flagged_paths),
+        "pages_seen": pages_seen,
         "cleared": cleared,
         "still_flagged": still,
         "orphan_count": len(orphans),
         "results": results,
     }
+    _record_lint_summary(summary)
+    return summary
 
 
 def list_flagged_pages(*, limit: int = 100) -> list[dict[str, Any]]:
+    # B10：此前单次 list_pages(limit=min(500, limit * 3))，500 页外的被
+    # flag 页不在列表中。现分页收集直至 limit 条被 flag 页或扫完。
     store = get_wiki_store()
-    rows = store.list_pages(limit=min(500, max(1, limit * 3)))
+    rows = []
+    for row in _iter_all_pages():
+        if len(rows) >= max(1, limit):
+            break
+        if row.flags:
+            rows.append(row)
     aliases = build_alias_to_path()
     flagged = []
     for row in rows:

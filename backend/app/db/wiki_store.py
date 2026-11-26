@@ -251,7 +251,7 @@ class WikiStore:
         if not log_path.exists():
             log_path.write_text("# Wiki Change Log\n\n", encoding="utf-8")
         line = (
-            f"- {utcnow_iso()} {rel} ({kind}, revision {revision}, {action})\n"
+            f"- [okf] {utcnow_iso()} {rel} ({kind}, revision {revision}, {action})\n"
         )
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(line)
@@ -270,7 +270,7 @@ class WikiStore:
             if not log_path.exists():
                 log_path.write_text("# Wiki Change Log\n\n", encoding="utf-8")
             suffix = f" ({detail})" if (detail or "").strip() else ""
-            line = f"- {utcnow_iso()} source {source_id} {reason}{suffix}\n"
+            line = f"- [invalidation] {utcnow_iso()} source {source_id} {reason}{suffix}\n"
             with log_path.open("a", encoding="utf-8") as fh:
                 fh.write(line)
             return True

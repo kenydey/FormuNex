@@ -348,6 +348,10 @@ class BotorchOptimizer(_ObservedHistoryMixin):
     # per-point without refitting the GP — None rather than a proxy number.
     last_acquisition: float | None = None
     acquisition_name: str = "LogEI"
+    # P2-1: GP 拟合失败降级为随机采样后置 True；engine 随之改名披露，
+    # 不再谎报 botorch-ei。观测不足（< max(4, n_factors+1)）的 warm-up
+    # 随机点不置位 —— 那不是失败，是既定的冷启动行为。
+    _degraded_random: bool = False
 
     def __post_init__(self) -> None:
         import torch
@@ -387,7 +391,19 @@ class BotorchOptimizer(_ObservedHistoryMixin):
             cand, _ = optimize_acqf(acq, bounds=unit, q=1, num_restarts=5, raw_samples=64)
             x = unnormalize(cand.detach(), bounds).squeeze(0).tolist()
             return [self.factors[i].clip(v) for i, v in enumerate(x)]
-        except Exception:
+        except Exception as exc:
+            # P2-1: GP 失败曾静默变随机且引擎标签仍报 botorch-ei ——
+            # 调用方与 UI 无法区分"GP 在跑"与"GP 坏了在随机跑"。记
+            # warning（含异常类型与已观测点数）并置降级标记；engine
+            # 属性随之改名披露。
+            logger.warning(
+                "botorch suggest degraded to random sampling "
+                "(%s: %s; %d observed points)",
+                type(exc).__name__,
+                exc,
+                len(self._X),
+            )
+            self._degraded_random = True
             return self._random_point()
 
     def observe(self, x: list[float], y: float) -> None:
@@ -398,7 +414,8 @@ class BotorchOptimizer(_ObservedHistoryMixin):
 
     @property
     def engine(self) -> str:
-        return "botorch-ei"
+        # P2-1: 降级后引擎名明示，不再谎报 botorch-ei。
+        return "botorch-ei(degraded-random)" if self._degraded_random else "botorch-ei"
 
 
 def build_optimizer(factors: list[Factor], seed: int = 0):

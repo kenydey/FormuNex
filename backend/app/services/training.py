@@ -28,9 +28,25 @@ from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 from ..domain import features
-from ..domain.schemas import ExperimentRecord, ModelInfo, ProductDomain, Requirement, Substrate
+from ..domain.schemas import (
+    REAL_SOURCES,
+    ExperimentRecord,
+    ModelInfo,
+    ProductDomain,
+    Requirement,
+    Substrate,
+)
 from ..pipeline import reconstruct  # lightweight: form-from-factors, no cycle
 from . import model_store
+
+#: P2-6: 可进入代理模型训练的记录来源。``REAL_SOURCES``（lab /
+#: workbench）之外，CSV 回灌（``"csv-import"``）也是实测数据通道 ——
+#: 导入的 CSV 是已填好的实验结果表，必须进训练。其余来源
+#: （``predictor_virtual`` / ``baybe_opt`` / 任意未知字符串）一律不进
+#: 训练：``baybe_opt`` 是 BayBE 轮内反馈，只在 BayBE 适配器层显式
+#: opt-in（``measurements_adapter.include_sources``），不进 registry 训练。
+#: ``convergence.best_objective_value`` 复用同一集合。
+TRAINABLE_SOURCES: frozenset[str] = REAL_SOURCES | {"csv-import"}
 
 
 def _utcnow_iso() -> str:
@@ -156,6 +172,9 @@ class ModelRegistry:
         self._records: list[ExperimentRecord] = []
         self._models: dict[tuple[str, str], _Trained] = {}
         self._lock = threading.RLock()
+        # P2-6: 最近一次 add() 拒绝的来源计数 {source: n}，供 API 如实
+        # 汇报（"N 条虚拟源记录未入库、未训练"），平时为空。
+        self.last_rejected_sources: dict[str, int] = {}
         self.load()
 
     # --- persistence ---------------------------------------------------
@@ -189,10 +208,34 @@ class ModelRegistry:
         store's ``add`` upserts on the same rule, so the persisted set stays
         in sync with memory across restarts (native/SQL + JSON stores upsert
         in place, so a corrected value persists).
+
+        P2-6: 来源白名单 —— 只有 ``TRAINABLE_SOURCES`` 的记录才会入库与
+        训练；虚拟源（``predictor_virtual`` / ``baybe_opt``）与未知来源
+        记 warning 并拒绝（不入库、不训练、不参与 ``total_records``）。
+        拒绝计数留在 ``self.last_rejected_sources`` 供调用方如实汇报。
         """
         from ..db.store import _copy_record_values, _same_training_values
 
         with self._lock:
+            # P2-6: 先按来源过滤 —— 虚拟/未知来源永不进入 store 与内存。
+            self.last_rejected_sources = {}
+            kept: list[ExperimentRecord] = []
+            for rec in records:
+                src = getattr(rec, "source", None) or "lab"
+                if src not in TRAINABLE_SOURCES:
+                    self.last_rejected_sources[src] = (
+                        self.last_rejected_sources.get(src, 0) + 1
+                    )
+                    continue
+                kept.append(rec)
+            if self.last_rejected_sources:
+                logger.warning(
+                    "training registry: rejected %d record(s) from "
+                    "non-trainable source(s) %s; not stored, never trained",
+                    sum(self.last_rejected_sources.values()),
+                    dict(self.last_rejected_sources),
+                )
+            records = kept
             # Partition first, persist, then mutate memory — so a store failure
             # leaves the in-memory set untouched (previously store-first too).
             new: list[ExperimentRecord] = []
@@ -262,6 +305,10 @@ class ModelRegistry:
         rows, ys = [], []
         pid = project_id or domain.value
         for rec in self._records:
+            # P2-6: 纵深防御 —— 存量库里已有的虚拟/未知来源行（本修复前
+            # 入库的）同样不进训练集；只过滤，不删除历史数据。
+            if (getattr(rec, "source", None) or "lab") not in TRAINABLE_SOURCES:
+                continue
             if rec.domain != domain or metric not in rec.measured:
                 continue
             # Scoped project training must not pull empty-project rows (or other
@@ -289,6 +336,9 @@ class ModelRegistry:
         pid = project_id or domain.value
         rows: list[ExperimentRecord] = []
         for rec in self._records:
+            # P2-6: 与 _dataset 同口径过滤（见上）。
+            if (getattr(rec, "source", None) or "lab") not in TRAINABLE_SOURCES:
+                continue
             if rec.domain != domain or metric not in rec.measured:
                 continue
             rec_pid = (rec.project_id or "").strip() or rec.domain.value
@@ -691,6 +741,7 @@ def _build_registry() -> ModelRegistry:
         reg._store = JsonExperimentStore(str(empty))
         reg._models = {}
         reg._records = []
+        reg.last_rejected_sources = {}
         # The fallback used to omit min_samples, so the first _dataset call
         # died with AttributeError instead of behaving like an empty
         # registry (batch 2 exposed this: a failed ModelRegistry() build

@@ -183,6 +183,13 @@ def pubchem_similar_by_smiles(
                 "in_catalog": False,
                 "catalog_name": None,
                 "role_hint": None,
+                # P2-2 (review 2026-11-26): external rows are never
+                # compliance-screened — they carry similarity only, no
+                # feasibility, no red-line check, no GHS preview. Mark
+                # them explicitly so no consumer can mistake them for
+                # screened catalog candidates.
+                "screened": False,
+                "advisory": True,
                 "note": "结构相似；未做配方 Δ 预测（入库后可再算）",
             }
         )

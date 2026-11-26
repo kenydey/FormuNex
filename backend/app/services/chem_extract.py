@@ -69,6 +69,32 @@ _SINGLE_ELEMENT_DIGIT_RE = re.compile(r"^[A-Z][a-z]?\d+$")
 _SINGLE_ELEMENT_ALLOW = frozenset({"H2", "O2", "N2", "F2", "Cl2", "Br2", "I2", "S8", "P4", "O3", "C60", "C70"})
 
 
+# B5（2026-11-26 全面审查）：专利号 / IPC 分类号不是化学式。
+# molar_mass("CN100453576C") 能解析为正摩尔质量（C、N 下标 100453576、
+# C），只靠摩尔质量拦不住荒谬下标；三条形态规则先行拒绝：
+# - 下标数字游程长度 >3（如 100453576）；
+# - 专利号形态 ^[A-Z]{2}\d+[A-Z]$（CN100453576C；US9982145B2 由游程规则拦）；
+# - IPC 形态 ^[A-Z]\d{2}[A-Z](\d+)?$（C08F、C08K3、C08K5）。
+_PATENT_NO_RE = re.compile(r"^[A-Z]{2}\d+[A-Z]$")
+_IPC_NO_RE = re.compile(r"^[A-Z]\d{2}[A-Z](\d+)?$")
+_DIGIT_RUN_RE = re.compile(r"\d{4,}")
+
+
+def is_patent_or_ipc_token(token: str) -> bool:
+    """True when *token* looks like a patent number or IPC class, not a formula.
+
+    Shared by ``extract_formulas`` and ``kg.entity_linker`` (formula branch)
+    so the two layers reject the same tokens. Pure shape check, no DB.
+    """
+    if not token:
+        return False
+    if _DIGIT_RUN_RE.search(token):
+        return True
+    if _PATENT_NO_RE.match(token) or _IPC_NO_RE.match(token):
+        return True
+    return False
+
+
 def _formula_plausible(token: str) -> bool:
     if token in _FORMULA_STOPWORDS or len(token) < 2:
         return False
@@ -91,6 +117,9 @@ def extract_formulas(text: str) -> list[str]:
     for m in _FORMULA_CAND_RE.finditer(text or ""):
         token = m.group(0)
         if not _formula_plausible(token):
+            continue
+        # B5：专利号/IPC 形态直接拒绝（molar_mass 拦不住荒谬下标）。
+        if is_patent_or_ipc_token(token):
             continue
         # P1-5: recover OCR/LLM case-mangled formulas upstream (ZNO→ZnO);
         # unsalvageable tokens are dropped as before.

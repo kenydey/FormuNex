@@ -675,6 +675,14 @@ def prepare_chunk_rows(
         for c in chunks:
             # Phase 0: rule-based patent tags（claim_no / example_no / section_title）
             tags = extract_patent_tags(c.text, c.heading_path)
+            # B3（2026-11-26 全面审查）：页码来源只在近似时写入 meta
+            # （缺省即 real，旧行无标记亦然；tree_builder / 引用渲染读同一键）。
+            # chunk_store 只在 meta 非空时合并段落/偏移，approx 行因此也带上它们。
+            meta: dict | None = (
+                {"page_no_source": "approx"} if c.page_no_source == "approx" else None
+            )
+            if tags:
+                meta = {**(meta or {}), "patent_tags": tags}
             rows.append(
                 {
                     "text": c.text,
@@ -690,7 +698,10 @@ def prepare_chunk_rows(
                     # chunk_store 忽略未知键（不持久化、不报错），
                     # 加 DB 列与进 dedup_key 另案决定。
                     "parent_key": c.parent_key,
-                    "meta": {"patent_tags": tags} if tags else None,
+                    # B3：页码来源透传（入库时 chunk_store 忽略未知键，
+                    # 持久化形态是 meta.page_no_source，见上）。
+                    "page_no_source": c.page_no_source,
+                    "meta": meta,
                 }
             )
 
@@ -864,9 +875,62 @@ def _drop_toc_tree(source_id: str) -> None:
         pass
 
 
+def backfill_page_no_source(*, dry_run: bool = False, session: Session | None = None) -> dict:
+    """B3（2026-11-26 全面审查）：一次性标记存量 chunk 的页码来源。
+
+    审查结论：存量 chunk 的页码要么来自 3000 字符/页估计（近似），要么是
+    Wiki 影子 chunk 的单页摘要（``page_no=1``，不视为近似）。故：
+
+    - ``source_kind == "wiki"`` 的行 → ``meta.page_no_source = "real"``；
+    - 其余无标记的行 → ``meta.page_no_source = "approx"``；
+    - 已有标记的行不动。
+
+    ``dry_run`` 只统计不写。返回 ``scanned / marked_approx /
+    marked_real_wiki / already_marked``。调用方自备 DB（开发库 1474 行
+    规模下单事务完成；生产库执行前须另案排期）。
+    """
+    from ..db.chunk_store import get_chunk_store
+    from ..db.models import DocumentChunk, SourceDocument
+
+    own_session = session is None
+    try:
+        if own_session:
+            session = get_chunk_store().session_factory()
+        counts = {"scanned": 0, "marked_approx": 0, "marked_real_wiki": 0, "already_marked": 0}
+        rows = (
+            session.query(DocumentChunk, SourceDocument.source_kind)
+            .outerjoin(SourceDocument, DocumentChunk.source_id == SourceDocument.id)
+            .order_by(DocumentChunk.id)
+            .yield_per(500)
+        )
+        for chunk, kind in rows:
+            counts["scanned"] += 1
+            meta = dict(chunk.meta or {})
+            if meta.get("page_no_source"):
+                counts["already_marked"] += 1
+                continue
+            if (kind or "") == "wiki":
+                meta["page_no_source"] = "real"
+                counts["marked_real_wiki"] += 1
+            else:
+                meta["page_no_source"] = "approx"
+                counts["marked_approx"] += 1
+            if not dry_run:
+                chunk.meta = meta
+        if not dry_run:
+            session.commit()
+        return counts
+    finally:
+        if own_session and session is not None:
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001 - 关闭失败不影响回填结果
+                pass
+
+
 def index_source(
     source_id: str, full_text: str, *, embed: bool = True, fail_soft: bool = True,
-    tables: list | None = None,
+    tables: list | None = None, parser: str | None = None,
 ) -> int:
     """(Re)chunk one source document into persistent KB rows.
 
@@ -933,7 +997,9 @@ def index_source(
             full_text,
             source_id,
             embed=embed,
-            gate_fn=lambda r: gate_ingest_rows(r, source_id=source_id),
+            gate_fn=lambda r: gate_ingest_rows(
+                r, source_id=source_id, mineru_structured=(parser == "mineru")
+            ),
         )
         if not rows:
             get_chunk_store().replace_for_source(source_id, [])
@@ -1192,8 +1258,15 @@ def _chunk_to_evidence(chunk, source_meta: dict, score: float) -> Evidence:
     title = meta.get("title") or "知识库文档"
     if chunk.heading_path:
         title = f"{title} · {chunk.heading_path}"
+    # B3（2026-11-26 全面审查）：近似页码在引用标题中显示为"约 p.N"，
+    # 不再以精确页码示人。来源读 chunk.meta.page_no_source（入库时写，
+    # 缺省即 real）；"约P" 标记由 format_inline_citation 复用。
+    _chunk_meta = getattr(chunk, "meta", None)
+    if _chunk_meta is None and isinstance(chunk, dict):
+        _chunk_meta = chunk.get("meta")
+    _page_approx = isinstance(_chunk_meta, dict) and _chunk_meta.get("page_no_source") == "approx"
     if getattr(chunk, "page_no", None):
-        title = f"{title} · P{chunk.page_no}"
+        title = f"{title} · 约P{chunk.page_no}" if _page_approx else f"{title} · P{chunk.page_no}"
     page = getattr(chunk, "page_no", None)
     # PageIndex 借鉴 A5: 跨页末页透传
     page_end = getattr(chunk, "page_end", None)
@@ -1547,6 +1620,8 @@ def _apply_nav(query: str, evidence: list, meta: dict) -> list:
     wrapper converts them to Evidence with the caller's source meta.
     Fail-open: any nav error leaves the hybrid list untouched.
     """
+    # QA-06：表格锚点缓存（_table_chunk_ord 用，一次检索内每源只查一次）。
+    _table_ord_cache: dict[str, dict[int, int]] = {}
     try:
         from .pageindex.nav_layer import apply_nav
 
@@ -1564,10 +1639,25 @@ def _apply_nav(query: str, evidence: list, meta: dict) -> list:
         snip = chunk_snippet(md)
         if len(snip) > 4000:
             snip = snip[:4000] + "…（表格过长已截断）"
+        # QA-06：表格证据标识规范化为 kb:{source_id}#c{ord}（表所在页的
+        # 首个 chunk 为锚点；表定位见 title 与 page）。查不到锚点时保留
+        # 旧标识 kb:{table_id} 并告警（召回优先于规范，不静默丢表）。
+        _ord = _table_chunk_ord(t.source_id, t.page_no, _cache=_table_ord_cache)
+        if _ord is not None:
+            ident = f"kb:{t.source_id}#c{_ord}"
+        else:
+            logger.warning(
+                "table evidence %s has no chunk anchor on page %s; "
+                "keeping legacy identifier kb:%s",
+                t.table_id,
+                t.page_no,
+                t.table_id,
+            )
+            ident = f"kb:{t.table_id}"
         out.append(
             Evidence(
                 source="kb",
-                identifier=f"kb:{t.table_id}",
+                identifier=ident,
                 title=f"{title} · 表格：{t.caption or t.table_id}",
                 snippet=snip,
                 relevance=floor,
@@ -1575,6 +1665,34 @@ def _apply_nav(query: str, evidence: list, meta: dict) -> list:
             )
         )
     return out
+
+
+def _table_chunk_ord(
+    source_id: str, page_no: int | None, *, _cache: dict[str, dict[int, int]]
+) -> int | None:
+    """QA-06：表格所在页的首个 chunk ord（表格证据的 kb:#c 锚点）。
+
+    ``_cache`` 由调用方持有（一次检索内每源只查一次 chunk 表）。
+    查不到（无该页 chunk / store 异常）返回 None，调用方保留旧标识。
+    """
+    if page_no is None:
+        return None
+    pages = _cache.get(source_id)
+    if pages is None:
+        pages = {}
+        try:
+            from ..db.chunk_store import get_chunk_store
+
+            for row in get_chunk_store().get_by_source(source_id):
+                pages.setdefault(
+                    int(getattr(row, "page_no", 0) or 0),
+                    int(getattr(row, "ord", 0)),
+                )
+        except Exception as exc:  # noqa: BLE001 - fail-open: no anchor
+            logger.debug("table chunk anchor lookup failed: %s", exc)
+            pages = {}
+        _cache[source_id] = pages
+    return pages.get(int(page_no))
 
 
 def search_chunks_hybrid(
@@ -1615,11 +1733,13 @@ def search_chunks_hybrid(
         return []
     try:
         from .children_retrieval import children_rerank
-        from .hybrid_search import hybrid_search_scored
+        from .hybrid_search import hybrid_search_scored, resolve_hybrid_alpha
 
         settings = get_settings()
-        if alpha is None:
-            alpha = settings.kb_hybrid_alpha
+        # QA-09：alpha 解析走唯一共享函数（动态调优见
+        # hybrid_search.resolve_hybrid_alpha）；此前这里把静态默认值
+        # 显式传入 hybrid_search_scored，动态分支在生产链路上永不可达。
+        alpha = resolve_hybrid_alpha(query, alpha, settings=settings)
         if children:
             mult = max(1, int(settings.kb_children_candidate_mult or 3))
             scored = hybrid_search_scored(
@@ -1665,6 +1785,27 @@ def search_chunks_hybrid(
 
 _IDENT_RE = re.compile(r"^kb:([^#]+)#c(\d+)$")
 
+#: QA-06 identifier 规范：所有 ``Evidence.identifier`` 必须匹配其一。
+#:   ``kb:{source_id}#c{ord}`` —— KB chunk（含表格证据，表定位见 title/page）
+#:   ``wiki:{path}`` —— Wiki 页（wiki/retrieve.py）
+#:   ``doi:{doi}`` / ``chemlit:{hash}`` —— 文献证据（literature.py）
+#:   ``seed:{name}`` —— 种子语料（colbert_store.py）
+#:   ``nav:{source_id}#{node_id}`` —— PageIndex 导航节点证据
+#:     （pageindex/two_stage.navigation_evidence；节点非 chunk，故不走
+#:     ``#c{ord}``，``_IDENT_RE`` 有意不匹配 nav:——需要 chunk ord 的
+#:     代码（stitch / nav_layer / evidence_merge）跳过它是正确的，
+#:     不是解析失败）。
+EVIDENCE_IDENTIFIER_RE = re.compile(
+    r"^(kb:[^#]+#c\d+|wiki:.+|doi:.+|chemlit:.+|seed:.+|nav:[^#]+#.+)$"
+)
+
+
+def validate_evidence_identifier(identifier: str | None) -> bool:
+    """QA-06：identifier 是否符合规范（见 EVIDENCE_IDENTIFIER_RE）。"""
+    return bool(
+        identifier and EVIDENCE_IDENTIFIER_RE.match(str(identifier).strip())
+    )
+
 
 def format_inline_citation(ev: "Evidence", n: int) -> str:
     """Render one evidence as an inline citation: ``[n] title · 第p页``.
@@ -1677,6 +1818,11 @@ def format_inline_citation(ev: "Evidence", n: int) -> str:
     loc = CitationLocator(page=ev.page)
     base = f"[{n}] {ev.title}"
     if loc is not None and loc.page:
+        # B3：_chunk_to_evidence 已把近似页码写成标题里的"约P{N}"，
+        # 此处复用该标记渲染"约第N页"（Evidence 本身无 approx 字段，
+        # 不另扩 schema；B2 如需结构化字段可另加 page_approx）。
+        if " · 约P" in (ev.title or ""):
+            return f"{base} · 约第{loc.page}页"
         return f"{base} · 第{loc.page}页"
     return base
 
@@ -1712,6 +1858,15 @@ def _stitch_patent_siblings(
     for ev in evidence:
         m = _IDENT_RE.match(ev.identifier or "")
         if not m:
+            # QA-06：_IDENT_RE 解析失败不再静默——kb: 前缀的非规范标识
+            # （旧 kb:<uuid> / kb:{table_id}）会使去重作用域回退、定位器
+            # 取不到 page/paragraph。非 kb: 命名空间（wiki:/nav:/doi:…）
+            # 本就不匹配，不告警。
+            if (ev.identifier or "").startswith("kb:"):
+                logger.warning(
+                    "patent stitch: non-canonical kb identifier %r, skipping",
+                    ev.identifier,
+                )
             continue
         source_id = m.group(1)
         try:
@@ -2011,6 +2166,44 @@ def doe_parameter_hints(factor_names: list[str]) -> list[str]:
     return notes
 
 
+def _wiki_governance_fields() -> dict:
+    """B9（2026-11-26 全面审查）：Wiki 治理三开关只读暴露（不改默认值）。
+
+    默认关 + 无告警是本项的指控点；/api/kb/stats 展示开关态后，治理处于
+    关闭态即为可见状态而非静默状态。启用时序（先 OKF 后漂移）须 Cheng 定。
+    """
+    try:
+        settings = get_settings()
+        return {
+            "wiki_drift_refresh_enabled": bool(settings.wiki_drift_refresh_enabled),
+            "wiki_okf_enabled": bool(settings.wiki_okf_enabled),
+            "kb_invalidation_enabled": bool(settings.kb_invalidation_enabled),
+        }
+    except Exception as exc:
+        return degrade_return(
+            logger, exc, "wiki governance flags failed",
+            {
+                "wiki_drift_refresh_enabled": False,
+                "wiki_okf_enabled": False,
+                "kb_invalidation_enabled": False,
+            },
+        )
+
+
+def _wiki_lint_fields() -> dict:
+    """B10：上次 Wiki lint 覆盖快照（wiki/lint.py 的进程内记录）。
+
+    无 lint 记录时为空 dict；lint 跑过后含 scanned/flagged/broken_count/
+    orphan_count。只读展示，失败时 fail-open 为空。
+    """
+    try:
+        from .wiki.lint import last_lint_summary
+
+        return dict(last_lint_summary() or {})
+    except Exception:  # noqa: BLE001 - fail-open: lint 统计缺失不影响 stats
+        return {}
+
+
 def kb_stats() -> dict:
     """Corpus counters for the UI / API."""
     from ..db.chunk_store import get_chunk_store
@@ -2091,6 +2284,8 @@ def kb_stats() -> dict:
             "suppliers_json_dual_write": dual_write,
             **_vector_health(total, embedded, stale),
             "quality_gate_drops": _quality_gate_drops(),
+            "wiki_governance": _wiki_governance_fields(),
+            "wiki_lint": _wiki_lint_fields(),
             **_embedding_status_fields(),
         }
     except Exception as exc:
@@ -2104,6 +2299,8 @@ def kb_stats() -> dict:
              "scan_near_cap": False, "archive_retention_days": 0,
              "suppliers_json_dual_write": True,
              "quality_gate_drops": _quality_gate_drops(),
+             "wiki_governance": _wiki_governance_fields(),
+             "wiki_lint": _wiki_lint_fields(),
              **_embedding_status_fields()},
         )
 

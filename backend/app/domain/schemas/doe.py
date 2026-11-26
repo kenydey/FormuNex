@@ -551,6 +551,11 @@ class BaybeRecommendResult(AdaptiveDOEMetadata):
     engine: str = "baybe"
     # v15: 实际喂给 GP 的 lab 点数（df_meas_clean 行数，含 workbench 通道）
     lab_points_used: int = 0
+    # P2-2: 仍驻留在 campaign/GP 训练集中的冷启动虚拟先验点数；0 = 已
+    # 剔除或从未 seed。lab 点数 ≥3 后下一轮自动剔除（重建 campaign）。
+    virtual_seed_points: int = 0
+    # P2-2: 本轮因 lab 数据到达而剔除的虚拟先验点数。
+    virtual_seed_removed: int = 0
     # KG chemical-compatibility verdict for the shared formulation skeleton.
     # None when KG is disabled or no material resolved. Structured as
     # {"feasible": bool, "status": str, "reasons": list[str]}.
@@ -597,6 +602,11 @@ class OptimizationResult(BaseModel):
     # How many measured lab experiments were shown to the optimizer (0 for a
     # purely virtual run). Lets the UI say "吸收了 N 条实验数据".
     lab_points_used: int = 0
+    # P2-5: 轮内早停的证据等级 —— 预测达标 ("predicted") 还是实测达标
+    # ("measured")；None = 未早停。预测值≠实测值，调用方/UI 不可混淆。
+    early_stop_basis: str | None = None
+    early_stop_round: int | None = None
+    early_stop_predicted_value: float | None = None
     # 补齐 2-16: per-iteration acquisition values of this run:
     # [{iteration, acquisition (None when the engine has no scalar acquisition),
     # acquisition_name, best_score, engine}]. Empty for engines (BayBE) that do
@@ -746,6 +756,7 @@ class LoopRequest(Requirement):
     workbench_campaign_id: int | None = None
     campaign_state: str | None = None
     prior_rmse_history: list[dict[str, float]] = Field(default_factory=list)
+    prior_rmse_generations: list[str | None] = Field(default_factory=list)
     prior_optimization: OptimizationResult | None = None
     prior_next_doe: DOEPlan | None = None
     budget_remaining: int | None = None
@@ -759,6 +770,9 @@ class LoopReport(AdaptiveDOEMetadata):
     total_records: int
     model_info: list[ModelInfo] = Field(default_factory=list)
     rmse_by_metric: dict[str, float] = Field(default_factory=dict)
+    # P2-3: 本轮 RMSE 快照的训练代际戳（convergence.rmse_generation_stamp）。
+    # 随 loop_history 持久化，供下一轮判定平台期时比对；None = 无模型。
+    rmse_generation: str | None = None
     optimization: OptimizationResult
     next_doe: DOEPlan
     engine: str = "offline"

@@ -101,6 +101,116 @@ def _fp_val(x):
     return str(x)
 
 
+#: P2-2: 冷启动虚拟先验点在 lab 数据到达后的剔除阈值（去重后 lab 点数）。
+_VIRTUAL_SEED_EVICT_LAB_THRESHOLD = 3
+
+
+def _measurement_fingerprints(df, factor_names, metric_names=None):
+    """P2-2: 测量行指纹（因子列 + 指标列，``_fp_val`` 格式化）。
+
+    与 ``_dedupe_measurement_frame`` 的 v16 口径一致：只比因子会把同
+    因子不同实测值的真重复实验误杀；纳入指标列后，只有因子与测量值
+    全相同的行才算同一行。列顺序固定（因子在前、指标在后），保证
+    seed 时与剔除时算出的指纹可比。
+    """
+    if df is None or getattr(df, "empty", True):
+        return []
+    cols = [c for c in factor_names if c in df.columns]
+    for m in metric_names or []:
+        if m in df.columns and m not in cols:
+            cols.append(m)
+    if not cols:
+        return []
+    return [
+        tuple(_fp_val(v) for v in row)
+        for row in df[cols].itertuples(index=False, name=None)
+    ]
+
+
+def _drop_fingerprinted_rows(df, factor_names, fingerprints, metric_names=None):
+    """P2-2: 从 measurements 帧中剔除指纹命中的行。
+
+    返回 ``(kept_df, n_dropped)``；无指纹或空帧时原样返回。
+    """
+    if df is None or getattr(df, "empty", True) or not fingerprints:
+        return df, 0
+    wanted = {tuple(fp) for fp in fingerprints}
+    fps = _measurement_fingerprints(df, factor_names, metric_names)
+    if not fps:
+        return df, 0
+    keep = [fp not in wanted for fp in fps]
+    return df[keep], int(len(keep) - sum(keep))
+
+
+def _wrap_campaign_state(campaign_json: str, virtual_seed_fps) -> str:
+    """P2-2: campaign_state 信封 —— BayBE 原生 JSON + 虚拟 seed 指纹 sidecar。
+
+    信封只在本模块读写；其余调用方把 campaign_state 当不透明字符串
+    透传（API / 任务 payload / ActiveDoeResult 均不解析）。无虚拟 seed
+    时也写信封（格式统一，便于后续轮次直接读指纹）。
+    """
+    import json
+
+    return json.dumps(
+        {
+            "v": 1,
+            "campaign": campaign_json,
+            "virtual_seed_fps": [list(fp) for fp in (virtual_seed_fps or [])],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _unwrap_campaign_state(state: str) -> tuple[str, list]:
+    """P2-2: 拆信封 → (campaign_json, virtual_seed_fps)。
+
+    兼容旧格式：非信封字符串（BayBE 原生 JSON 或任意非法 JSON）原样
+    返回，指纹为空 —— 旧 campaign_state 在新代码下仍可继续用，只是
+    无法追溯其中是否含虚拟 seed（按"无"处理，lab 点数仍正常披露）。
+    """
+    import json
+
+    try:
+        obj = json.loads(state)
+    except Exception:
+        return state, []
+    if (
+        isinstance(obj, dict)
+        and obj.get("v") == 1
+        and isinstance(obj.get("campaign"), str)
+    ):
+        fps = obj.get("virtual_seed_fps") or []
+        return obj["campaign"], [
+            tuple(fp) for fp in fps if isinstance(fp, (list, tuple))
+        ]
+    return state, []
+
+
+def _predicted_early_stop(objectives, ranked, round_no: int):
+    """P2-5: 轮内早停判据 —— 只看 top 配方的预测值是否达标。
+
+    返回 ``{"basis": "predicted", "round": round_no, "metric": ...,
+    "value": ...}`` 或 ``None``。预测值≠实测值：早停依据必须随结果
+    向上传递（``OptimizationResult.early_stop_basis``），调用方与 UI
+    不可把"预测器认为达标"当成"实测达标"。
+    """
+    from ..convergence import target_achieved
+
+    if not objectives or not ranked:
+        return None
+    obj0 = objectives[0]
+    top_form = max(ranked, key=lambda t: t[0])[1]
+    raw_val = (getattr(top_form, "predicted", None) or {}).get(obj0.metric)
+    if target_achieved(raw_val, obj0):
+        return {
+            "basis": "predicted",
+            "round": round_no,
+            "metric": obj0.metric,
+            "value": raw_val,
+        }
+    return None
+
+
 def fetch_campaign_data_for_baybe(
     campaign_id: int,
     req: Requirement | None = None,
@@ -437,10 +547,14 @@ class BaybeCampaignEngine:
             wb_factors = factors_from_campaign(campaign_meta, req)
 
         if campaign_state:
-            campaign = Campaign.from_json(campaign_state)
+            # P2-2: 信封拆包 —— BayBE 原生 JSON + 上轮留下的虚拟 seed 指纹。
+            _campaign_json, _virtual_seed_fps = _unwrap_campaign_state(campaign_state)
+            campaign = Campaign.from_json(_campaign_json)
             factor_list = wb_factors or factors_for_requirement(req)
         else:
             campaign, factor_list = self._new_campaign(req, objectives, wb_factors)
+            _virtual_seed_fps: list = []
+        _virtual_seed_removed = 0
 
         # P0-5: GP 只吃 lab 真实测量；外部虚拟记录（predictor_virtual）不进 GP。
         # v18-1: baybe_opt 是内部循环反馈，必须进 GP（否则多轮 GP 冻结）。
@@ -582,6 +696,37 @@ class BaybeCampaignEngine:
             if not df_meas_clean.empty:
                 campaign.add_measurements(df_meas_clean)
 
+        # P2-2: 虚拟 seed 点剔除 —— lab 数据到达（去重后 ≥ 阈值）后，
+        # 虚拟先验点即从 campaign 中剔除并重建 campaign；GP 训练集不再
+        # 被"预测器自己的输出"永久锚定。重建沿用同一 req / objectives /
+        # 因子集，只换掉 measurements。失败时 fail-open：保留虚拟点，
+        # 仅记 warning（剔除失败绝不能拖死推荐）。
+        if _virtual_seed_fps and _lab_points_deduped >= _VIRTUAL_SEED_EVICT_LAB_THRESHOLD:
+            try:
+                _existing_meas = campaign.measurements
+            except Exception:
+                _existing_meas = None
+            if _existing_meas is not None and not _existing_meas.empty:
+                _kept, _virtual_seed_removed = _drop_fingerprinted_rows(
+                    _existing_meas,
+                    [f.name for f in factor_list],
+                    _virtual_seed_fps,
+                    metric_names=metrics,
+                )
+                if _virtual_seed_removed:
+                    _new_campaign, _ = self._new_campaign(req, objectives, wb_factors)
+                    if not _kept.empty:
+                        _new_campaign.add_measurements(_kept)
+                    campaign = _new_campaign
+                    log.info(
+                        "baybe: evicted %d virtual seed point(s) after %d lab "
+                        "point(s) arrived; GP training set no longer contains "
+                        "predictor-seeded priors",
+                        _virtual_seed_removed,
+                        _lab_points_deduped,
+                    )
+                    _virtual_seed_fps = []
+
         if campaign_state is None and df_meas_clean.empty:
             # v13-5: 透传 requirement，冷启动 seed 也过 KG 化学门。
             # v15: 透传 seed，冷启动 LHS 可复现（None 时用确定性默认 0，与 DOE 链一致）。
@@ -605,6 +750,11 @@ class BaybeCampaignEngine:
                 except Exception:  # noqa: BLE001 - fail-open
                     virtual = virtual.head(min(3, len(virtual)))
                 campaign.add_measurements(virtual)
+                # P2-2: 记下虚拟 seed 行的指纹（因子+指标），随 campaign_state
+                # 信封带到后续轮次；lab 点数达阈值后按指纹剔除。
+                _virtual_seed_fps = _measurement_fingerprints(
+                    virtual, [f.name for f in factor_list], metrics
+                )
 
         rec_df = campaign.recommend(batch_size=batch_size)
         plan = dataframe_to_doe_plan(rec_df, factor_list, design, engine="baybe", ai_suggested=True)
@@ -690,9 +840,22 @@ class BaybeCampaignEngine:
             )
             plan.notes = f"{prev}; {note}" if prev else note
 
+        # P2-2: 持续披露 —— 只要虚拟先验点还驻留在 GP 训练集，每轮都
+        # 在日志里明示数量与剔除条件（方案 B 的底线；方案 A 的剔除在上）。
+        if _virtual_seed_fps:
+            log.info(
+                "baybe: GP training set contains %d virtual seed point(s) "
+                "(cold-start predictor priors, not lab measurements); "
+                "evicted once %d lab points arrive",
+                len(_virtual_seed_fps),
+                _VIRTUAL_SEED_EVICT_LAB_THRESHOLD,
+            )
+
         result = BaybeRecommendResult(
             plan=plan,
-            campaign_state=campaign.to_json(),
+            campaign_state=_wrap_campaign_state(
+                campaign.to_json(), _virtual_seed_fps
+            ),
             engine="baybe",
             chemical_feasibility=chem_verdict,
             physical_constraints=phys_verdict,
@@ -700,6 +863,10 @@ class BaybeCampaignEngine:
             # v19-fix: 只计 REAL_SOURCES，不含 baybe_opt（v18-1 回归修复）。
             # P2-4: 用去重后计数（UI 显示"吸收了 N 条实验数据"不虚高）。
             lab_points_used=_lab_points_deduped,
+            # P2-2: 仍驻留的虚拟先验点数 + 本轮剔除数（字段由协调员在
+            # doe.py 的 BaybeRecommendResult 落盘后生效，此前被忽略）。
+            virtual_seed_points=len(_virtual_seed_fps),
+            virtual_seed_removed=_virtual_seed_removed,
         )
         from ..doe_adaptive import enrich_baybe_result
 
@@ -784,6 +951,9 @@ class BaybeCampaignEngine:
         settings = get_settings()
         # v15: 聚合各轮实际喂给 GP 的 lab 点数
         _max_lab_points = 0
+        # P2-5: 轮内早停依据（None = 未早停；命中时为 _predicted_early_stop
+        # 返回的 dict，随 OptimizationResult 向上传递）。
+        _early_stop: dict | None = None
 
         for r in range(rounds):
             result = self.recommend(
@@ -857,21 +1027,23 @@ class BaybeCampaignEngine:
             # v18-7: 收敛早停 —— 目标达成即停，节省 GP 采样与 predictor 计算。
             # v19-fix: 用原始 metric 值判收敛（best_so_far 是归一化 [0,1] 分，
             # 与 target 的原始量纲不可比 —— v18 量纲 bug）。
+            # P2-5: 早停依据是预测值（轮内本无实测值可用），必须随结果披露。
             try:
-                from ..convergence import target_achieved
-
-                _obj0 = objectives[0] if objectives else None
-                if _obj0 is not None and ranked:
-                    _top_form = max(ranked, key=lambda t: t[0])[1]
-                    _raw_val = (_top_form.predicted or {}).get(_obj0.metric)
-                    if target_achieved(_raw_val, _obj0):
-                        log.info(
-                            "baybe: target achieved at round %d/%d (%s=%.3f), early stop",
-                            r + 1, rounds, _obj0.metric, _raw_val,
-                        )
-                        break
-            except Exception:  # noqa: BLE001
-                pass
+                _hit = _predicted_early_stop(objectives, ranked, r + 1)
+            except Exception as exc:  # noqa: BLE001 - fail-open：早停判据失败不断循环
+                log.debug("baybe: predicted early-stop check failed (%s)", exc)
+                _hit = None
+            if _hit is not None:
+                _early_stop = _hit
+                log.info(
+                    "baybe: target achieved at round %d/%d (%s=%.3f, predicted "
+                    "value, not measured), early stop",
+                    r + 1,
+                    rounds,
+                    _hit["metric"],
+                    _hit["value"],
+                )
+                break
 
         top = _rank_by_pareto_then_score(ranked, objectives, settings.top_n_formulas)
         for score, form in top:
@@ -903,4 +1075,10 @@ class BaybeCampaignEngine:
             measurement_source=_src,
             # P0-5: 披露实际进入 GP 的 lab 点数（虚拟点已被过滤）。
             lab_points_used=_max_lab_points,
+            # P2-5: 轮内早停依据（字段由协调员在 doe.py 的 OptimizationResult
+            # 落盘后生效，此前被 pydantic 忽略）。"predicted" = top 配方
+            # 预测值达标即停，未经实测；None = 未早停。
+            early_stop_basis=_early_stop["basis"] if _early_stop else None,
+            early_stop_round=_early_stop["round"] if _early_stop else None,
+            early_stop_predicted_value=_early_stop["value"] if _early_stop else None,
         )

@@ -110,7 +110,8 @@ def test_doc_kind_for_standards_and_papers():
 
 def test_empty_document():
     built = build_toc_tree([], title="empty")
-    assert built["stats"] == {"node_count": 1, "max_depth": 1, "page_count": 0, "table_nodes": 0, "ref_edges": 0}
+    # 2026-11-26 review B3：stats 新增双口径键（空文档 distinct=0、approx=False）。
+    assert built["stats"] == {"node_count": 1, "max_depth": 1, "page_count": 0, "table_nodes": 0, "ref_edges": 0, "page_count_distinct": 0, "page_count_approx": False}
 
 
 def test_recipe_performance_links():

@@ -812,8 +812,14 @@ def _persist_fulltext(
     acquisition: str | None = None,
     pdf_bytes: bytes | None = None,
     tables: list | None = None,
+    refusal: dict | None = None,
 ) -> str | None:
     """Store the raw full text as a SourceDocument (dedup by content hash).
+
+    ``refusal`` (P2-10): optional out-param dict; when the write-path quota
+    recheck refuses the row, ``refusal["reason"]`` is set to
+    ``"project_quota_full"`` so callers can tell a quota refusal apart from
+    a storage/index failure (both return None).
 
     Retries the whole persist on SQLite "database is locked": kb_ingest writes
     into source_documents while uvicorn autosaves the project, and the two
@@ -835,6 +841,7 @@ def _persist_fulltext(
     from .patent_ids import canonical_origin_url, normalize_patent_pub
 
     # Phase 1 P0-1a: PDF 全管线解析 —— v2 决策②"一律走 parse_document 全管线"
+    parsed = None  # P1-3 (2026-11-26 review): 非 PDF 路径不赋值，下方透传须先初始化
     if pdf_bytes:
         try:
             from .parsing import parse_document
@@ -892,7 +899,10 @@ def _persist_fulltext(
 
                 # P1-8: index_source fail_soft 返回 0 不是成功 —— 必须重新
                 # 标记 failed，否则永久僵尸行（已标 indexed、零 chunk）。
-                if not index_source(failed_row.id, text, tables=tables) and kb_enabled():
+                if not index_source(
+                    failed_row.id, text, tables=tables,
+                    parser=getattr(parsed, "parser", None),
+                ) and kb_enabled():
                     try:
                         store.update_fields(
                             failed_row.id,
@@ -907,6 +917,33 @@ def _persist_fulltext(
                 except Exception:  # noqa: BLE001
                     logger.warning("pdf sidecar persist failed on revive (fail-open)")
                 return failed_row.id
+            if refusal is not None:
+                refusal.pop("reason", None)
+            # P2-10 (2026-11-26 review): 写路径配额复核 —— 批开始的
+            # select_ingest_targets 只查一次余量，并发批可共同超
+            # kb_project_source_quota=300 上限。在真正新建行之前再查一次；
+            # 已满则拒绝本行（返回 None，不新建行），调用方按 refusal 区分
+            # "配额拒绝"与"入库失败"。hash 去重命中 / 失败行复活不新建行，
+            # 不受此限。check-then-act 仍有竞态窗口，但比批开始查一次窄得多；
+            # 真原子预留计数需跨进程锁，另案。
+            if project_id:
+                try:
+                    _quota = int(get_settings().kb_project_source_quota or 0)
+                except Exception:
+                    _quota = 0
+                if _quota > 0:
+                    try:
+                        _used = get_source_store().count_for_project(project_id)
+                    except Exception as exc:
+                        _used = degrade_return(logger, exc, "quota recheck failed", 0)
+                    if _used >= _quota:
+                        logger.warning(
+                            "kb_ingest 项目配额已满，写路径拒绝入库: %s (%s/%s) %s",
+                            project_id, _used, _quota, (ev.identifier or "")[:80],
+                        )
+                        if refusal is not None:
+                            refusal["reason"] = "project_quota_full"
+                        return None
             source_id = store.create(
                 filename=ev.identifier[:500],
                 title=ev.title[:500],
@@ -922,7 +959,10 @@ def _persist_fulltext(
             from .kb_index import index_source, kb_enabled
 
             # P1-8: 同上 —— 0 chunk 必须降级为 failed 供下次复活。
-            if not index_source(source_id, text, tables=tables) and kb_enabled():
+            if not index_source(
+                source_id, text, tables=tables,
+                parser=getattr(parsed, "parser", None),
+            ) and kb_enabled():
                 try:
                     store.update_fields(
                         source_id,
@@ -960,6 +1000,43 @@ def _persist_fulltext(
 
 
 # ── public API ───────────────────────────────────────────────────────────────
+# P3-1 (2026-11-26 review): 跨模块私访改公开 API —— `kb_ingest` 与
+# `worker/tasks/kb` 曾直调 `ff._dispatch_fetch` / `ff._last_acquisition` /
+# `ff._persist_fulltext`（与严格报告 SR-054 同模式，重构会静默断链）。
+# 下划线原函数保留（同模块内与 `literature_oa_enrich` 仍可调用），跨模块
+# 调用一律走以下公开包装。
+
+
+def dispatch_fetch(kind: str, ev: Evidence, timeout: float) -> FetchedFulltext | None:
+    """Public wrapper for :func:`_dispatch_fetch` (cross-module callers)."""
+    return _dispatch_fetch(kind, ev, timeout)
+
+
+def last_acquisition() -> str:
+    """Public wrapper for :func:`_last_acquisition` (cross-module callers)."""
+    return _last_acquisition()
+
+
+def persist_fulltext(
+    text: str,
+    ev: Evidence,
+    kind: str,
+    *,
+    project_id: str | None = None,
+    acquisition: str | None = None,
+    pdf_bytes: bytes | None = None,
+    tables: list | None = None,
+    refusal: dict | None = None,
+) -> str | None:
+    """Public wrapper for :func:`_persist_fulltext` (cross-module callers)."""
+    return _persist_fulltext(
+        text, ev, kind,
+        project_id=project_id,
+        acquisition=acquisition,
+        pdf_bytes=pdf_bytes,
+        tables=tables,
+        refusal=refusal,
+    )
 
 
 def enrich_search_results(

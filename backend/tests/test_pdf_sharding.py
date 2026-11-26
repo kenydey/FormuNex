@@ -83,8 +83,9 @@ def test_inject_approximate_markers_with_offset():
     content = _make_pdf(12)
     text = "".join(f"line {i} word word word word\n" for i in range(400))
     out = parsing._inject_approximate_page_markers(content, text, start_page=11)
-    assert out.startswith("<!-- page:11 -->")
-    assert "<!-- page:22 -->" in out
+    # 2026-11-26 review B3：估计页码须标 approx（否则会被认作 real）。
+    assert out.startswith("<!-- page:11 approx -->")
+    assert "<!-- page:22 approx -->" in out
     assert "<!-- page:1 -->" not in out
 
 

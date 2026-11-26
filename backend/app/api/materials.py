@@ -326,6 +326,16 @@ def _material_not_found(material: str, genome) -> HTTPException:
 
 @router.post("/substitutes")
 def substitutes(body: SubstituteRequest) -> dict:
+    """材料替代搜索。
+
+    筛查契约（review 2026-11-26 P2-2）：只有 ``candidates``（库内 L1）是
+    已筛查候选（``screened: true``，带 ``feasible`` / ``blocking_reasons``，
+    有 session 时另带红线与 GHS 重分类预览）；``external`` / ``literature`` /
+    ``surechembl`` / ``llm`` 四层一律 ``screened: false`` / ``advisory: true``，
+    不带 ``feasible``，仅对有 CAS 的行附加 ``light_screen``（纯物质口径的
+    RoHS/SVHC 存在性检查），不作 GHS 预览。调用方不得把外部行与已筛查候选
+    等同采纳。
+    """
     from ..domain.genome import genome_from_formulation
     from ..pipeline import reconstruct
     from ..services.substitution import find_substitutes

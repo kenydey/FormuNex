@@ -570,8 +570,26 @@ def _parse_scanned(content: bytes, pages: list[pdf_local.LocalPage]) -> str | No
         content, ext="pdf", ocr=True,
         language=_sample_document_language(content),
     )
-    if document is None or not document.blocks:
+    if document is None:
         # v16 P3-4: MinerU 空结果不再静默 —— 写用户可见 note。
+        from .parse_notices import note
+
+        note("MinerU OCR 解析返回空结果，已回退本地处理")
+        return None
+    if not document.blocks:
+        # P1-3 (review 2026-11-26): no blocks but a non-empty full.md is
+        # "block rendering failed", not "no content" — use full.md instead
+        # of returning None. Block-level page coverage is unknowable here.
+        full = (document.markdown or "").strip()
+        if full:
+            logger.info("hybrid: MinerU returned no blocks, using full.md fallback")
+            try:
+                from .parse_notices import note
+
+                note("MinerU 逐块解析为空，已用全文 Markdown 回退")
+            except Exception:
+                pass
+            return full
         from .parse_notices import note
 
         note("MinerU OCR 解析返回空结果，已回退本地处理")
@@ -596,7 +614,16 @@ def _parse_scanned(content: bytes, pages: list[pdf_local.LocalPage]) -> str | No
             note(f"MinerU 返回的解析块无页码信息（{len(pages)} 页文档），已按文档顺序合并呈现")
         except Exception:
             pass
-        return _render_blocks(document.blocks, page_label="scan") or None
+        # P1-3 (review 2026-11-26): full.md fallback — a document-order
+        # rendering that carries almost nothing next to full.md loses to it.
+        from .mineru_structured import full_md_fallback
+
+        rendered_scan = _render_blocks(document.blocks, page_label="scan")
+        fallback = full_md_fallback(rendered_scan or "", document.markdown or "")
+        if fallback is not None:
+            logger.info("hybrid: block rendering sparse vs full.md — using full.md fallback")
+            return fallback
+        return rendered_scan or None
 
     by_page: dict[int, list[mineru_cloud.MinerUBlock]] = {}
     for block in document.blocks:
@@ -634,7 +661,30 @@ def _parse_scanned(content: bytes, pages: list[pdf_local.LocalPage]) -> str | No
             rendered.append(
                 (page_no, f"> _（第 {page_no} 页 MinerU 未返回内容）_")
             )
-    return pdf_local.assemble(rendered) or None
+    assembled = pdf_local.assemble(rendered)
+    # P1-3 (review 2026-11-26): full.md fallback — the per-page rendering
+    # is only kept when it actually carries the document. Missing-page
+    # placeholders (P1-2, wave 1) are re-appended after the swap so the
+    # fallback cannot silently un-mark a page the rendering had flagged.
+    from .mineru_structured import full_md_fallback
+
+    fallback = full_md_fallback(assembled or "", document.markdown or "")
+    if fallback is not None:
+        logger.info(
+            "hybrid: block rendering sparse vs full.md — using full.md fallback"
+        )
+        try:
+            from .parse_notices import note
+
+            note("MinerU 逐块解析内容稀疏，已用全文 Markdown 回退补全")
+        except Exception:
+            pass
+        if missing:
+            fallback = fallback + "\n\n" + "\n\n".join(
+                f"> _（第 {n} 页 MinerU 未返回内容）_" for n in missing
+            )
+        return fallback
+    return assembled or None
 
 
 def _scanned_vision_fallback(content: bytes) -> str | None:

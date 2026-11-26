@@ -16,7 +16,8 @@ def test_inject_markers_three_pages():
     try:
         out = _inject_approximate_page_markers(b"x", _long_text())
         markers = [l for l in out.splitlines() if "page:" in l]
-        assert markers == ["<!-- page:1 -->", "<!-- page:2 -->", "<!-- page:3 -->"]
+        # 2026-11-26 review B3：估计页码须标 approx（否则会被认作 real）。
+        assert markers == ["<!-- page:1 approx -->", "<!-- page:2 approx -->", "<!-- page:3 approx -->"]
     finally:
         pdf_local.page_count = orig
 

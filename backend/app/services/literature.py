@@ -36,7 +36,17 @@ _ENRICH_CHUNK_ID_RE = re.compile(r"^(?P<base>.+)#p(?P<idx>\d+)$")
 _SOURCE_TIMEOUT_SEC = 25
 
 # Shared executor for per-source fetch timeouts (avoid creating a pool per call).
-_FETCH_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+# P2-4 (2026-11-26 review): 4 线程 vs 每轮最多 8 个并发流，排队等待计入
+# 25s 源超时、本可成功的源被判超时 —— 扩到 8 线程，与最大流数对齐。
+_FETCH_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+
+# P3-6 (2026-11-26 review): 轮次 executor 复用 —— 旧代码每轮新建一个
+# ThreadPoolExecutor 再 shutdown(wait=False)，每轮重建线程池；改为模块级
+# 单例常驻（与 _FETCH_EXECUTOR 分离：轮次任务会阻塞等待 _FETCH_EXECUTOR
+# 的内层 fetch，同一池会死锁）。
+_ROUND_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="lit-round"
+)
 
 
 # Wave 1 · 会话级检索缓存（P0-13）：同 query/source/limit 指纹在 TTL 内直接
@@ -47,6 +57,44 @@ _SEARCH_CACHE_LOCK = threading.Lock()
 _SEARCH_CACHE_MAX_SIZE = 128
 
 
+def _settings_fingerprint(settings=None) -> str:
+    """Provider/开关设置指纹（只记有无与布尔值，绝不记密钥值）。
+
+    P2-5 (2026-11-26 review): 检索缓存 key 缺失 provider/开关维度，600s
+    内换 key / 改开关仍命中旧配置下的脏缓存。指纹覆盖：各 provider key
+    是否配置、OpenAlex 开关与 arm 开关、deny/rerank/MMR/content-filter/
+    fulltext_enrich 开关。`settings=None` 时指纹为空串（旧调用兼容）。
+    """
+    if settings is None:
+        return ""
+    bits: list[str] = []
+    for attr in (
+        "serpapi_api_key",
+        "tavily_api_key",
+        "epo_consumer_key",
+        "openalex_api_key",
+    ):
+        try:
+            present = bool(effective_setting(settings, attr))
+        except Exception:
+            present = bool(getattr(settings, attr, None))
+        bits.append(f"{attr}={1 if present else 0}")
+    for attr in (
+        "openalex_enabled",
+        "openalex_multi_arm",
+        "openalex_arm_precise",
+        "openalex_arm_recall",
+        "openalex_arm_broad",
+        "kb_search_deny_enabled",
+        "search_rerank_enabled",
+        "search_mmr_enabled",
+        "content_filter_enabled",
+        "fulltext_enrich",
+    ):
+        bits.append(f"{attr}={1 if getattr(settings, attr, False) else 0}")
+    return hashlib.sha256("|".join(bits).encode("utf-8")).hexdigest()[:16]
+
+
 def _search_cache_key(
     query: str,
     source_types: "list[str] | None",
@@ -55,13 +103,16 @@ def _search_cache_key(
     domain,
     req=None,
     max_rounds: int = 5,
+    settings=None,
 ) -> str:
-    """sha256(query | 排序后 source_types | total_limit | per_source_cap | domain | req指纹 | max_rounds)。
+    """sha256(query | 排序后 source_types | total_limit | per_source_cap | domain | req指纹 | max_rounds | 设置指纹)。
 
     P1-2: req 指纹（substrate 等）必须进 key。_merge_filter_rank 用 req 做
     substrate 过滤，旧 key 缺 req 维度，换需求后 600s 内命中脏缓存。
     v16 P3-7: max_rounds 进 key —— 轮数影响终态（早停条件），不同轮数
     不应共享缓存。
+    P2-5 (2026-11-26 review): 设置指纹进 key —— 换 key / 改开关后旧缓存
+    不再命中（`settings` 由调用方 `iter_search` 传入；不传时指纹为空）。
     """
     req_fp = ""
     if req is not None:
@@ -81,6 +132,7 @@ def _search_cache_key(
             str(domain or ""),
             req_fp,
             str(max_rounds),
+            _settings_fingerprint(settings),
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -97,6 +149,9 @@ def _search_cache_get(key: str, ttl_s: int) -> "tuple[list[Evidence], dict] | No
             if time.monotonic() - ts > ttl_s:
                 _SEARCH_CACHE.pop(key, None)
                 return None
+            # P3-6 (2026-11-26 review): 命中刷新时间戳 —— 旧代码淘汰"时间戳
+            # 最旧"条目但命中不刷新，是 FIFO 而非 LRU，热点查询反而先被淘汰。
+            _SEARCH_CACHE[key] = (time.monotonic(), final, payload)
             # v16 P3-19: 深拷贝 —— 浅拷贝仍共享 Evidence 对象，
             # 调用方改 evidence.relevance 会污染后续缓存命中。
             import copy
@@ -159,10 +214,6 @@ SEED_CORPUS: dict[ProductDomain, list[dict]] = {
          "snippet": "Autodeposition proceeds by acid-catalyzed coagulation of polymer dispersion at the metal/liquid interface: dissolved Fe2+/Fe3+ (from fluoride etch and oxidizer) destabilizes the latex, and film growth self-limits as deposited polymer blocks further iron dissolution."},
     ],
 }
-
-# Identifiers that belong to the offline seed corpus — used to tell offline
-# fallback evidence apart from real online hits (online results are never filtered).
-_SEED_IDENTIFIERS = {d["identifier"] for docs in SEED_CORPUS.values() for d in docs}
 
 # Bilingual keyword tokenizer: English words by run, Chinese segmented
 # (jieba words + overlapping character bigrams) — see _keywords.
@@ -400,7 +451,13 @@ _ALLOWED_S2_FIELDS = frozenset({
 
 
 def search_semantic_scholar(query: str, limit: int = 5, offset: int = 0, *, domain=None) -> list[Evidence]:
-    """Semantic Scholar 学术文献搜索（HTTP API + 超时，避免 SDK 挂死）。"""
+    """Semantic Scholar 学术文献搜索（HTTP API + 超时，避免 SDK 挂死）。
+
+    P2-3 (2026-11-26 review): 服务端分页 + 过滤后补取 —— 旧代码每轮重取
+    `(limit+offset)*3` 的同一前缀再客户端切片，深翻页超约 100 行即不可能，
+    且 `fieldsOfStudy` 过滤掉的行占用 offset 位、短页时无补取。现传 `offset`
+    参数逐页取，过滤后不足 `limit` 时循环补取下一页（最多 5 次请求防死循环）。
+    """
     try:
         from ..domain.search_profiles import resolve_profile
         _prof = resolve_profile(domain)
@@ -409,27 +466,40 @@ def search_semantic_scholar(query: str, limit: int = 5, offset: int = 0, *, doma
             if _prof is not None
             else _ALLOWED_S2_FIELDS
         )
-        want = min(100, (limit + offset) * 3)
+        # 单次请求行数：S2 `limit` 上限 100；取 3 倍做过滤缓冲。
+        page_limit = min(100, max(limit, 1) * 3)
+        collected: list[dict] = []
+        fetch_offset = max(offset, 0)
         with make_client(timeout=_SOURCE_TIMEOUT_SEC) as client:
-            resp = client.get(
-                f"{SEMANTIC_SCHOLAR_API}/paper/search",
-                params={
-                    "query": query,
-                    "limit": want,
-                    "fields": "title,abstract,externalIds,paperId,fieldsOfStudy",
-                },
-                headers=semantic_scholar_headers(),
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-        papers = payload.get("data") or []
-        filtered = []
-        for p in papers:
-            fos = {str(x).lower() for x in (p.get("fieldsOfStudy") or [])}
-            if fos and not (fos & _allowed):
-                continue
-            filtered.append(p)
-        papers = filtered[offset : offset + limit]
+            for _attempt in range(5):
+                if len(collected) >= limit:
+                    break
+                resp = client.get(
+                    f"{SEMANTIC_SCHOLAR_API}/paper/search",
+                    params={
+                        "query": query,
+                        "limit": page_limit,
+                        "offset": fetch_offset,
+                        "fields": "title,abstract,externalIds,paperId,fieldsOfStudy",
+                    },
+                    headers=semantic_scholar_headers(),
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                papers = payload.get("data") or []
+                if not papers:
+                    break  # 空页 = 到顶
+                for p in papers:
+                    fos = {str(x).lower() for x in (p.get("fieldsOfStudy") or [])}
+                    if fos and not (fos & _allowed):
+                        continue
+                    collected.append(p)
+                    if len(collected) >= limit:
+                        break
+                if len(papers) < page_limit:
+                    break  # 短页 = 到顶，无需再补
+                fetch_offset += len(papers)
+        papers = collected[:limit]
         out: list[Evidence] = []
         for i, p in enumerate(papers):
             ext = p.get("externalIds") or {}
@@ -460,8 +530,13 @@ def search_openalex(
     taxonomy_source: str = "openalex",
     arm: str | None = None,
     arm_delta: float = 0.0,
+    stats: dict | None = None,
 ) -> list[Evidence]:
-    """OpenAlex 学术文献（需 mailto 礼貌池，可在 config 关闭）。"""
+    """OpenAlex 学术文献（需 mailto 礼貌池，可在 config 关闭）。
+
+    ``stats``（P2-9）：可选 out-param，透传给 provider 层累计
+    ``non_oa_dropped``（非 OA 行丢弃数），调用方进 FilterReport。
+    """
     from .search_providers import search_openalex as _openalex
 
     return _openalex(
@@ -475,6 +550,7 @@ def search_openalex(
         taxonomy_source=taxonomy_source,
         arm=arm,
         arm_delta=arm_delta,
+        stats=stats,
     )
 
 
@@ -669,12 +745,19 @@ def _rank_score_with_boost(e: Evidence, q_kw: set[str], qctx: dict) -> tuple[flo
 def _is_weblike(e: Evidence) -> bool:
     """Internet/web sources are the junk-prone ones worth filtering hard."""
     s = (e.source or "").lower()
+    # P2-12 (2026-11-26 review): CNIPA 豁免 —— `CNIPA (web)` 虽是 Tavily/
+    # SerpAPI 网页搜索 v1 路由，内容却是专利；旧代码因 source 含 `cnipa` /
+    # `(web)` 把它判为 weblike，走 web 分支（且 content_filter 侧的
+    # SimHash 近重折叠同样按 weblike 处理，同族专利可能被折叠掉 —— 该侧
+    # 豁免见 content_filter._is_weblike）。豁免后 `_is_patent_or_literature`
+    #（已含 `cnipa` 关键字）接管，按专利处理。
+    if "cnipa" in s:
+        return False
     return (
         "internet" in s
         or "web" in s
         or "duck" in s
         or "tavily" in s
-        or "cnipa" in s
     )
 
 
@@ -700,8 +783,11 @@ def _merge_filter_rank(
     from .search_scoring import query_chem_context
 
     qctx = query_chem_context(query)
-    seeds = [e for e in results if e.identifier in _SEED_IDENTIFIERS]
-    online = [e for e in results if e.identifier not in _SEED_IDENTIFIERS]
+    # P2-11（审查 2026-11-26）：种子/在线按 e.is_seed_corpus 划分，不再按
+    # 裸 identifier 查 _SEED_IDENTIFIERS——种子用真实专利号（如 US9982145B2），
+    # 在线结果撞同号会被误认作种子而绕过在线过滤。
+    seeds = [e for e in results if e.is_seed_corpus]
+    online = [e for e in results if not e.is_seed_corpus]
 
     # Stamp domain_match for untagged rows before keep/drop decisions.
     if domain is not None:
@@ -877,6 +963,7 @@ def openalex_arms(
     domain=None,
     req: Requirement | None = None,
     preferred_source_ids=None,
+    stats: dict | None = None,
 ) -> list[Evidence]:
     """Fetch the OpenAlex arm set for one page and return the merged union.
 
@@ -911,6 +998,7 @@ def openalex_arms(
         return search_openalex(
             " ".join(terms or ()), limit, offset,
             domain=domain, preferred_source_ids=preferred_source_ids,
+            stats=stats,
         )
 
     arms = arm_queries(terms, req=req, profile=profile, settings=settings)
@@ -930,6 +1018,7 @@ def openalex_arms(
                 arm.query, limit, offset,
                 domain=domain, preferred_source_ids=preferred_source_ids,
                 arm=arm.name, arm_delta=arm.relevance_delta,
+                stats=stats,
             )
         except Exception as exc:  # noqa: BLE001 — one dead arm must not kill the search
             logger.debug("openalex arm %s failed: %s", arm.name, exc)
@@ -963,6 +1052,7 @@ def openalex_arms(
                 arm.query, limit, offset,
                 domain=domain, preferred_source_ids=preferred_source_ids,
                 arm=arm.name, arm_delta=arm.relevance_delta,
+                stats=stats,
             )
             counts.append(f"{arm.name}={len(rows)}(rescue)")
             merged.extend(rows)
@@ -984,6 +1074,7 @@ def _build_streams(
     ipc_codes: tuple[str, ...] | list[str] = (),
     chinese_query: str = "",
     western_terms: "Sequence[str] | None" = None,
+    openalex_stats: dict | None = None,
 ) -> list[dict]:
     """One paged stream per source. ``paged`` sources support offset/round paging;
     single-shot sources (chemcrow) yield once then finish."""
@@ -1040,13 +1131,14 @@ def _build_streams(
             cr_terms = list(western_terms or ()) or (western_query or "").split()
             add(
                 "openalex",
-                lambda off, t=cr_terms, d=domain, n=openalex_n, p=prefs, r=req: openalex_arms(
+                lambda off, t=cr_terms, d=domain, n=openalex_n, p=prefs, r=req, st=openalex_stats: openalex_arms(
                     t,
                     n,
                     offset=off,
                     domain=d,
                     req=r,
                     preferred_source_ids=p or None,
+                    stats=st,
                 ),
                 True,
             )
@@ -1067,7 +1159,7 @@ def _build_streams(
             crx_q = venue_scoped_query((western_query or "").split(), req=req, profile=prof)
             add(
                 "chemrxiv",
-                lambda off, q=crx_q, d=domain, n=chemrxiv_n, sid=crx_id: search_openalex(
+                lambda off, q=crx_q, d=domain, n=chemrxiv_n, sid=crx_id, st=openalex_stats: search_openalex(
                     q,
                     n,
                     offset=off,
@@ -1075,6 +1167,7 @@ def _build_streams(
                     source_id=sid,
                     evidence_source="ChemRxiv",
                     taxonomy_source="chemrxiv",
+                    stats=st,
                 ),
                 True,
             )
@@ -1163,6 +1256,8 @@ def iter_search(
         query, source_types, total_limit, per_source_cap, domain_hint, req,
         # v16 P3-7: max_rounds 进 key
         max_rounds=max_rounds,
+        # P2-5: 设置指纹进 key（换 key / 改开关后不再命中旧配置的缓存）
+        settings=_cache_settings,
     )
     if cache_ttl_s > 0:
         hit = _search_cache_get(cache_key, cache_ttl_s)
@@ -1190,10 +1285,14 @@ def iter_search(
         rank_q = patent_q = western_q = chinese_q = q
         ipc_codes = ()
     page_size = max(1, min(per_source_cap, 50))
+    # P2-9: OpenAlex/ChemRxiv 流的非 OA 丢弃数累计于此（provider 层经 stats
+    # out-param 写入，多臂并行由 provider 侧锁保护），终态进 FilterReport。
+    openalex_stats: dict = {}
     streams = _build_streams(
         patent_q, western_q, source_types, req, page_size,
         ipc_codes=ipc_codes, chinese_query=chinese_q,
         western_terms=western_terms,
+        openalex_stats=openalex_stats,
     )
 
     from ..config import get_settings
@@ -1242,8 +1341,9 @@ def iter_search(
             break
         rounds += 1
         active = [st for st in streams if not st["done"]]
-        ex = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(active)))
-        futures = {ex.submit(_fetch_with_timeout, st["fetch"], st["cursor"]): st for st in active}
+        # P3-6: 轮次 executor 复用（模块级 _ROUND_EXECUTOR 常驻，不再每轮
+        # 新建 ThreadPoolExecutor + shutdown）。
+        futures = {_ROUND_EXECUTOR.submit(_fetch_with_timeout, st["fetch"], st["cursor"]): st for st in active}
         try:
             for fut in concurrent.futures.as_completed(
                 futures, timeout=_SOURCE_TIMEOUT_SEC + 10
@@ -1293,7 +1393,6 @@ def iter_search(
                 if not fut.done():
                     fut.cancel()
                     _notify(source=st["name"], new_count=0)
-        ex.shutdown(wait=False)
 
     final, rule_report = _merge_filter_rank(
         raw, rank_q, total_limit, domain=getattr(req, "domain", None) if req else None, req=req
@@ -1333,6 +1432,13 @@ def iter_search(
     filter_report = FilterReport()
     filter_report.merge(rule_report)
     filter_report.merge(judge_report)
+    # P2-9: OpenAlex 非 OA 行在 provider 层被硬过滤，从未进 raw —— 经
+    # openalex_stats 累计后在此进 FilterReport。只计 dropped_by_reason（用
+    # record_provider_drop），不计 dropped：这些行从未到达过滤器，计入
+    # dropped 会让 dropped/kept 口径失真；同时进 filter_payload 明示。
+    non_oa_dropped = int(openalex_stats.get("non_oa_dropped", 0) or 0)
+    if non_oa_dropped:
+        filter_report.record_provider_drop("non_oa", non_oa_dropped)
 
     from ..config import get_settings
 
@@ -1383,6 +1489,7 @@ def iter_search(
     except Exception:
         logger.debug("has_fulltext marking failed", exc_info=True)
     filter_payload = filter_report.as_dict()
+    filter_payload["non_oa_dropped"] = non_oa_dropped
     filter_payload["rerank_applied"] = bool(rerank_meta.get("applied"))
     filter_payload["rerank_backend"] = rerank_meta.get("backend") or "none"
     filter_payload["mmr_applied"] = mmr_applied
@@ -1581,9 +1688,12 @@ def split_lit_answer(
         return []
     out = [
         Evidence(
-            source="ChemCrow-Lit",
-            # v16: 非确定性 hash() 改为 sha256（跨进程稳定）
-            identifier=f"chemlit:{hashlib.sha256(query.encode()).hexdigest()[:4]}",
+            source="LitSearch",
+            # P3-3 (2026-11-26 review): 标识由 4 位 hex（16 bit 碰撞空间；
+            # 同查询不同答案去重后只剩一行）扩到 12 位，并混入答案摘要哈希
+            # —— 同查询不同答案不再撞标识；来源名 `ChemCrow-Lit` 亦随同退役
+            # 更名（ChemCrow 已于 2026-09 退役）。
+            identifier=f"chemlit:{hashlib.sha256((query + chr(0) + body).encode('utf-8')).hexdigest()[:12]}",
             title=f"LitSearch: {query[:80]}",
             snippet=body[:600],
             relevance=relevance,
@@ -1602,7 +1712,7 @@ def split_lit_answer(
         title = line.replace(doi, "").strip(" -–—:.,;()[]") or f"DOI {doi}"
         out.append(
             Evidence(
-                source="ChemCrow-Lit",
+                source="LitSearch",
                 identifier=f"doi:{doi}",
                 title=title[:160],
                 snippet=line[:600] or body[:600],
@@ -1726,7 +1836,7 @@ def get_source_availability() -> dict[str, dict]:
             "offline_fallback": False,
             "reason": "retired",
             "deprecated": True,
-            "hint": "ChemCrow 集成已于 2026-09 退役，无需安装（化学增强检索由 paper-qa 与网络源提供）",
+            "hint": "ChemCrow 集成已于 2026-09 退役，无需安装（化学增强检索由网络源提供）",
         },
         "surechembl": {
             "available": s.surechembl,

@@ -176,6 +176,17 @@ def chunk_floor() -> int:
     return max(20, base // 2)
 
 
+# P1-3 (review 2026-11-26): the floor for chunks from the MinerU structured
+# path. That tier emits one chunk per layout block, so a real one-sentence
+# block ("本方法适用于铝合金表面处理。") trips the 20-char floor on length
+# alone — the exact mechanism the review probed (5 short sentences across
+# 5 pages, all 5 chunks dropped). 8 matches the numeric-exempt floor above:
+# short enough for one real sentence, still long enough that a lone fragment
+# or page-number stub fails. The word-ratio test below still applies, so
+# symbol soup does not ride through on length alone.
+_MINERU_STRUCTURED_SHORT_FLOOR = 8
+
+
 # What ``chunking._classify_block_type`` calls a formula: the chunk opens with display-math syntax.
 _FORMULA_OPENERS = ("$$", "\\[", "\\begin{")
 # A formula keeps no density rule, but it still has to contain *something*: ``$$-----------------$$`` is long enough.
@@ -202,7 +213,8 @@ _NUMERIC_EXEMPT_RE = re.compile(
 )
 
 
-def is_garbage_chunk_text(text: str, *, min_chars: int | None = None, block_type: str | None = None) -> bool:
+def is_garbage_chunk_text(text: str, *, min_chars: int | None = None, block_type: str | None = None,
+                            mineru_structured: bool = False) -> bool:
     """Chunk-body analogue of literature garbage-snippet detection.
 
     Literature filters ``title + snippet`` (often >40 chars). Stored chunks can
@@ -213,8 +225,21 @@ def is_garbage_chunk_text(text: str, *, min_chars: int | None = None, block_type
     ratio), so it is measured by length only - plus a handful of word characters so that a line of symbols still
     fails. ``block_type`` says what the chunk is; without it a chunk that opens with display-math syntax counts as a
     formula, exactly as the chunker classifies it.
+
+    ``mineru_structured`` (P1-3, review 2026-11-26): the chunk comes from
+    the MinerU structured tier (``ParseResult.parser == "mineru"``), where
+    one layout block becomes one chunk. Its length floor drops to 8 instead
+    of ``chunk_floor()`` — a short real sentence is content, not garbage.
+    The word-ratio test still applies, and an explicit ``min_chars``
+    override wins over both floors. Callers that do not know the parser
+    leave it False (the safe default: no exemption).
     """
-    limit = chunk_floor() if min_chars is None else int(min_chars)
+    if min_chars is not None:
+        limit = int(min_chars)
+    elif mineru_structured:
+        limit = _MINERU_STRUCTURED_SHORT_FLOOR
+    else:
+        limit = chunk_floor()
     body = _without_table_markup((text or "").strip()).strip()
     # v18-5: 数字豁免 —— 含数字+单位/配比模式的 chunk（如"固体含量 65 %"、
     # "中性盐雾 720 h"）是化学检索的核心目标，用宽松 floor（8）而非 20，
@@ -281,6 +306,7 @@ def drop_reason_for_chunk(
     *,
     source_meta: dict[str, _SourceGateMeta] | None = None,
     wiki_ids: set[str] | None = None,
+    mineru_structured: bool = False,
 ) -> str | None:
     """Return a drop reason string, or None if the chunk may stay."""
     settings = get_settings()
@@ -300,7 +326,8 @@ def drop_reason_for_chunk(
         return "blocked_domain"
 
     text = getattr(chunk, "text", "") or ""
-    if is_garbage_chunk_text(text, block_type=getattr(chunk, "block_type", None)):
+    if is_garbage_chunk_text(text, block_type=getattr(chunk, "block_type", None),
+                             mineru_structured=mineru_structured):
         return "garbage_snippet"
 
     return None
@@ -365,6 +392,7 @@ def gate_ingest_rows(
     rows: list[dict],
     *,
     source_id: str | None = None,
+    mineru_structured: bool = False,
 ) -> tuple[list[dict], str | None]:
     """Filter chunk rows before ``replace_for_source``.
 
@@ -372,6 +400,12 @@ def gate_ingest_rows(
     ``kept_rows`` is empty and ``drop_reason`` is ``blocked_domain``. When only
     garbage chunks are removed, ``drop_reason`` is ``garbage_snippet`` if
     nothing remains, else None (partial keep). Disabled filter → identity.
+
+    ``mineru_structured`` (P1-3, review 2026-11-26): the rows come from the
+    MinerU structured tier (``ParseResult.parser == "mineru"``) — short
+    one-block chunks use the 8-char floor instead of the 20-char floor
+    (see ``is_garbage_chunk_text``). Callers thread the parser through
+    from the parse result; unknown parser → False (no exemption).
     """
     settings = get_settings()
     if not settings.content_filter_enabled:
@@ -391,7 +425,8 @@ def gate_ingest_rows(
     garbage_n = 0
     for row in rows:
         text = (row.get("text") if isinstance(row, dict) else "") or ""
-        if is_garbage_chunk_text(text, block_type=row.get("block_type") if isinstance(row, dict) else None):
+        if is_garbage_chunk_text(text, block_type=row.get("block_type") if isinstance(row, dict) else None,
+                                 mineru_structured=mineru_structured):
             garbage_n += 1
             continue
         kept.append(row)

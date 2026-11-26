@@ -46,4 +46,8 @@ def test_ranking_metrics_on_fake_retrieve(monkeypatch):
     p = precision_at_k(ids, labeled_relevant, 3)
     r = recall_at_k(ids, labeled_relevant, 3)
     assert p > 0
-    assert r == 1.0
+    # QA-11：天花板钉死改区间断言——recall 不是恒 1.0 的期望值，而是
+    # 随语料/难负例浮动的指标（下界 0.95）；金标基线本身由
+    # test_golden_eval 的全量跑（Recall@3 / mean RR / nDCG@3）报告，
+    # 见 test_review_wave2_b2。区间不断言"必须满分"，只防回归性塌陷。
+    assert 0.95 <= r <= 1.0

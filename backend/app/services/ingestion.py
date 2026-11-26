@@ -196,7 +196,7 @@ def _ingest_parsed_text(
             from .kb_index import kb_enabled
 
             reset_all_duplicate_flag()
-            n_chunks = index_source(source_id, text, fail_soft=False)
+            n_chunks = index_source(source_id, text, fail_soft=False, parser=parser)
             if not n_chunks and kb_enabled():
                 # Zero chunks is either a real failure or "everything in this
                 # document already exists under another source" (L1 exact

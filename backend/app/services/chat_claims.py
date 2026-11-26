@@ -99,8 +99,6 @@ def build_sourced_claims(
         return None
 
     out: list[SourcedClaim] = []
-    from .wiki.retrieve import is_wiki_evidence
-
     # _indices_to_chunk_ids strips the "kb:" prefix, so index both forms.
     by_id: dict[str, object] = {}
     for e in sources:
@@ -112,15 +110,20 @@ def build_sourced_claims(
         chunk_ids = _indices_to_chunk_ids(v.evidence_indices, sources)
         status = _map_verdict(v.verdict)
         conf = 0.9 if status == "supported" else 0.4 if status == "weak" else 0.1
-        # Batch 2 (Q3=A): a claim supported ONLY by wiki evidence is labeled
-        # by its evidence (source="wiki") and capped below literature-backed
-        # claims. Unknown identifiers never trigger the cap (conservative).
-        known = [by_id[c] for c in chunk_ids if c in by_id]
-        if (
-            chunk_ids
-            and len(known) == len(chunk_ids)
-            and all(is_wiki_evidence(e) for e in known)
-        ):
+        # QA-12 逃逸 A：supported 但 chunk_ids 为空（核验未给出任何证据
+        # 下标）是无据支撑，不得拿 0.9，降级为 weak。
+        if not chunk_ids and status == "supported":
+            logger.warning(
+                "wiki cap: supported claim with no evidence indices, "
+                "downgrading to weak: %r",
+                (v.text or "")[:80],
+            )
+            status = "weak"
+            conf = 0.4
+        # QA-12 逃逸 B：封顶条件改为"全部已知来源均为 wiki 且至少一个
+        # 已知"（见 _wiki_only_sources）；未知标识不否决封顶，只记 warning，
+        # 否则任一不可解析的标识就能让整条封顶逃逸。
+        elif _wiki_only_sources(chunk_ids, by_id):
             conf = min(conf, cap)
         out.append(
             SourcedClaim(
@@ -282,6 +285,33 @@ def _extract_claims(answer: str, structured: StructuredAnswer | None) -> list[st
             if len(out) >= max_total:
                 return out
     return out
+
+
+def _wiki_only_sources(chunk_ids: list[str], by_id: dict[str, object]) -> bool:
+    """QA-12：chunk_ids 是否全部指向已知的 Wiki 来源（至少一个已知）。
+
+    未知标识不否决封顶（只记 warning）：调用方无法确认它是不是 Wiki，
+    但也不能让一条未知标识豁免整条论断的封顶。空 chunk_ids 返回 False
+    （无据支撑走逃逸 A 的降级分支，不走封顶）；全未知同样返回 False
+    （无已知来源可判定，封顶无依据——该情形已记 warning）。
+    """
+    from .wiki.retrieve import is_wiki_evidence
+
+    if not chunk_ids:
+        return False
+    known = [by_id[c] for c in chunk_ids if c in by_id]
+    unknown = [c for c in chunk_ids if c not in by_id]
+    if unknown:
+        logger.warning(
+            "wiki cap: %d/%d claim sources unresolvable, "
+            "capping on known sources only: %r",
+            len(unknown),
+            len(chunk_ids),
+            unknown[:3],
+        )
+    if not known:
+        return False
+    return all(is_wiki_evidence(e) for e in known)
 
 
 def _indices_to_chunk_ids(indices: list[int], sources: list[Evidence]) -> list[str]:

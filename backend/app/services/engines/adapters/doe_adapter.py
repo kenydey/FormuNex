@@ -134,6 +134,31 @@ def matrix_to_doe_plan(
     if design in _MIXTURE_DESIGNS:
         for idx, row in enumerate(matrix, start=1):
             runs.append(_mixture_row_to_run(row, factors, run_id=idx))
+        # D6-3：紧约束下不同的 simplex 比例点经伪组分映射 + _fit_to_bounds
+        # 截断会坍缩到同一边界点 —— 按 natural 去重、重编号，并在 notes
+        # 写明合并数；去重后 run 数少于二次 Scheffé 模型参数数时，提示
+        # 改用约束混料设计（/doe/designs/mixture）。
+        seen: set[tuple[float, ...]] = set()
+        deduped: list[DOERun] = []
+        for run in runs:
+            key = tuple(float(run.natural[f.name]) for f in factors)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(run)
+        removed = len(runs) - len(deduped)
+        if removed:
+            deduped = [run.model_copy(update={"run_id": i}) for i, run in enumerate(deduped, start=1)]
+            runs = deduped
+            dedup_note = f"{removed} 个重复点已合并（紧约束致 simplex 点坍缩）。"
+            components_n = len(split_mixture_factors(factors)[0])
+            quad_params = components_n * (components_n + 1) // 2
+            if len(runs) < quad_params:
+                dedup_note += (
+                    f"去重后仅剩 {len(runs)} 个不同配方，少于二次混料模型参数数 {quad_params}："
+                    "建议改用约束混料设计（/doe/designs/mixture）。"
+                )
+            extra_notes = f"{extra_notes} {dedup_note}".strip()
         held = [factors[i].name for i in split_mixture_factors(factors)[1]]
         if held:
             held_note = f"process factors held at their midpoint: {', '.join(held)}."

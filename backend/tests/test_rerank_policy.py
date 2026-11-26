@@ -120,9 +120,16 @@ def stores(tmp_path, monkeypatch):
                       source_kind="local", full_text="x", content_hash="h1")
     sid2 = src.create(filename="d2.md", title="烘焙食谱",
                       source_kind="local", full_text="y", content_hash="h2")
+    # 第 3 篇干扰文档：2 篇语料下 rank_bm25 的 IDF 在 df=N/2 时恰为 0，
+    # BM25 通道恒为 0，combined 只剩 cosine×(1−alpha)≈0.05，会被 QA-08
+    # 校准后的 0.10 阈值误滤；3 篇时 df=1/3，IDF>0，BM25 正常工作。
+    sid3 = src.create(filename="d3.md", title="点蚀检测",
+                      source_kind="local", full_text="z", content_hash="h3")
     chk.replace_for_source(sid1, [{"text": "环氧树脂是一种优异的防腐涂料成膜物质，添加磷酸锌可提升盐雾耐受时间。",
                                    "embedding": [1.0, 0.0], "embedding_model": "m"}])
     chk.replace_for_source(sid2, [{"text": "巧克力蛋糕配方需要面粉糖和鸡蛋黄油混合烘烤。",
+                                   "embedding": [0.0, 1.0], "embedding_model": "m"}])
+    chk.replace_for_source(sid3, [{"text": "不锈钢点蚀检测用电化学工作站做动电位极化扫描。",
                                    "embedding": [0.0, 1.0], "embedding_model": "m"}])
     monkeypatch.setattr("app.services.kb_index._embed_texts",
                         lambda texts, model_name=None: [[0.9, 0.1]])
@@ -136,7 +143,7 @@ def test_policy_off_keeps_low_score_chunk(stores):
     settings = get_settings()
     settings.kb_rerank_enabled = False
     scored = hybrid_search_scored("防腐涂料 环氧 磷酸锌", top_k=5)
-    assert len(scored) == 2
+    assert len(scored) == 3  # 策略层关：3 篇全保留（夹具含第 3 篇干扰文档）
 
 
 def test_policy_on_filters_low_score_chunk(stores):
@@ -156,4 +163,4 @@ def test_policy_exception_fails_open(stores, monkeypatch):
 
     monkeypatch.setattr(hs_mod, "apply_rerank_policy", _boom)
     scored = hybrid_search_scored("防腐涂料 环氧 磷酸锌", top_k=5)
-    assert len(scored) == 2
+    assert len(scored) == 3  # fail-open：策略层异常时 3 篇原样返回

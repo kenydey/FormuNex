@@ -444,10 +444,14 @@ def test_pydoe_fallback_does_not_swallow_discrete_error(monkeypatch):
         pe.build_plan_with_fallback(factors, design="lhs")
 
 
-# ── P2-1: _stub_doe 离散取中间水平 ────────────────────────────────────────────
+# ── P3-2（2026-11-26 全面审查）：_stub_doe 收敛 hold 计划诚实化 ─────────────
+# 报告明确判定旧行为是缺陷：_stub_doe 以"保留上一轮 DOE"名义返回全新中点
+# 单点计划（离散取中间水平），notes 却写"无需新实验建议"。修复：收敛 hold
+# 计划返回 runs=[]（空计划即"无需新实验"），notes 如实写已收敛。本测试按
+# 新契约重写；旧的"离散取中间水平"断言随旧行为一同废止（中点合成已删除）。
 
-def test_stub_doe_discrete_middle_level():
-    """_stub_doe 曾对离散因子算 (low+high)/2 → 无效值 0.5。现在取中间水平。"""
+def test_stub_doe_converged_hold_is_empty_with_honest_notes():
+    """P3-2：收敛 hold 计划返回空 run + 如实 notes，不再合成中点实验点。"""
     from app.domain.schemas import LeverSpec, ProductDomain, Requirement
     from app.services.auto_loop import _stub_doe
 
@@ -460,8 +464,13 @@ def test_stub_doe_discrete_middle_level():
         ],
     )
     plan = _stub_doe(req, reason="target_achieved")
-    assert plan.runs, "stub 应有 runs"
-    assert plan.runs[0].natural["树脂"] == "B", f"应为中间水平: {plan.runs[0].natural}"
+    assert plan.runs == []
+    assert plan.design == "converged-hold"
+    assert plan.plan_id == "converged"
+    assert "未生成新实验" in plan.notes
+    plan2 = _stub_doe(req, reason="rmse_plateau")
+    assert plan2.runs == []
+    assert "未生成新实验" in plan2.notes
 
 
 # ── P2-2: lever_snapshot_from_plan 保留离散 ───────────────────────────────────

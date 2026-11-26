@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 
+from app.domain.schemas import Evidence
 from app.services import chat_claims as cc
 
 
@@ -54,7 +55,11 @@ def test_exception_falls_back_offline(monkeypatch):
     monkeypatch.setattr(cc, "get_settings",
                         lambda: type("S", (), {"chat_claim_check_enabled": True})())
 
-    out = cc.build_sourced_claims("问题?", "这是第一句。这是第二句。", [])
+    # QA-12：离线兜底 verdict 引用 evidence index 0，须传入对应的证据池；
+    # sources=[] 时 chunk_ids 为空，supported 会按逃逸 A 正确降级为 weak。
+    ev = Evidence(source="kb", identifier="kb:s1#c0", title="t",
+                  snippet="证据。", relevance=0.9)
+    out = cc.build_sourced_claims("问题?", "这是第一句。这是第二句。", [ev])
     assert calls["offline"] == 2
     assert len(out) == 2
     assert all(c.status == "supported" for c in out)
@@ -63,6 +68,7 @@ def test_exception_falls_back_offline(monkeypatch):
 def test_conflicting_verdict_structured_passthrough():
     """A-6: conflicting 判词结构化透出 — status 保持 weak（back-compat），
     raw_verdict 携带 "conflicting" 供前端渲染独立冲突态。"""
+    from app.domain.schemas import Evidence
     from app.pipeline.claim_checker import ClaimVerdict, VerifiedClaim
 
     verified = [
@@ -74,10 +80,14 @@ def test_conflicting_verdict_structured_passthrough():
         VerifiedClaim(
             text="水性体系",
             verdict=ClaimVerdict.supported,
-            evidence_indices=[],
+            # QA-12：supported 须有证据下标才保持 supported；evidence_indices
+            # 为空 + sources 为空时按逃逸 A 降级为 weak（见新单测）。
+            evidence_indices=[0],
         ),
     ]
-    out = cc.build_sourced_claims("问题?", "答案。", [], verified=verified)
+    ev = Evidence(source="kb", identifier="kb:s1#c0", title="t",
+                  snippet="证据。", relevance=0.9)
+    out = cc.build_sourced_claims("问题?", "答案。", [ev], verified=verified)
     assert out is not None and len(out) == 2
     conflict, ok = out
     assert conflict.status == "weak"  # back-compat: 不破坏旧前端

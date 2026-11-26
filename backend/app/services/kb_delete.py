@@ -114,9 +114,28 @@ def _strip_wiki_source_ids(source_id: str) -> int:
 
     wiki = get_wiki_store()
     touched = 0
-    for row in wiki.list_pages(limit=500):
-        ids = list(row.source_ids or [])
+    # B10（2026-11-26 全面审查）：此前单次 list_pages(limit=500)，超
+    # 500 页后删源漏剔后半部分页面的 source_ids。改为分页循环直至扫完。
+    # 先只读收集全部 (path, source_ids) 再逐页处理：upsert 会改
+    # updated_at（list_pages 按 updated_at desc 排序），边读边写下
+    # offset 分页会跳页；两趟分离后读侧稳定。
+    _PAGE = 200
+    _targets: list[tuple[str, list[str]]] = []
+    _offset = 0
+    while True:
+        _rows = wiki.list_pages(limit=_PAGE, offset=_offset)
+        if not _rows:
+            break
+        for _row in _rows:
+            _targets.append((_row.path, list(_row.source_ids or [])))
+        _offset += len(_rows)
+        if len(_rows) < _PAGE:
+            break
+    for path, ids in _targets:
         if source_id not in ids:
+            continue
+        row = wiki.get_by_path(path)
+        if row is None:
             continue
         new_ids = [x for x in ids if x != source_id]
         md = wiki.read_markdown(row.path) or ""

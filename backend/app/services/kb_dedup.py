@@ -63,6 +63,42 @@ def all_chunks_were_duplicates() -> bool:
 _L2_MAT_CACHE: dict[tuple, tuple[list[str], object]] = {}
 
 
+def clear_l2_cache() -> int:
+    """B6（2026-11-26 全面审查）：清空 L2 语料矩阵缓存，返回清掉的条目数。
+
+    模型重嵌后向量空间已变，旧归一化矩阵继续用于新入库的 L2 比对会在
+    跨模型同维时用旧空间算余弦。由 ``embedding_reindex`` 收尾调用；
+    其余调用方（测试）也可直接调。
+    """
+    n = len(_L2_MAT_CACHE)
+    _L2_MAT_CACHE.clear()
+    if n:
+        logger.info("kb dedup L2 cache cleared (%d entries)", n)
+    return n
+
+
+def _exclude_archived_corpus(query, session):
+    """B7：dedup 语料排除已归档源 —— 与 ``chunk_store.all_chunks`` 同口径。
+
+    OUTER JOIN（孤儿 chunk——无 SourceDocument 行的测试/残留行——仍参与），
+    只排除 ``archived`` 为真的源。L1/L2 共用；检索层本就排除归档源，
+    去重语料与检索口径一致后，归档内容不再导致新入库 chunk 被判重复。
+    """
+    from sqlalchemy import or_
+
+    from ..db.models import DocumentChunk, SourceDocument
+
+    return query.outerjoin(
+        SourceDocument, DocumentChunk.source_id == SourceDocument.id
+    ).filter(
+        or_(
+            SourceDocument.id.is_(None),
+            SourceDocument.archived.is_(False),
+            SourceDocument.archived.is_(None),
+        )
+    )
+
+
 def dedup_key_for_row(row: dict) -> str:
     """v27 P0-5: 查询侧与写入侧同一口径。
 
@@ -98,19 +134,21 @@ def _l1_exact(
             keys = sorted(wanted)
             for i in range(0, len(keys), 500):
                 batch = keys[i : i + 500]
-                for (k,) in (
+                # B7：语料排除已归档源（_exclude_archived_corpus）。
+                q = (
                     session.query(DocumentChunk.dedup_key)
                     .filter(
                         DocumentChunk.dedup_key.in_(batch),
                         DocumentChunk.source_id != source_id,
                     )
-                    .all()
-                ):
+                )
+                q = _exclude_archived_corpus(q, session)
+                for (k,) in q.all():
                     if k:
                         existing_keys.add(k)
             # 兜底：dedup_key 为 NULL 的历史行（0042 回填失败/直接插库），
             # 按旧方式在 Python 侧比对 —— 正常库中这类行接近于零。
-            for text, heading_path, page_no in (
+            q = (
                 session.query(
                     DocumentChunk.text,
                     DocumentChunk.heading_path,
@@ -120,8 +158,9 @@ def _l1_exact(
                     DocumentChunk.source_id != source_id,
                     DocumentChunk.dedup_key.is_(None),
                 )
-                .yield_per(1000)
-            ):
+            )
+            q = _exclude_archived_corpus(q, session)
+            for text, heading_path, page_no in q.yield_per(1000):
                 existing_keys.add(
                     chunk_dedup_key(text, (heading_path or "")[:120], page_no)
                 )
@@ -166,6 +205,48 @@ def _row_lang(row: dict) -> str:
         return _detect_chunk_lang(row.get("text") or "")
     except Exception:  # noqa: BLE001
         return "en"
+
+
+def _cross_lang_text_matches(
+    rows: list[dict], source_id: str, session
+) -> dict[int, str]:
+    """B7 跨语言通道：不同语言但归一化文本相同的行。
+
+    向量比对只覆盖同语言，中英同一内容（如双语摘要）永不判定近似。
+    此处先走文本比对：入库行与语料行归一化文本（``normalize_text``，
+    与 L1 同款）相同、且语言不同时即为匹配。返回
+    ``{入库行下标: 语料行语言}``；调用方按 enforce/audit 处置
+    （enforce 丢弃、audit 只记日志）。语料同样排除已归档源。
+    流式扫描（``yield_per``），失败时由调用方 fail-open。
+    """
+    from ..db.models import DocumentChunk
+
+    by_lang: dict[str, dict[str, list[int]]] = {}
+    for i, row in enumerate(rows):
+        norm = normalize_text(row.get("text") or "")
+        if not norm:
+            continue
+        by_lang.setdefault(_row_lang(row), {}).setdefault(norm, []).append(i)
+    if not by_lang:
+        return {}
+    q = session.query(DocumentChunk.id, DocumentChunk.lang, DocumentChunk.text).filter(
+        DocumentChunk.source_id != source_id
+    )
+    q = _exclude_archived_corpus(q, session)
+    matches: dict[int, str] = {}
+    for _cid, clang, ctext in q.yield_per(1000):
+        if not ctext:
+            continue
+        norm = normalize_text(ctext)
+        if not norm:
+            continue
+        corpus_lang = (clang or "en").strip().lower() or "en"
+        for lang, table in by_lang.items():
+            if corpus_lang == lang:
+                continue
+            for idx in table.get(norm, []):
+                matches.setdefault(idx, corpus_lang)
+    return matches
 
 
 def _l2_near(
@@ -248,11 +329,32 @@ def _l2_near(
                     (DocumentChunk.lang == lang)
                     | ((DocumentChunk.lang.is_(None)) & (lang == "en")),
                 )
-                .yield_per(1000)
             )
-            for cid, _lang, blob, js in q:
-                if audit_cap is not None and len(vecs) >= audit_cap:
-                    break
+            # B7：语料排除已归档源（与 L1 / 检索层同口径）。
+            q = _exclude_archived_corpus(q, session)
+            # B7：审计抽样改为确定性均匀抽样 —— 此前无 order_by 下取前
+            # audit_cap 行，抽样结果随入库顺序漂移、不可复现。现按 id 排序
+            # 后等步长取样（stride 由分母算出），日志写明方式与分母；
+            # enforce 模式（audit_cap 为 None）仍全量扫描。
+            stride = 1
+            total = 0
+            if audit_cap is not None and audit_cap > 0:
+                total = q.count()
+                if total > audit_cap:
+                    stride = (total + audit_cap - 1) // audit_cap
+                    logger.info(
+                        "kb dedup L2 audit sampling: lang=%s stride=%d over "
+                        "%d corpus rows (cap %d, deterministic ORDER BY id)",
+                        lang, stride, total, audit_cap,
+                    )
+            for _pos, (cid, _lang, blob, js) in enumerate(
+                q.order_by(DocumentChunk.id).yield_per(1000)
+            ):
+                if audit_cap is not None:
+                    if _pos % stride:
+                        continue
+                    if len(vecs) >= audit_cap:
+                        break
                 raw = None
                 if blob:
                     try:
@@ -282,6 +384,28 @@ def _l2_near(
             return val
 
         drop_idx: set[int] = set()
+        # B7 跨语言通道：向量比对只覆盖同语言；归一化文本相同但语言
+        # 不同的行在此先行比对（enforce 下丢弃，audit 下只记日志）。
+        try:
+            cross_matches = _cross_lang_text_matches(rows, source_id, session)
+        except Exception as exc:  # noqa: BLE001 - fail-open
+            logger.warning(
+                "kb dedup L2 cross-lang check failed for source %s: %s",
+                source_id, exc,
+            )
+            cross_matches = {}
+        for i, clang in sorted(cross_matches.items()):
+            if enforce:
+                drop_idx.add(i)
+            if enforce or audit:
+                logger.info(
+                    "kb dedup L2 %s cross-lang: source=%s lang=%s matches "
+                    "%s text (normalized-text equal)",
+                    "drop" if enforce else "audit",
+                    source_id,
+                    _row_lang(rows[i]),
+                    clang,
+                )
         for i, lang, vec in indexed:
             got = _corpus_matrix(lang)
             if not got:

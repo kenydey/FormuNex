@@ -77,7 +77,7 @@ def requirement_from_campaign(campaign: Any) -> Requirement:
 def _campaign_loop_context(
     campaign_id: int, requirement: Requirement | None = None
 ) -> tuple[list[dict[str, float]], bool, str]:
-    """Return (prior_rmse_history, converged, message) from campaign loop_history.
+    """Return (prior_rmse_history, prior_generations, converged, message) from campaign loop_history.
 
     收敛重估：history[-1].converged 只是"上次判定"的快照。如果调用方传了
     requirement，会用当前数据（records + rmse）重新跑 evaluate_convergence。
@@ -92,11 +92,11 @@ def _campaign_loop_context(
 
     settings = get_settings()
     if not settings.loop_convergence_enabled:
-        return [], False, ""
+        return [], [], False, ""
 
     campaign = get_campaign_store().get_campaign_sync(campaign_id)
     if campaign is None:
-        return [], False, ""
+        return [], [], False, ""
 
     history = list(campaign.loop_history or [])
     prior_rmse = [
@@ -104,18 +104,27 @@ def _campaign_loop_context(
         for entry in history
         if entry.get("rmse_by_metric")
     ]
+    # P2-3: 与 prior_rmse 逐项对齐的训练代际戳（由 _persist_loop_history 随
+    # loop_history 持久化；旧条目无该键时为 None，沿用旧平台期语义）。
+    prior_gens = [entry.get("rmse_generation") for entry in history if entry.get("rmse_by_metric")]
     if history and history[-1].get("converged"):
         if requirement is not None:
             try:
                 from .auto_loop import _rmse_by_metric
-                from .convergence import evaluate_convergence, primary_objective_spec
+                from .convergence import (
+                    evaluate_convergence,
+                    primary_objective_spec,
+                    rmse_generation_stamp,
+                )
                 from .training import registry
 
                 domain = getattr(requirement, "domain", None)
                 records = registry.records_for(domain) if domain is not None else []
-                _, current_rmse = _rmse_by_metric(domain) if domain is not None else ([], {})
+                infos, current_rmse = _rmse_by_metric(domain) if domain is not None else ([], {})
                 converged, _reason = evaluate_convergence(
                     prior_rmse_history=prior_rmse,
+                    prior_generations=prior_gens,
+                    current_generation=rmse_generation_stamp(infos) if infos else None,
                     current_rmse=current_rmse or None,
                     records=records,
                     objective=primary_objective_spec(requirement),
@@ -128,13 +137,13 @@ def _campaign_loop_context(
                         "loop re-evaluation for campaign %s: no longer converged, resuming",
                         campaign_id,
                     )
-                    return prior_rmse, False, ""
+                    return prior_rmse, prior_gens, False, ""
             except Exception as exc:  # noqa: BLE001
                 # fail-open：重估失败时信任历史收敛状态。
                 logger.debug("loop re-evaluation failed for campaign %s: %s", campaign_id, exc)
         msg = str(history[-1].get("loop_message") or "闭环已收敛，建议停止迭代")
-        return prior_rmse, True, msg
-    return prior_rmse, False, ""
+        return prior_rmse, prior_gens, True, msg
+    return prior_rmse, prior_gens, False, ""
 
 
 def campaign_loop_status(campaign_id: int) -> dict[str, Any]:
@@ -241,7 +250,7 @@ def dispatch_loop_after_sync(
             logger.debug("requirement_from_campaign failed for %s: %s", workbench_campaign_id, exc)
             req = None
 
-    prior_rmse, converged, conv_msg = _campaign_loop_context(workbench_campaign_id, req)
+    prior_rmse, prior_gens, converged, conv_msg = _campaign_loop_context(workbench_campaign_id, req)
     if converged:
         return None, conv_msg
 
@@ -265,6 +274,7 @@ def dispatch_loop_after_sync(
         doe_engine=doe_engine,
         n_suggest=n_suggest,
         prior_rmse_history=prior_rmse,
+        prior_rmse_generations=prior_gens,
     )
     if task_id is None:
         # W1-10 ②: dispatch failed (dead broker / publish error). The sync
@@ -290,6 +300,7 @@ def _start_loop_task(
     doe_engine: str = "auto",
     n_suggest: int = 4,
     prior_rmse_history: list[dict[str, float]] | None = None,
+    prior_rmse_generations: list[str | None] | None = None,
 ) -> str | None:
     """Fire-and-forget closed-loop task; returns task_id for SSE tracking.
 
@@ -317,6 +328,7 @@ def _start_loop_task(
         "workbench_campaign_id": workbench_campaign_id,
         "campaign_state": campaign_state,
         "prior_rmse_history": prior_rmse_history or [],
+        "prior_rmse_generations": prior_rmse_generations,
     }
 
     outbox_id = enqueue_outbox("loop", payload)

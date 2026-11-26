@@ -44,7 +44,11 @@ def test_process_factors_are_not_mixture_components():
 def test_every_run_stays_inside_every_range_and_keeps_the_total():
     plan = matrix_to_doe_plan(_lattice(3), RECIPE, "simplex_lattice", engine="test")
     total = sum((f.low + f.high) / 2 for f in COMPONENTS)
-    assert len(plan.runs) == 6
+    # D6-3（审查 2026-11-26，第二波已批准的行为变更）：mixture 分支去重后
+    # lattice 第 2 行与第 6 行经 _fit_to_bounds 映射为同一 natural 点，只剩
+    # 5 个不同配方；旧期望 6 计入了该重复 run。去重后的每 run 仍须守总量与界。
+    assert len(plan.runs) == 5
+    assert "1 个重复点已合并" in plan.notes
     for run in plan.runs:
         assert sum(run.natural[f.name] for f in COMPONENTS) == pytest.approx(total, abs=1e-3)
         for f in RECIPE:

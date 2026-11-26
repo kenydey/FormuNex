@@ -231,15 +231,28 @@ def apply_budget_cap(plan, budget_remaining: int | None):
 
     `budget_remaining <= 0` 由各调用方的硬停处理（A-7）；这里只处理
     `0 < budget < len(runs)` 的静默超发。
+
+    P2-4: 截断前把 ``ai_suggested=True`` 的 run 稳定排到前面 —— BayBE
+    路径的 plan 顺序即推荐顺序（全是建议点，顺序不变）；legacy 路径的
+    plan 顺序是 LHS 设计顺序，建议点散落各处，截前 N 会把刚选出的建议
+    点静默换成设计表前几行。缺额再按原设计顺序补。notes 写明保留的
+    建议点数。
     """
     if budget_remaining is None:
         return plan
     runs = list(plan.runs or [])
     if len(runs) > budget_remaining:
-        plan.runs = runs[:budget_remaining]
+        ordered = sorted(
+            runs, key=lambda r: not bool(getattr(r, "ai_suggested", False))
+        )
+        kept = ordered[:budget_remaining]
+        n_suggested = sum(1 for r in runs if getattr(r, "ai_suggested", False))
+        kept_suggested = sum(1 for r in kept if getattr(r, "ai_suggested", False))
+        plan.runs = kept
         note = (
             f"budget_remaining={budget_remaining}: "
-            f"truncated {len(runs)} runs to {budget_remaining}"
+            f"truncated {len(runs)} runs to {budget_remaining} "
+            f"(kept {kept_suggested}/{n_suggested} ai_suggested)"
         )
         plan.notes = f"{plan.notes}\n{note}".strip() if getattr(plan, "notes", None) else note
     return plan
