@@ -161,3 +161,136 @@ def test_v15_prefilled_valid_ref_kept():
         texts=[], per_evidence_tokens={"CN123": {"zinc", "phosphate"}},
     )
     assert out.evidence_refs == ["CN123"]
+
+
+# ── P1-1 (review 2026-11-26)：名称↔CAS 一致性校验 ──────────────────────────
+
+
+def test_p1_1_fictional_name_with_real_cas_is_not_high():
+    """虚构名称借真实库内 CAS 不得拿 high：77-92-9 属于柠檬酸，不属于该名称。"""
+    formulas = [
+        RecommendedFormula(
+            name="g-probe2",
+            domain=ProductDomain.anticorrosion_coating,
+            components=[
+                RecommendedFormulaComponent(
+                    name="Zqxwobble resinoid",
+                    component_type="resin",
+                    weight_pct=100.0,
+                    cas_no="77-92-9",
+                ),
+            ],
+        )
+    ]
+    # strict：整个配方剔除（此前判 high、零引用、零警告、配方保留）。
+    out, warnings = ground_recommended_formulas(formulas, [], strict=True)
+    assert out == []
+    assert any("整个配方已剔除" in w for w in warnings)
+    # 非 strict：仅标记 low，不标 high。
+    out, _ = ground_recommended_formulas(formulas, [], strict=False)
+    assert out[0].components[0].grounding_confidence == "low"
+    assert out[0].components[0].evidence_refs == []
+
+
+def test_p1_1_real_name_with_wrong_cas_is_rejected_with_warning():
+    """真实名称配错 CAS 不得拿 high：磷酸锌登记 CAS 为 7779-90-0，非二甲苯 CAS。"""
+    formulas = [
+        RecommendedFormula(
+            name="g-probe3",
+            domain=ProductDomain.anticorrosion_coating,
+            components=[
+                RecommendedFormulaComponent(
+                    name="Zinc phosphate",
+                    component_type="inhibitor",
+                    weight_pct=10.0,
+                    cas_no="1330-20-7",
+                ),
+            ],
+        )
+    ]
+    out, warnings = ground_recommended_formulas(formulas, [], strict=True)
+    assert out == []
+    assert any("不一致" in w and "1330-20-7" in w and "7779-90-0" in w for w in warnings)
+    # 非 strict：保留但标 low，并带 cas_mismatch 明细。
+    out, warnings = ground_recommended_formulas(formulas, [], strict=False)
+    comp = out[0].components[0]
+    assert comp.grounding_confidence == "low"
+    assert any(d.hit_type == "cas_mismatch" for d in comp.evidence_details)
+    assert any("不一致" in w for w in warnings)
+
+
+def test_p1_1_right_name_right_cas_stays_high():
+    """正例：名称正确 + CAS 正确仍 high（回归保护）。"""
+    formulas = [
+        RecommendedFormula(
+            name="g-probe4",
+            domain=ProductDomain.anticorrosion_coating,
+            components=[
+                RecommendedFormulaComponent(
+                    name="Zinc phosphate",
+                    component_type="inhibitor",
+                    weight_pct=10.0,
+                    cas_no="7779-90-0",
+                ),
+            ],
+        )
+    ]
+    out, _ = ground_recommended_formulas(formulas, [], strict=True)
+    assert out[0].components[0].grounding_confidence == "high"
+
+
+def test_p1_1_cas_linked_to_name_in_evidence_stays_high():
+    """库外名称 + 证据同条目中名称与 CAS 共现，仍可经 CAS 分支判 high。"""
+    formulas = [
+        RecommendedFormula(
+            name="g-probe8",
+            domain=ProductDomain.anticorrosion_coating,
+            components=[
+                RecommendedFormulaComponent(
+                    name="Benzotriazole",
+                    component_type="inhibitor",
+                    weight_pct=1.0,
+                    cas_no="95-14-7",
+                ),
+            ],
+        )
+    ]
+    evidence = [
+        _ev("US777", "Benzotriazole (CAS 95-14-7) inhibits copper corrosion."),
+    ]
+    out, _ = ground_recommended_formulas(formulas, evidence, strict=True)
+    comp = out[0].components[0]
+    assert comp.grounding_confidence == "high"
+    assert any(d.hit_type == "cas" for d in comp.evidence_details)
+
+
+def test_p1_1_component_in_catalog_requires_name_cas_consistency():
+    """_component_in_catalog：单借 CAS 或单长 token 不再构成目录命中。"""
+    from app.services.grounded_recommend import (
+        _catalog_tokens,
+        _component_in_catalog,
+        _catalog_cas,
+    )
+
+    catalog = _catalog_tokens()
+    catalog_cas = _catalog_cas()
+    # 虚构名 + 真实 CAS：False（此前 True）。
+    assert not _component_in_catalog(
+        RecommendedFormulaComponent(name="Zqxwobble resinoid", cas_no="77-92-9"),
+        catalog, catalog_cas,
+    )
+    # 真实名 + 错 CAS：False（此前 True，靠单长 token "phosphate"）。
+    assert not _component_in_catalog(
+        RecommendedFormulaComponent(name="Zinc phosphate", cas_no="1330-20-7"),
+        catalog, catalog_cas,
+    )
+    # 真实名 + 对 CAS：True。
+    assert _component_in_catalog(
+        RecommendedFormulaComponent(name="Zinc phosphate", cas_no="7779-90-0"),
+        catalog, catalog_cas,
+    )
+    # 真实名（无 CAS）：True（精确名匹配）。
+    assert _component_in_catalog(
+        RecommendedFormulaComponent(name="Zinc phosphate"),
+        catalog, catalog_cas,
+    )

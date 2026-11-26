@@ -143,8 +143,15 @@ def suggest_next_experiments(
     minimize = (direction or "maximize") == "minimize"
     y_best = 0.0
     if existing:
-        vals = [rec.measured.get(obj_metric, 0.0) for rec in existing]
-        y_best = min(vals) if minimize else max(vals)
+        # D6-2（与 doe_explain._y_best 的 P3-C19 同款修法）：缺失目标指标
+        # 的记录跳过，不再默认 0.0 —— minimize 下一条缺失记录曾把
+        # y_best 拉成 0.0（真实值 300），全部候选点 EI≈0、选点退化为
+        # 计划顺序。全部记录都缺失时仍回 0.0（确实无任何观测时的旧
+        # fallback 语义，与解释层一致）。
+        vals = [(rec.measured or {}).get(obj_metric) for rec in existing]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            y_best = min(vals) if minimize else max(vals)
 
     # Runs that breached a spec are negative evidence. Expected improvement
     # cannot see them — a low value and a failed acceptance test look the same

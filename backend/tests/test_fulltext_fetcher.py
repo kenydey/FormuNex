@@ -128,14 +128,20 @@ def test_patent_hit_replaced_by_fulltext_chunks(monkeypatch):
     assert persisted == [("US1234567", "patent")]
 
 
-def test_failed_fetch_removes_row(monkeypatch):
+def test_failed_fetch_keeps_abstract_row(monkeypatch):
+    # 2026-11-26 审查 P1-4 批准的行为变更(原行为: 下载失败 → 移除行):
+    # 全文取不到时保留原摘要行(置 has_fulltext=False), 摘要本身是有效、
+    # 可引用的检索结果; 失败仍计入 report, dropped_abstracts 观测。
     _enable(monkeypatch)
     monkeypatch.setattr(ff, "_fetch_patent_text", lambda ev, t: None)
     rows = [_ev("US1234567")]
     out, report = ff.enrich_search_results(rows, persist=False)
-    assert out == []  # 下载失败 → 移除，不进结果/左栏
+    assert [e.identifier for e in out] == ["US1234567"]
+    assert out[0].has_fulltext is False
+    assert out[0].title == rows[0].title and out[0].snippet == rows[0].snippet
     assert report.attempted == 1
     assert report.succeeded == 0
+    assert report.dropped_abstracts == 1
 
 
 def test_max_docs_cap(monkeypatch):
@@ -192,12 +198,17 @@ def test_web_fetch_uses_trafilatura_fallback_chain(monkeypatch):
 
 
 def test_web_fetch_refuses_unsafe_urls(monkeypatch):
+    # 2026-11-26 审查 P1-4 批准的行为变更(原行为: 下载失败 → 移除行):
+    # 不安全 URL 仍拒绝下载(succeeded==0), 但摘要行保留(has_fulltext=False),
+    # 不从结果里删除。
     _enable(monkeypatch)
     out, report = ff.enrich_search_results(
         [_ev("http://127.0.0.1/internal", source="internet")], persist=False
     )
-    assert out == []  # unsafe URL 无法下载全文 → 移除
+    assert [e.identifier for e in out] == ["http://127.0.0.1/internal"]
+    assert out[0].has_fulltext is False
     assert report.succeeded == 0
+    assert report.dropped_abstracts == 1
 
 
 def test_literature_oa_flow(monkeypatch):

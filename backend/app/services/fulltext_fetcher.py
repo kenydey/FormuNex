@@ -75,6 +75,10 @@ class FulltextReport:
     attempted: int = 0
     succeeded: int = 0
     by_kind: dict[str, int] = field(default_factory=dict)
+    # P1-4 (2026-11-26 review): 全文取不到而被保留为摘要级证据的行数。
+    # 修复前这类行直接从结果里删除; 修复后保留原行 (has_fulltext=False),
+    # 此计数即"本会被丢弃、现被保留"的摘要行数, 供 filter payload 观测。
+    dropped_abstracts: int = 0
 
     def record(self, kind: str, ok: bool) -> None:
         self.attempted += 1
@@ -87,6 +91,7 @@ class FulltextReport:
             "attempted": self.attempted,
             "succeeded": self.succeeded,
             "by_kind": dict(self.by_kind),
+            "dropped_abstracts": self.dropped_abstracts,
         }
 
 
@@ -1047,8 +1052,10 @@ def enrich_search_results(
                 continue
         if kind:
             report.record(kind, False)
-            # 下载失败（无 OA / 403 / 超时 / 解析为空）→ 移除，不进结果/左栏。
-            # P0-1: 失败入重试队列（指数退避 ×3），fail-open。
+            # P1-4 (2026-11-26 review): 全文取不到时保留原摘要行(置
+            # has_fulltext=False), 而不是从结果里删除 —— 摘要本身是有效、
+            # 可引用的检索结果。失败仍入重试队列 (P0-1)。
+            report.dropped_abstracts += 1
             try:
                 from ..worker.tasks import enqueue_fulltext_retry
                 enqueue_fulltext_retry(
@@ -1058,13 +1065,15 @@ def enrich_search_results(
                 )
             except Exception:
                 pass
+            out.append(ev.model_copy(update={"has_fulltext": False}))
             continue
         out.append(ev)
 
     logger.info(
-        "fulltext_fetcher: %d/%d succeeded %s",
+        "fulltext_fetcher: %d/%d succeeded %s retained_failed=%d",
         report.succeeded,
         report.attempted,
         report.by_kind,
+        report.dropped_abstracts,
     )
     return out, report

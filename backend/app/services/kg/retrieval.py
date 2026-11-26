@@ -101,14 +101,26 @@ def retrieve(
             query, project_id=project_id
         )
 
-    pool: list[tuple[float, Evidence, str]] = list(mention_evs)
-    pool.extend(wikilink_evs)
+    # QA-04：先按通道归一化再合并（mention / semantic 各自除本轮最大值，
+    # 权重默认各 0.5；pre 固定 1.0），同一 chunk 两路只留一份。
+    entries: list[tuple[str, float, Evidence, str]] = [
+        ("mention", score, ev, cid) for score, ev, cid in mention_evs
+    ]
+    entries.extend(
+        ("semantic", score, ev, cid) for score, ev, cid in wikilink_evs
+    )
     for ev in semantic:
-        pool.append((float(ev.relevance), ev, _chunk_id_from_identifier(ev.identifier)))
+        entries.append(
+            ("semantic", float(ev.relevance), ev, _chunk_id_from_identifier(ev.identifier))
+        )
 
     if pre_evidence:
         for ev in pre_evidence:
-            pool.append((1.0, ev, _chunk_id_from_identifier(ev.identifier)))
+            entries.append(
+                ("pre", 1.0, ev, _chunk_id_from_identifier(ev.identifier))
+            )
+
+    pool = _normalize_and_merge_pool(entries, settings=settings)
 
     if plan_mode == "hybrid":
         pool.sort(key=lambda x: x[0], reverse=True)
@@ -297,7 +309,10 @@ def _mention_evidence(
             score += 0.5
         ev = Evidence(
             source=kind,
-            identifier=f"kb:{cid}",
+            # QA-04：mention 标识规范化为 kb:{source_id}#c{ord}，与语义路
+            # _chunk_to_evidence 同形，同一 chunk 两路可去重；tuple 第 3 元
+            # 仍是 chunk uuid（实体引用挂接用），不受标识改写影响。
+            identifier=f"kb:{chunk.source_id}#c{chunk.ord}",
             title=title,
             snippet=(chunk.text or "")[:800],
             relevance=min(score / 2.5, 1.0),
@@ -305,6 +320,104 @@ def _mention_evidence(
         out.append((score, ev, cid))
     out.sort(key=lambda x: x[0], reverse=True)
     return out, scan_total, truncated
+
+
+# QA-04：同一 chunk 的规范去重键 + 多通道归一化合并。
+#
+# 根因：mention 分（0.7，trade +1.0、实施例 +0.5，最高 2.2）与语义分
+# （hybrid 融合分，约 0–1）量纲不同却直接比大小；且 mention 标识
+# kb:<uuid> 与语义标识 kb:{source_id}#c{ord} 各说各话，去重失效。
+_KB_CANONICAL_RE = re.compile(r"^kb:[^#]+#c\d+$")
+
+
+def _canonical_chunk_key(ev: Evidence, cid: str) -> str:
+    """同一 chunk 的规范去重键。
+
+    规范 ``kb:{source_id}#c{ord}`` 本身即键；遗留 ``kb:<uuid>`` 用 uuid
+    兜底（与 mention 路的 chunk id 同源）；其余标识用 identifier 本身，
+    为空时回退 cid。
+    """
+    ident = (ev.identifier or "").strip()
+    if _KB_CANONICAL_RE.match(ident):
+        return ident
+    if ident.startswith("kb:") and "#" not in ident[3:]:
+        return f"kb-uuid:{cid or ident[3:]}"
+    return ident or (cid or "")
+
+
+def _normalize_and_merge_pool(
+    entries: list[tuple[str, float, Evidence, str]],
+    *,
+    settings=None,
+) -> list[tuple[float, Evidence, str]]:
+    """多通道分数归一化 + 同 chunk 合并。
+
+    - mention / semantic 两通道各自除以本轮最大值归一化到 [0, 1]；
+    - 同一 chunk（规范键见 ``_canonical_chunk_key``）合并为一条，
+      分数 = mention_weight * norm_mention + semantic_weight * norm_semantic
+      （缺失通道计 0；权重默认各 0.5，可由
+      ``kg_hybrid_mention_weight`` / ``kg_hybrid_semantic_weight`` 覆盖）；
+    - pre 通道（调用方已给证据）固定 1.0 置顶，不参与归一化；
+    - 合并后保留单通道最高归一化分对应的 Evidence；cid 优先取 mention
+      路的 chunk uuid（实体引用挂接用），其次任一非空 cid。
+    """
+    mention_w = 0.5
+    semantic_w = 0.5
+    if settings is not None:
+        try:
+            mention_w = float(getattr(settings, "kg_hybrid_mention_weight", 0.5) or 0.5)
+            semantic_w = float(getattr(settings, "kg_hybrid_semantic_weight", 0.5) or 0.5)
+        except (TypeError, ValueError):
+            mention_w, semantic_w = 0.5, 0.5
+    m_max = max((s for ch, s, _, _ in entries if ch == "mention"), default=0.0)
+    s_max = max((s for ch, s, _, _ in entries if ch == "semantic"), default=0.0)
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for channel, raw, ev, cid in entries:
+        key = _canonical_chunk_key(ev, cid) or f"\x00anon:{len(order)}"
+        slot = merged.get(key)
+        if slot is None:
+            slot = {
+                "mention": 0.0,
+                "semantic": 0.0,
+                "pre": False,
+                "ev": ev,
+                "cid": cid or "",
+                "best": -1.0,
+            }
+            merged[key] = slot
+            order.append(key)
+        if channel == "mention":
+            norm = (raw / m_max) if m_max > 0 else 0.0
+            if norm > slot["mention"]:
+                slot["mention"] = norm
+            if norm > slot["best"]:
+                slot["best"] = norm
+                slot["ev"] = ev
+            if cid:
+                slot["cid"] = cid
+        elif channel == "semantic":
+            norm = (raw / s_max) if s_max > 0 else 0.0
+            if norm > slot["semantic"]:
+                slot["semantic"] = norm
+            if norm > slot["best"]:
+                slot["best"] = norm
+                slot["ev"] = ev
+            if cid and not slot["cid"]:
+                slot["cid"] = cid
+        elif channel == "pre":
+            slot["pre"] = True
+            if not slot["cid"] and cid:
+                slot["cid"] = cid
+    out: list[tuple[float, Evidence, str]] = []
+    for key in order:
+        slot = merged[key]
+        if slot["pre"]:
+            score = 1.0
+        else:
+            score = mention_w * slot["mention"] + semantic_w * slot["semantic"]
+        out.append((score, slot["ev"], slot["cid"]))
+    return out
 
 
 def _apply_caps(
@@ -327,7 +440,9 @@ def _apply_caps(
     seen_id: dict[str, int] = {}
     deduped: list[tuple[float, Evidence, str]] = []
     for score, ev, cid in sorted(pool, key=lambda x: x[0], reverse=True):
-        key = ev.identifier or cid
+        # QA-04：去重键用规范 chunk 身份（kb:{source_id}#c{ord}），
+        # 同一 chunk 的 mention 版与语义版在此处只留一份。
+        key = _canonical_chunk_key(ev, cid)
         if key in seen_id:
             # 2.4：按 identifier 去重丢弃时，保留方继承丢弃方的图像证据
             # （排序不变，继承发生在丢弃那一刻）。
@@ -385,12 +500,23 @@ def _apply_caps(
             final.append((ev, cid))
             sources_used.add(sid)
 
+    # QA-04：轮询只决定"取哪些"（保每源多样性），最终输出按分数序——
+    # hybrid 的 sort 不再被轮询顺序丢弃，top-k 按分排列。
+    _scores = {id(ev): s for s, ev, _ in deduped}
+    final.sort(key=lambda item: _scores.get(id(item[0]), 0.0), reverse=True)
+
     return final, len(deduped), truncated
 
 
 def _chunk_id_from_identifier(identifier: str) -> str:
     if identifier.startswith("kb:"):
-        return identifier[3:]
+        rest = identifier[3:]
+        # QA-04：规范 kb:{source_id}#c{ord} 不含 chunk uuid，不可反推；
+        # 返回 ""（mention 路 tuple 自带 uuid；语义路此前返回的
+        # "source#cOrd" 当 chunk id 查实体引用恒为空，属静默错值）。
+        if "#" in rest:
+            return ""
+        return rest
     return ""
 
 

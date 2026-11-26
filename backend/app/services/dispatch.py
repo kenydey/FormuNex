@@ -162,10 +162,57 @@ def broker_reachable() -> bool:
 
 
 def _record_outbox_task_id(outbox_id: str | None, task_id: str) -> bool:
-    """Remember which Celery id the client holds, so recovery can replay under it."""
+    """Remember which Celery id the client holds, so recovery can replay under it.
+
+    Conditional write (X-P1-1): returns False when the row already carries
+    an id — the caller must re-read and reuse that id, not fail.
+    """
     from ..db.outbox_store import record_task_id
 
     return record_task_id(outbox_id, task_id)
+
+
+def get_outbox_task_id(outbox_id: str | None) -> str | None:
+    """Read the Celery id already recorded on an outbox row, if any.
+
+    X-P1-1 (review 2026-11-26): the submit path reads the row before
+    fixing a new id. Never raises (None on a missing row / DB failure);
+    the HTTP adapter uses it to build the 202 body with the reused id.
+
+    X-P1-1 follow-up (review 2026-11-26, plm_ts regression): an id is
+    only "already claimed" while its task is still running. A task whose
+    persisted result is already visible may still sit on a PENDING row —
+    ``on_success`` lands after the result becomes visible (seconds of
+    lag in eager mode) — and reusing that id makes the next submission
+    look like a replay of the finished task (document generation's P1-A6
+    guard then returns the old version instead of building a new one).
+    Same close-from-snapshot guard as dispatcher.recover_stalled (SR-002
+    stopgap): when the recorded id already has a terminal snapshot, close
+    the row from the snapshot, clear the id, and report None so the
+    caller mints a fresh id. Lives here (not in db/outbox_store) because
+    the db layer may not import worker code — the only documented
+    db -> worker edge is dispatcher -> worker.tasks (stage4 layering
+    test pins it).
+    """
+    from ..db.outbox_store import close_terminal_row, get_task_id
+
+    task_id = get_task_id(outbox_id)
+    if not task_id:
+        return None
+    try:
+        from ..worker.tasks import load_persisted_task
+
+        snap = load_persisted_task(task_id)
+        snap_state = getattr(snap.state, "value", snap.state) if snap is not None else None
+    except Exception:  # noqa: BLE001 — unreadable snapshot means "no guard", reuse as before
+        snap, snap_state = None, None
+    if snap_state in ("completed", "failed", "cancelled"):
+        error = (snap.message or "") if snap_state == "failed" else None
+        if close_terminal_row(outbox_id, snap_state, task_id, error=error):
+            return None
+        # Row changed under us (lost a race) — re-read once.
+        return get_task_id(outbox_id)
+    return task_id
 
 
 class DispatchUnavailable(Exception):
@@ -222,25 +269,78 @@ def dispatch_task_kernel(
     a replay can still run the payload twice. ``detail``
     stays a plain string — the frontend parses error bodies as JSON with a
     string detail, so the id travels in a header, not in the body.
+
+    X-P1-1 (review 2026-11-26): when the outbox row already carries a task
+    id, that id is reused — never minted over or overwritten. The dispatch
+    flow below still runs (probe + publish) under the reused id: skipping
+    it would turn a broker-down retry into a false 202 and break the
+    dispatch-guard contract (broker down / post-probe failure must stay
+    503), because a row cannot tell "published" from "recorded then
+    503'd". One id, not one publish: a resubmission may execute twice
+    under the same id, which D-4 accepts; what must never happen is a
+    second id overwriting the row. The conditional record below is what
+    makes the first claim win; a lost claim race re-reads the row and
+    reuses the winner's id.
     """
     from ..config import get_settings
 
-    # The id is the source of truth, fixed before anything else: it is
-    # recorded on the outbox row first (so even a probe failure leaves a
-    # recoverable row under the id the 503 header will claim), then
-    # published under exactly that id.
+    # X-P1-1 (review 2026-11-26, SR-015 prescribed fix, first half): a row
+    # that already carries a task id is a resubmission of work already
+    # claimed (503 retry, double-click). Reuse that id — never mint a
+    # second one and never overwrite the row, which used to orphan the
+    # first task's recovery when the second one crashed. The probe +
+    # publish below still run under the reused id: a row cannot tell
+    # "published" from "recorded then 503'd at the probe", so skipping
+    # the flow would turn a broker-down retry into a false 202 and break
+    # the dispatch-guard contract (broker down / post-probe failure must
+    # stay 503). One Celery id, not one publish — a resubmission may
+    # execute twice under the same id (D-4 at-least-once).
     task_id = task_id or str(uuid.uuid4())
-    if outbox_id and not _record_outbox_task_id(outbox_id, task_id):
-        # Stage 5 / SR-088: a 503 whose id never landed on the row is
-        # unrecoverable — the client would poll an id recovery cannot
-        # replay under. Fail the dispatch here, before the probe, instead
-        # of warning and publishing an orphan id.
-        logger.error(
-            "outbox %s: task id %s not recorded; failing dispatch",
-            outbox_id,
-            task_id,
-        )
-        raise DispatchUnavailable(OUTBOX_RECORD_DETAIL, task_id)
+    if outbox_id:
+        existing_id = get_outbox_task_id(outbox_id)
+        if existing_id:
+            logger.debug(
+                "outbox %s: already claimed by task %s; reusing id",
+                outbox_id,
+                existing_id,
+            )
+            task_id = existing_id
+        elif not _record_outbox_task_id(outbox_id, task_id):
+            # Conditional write (X-P1-1) lost a claim race between the
+            # read above and this write: the winner's id is on the row
+            # now — reuse it. Only when the row is still id-less (missing
+            # row / DB failure) is this the SR-088 hard failure.
+            winner_id = get_outbox_task_id(outbox_id)
+            if winner_id:
+                logger.debug(
+                    "outbox %s: claim race lost to task %s; reusing winner id",
+                    outbox_id,
+                    winner_id,
+                )
+                task_id = winner_id
+            elif _record_outbox_task_id(outbox_id, task_id):
+                # X-P1-1 follow-up: no winner id because the snapshot
+                # guard in get_outbox_task_id closed the winner's row from
+                # a terminal snapshot (it finished between the record and
+                # the re-read) — the row is id-less now, so claim it with
+                # my id instead of failing. Only a second failed record
+                # is the SR-088 hard failure.
+                logger.debug(
+                    "outbox %s: winner finished; claimed with %s",
+                    outbox_id,
+                    task_id,
+                )
+            else:
+                # Stage 5 / SR-088: a 503 whose id never landed on the row is
+                # unrecoverable — the client would poll an id recovery cannot
+                # replay under. Fail the dispatch here, before the probe, instead
+                # of warning and publishing an orphan id.
+                logger.error(
+                    "outbox %s: task id %s not recorded; failing dispatch",
+                    outbox_id,
+                    task_id,
+                )
+                raise DispatchUnavailable(OUTBOX_RECORD_DETAIL, task_id)
     if not broker_reachable():
         raise DispatchUnavailable(BROKER_DOWN_DETAIL, task_id)
 

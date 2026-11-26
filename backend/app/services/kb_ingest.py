@@ -45,7 +45,8 @@ def ingest_enabled() -> bool:
 # ── 主题预筛(永久规则 2026-09) ─────────────────────────────────────────────
 # 背景: 自动入库按 relevance+fetchable 全收, 会吞进磁性/储氢/电池/半导体/
 # 天文/纯力学等与"金属表面处理/配方研发"无关的检索结果(2026-09-04 一次吞 29 篇)。
-# 规则: 项目标题含领域锚词时, 入库前按 高判别词≥1 或 低判别词≥2 放行,
+# 规则: 项目标题含领域锚词时, 入库前按 高判别词≥1 放行(2026-11-26 审查 P1-3
+# 收紧: 低判别词≥2 不再单独放行, 仅作辅助信号),
 # 反向硬拦词命中且高判别词<2 时拦截。专利豁免(主动 IP 检索), 无锚词不过滤。
 
 # 高判别词(工艺/功能/配方/腐蚀领域)——命中任一即视为领域内(子串匹配, stem 安全)
@@ -74,15 +75,18 @@ _TOPIC_BLOCK = [
     "磁性", "超导", "电池", "半导体", "光伏", "天文", "星际", "核聚变",
     "生物医学", "植入", "可降解", "硬化", "位错", "疲劳", "储氢", "高熵",
     "刀具", "准晶",
-    "magnetic", "magnetoresist", "superconduct", "battery", "electrode",
+    "magnetic", "magnetoresist", "superconduct", "battery",
     "photovoltaic", "perovskite", "semiconductor", "astronom", "interstellar",
     "gravitat", "nuclear", "fusion", "quasicrystal", "biomedical", "implant",
     "biodegrad", "dental", "dislocation", "hardening", "tensile", "creep",
     "fatigue", "high-entropy", "nanolamellar", "electrolyzer", "hydride",
-    "heusler", "quasar", "doping", "hydrogen storage", "cutting",
+    "heusler", "quasar", "hydrogen storage", "cutting",
 ]
 # 需要词边界而非子串的短反向词(避免 hall∈shall 之类误伤)
-_TOPIC_BLOCK_WORD = ["hall", "doping"]
+# P1-5 (2026-11-26 review): "electrode" 由子串表移入此处 —— 子串匹配会把
+# 电沉积核心词 electrodeposit(ion/ed) 一并命中, 系统性误拦电沉积文献。
+# "doping" 只留在此表(子串表里的重复项已删, 避免一次命中计两次)。
+_TOPIC_BLOCK_WORD = ["hall", "doping", "electrode"]
 
 
 def _topic_anchor(project_id: str | None = None, query: str | None = None) -> tuple[set[str], set[str]] | None:
@@ -125,8 +129,9 @@ def _topic_hits(text: str) -> tuple[int, int, int]:
     n_high = sum(1 for w in _TOPIC_HIGH if w in text)
     n_low = sum(1 for w in _TOPIC_LOW if w in text)
     n_block = sum(1 for w in _TOPIC_BLOCK if w in text)
-    for w in _TOPIC_BLOCK_WORD:  # 词边界版
-        if re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", text):
+    for w in _TOPIC_BLOCK_WORD:  # 词边界版(可带复数 s): "electrode(s)" 命中,
+        # "electrodeposition" / "electrodeposited" 不命中 (P1-5)
+        if re.search(rf"(?<![a-z]){re.escape(w)}s?(?![a-z])", text):
             n_block += 1
     return n_high, n_low, n_block
 
@@ -180,13 +185,13 @@ def topic_gate(
             return True
         # still allow generic high/low path below as weak channel
 
-    n_high, n_low, n_block = _topic_hits(text_l)
+    n_high, _n_low, n_block = _topic_hits(text_l)
     if n_block and n_high < 2:
         return False
     if n_high >= 1:
         return True
-    if n_low >= 2:
-        return True
+    # P1-3 (2026-11-26 review): 低判别词(基材信号)不再单独放行 —— 仅含
+    # "铝/合金"等基材词、无任一高判别词的文献(如纯焊接文)此前被误放行。
     return False
 
 
@@ -380,14 +385,19 @@ def _topicality(ev: Evidence, query: str) -> float:
     `kb_ingest_min_relevance = 0.45` behaves as "position < 27.5" and waves the
     whole first page through — it filters on how far down the list OpenAlex put
     a row, not on whether the row is about the topic.
+
+    P1-3 (2026-11-26 review): 分词计分 —— 查询与标题+摘要同样经
+    ``_keywords`` 分词(中文 jieba 词 + 二字词, 英文轻量词干归一)后取交集,
+    而非在原文上做单字子串命中计数(单字命中曾让任意铝合金论文对 8 字
+    查询得 0.50, 越过 0.45 阈值)。
     """
     from .literature import _keywords
 
     kws = _keywords(query or "")
     if not kws:
         return 0.0
-    blob = f"{getattr(ev, 'title', '') or ''} {getattr(ev, 'snippet', '') or ''}".casefold()
-    return sum(1 for k in kws if k in blob) / len(kws)
+    blob = f"{getattr(ev, 'title', '') or ''} {getattr(ev, 'snippet', '') or ''}"
+    return len(kws & _keywords(blob)) / len(kws)
 
 
 def _log_relevance_shadow(

@@ -860,3 +860,65 @@ def rerank_scored(
         "backend": "none",
         "reason": "cross_encoder_unavailable",
     }
+
+
+# ── QA-03：同步 / 流式共用的精排入口（单一开关语义）────────────────────
+# 根因：同步只在 chat_cross_encoder_enabled 时精排（prefer="cross_encoder"，
+# 默认 BM25-only），流式无条件调 rerank_scored（prefer 为空 → auto，
+# CE 未缓存时自动回退 LLM 精排，成本/延迟不可控且两路顺序不一致）。
+# 统一语义：开关只有一个 chat_cross_encoder_enabled（默认关 → 两路默认
+# 均 BM25-only）；开后后端默认 CE-only，LLM 精排只在显式指定时走
+# （prefer="llm" 或 search_rerank_backend="llm"）；候选数一律截到
+# cross_encoder_max_candidates；meta 含 applied/backend/candidates，
+# 供调用方记入日志或 done.meta，可观测。
+
+
+def recall_and_rerank(
+    query: str,
+    candidates: list[Evidence],
+    k: int | None = None,
+    req: Requirement | None = None,
+    *,
+    settings=None,
+    prefer: str | None = None,
+) -> tuple[list[RerankScoredItem], dict]:
+    """Unified chat rerank (QA-03): one gate, CE-only by default.
+
+    Returns ``(items, meta)``. When rerank is disabled or not applied,
+    ``items`` preserve the input order (truncated to ``k``) and
+    ``meta["applied"]`` is False — never a silent success.
+    """
+    from ..config import get_settings
+
+    settings = settings or get_settings()
+    top_k = int(k or getattr(settings, "chat_rerank_top_k", 20) or 20)
+    max_cands = max(
+        1, int(getattr(settings, "cross_encoder_max_candidates", 30) or 30)
+    )
+    pool = list(candidates or [])[:max_cands]
+    backend = (prefer or getattr(settings, "search_rerank_backend", None) or "auto")
+    backend = str(backend).strip().lower()
+    if backend not in ("auto", "cross_encoder", "llm"):
+        backend = "auto"
+    # auto == CE-only；LLM 只在显式指定时走。
+    effective_prefer = "llm" if backend == "llm" else "cross_encoder"
+    meta_base = {
+        "candidates": len(pool),
+        "truncated_to": max_cands,
+        "prefer": effective_prefer,
+    }
+    if not pool:
+        return [], {**meta_base, "applied": False, "backend": "none", "reason": "empty"}
+    if effective_prefer != "llm" and not bool(
+        getattr(settings, "chat_cross_encoder_enabled", False)
+    ):
+        return _passthrough_scored(pool, top_k), {
+            **meta_base,
+            "applied": False,
+            "backend": "none",
+            "reason": "chat_rerank_disabled",
+        }
+    items, meta = rerank_scored(
+        query, pool, k=top_k, req=req, prefer=effective_prefer
+    )
+    return items, {**meta_base, **meta}

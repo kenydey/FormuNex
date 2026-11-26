@@ -229,6 +229,12 @@ def _send_wiki_lint_sweep(payload: dict, task_id: str | None = None) -> None:
     _publish(run_wiki_lint_sweep_task, payload, task_id)
 
 
+def _send_kb_ingest(payload: dict, task_id: str | None = None) -> None:
+    from ..worker.tasks import run_kb_ingest_task
+
+    _publish(run_kb_ingest_task, payload, task_id)
+
+
 # Single source of truth for what recovery may replay. Every operation that
 # ``api/*`` or ``services/*`` enqueues through ``enqueue_outbox`` MUST have an
 # entry here (a test pins that); audit-only operations deliberately do not.
@@ -261,6 +267,9 @@ _HANDLERS: dict[str, Callable[..., None]] = {
     "document_generate": _send_document_generate,
     "wiki_lint_run": _send_wiki_lint_run,
     "wiki_lint_sweep": _send_wiki_lint_sweep,
+    # P1-6 (2026-11-26 review): kb_ingest wired to outbox (see
+    # worker/tasks/kb.py run_kb_ingest_task); recovery may replay it.
+    "kb_ingest": _send_kb_ingest,
 }
 
 DISPATCHABLE_OPERATIONS: tuple[str, ...] = tuple(_HANDLERS)

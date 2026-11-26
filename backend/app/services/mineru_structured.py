@@ -60,6 +60,12 @@ class StructuredBlock:
 class MinerUStructured:
     markdown: str
     blocks: list[StructuredBlock] = field(default_factory=list)
+    # P1-2 (review 2026-11-26): 1-based pages MinerU returned no blocks
+    # for. They are also visible in `markdown` as placeholders and in a
+    # user-facing note; this list carries them for callers that record
+    # them structurally (e.g. ParseResult.table_stats in parsing.py —
+    # wiring there is a follow-up, outside this wave's files).
+    missing_pages: list[int] = field(default_factory=list)
 
     @property
     def tables(self) -> list[StructuredBlock]:
@@ -490,12 +496,50 @@ def render_markdown(blocks: list[StructuredBlock]) -> str:
         # so empty blocks left marker-only lines in the output.
         if not parts:
             continue
+        # P2-4 (review 2026-11-26): a block with page_no None carries no
+        # trustworthy page attribution — do not stamp a false p.1 on it.
+        # It is rendered in document order with no page marker; the
+        # following block with a real page number still emits its marker.
         if b.page_no != last_page:
-            out.append(page_marker(b.page_no or 1))
+            if b.page_no is not None:
+                out.append(page_marker(b.page_no))
             last_page = b.page_no
         out.append(block_marker(b.kind))
         out.extend(parts)
     return "\n\n".join(p for p in out if p.strip())
+
+
+def _insert_missing_page_placeholders(
+    blocks: list[StructuredBlock], missing_pages: list[int], n_pages: int
+) -> list[StructuredBlock]:
+    """Insert a visible placeholder block for each page MinerU returned no
+    blocks for (P1-2, review 2026-11-26), in page order.
+
+    A missing page has no blocks by definition, so the placeholder is the
+    page's only entry; blocks with no usable page number (or one outside
+    the document) keep their document order at the end.
+    """
+    missing = set(missing_pages)
+    by_page: dict[int, list[StructuredBlock]] = {}
+    rest: list[StructuredBlock] = []
+    for b in blocks:
+        if b.page_no is None or b.page_no < 1 or b.page_no > n_pages:
+            rest.append(b)
+        else:
+            by_page.setdefault(b.page_no, []).append(b)
+    out: list[StructuredBlock] = []
+    for n in range(1, n_pages + 1):
+        out.extend(by_page.get(n, []))
+        if n in missing:
+            out.append(
+                StructuredBlock(
+                    page_no=n,
+                    kind="text",
+                    text=f"> _（第 {n} 页 MinerU 未返回内容）_",
+                )
+            )
+    out.extend(rest)
+    return out
 
 
 # ── entry point ────────────────────────────────────────────────────────────
@@ -529,7 +573,76 @@ def parse_structured(content: bytes) -> MinerUStructured | None:
     if document is None or not document.blocks:
         return None
     blocks = _normalise_blocks(document)
-    structured = MinerUStructured(markdown=render_markdown(blocks), blocks=blocks)
+    # P2-4 (review 2026-11-26): mirror hybrid `_parse_scanned`'s all-zero
+    # detection (P2-B12, hybrid-only until now). MinerU's `_normalise`
+    # collapses a missing page_idx to 0, so "every block claims page 0"
+    # is the only observable signal — and it is ambiguous with a genuine
+    # page-1-only result. Like hybrid, only treat it as missing page info
+    # when the document has more than one page; a single-page document
+    # keeps its p.1 attribution harmlessly. Page attribution is then
+    # untrustworthy, so the blocks render in document order with
+    # page_no None (render_markdown emits no false page marker) and the
+    # P1-2 coverage check below is skipped — it cannot tell a missing
+    # page from an unattributed block.
+    # NOTE (partial-missing limitation): a single block whose page_idx is
+    # missing is indistinguishable from a genuine page-1 block once
+    # mineru_cloud._normalise has collapsed it to 0, so partial missing
+    # page_idx cannot be detected here. Telling them apart needs
+    # mineru_cloud.py to preserve the missing signal (e.g. a sentinel),
+    # which is outside this wave's files — see the wave report.
+    lengths = _page_text_lengths(content)
+    n_pages = len(lengths) if lengths else None
+    missing_pages: list[int] = []
+    if (
+        n_pages is not None
+        and n_pages > 1
+        and all((b.page_idx or 0) == 0 for b in document.blocks)
+    ):
+        logger.warning(
+            "mineru_cloud: MinerU returned no page indices for a %d-page "
+            "document — rendering %d blocks in document order",
+            n_pages,
+            len(blocks),
+        )
+        try:
+            from .parse_notices import note
+
+            note(
+                f"MinerU 返回的解析块无页码信息（{n_pages} 页文档），"
+                "已按文档顺序合并呈现"
+            )
+        except Exception:
+            pass
+        for b in blocks:
+            b.page_no = None
+    elif n_pages is not None:
+        # P1-2 (review 2026-11-26): whole-document MinerU path had no
+        # page-coverage check — a page MinerU returned zero blocks for
+        # vanished without a trace. Expected pages come from the local
+        # fitz probe; every expected page with no blocks gets a visible
+        # placeholder block instead of disappearing.
+        covered = {b.page_no for b in blocks if b.page_no is not None}
+        missing_pages = [n for n in range(1, n_pages + 1) if n not in covered]
+        if missing_pages:
+            logger.warning(
+                "mineru_cloud: MinerU returned no blocks for page(s) %s "
+                "of a %d-page document",
+                ", ".join(str(n) for n in missing_pages),
+                n_pages,
+            )
+            try:
+                from .parse_notices import note
+
+                note(
+                    f"MinerU 未返回第 {', '.join(str(n) for n in missing_pages)} 页内容，"
+                    f"已用占位标记（共 {n_pages} 页文档）"
+                )
+            except Exception:
+                pass
+            blocks = _insert_missing_page_placeholders(blocks, missing_pages, n_pages)
+    structured = MinerUStructured(
+        markdown=render_markdown(blocks), blocks=blocks, missing_pages=missing_pages
+    )
     formula_gatekeeper(structured)  # count-only unless explicitly enabled
     return structured
 

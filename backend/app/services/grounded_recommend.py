@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from ..domain.chemistry import normalize_role
-from ..domain.knowledge import RAW_MATERIALS
+from ..domain.knowledge import RAW_MATERIALS, TRADE_ALIASES
 from ..domain.schemas import (
     Evidence,
     EvidenceRef,
@@ -156,12 +157,87 @@ def _component_in_catalog(
     catalog: set[str],
     catalog_cas: set[str],
 ) -> bool:
-    name_toks = {t for t in _tokens(comp.name) | _tokens(comp.zh_name or "") if len(t) >= 5}
+    # P1-1 (review 2026-11-26): a CAS number alone never counts as a catalog
+    # hit — it must be the CAS registered for THIS name (a CAS borrowed from
+    # another material must not ground the component). A single long token
+    # no longer counts either. A hit is an exact/alias name match or a
+    # >=2-token overlap.
     comp_cas = (comp.cas_no or "").strip().lower()
-    if comp_cas and comp_cas in catalog_cas:
+    registered = _registered_cas_for(comp)
+    if comp_cas and registered and comp_cas not in registered:
+        return False
+    if _catalog_exact_name_match(comp):
         return True
-    overlap = name_toks & catalog
-    return len(overlap) >= 2 or any(len(t) >= 8 for t in overlap)
+    name_toks = {t for t in _tokens(comp.name) | _tokens(comp.zh_name or "") if len(t) >= 5}
+    return len(name_toks & catalog) >= 2
+
+
+@lru_cache(maxsize=1)
+def _catalog_name_index() -> tuple[dict[str, str], dict[str, set[str]]]:
+    """Normalized name -> canonical catalog key; key -> registered CAS set.
+
+    Keys cover canonical names, Chinese names and trade aliases, all
+    lower-cased, so "Zinc Phosphate", "磷酸锌" and "zinc phosphate" all
+    resolve to the same catalog entry and its registered CAS.
+    """
+    name_to_key: dict[str, str] = {}
+    key_to_cas: dict[str, set[str]] = {}
+    for key, spec in RAW_MATERIALS.items():
+        key_to_cas[key] = set()
+        cas = str(spec.get("cas_no") or "").strip().lower()
+        if cas:
+            key_to_cas[key].add(cas)
+        for variant in (key, spec.get("zh_name")):
+            if variant:
+                name_to_key[str(variant).strip().lower()] = key
+    for alias, key in TRADE_ALIASES.items():
+        if key in RAW_MATERIALS:
+            name_to_key[alias.strip().lower()] = key
+    return name_to_key, key_to_cas
+
+
+def _registered_cas_for(comp: RecommendedFormulaComponent) -> set[str]:
+    """CAS numbers the catalog registers for this component's name (any spelling)."""
+    name_to_key, key_to_cas = _catalog_name_index()
+    out: set[str] = set()
+    for cand in [comp.name, comp.zh_name, *_name_variants(comp)]:
+        key = name_to_key.get((cand or "").strip().lower())
+        if key:
+            out |= key_to_cas.get(key, set())
+    return out
+
+
+def _catalog_exact_name_match(comp: RecommendedFormulaComponent) -> bool:
+    """True when the component's name (any spelling) is a catalog name/alias."""
+    name_to_key, _ = _catalog_name_index()
+    for cand in [comp.name, comp.zh_name, *_name_variants(comp)]:
+        if (cand or "").strip().lower() in name_to_key:
+            return True
+    return False
+
+
+def _cas_linked_in_evidence(
+    comp: RecommendedFormulaComponent,
+    cas: str,
+    texts: list[tuple[str, str]],
+) -> bool:
+    """True when the component's name and this CAS co-occur in one evidence item.
+
+    The evidence corpus is the only other registry of name<->CAS pairings: a
+    CAS mentioned in the same snippet as the component name is registered
+    *for that name*; a CAS mentioned anywhere else in the corpus is not.
+    (Co-occurrence is a weak link — a snippet naming two substances can
+    misattribute — but it is the registry the review prescribes for names
+    the catalog does not cover.)
+    """
+    if not texts:
+        return False
+    cas = (cas or "").strip().lower()
+    by_ident = dict(texts)
+    for ident in _verbatim_refs(comp, texts):
+        if cas and cas in by_ident.get(ident, ""):
+            return True
+    return False
 
 
 def _catalog_tokens() -> set[str]:
@@ -254,31 +330,68 @@ def _ground_component(
     name_toks = {t for t in raw_toks if len(t) >= 5}
     comp_cas = (comp.cas_no or "").strip().lower()
 
-    if comp_cas and (comp_cas in corpus_cas or comp_cas in catalog_cas):
-        # v16: CAS 分支也要复核预填 refs 的相关性 —— 存在但无关的真实 ID
-        #（如磷酸锌预填了环氧树脂的证据 ID）不能标 high。
-        related = set(_match_evidence_ids(comp.name, per_evidence_tokens, id_map))
-        refs = [r for r in refs if r in related]
-        if not refs:
-            refs = _match_evidence_ids(comp.name, per_evidence_tokens, id_map)
-        # v20-1: 引用可解释性 —— 记录命中原因。
-        # v21-fix: 用 EvidenceRef 对象而非 dict，避免 Pydantic 警告。
-        details = [
-            EvidenceRef(
-                id=r,
-                hit_type="cas",
-                hit_detail=f"CAS {comp.cas_no} 命中",
-                confidence="high",
+    # P1-1 (review 2026-11-26): a CAS number on its own proves nothing
+    # about THIS component — it must be registered for this name in the
+    # catalog, or co-occur with the name in one evidence item. A borrowed
+    # CAS (a real number belonging to another substance) previously bought
+    # "high" with zero references and zero warnings.
+    if comp_cas:
+        registered = _registered_cas_for(comp)
+        linked = _cas_linked_in_evidence(comp, comp_cas, texts or [])
+        if registered or linked:
+            if comp_cas in registered or linked:
+                # v16: CAS 分支也要复核预填 refs 的相关性 —— 存在但无关的真实 ID
+                #（如磷酸锌预填了环氧树脂的证据 ID）不能标 high。
+                related = set(_match_evidence_ids(comp.name, per_evidence_tokens, id_map))
+                refs = [r for r in refs if r in related]
+                if not refs:
+                    refs = _match_evidence_ids(comp.name, per_evidence_tokens, id_map)
+                # v20-1: 引用可解释性 —— 记录命中原因。
+                # v21-fix: 用 EvidenceRef 对象而非 dict，避免 Pydantic 警告。
+                details = [
+                    EvidenceRef(
+                        id=r,
+                        hit_type="cas",
+                        hit_detail=f"CAS {comp.cas_no} 命中",
+                        confidence="high",
+                    )
+                    for r in refs
+                ]
+                return comp.model_copy(
+                    update={
+                        "evidence_refs": refs,
+                        "evidence_details": details,
+                        "grounding_confidence": "high",
+                    }
+                )
+            # Name↔CAS mismatch: the name is registered under a different
+            # CAS (or only linked to a different CAS in evidence). The
+            # identity itself is suspect, so no "high" and no carried refs;
+            # the "cas_mismatch" detail is surfaced as a warning by
+            # ground_recommended_formulas. Strict mode drops the component.
+            registered_display = ", ".join(sorted(registered)) if registered else "无登记 CAS"
+            reason = (
+                f"{comp.name}: 申报 CAS {comp.cas_no} 与登记 CAS"
+                f"（{registered_display}）不一致，名称↔CAS 未通过一致性校验"
             )
-            for r in refs
-        ]
-        return comp.model_copy(
-            update={
-                "evidence_refs": refs,
-                "evidence_details": details,
-                "grounding_confidence": "high",
-            }
-        )
+            return comp.model_copy(
+                update={
+                    "evidence_refs": [],
+                    "evidence_details": [
+                        EvidenceRef(
+                            id=comp.cas_no or "",
+                            hit_type="cas_mismatch",
+                            hit_detail=reason,
+                            confidence="low",
+                        )
+                    ],
+                    "grounding_confidence": "low",
+                    "selection_reason": reason,
+                }
+            )
+        # No ground truth for this name's CAS (name not in the catalog and
+        # no evidence links a CAS to it): the CAS grants nothing; fall
+        # through to name-based grounding below.
 
     # The evidence states the component by name: that is support, however short
     # the name is or whichever script it is written in.
@@ -313,7 +426,15 @@ def _ground_component(
 
     catalog_overlap = name_toks & catalog
     # One shortish role-like token (e.g. "additive") is not enough to ground.
-    catalog_hit = len(catalog_overlap) >= 2 or any(len(t) >= 8 for t in catalog_overlap)
+    # P1-1 (review 2026-11-26): a single long token (e.g. "phosphate")
+    # no longer grounds a component on its own — it used to let a wrong-CAS
+    # component through. A catalog hit is now an exact/alias name match
+    # (specialty roles only — commodity ingredients keep their deliberate
+    # "medium, flagged for a human" treatment, see test_grounding_commodity)
+    # or a >=2-token overlap.
+    catalog_hit = len(catalog_overlap) >= 2 or (
+        _catalog_exact_name_match(comp) and not _is_commodity(comp)
+    )
     token_hit = bool(raw_toks & corpus)
     strong_token_hit = token_hit and len(raw_toks & corpus) >= 2
 
@@ -418,6 +539,18 @@ def ground_recommended_formulas(
         low = [c.name for c in comps if c.grounding_confidence == "low"]
         medium = [c.name for c in comps if c.grounding_confidence == "medium"]
         form_warnings = list(rec.warnings)
+        # P1-1 (review 2026-11-26): surface name<->CAS mismatch reasons
+        # recorded by _ground_component ("cas_mismatch" details) — the drop
+        # warning alone does not say WHY the component was distrusted.
+        mismatch_msgs = [
+            d.hit_detail
+            for c in comps
+            for d in (c.evidence_details or [])
+            if getattr(d, "hit_type", "") == "cas_mismatch" and d.hit_detail
+        ]
+        if mismatch_msgs:
+            form_warnings.extend(mismatch_msgs)
+            warnings.extend(f"{rec.name}: {m}" for m in mismatch_msgs)
         if medium:
             form_warnings.append(
                 f"常规成分未在证据/材料库中核实（已保留，请人工确认）: {', '.join(medium[:5])}"

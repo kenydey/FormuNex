@@ -11,6 +11,7 @@ Gated by ``FORMUNEX_KB_V2_ENABLED`` (default on; pure-local, no network).
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import time
@@ -42,6 +43,45 @@ _EMBED_FAIL_COUNT: dict[str, int] = {}
 _EMBED_BREAKER_THRESHOLD = 5
 _EMBED_BROKEN: dict[str, float] = {}  # v22: 模型名 → 熔断时间戳（含 TTL，超时自动半开重试）
 _EMBED_BREAKER_COOLDOWN_S = 600.0  # v22: 熔断冷却时间（秒），超时后允许一次半开重试
+
+# B1（2026-11-26 全面审查）：每源 chunk 上限截断不再只记一条 warning。
+# 进程内累计计数（chunks / sources）并入 /api/kb/stats 的
+# quality_gate_drops.ingest.chunk_cap_truncated；本次调用的截断详情另存
+# 在 contextvar 里，供 ingest 响应 warnings 读取（见 last_chunk_cap_warning）。
+# 与 kb_retrieval_gate 的计数器分开：该模块的 reason 白名单没有
+# chunk_cap_truncated 一项，硬调 record_gate_drop 会被静默忽略。
+_CHUNK_CAP_LOCK = _threading.Lock()
+_CHUNK_CAP_COUNTS = {"truncated_chunks": 0, "truncated_sources": 0}
+_LAST_CHUNK_CAP_WARNING: contextvars.ContextVar[dict | None] = (
+    contextvars.ContextVar("kb_last_chunk_cap_warning", default=None)
+)
+
+
+def chunk_cap_truncation_stats() -> dict:
+    """B1：累计截断计数 + 本次调用的截断警告（无截断时为 None）。"""
+    with _CHUNK_CAP_LOCK:
+        return {
+            "truncated_chunks": _CHUNK_CAP_COUNTS["truncated_chunks"],
+            "truncated_sources": _CHUNK_CAP_COUNTS["truncated_sources"],
+            "last_warning": _LAST_CHUNK_CAP_WARNING.get(),
+        }
+
+
+def last_chunk_cap_warning() -> dict | None:
+    """B1：本次 ingest 调用因每源 chunk 上限被截断的警告，无截断时为 None。
+
+    供 POST /api/kb/ingest 在 IngestResponse.warnings 中原样返回
+    （接线见 ingest_tx / api/kb，另案）。
+    """
+    return _LAST_CHUNK_CAP_WARNING.get()
+
+
+def reset_chunk_cap_truncation_stats() -> None:
+    """Test helper — 截断计数与本次警告清零（进程重启同效）。"""
+    with _CHUNK_CAP_LOCK:
+        _CHUNK_CAP_COUNTS["truncated_chunks"] = 0
+        _CHUNK_CAP_COUNTS["truncated_sources"] = 0
+    _LAST_CHUNK_CAP_WARNING.set(None)
 
 def reset_embed_breaker() -> None:
     """Close every embedding-model breaker (test seam; a restart does the same in production).
@@ -555,6 +595,8 @@ def prepare_chunk_rows(
     from .chunking import chunk_markdown
     from . import ingest_timing as timing
 
+    # B1：本次调用的截断警告先清零，避免上一次 ingest 的警告被误读为本次的。
+    _LAST_CHUNK_CAP_WARNING.set(None)
     settings = get_settings()
     with timing.span("chunk"):
         # v2 P1-10: 专利 Example N 感知切分 —— 专利源按示例边界切分。
@@ -580,13 +622,51 @@ def prepare_chunk_rows(
             if len(c.text.strip()) > 30
             or (is_formula_text(c.text, c.block_type) and len(c.text.strip()) >= formula_floor)
         ]
-        # P2-5: 超长文档截断记 warning（此前静默丢弃尾部 chunk）。
+        # B1（2026-11-26 全面审查）：超长文档截断不再只记一条 warning。
+        # ① 计数：进程内累计（并入 /api/kb/stats quality_gate_drops）；
+        # ② 审计：写一行 kb_ingest_audit（action=skip 为该表既有词汇，
+        #    指被丢弃的 chunk 部分）；③ 响应 warnings：详情存 contextvar，
+        #    供 ingest 响应读取（last_chunk_cap_warning）。三步全部 fail-open，
+        #    任一步失败都不影响 chunk 写入。
         _cap = int(settings.kb_max_chunks_per_source or 0)
         if _cap > 0 and len(chunks) > _cap:
+            _truncated = len(chunks) - _cap
+            _before = len(chunks)
             logger.warning(
                 "kb index_source: %s chunk 数 %d 超上限 %d，截断尾部 %d 个",
-                source_id, len(chunks), _cap, len(chunks) - _cap,
+                source_id, _before, _cap, _truncated,
             )
+            with _CHUNK_CAP_LOCK:
+                _CHUNK_CAP_COUNTS["truncated_chunks"] += _truncated
+                _CHUNK_CAP_COUNTS["truncated_sources"] += 1
+            _LAST_CHUNK_CAP_WARNING.set(
+                {
+                    "code": "chunk_cap_truncated",
+                    "source_id": source_id,
+                    "chunks_before_cap": _before,
+                    "cap": _cap,
+                    "truncated_chunks": _truncated,
+                    "message": (
+                        f"文档共 {_before} 个 chunk，超过每源上限 {_cap}，"
+                        f"已截断尾部 {_truncated} 个 chunk（尾部内容不可检索）"
+                    ),
+                }
+            )
+            try:
+                from .kb_ingest_audit import record_ingest_audit
+
+                record_ingest_audit(
+                    project_id=None,
+                    domain=None,
+                    query=None,
+                    evidence_id=None,
+                    source=source_id,
+                    action="skip",
+                    reason=f"chunk_cap_truncated:{_truncated}/{_before}@cap{_cap}",
+                    domain_match=None,
+                )
+            except Exception:
+                logger.debug("kb chunk-cap audit write skipped", exc_info=True)
             chunks = chunks[:_cap]
         if not chunks:
             return None
@@ -2052,9 +2132,18 @@ def _quality_gate_drops() -> dict:
     try:
         from .kb_retrieval_gate import gate_drop_stats
 
-        return gate_drop_stats()
+        out = gate_drop_stats()
     except Exception:
-        return {
+        out = {
             "retrieval": {"blocked_domain": 0, "garbage_snippet": 0, "wiki_track": 0},
             "ingest": {"blocked_domain": 0, "garbage_snippet": 0, "wiki_track": 0},
         }
+    # B1：每源 chunk 上限截断计数并入 ingest 臂（/api/kb/stats 可见）。
+    # kb_retrieval_gate 的 reason 白名单无此项，计数由 kb_index 自行维护。
+    try:
+        out.setdefault("ingest", {})["chunk_cap_truncated"] = (
+            chunk_cap_truncation_stats()["truncated_chunks"]
+        )
+    except Exception:
+        pass
+    return out

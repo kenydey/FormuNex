@@ -338,6 +338,51 @@ def _outcome_for_status(status: str | None) -> str:
     return "null"
 
 
+def write_shadow_review_run(
+    *,
+    question: str,
+    answer: str,
+    review: dict[str, Any] | None,
+    settings: Any = None,
+    project_id: str | None = None,
+    artifact_version_id: str | None = None,
+) -> dict[str, Any] | None:
+    """QA-01：warning-only 下写影子 ReviewRun（不进 fix-loop）。
+
+    兑现 Reviewer 方案 H 第 150 行："warning-only 下也写 run，但不触发
+    fix-loop"。fix-loop 关时 ``run_fix_loop`` 入口提前返回、不写 run，
+    warning/failure 除浸泡日志外无任何可审计记录——此处补写。
+    仅对 warning/failure 写 run（pass / error / None 不写）；永不抛错，
+    写盘失败返回 None。返回已落盘的 run（含 run_id），供调用方把
+    ``review_run_id`` 挂到 ``evidence_reviewer`` 上。
+    """
+    if not isinstance(review, dict):
+        return None
+    status = (review.get("status") or "pass").lower()
+    if status not in {"warning", "failure", "warn", "fail", "flagged"}:
+        return None
+    try:
+        from .evidence_reviewer import reviewer_model_name
+
+        run = new_review_run(
+            project_id=project_id,
+            model=reviewer_model_name(settings),
+            scope={
+                "project_id": project_id,
+                "question": question,
+                "answer": answer,
+                "artifact_version_id": artifact_version_id,
+            },
+        )
+        run["session_key"] = session_key(question, answer, project_id)
+        run = finish_review_run(run, outcome=_outcome_for_status(status))
+        save_review_run(run)
+        return run
+    except Exception:  # noqa: BLE001
+        logger.debug("shadow review run persist failed")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # P1-12 turn-stop 自动审计：防抖 + per-turn 幂等 + 修正轮抑制
 #

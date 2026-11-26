@@ -164,24 +164,52 @@ SEED_CORPUS: dict[ProductDomain, list[dict]] = {
 # fallback evidence apart from real online hits (online results are never filtered).
 _SEED_IDENTIFIERS = {d["identifier"] for docs in SEED_CORPUS.values() for d in docs}
 
-# Bilingual keyword tokenizer: English words by run, Chinese by single char.
-_KW_RE = re.compile(r"[a-z0-9]+|[一-鿿]")
+# Bilingual keyword tokenizer: English words by run, Chinese segmented
+# (jieba words + overlapping character bigrams) — see _keywords.
+def _stem_en(tok: str) -> str:
+    """Light English plural stemming for overlap scoring (``coatings`` → ``coating``).
+
+    Deliberately minimal — not a full stemmer: only the plural suffixes that
+    split singular/plural spellings of the same domain word. Tokens with
+    digits (CAS / IPC / alloy codes) are left untouched.
+    """
+    if len(tok) <= 3 or not tok.isalpha():
+        return tok
+    if tok.endswith("ies") and len(tok) > 4:
+        return tok[:-3] + "y"
+    if tok.endswith(("sses", "xes", "zes", "ches", "shes")):
+        return tok[:-2]
+    if tok.endswith("s") and not tok.endswith(("ss", "us", "is")):
+        return tok[:-1]
+    return tok
 
 
 def _keywords(text: str) -> set[str]:
     """Tokenize for overlap scoring.
 
+    Chinese is segmented with the unified tokenizer (``text_tokenize.tokenize``:
+    jieba words + overlapping character bigrams) instead of single characters:
+    single-char hits inflated topicality — any aluminium paper contains
+    ``铝/合/金/性`` — so a welding paper scored 0.50 against an 8-char query
+    (P1-3, 2026-11-26 review). Single CJK characters no longer count; only
+    jieba words and bigrams (len >= 2) do. English tokens get light plural
+    stemming (``coatings`` ≡ ``coating``).
+
     Drops pure digits and 1–2 char ASCII fragments so CAS pieces (``7440-66-6`` →
-    ``6``) and IPC tail numbers cannot create false seed matches. Chinese stays
-    character-level (len 1) because that is how bilingual queries are written.
+    ``6``) and IPC tail numbers cannot create false seed matches.
     """
+    from .text_tokenize import tokenize
+
     out: set[str] = set()
-    for tok in _KW_RE.findall(text.lower()):
-        if tok.isdigit():
+    for tok in tokenize(text or ""):
+        if not tok or tok.isdigit():
             continue
-        if tok.isascii() and len(tok) < 3:
+        if any("\u3400" <= ch <= "\u9fff" for ch in tok):
+            if len(tok) >= 2:
+                out.add(tok)
             continue
-        out.add(tok)
+        if tok.isascii() and len(tok) >= 3:
+            out.add(_stem_en(tok))
     return out
 
 
@@ -227,13 +255,19 @@ def _seed_evidence(doc: dict, index: int) -> Evidence:
     )
 
 
-def _fetch_with_timeout(fetch, cursor: int) -> list[Evidence]:
-    """Run one source page fetch with a hard timeout."""
+def _fetch_with_timeout(fetch, cursor: int) -> tuple[list[Evidence], Exception | None]:
+    """Run one source page fetch with a hard timeout.
+
+    Returns ``(rows, error)`` so the caller can tell a failed page from a
+    genuinely empty one (P1-2): an error page must not advance the cursor or
+    finish the source — it is retried on the next round.
+    """
     fut = _FETCH_EXECUTOR.submit(fetch, cursor)
     try:
-        return fut.result(timeout=_SOURCE_TIMEOUT_SEC) or []
+        return fut.result(timeout=_SOURCE_TIMEOUT_SEC) or [], None
     except Exception as exc:
-        return degrade_return(logger, exc, "source fetch timed out or failed", [])
+        degrade_return(logger, exc, "source fetch timed out or failed", [])
+        return [], exc
 
 
 def _build_patent_query(req: Requirement | None, query: str) -> str:
@@ -725,7 +759,13 @@ def _merge_filter_rank(
     seen: set[str] = set()
     deduped: list[Evidence] = []
     for e in sorted(merged, key=lambda x: _rank_score_with_boost(x, q_kw, qctx), reverse=True):
-        key = e.identifier or e.title
+        # P1-1 (2026-11-26 review): 终态去重改用 _evidence_key (DOI 前缀剥离 +
+        # casefold), 与 _dedupe_evidence 同口径 —— 同一 DOI 的四种写法
+        # (裸 DOI / DOI: 前缀 / doi.org URL / 大写) 只留排序最高的一行。
+        key = _evidence_key(e)
+        if not key:
+            deduped.append(e)
+            continue
         if key not in seen:
             seen.add(key)
             deduped.append(e)
@@ -950,7 +990,7 @@ def _build_streams(
     streams: list[dict] = []
 
     def add(name: str, fetch, paged: bool) -> None:
-        streams.append({"name": name, "fetch": fetch, "cursor": 0, "paged": paged, "done": False})
+        streams.append({"name": name, "fetch": fetch, "cursor": 0, "paged": paged, "done": False, "dup_rounds": 0})
 
     if "patents" in source_types:
         ipc = tuple(ipc_codes)
@@ -1210,9 +1250,20 @@ def iter_search(
             ):
                 st = futures[fut]
                 try:
-                    page = fut.result() or []
-                except Exception:
-                    page = []
+                    page, error = fut.result() or ([], None)
+                except Exception as exc:
+                    page, error = [], exc
+                if error is not None:
+                    # P1-2: 异常页不推进 cursor、不标记完成、不计全重复轮次，
+                    # 下轮在同一 cursor 重试（总轮次 max_rounds 兜底）。
+                    logger.warning("search source %s page failed; retrying next round", st["name"])
+                    _notify(source=st["name"], new_count=0)
+                    continue
+                if not page:
+                    # 原始页为空 = 该源已枯竭，是唯一的空页终结条件。
+                    st["done"] = True
+                    _notify(source=st["name"], new_count=0)
+                    continue
                 st["cursor"] += page_size
                 # 轮次间去重改用身份键（W1-4）：doi 大小写/前缀写法差异不再重复抓取。
                 new: list[Evidence] = []
@@ -1223,15 +1274,24 @@ def iter_search(
                     seen_ids.update(e_keys)
                     new.append(e)
                 raw.extend(new)
-                if not st["paged"] or not new:
+                if not st["paged"]:
                     st["done"] = True
+                elif not new:
+                    # 本页全重复 ≠ 该源枯竭（别源可能已返回同一批）；
+                    # 连续 2 轮全重复才停。
+                    st["dup_rounds"] = st.get("dup_rounds", 0) + 1
+                    if st["dup_rounds"] >= 2:
+                        st["done"] = True
+                else:
+                    st["dup_rounds"] = 0
                 _notify(source=st["name"], new_count=len(new))
         except TimeoutError:
-            logger.warning("search round timed out; marking slow sources done")
+            # P1-2: 轮次级超时同样不终结慢源 —— 只取消未完成的 future，
+            # 下轮重试（总轮次 / deadline 兜底）。
+            logger.warning("search round timed out; leaving slow sources active for retry")
             for fut, st in futures.items():
                 if not fut.done():
                     fut.cancel()
-                    st["done"] = True
                     _notify(source=st["name"], new_count=0)
         ex.shutdown(wait=False)
 

@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from typing import NamedTuple
 
 from ..config import Settings, get_settings
+from ..domain.chemistry import normalize_role
 from ..domain.schemas import Formulation, RecommendedFormula
 from ..domain.tradeoff_schemas import TradeOffAnalysis
 from . import chemtools
@@ -159,7 +160,36 @@ def run_recommend_orchestration(
     )
 
 
-def _complete_ratios(form) -> None:
+# P1-2 (review 2026-11-26): 缺失配比的默认分布。先按角色
+# (component_type/role 归一后的规范值) 取，再按名称关键词取，最后按角色
+# 兜底。名称子串不可靠：英文名 "Xylene" 不含 solvent/二甲苯，按旧表只
+# 拿到 5.0 兜底值而非溶剂档 15.0。
+_ROLE_RATIO_DEFAULTS = {
+    "resin": 50.0,
+    "pigment": 25.0,
+    "filler": 15.0,
+    "solvent": 15.0,
+    "additive": 2.0,
+    "hardener": 10.0,
+}
+_NAME_RATIO_DEFAULTS = [
+    (("resin", "树脂", "基料", "epoxy", "环氧"), 50.0),
+    (("pigment", "颜料", "tio2", "钛白", "titanium"), 25.0),
+    (("filler", "填料", "碳酸钙", "滑石", "talc"), 15.0),
+    (
+        (
+            "solvent", "溶剂", "二甲苯", "丁醇",
+            "xylene", "toluene", "butanol", "butyl", "acetone",
+            "ethanol", "methanol", "isopropanol", "acetate",
+        ),
+        15.0,
+    ),
+    (("additive", "助剂", "分散剂", "消泡剂", "流平剂"), 2.0),
+    (("hardener", "固化剂", "amine", "胺"), 10.0),
+]
+
+
+def _complete_ratios(form) -> list[dict]:
     """N-5: 配比智能补全。缺失 weight_pct 时按成分类型默认分布补全。
 
     规则（涂料典型配比）：
@@ -168,42 +198,51 @@ def _complete_ratios(form) -> None:
     - 溶剂：10-30%
     - 助剂：0.5-5%
     缺失时按类型分配，剩余按比例归一化到 100%。
+
+    返回补全记录（每条为缺失成分填一条）：
+    ``{"index", "name", "default_pct", "final_pct"}``，无缺失时为空列表。
+    调用方用它把补全事实写进 warnings 与成分级标记。
     """
     ingredients = getattr(form, "ingredients", None) or getattr(form, "components", []) or []
     if not ingredients:
-        return
-    # 类型关键词 → 默认配比
-    _defaults = [
-        (("resin", "树脂", "基料", "epoxy", "环氧"), 50.0),
-        (("pigment", "颜料", "tio2", "钛白"), 25.0),
-        (("filler", "填料", "碳酸钙", "滑石"), 15.0),
-        (("solvent", "溶剂", "二甲苯", "丁醇"), 15.0),
-        (("additive", "助剂", "分散剂", "消泡剂", "流平剂"), 2.0),
-        (("hardener", "固化剂", "amine", "胺"), 10.0),
-    ]
+        return []
     total_given = 0.0
     missing = []
-    for ing in ingredients:
+    for idx, ing in enumerate(ingredients):
         wp = getattr(ing, "weight_pct", None)
         if wp and wp > 0:
             total_given += wp
         else:
-            missing.append(ing)
+            missing.append((idx, ing))
     if not missing:
-        return
-    # 为缺失的分配默认值
-    for ing in missing:
-        name = (getattr(ing, "name", "") or "").lower()
-        default = 5.0  # 兜底
-        for keywords, pct in _defaults:
-            if any(kw in name for kw in keywords):
-                default = pct
-                break
+        return []
+    # 为缺失的分配默认值（角色优先，名称关键词次之）
+    records: list[dict] = []
+    for idx, ing in missing:
+        role = normalize_role(
+            getattr(ing, "component_type", "") or getattr(ing, "role", "") or ""
+        )
+        default = _ROLE_RATIO_DEFAULTS.get(role)
+        if default is None:
+            name = (getattr(ing, "name", "") or "").lower()
+            default = 5.0  # 兜底
+            for keywords, pct in _NAME_RATIO_DEFAULTS:
+                if any(kw in name for kw in keywords):
+                    default = pct
+                    break
         try:
             ing.weight_pct = default
         except Exception:
-            pass
+            continue
         total_given += default
+        records.append(
+            {
+                "index": idx,
+                "name": getattr(ing, "name", ""),
+                "default_pct": default,
+                "final_pct": default,
+            }
+        )
     # 归一化到 100
     if total_given > 0:
         factor = 100.0 / total_given
@@ -213,6 +252,9 @@ def _complete_ratios(form) -> None:
                 ing.weight_pct = round(wp * factor, 2)
             except Exception:
                 pass
+        for rec in records:
+            rec["final_pct"] = round(rec["default_pct"] * factor, 2)
+    return records
 
 
 def _score_ratio_reasonableness(form) -> list[str]:
@@ -339,6 +381,30 @@ def finalize_scored_formulations(
             #（v20 双字段展示契约未兑现）。
             rec.score = f.score
             rec.predicted = dict(f.predicted or {})
+            # P1-2 (review 2026-11-26): 补全后的配比回填到返回配方。此前
+            # 只回填 score/predicted，返回配方仍含 weight_pct=None、合计
+            # ≠100%。位置配对（recommended_to_formulation 保持成分顺序）；
+            # 长度/名称不一致时不回填（直接调用方手工构造的配对不受影响）。
+            # 补全过的成分同时在 notes 留成分级标记。
+            if len(rec.components) == len(f.ingredients) and all(
+                c.name == i.name for c, i in zip(rec.components, f.ingredients)
+            ):
+                _completed = {
+                    entry["index"]: entry.get("final_pct")
+                    for entry in (getattr(f, "_ratio_completed", None) or [])
+                    if isinstance(entry, dict) and isinstance(entry.get("index"), int)
+                }
+                for _ci, (_comp, _ing) in enumerate(zip(rec.components, f.ingredients)):
+                    _comp.weight_pct = _ing.weight_pct
+                    if _ci in _completed:
+                        _note = (
+                            "配比由系统补全（原缺失），"
+                            f"补全后 {_completed[_ci]:.2f}%"
+                        )
+                        if _note not in (_comp.notes or ""):
+                            _comp.notes = (
+                                f"{_comp.notes}；{_note}" if _comp.notes else _note
+                            )
             formulas.append(rec)
 
     # v22: 配对完整性检查（P2-1: assert 改显式检查，生产环境 assert 可能被 -O 剥离）
@@ -440,6 +506,13 @@ def finalize_recommendation_bundle(
     for _ri, rec in enumerate(rec_formulas):
         try:
             form = recommended_to_formulation(rec)
+            # P1-2 (review 2026-11-26): 配比补全必须在评分之前。旧代码在
+            # 评分后才补全内部 Formulation 副本，API 返回的配方仍缺配比、
+            # 合计 ≠100%，而 score/predicted 描述的是补全前的另一配方。
+            # 补全后在补全后的配方上评分，score/predicted 与返回配方同源。
+            _completion: list[dict] = []
+            if settings.ratio_completion_enabled:
+                _completion = _complete_ratios(form) or []
             # ``objectives`` is the list trade-off analysis and the LLM prompt
             # use; scoring must rank by the same one (see _score_and_validate).
             scored_form = _score_and_validate(
@@ -450,6 +523,18 @@ def finalize_recommendation_bundle(
                 object.__setattr__(scored_form, "_src_idx", _ri)
             except Exception:  # noqa: BLE001
                 pass
+            if _completion:
+                try:
+                    object.__setattr__(scored_form, "_ratio_completed", _completion)
+                except Exception:  # noqa: BLE001
+                    pass
+                _filled = "、".join(
+                    f"{c['name']} {c['final_pct']:.2f}%" for c in _completion
+                )
+                warnings.append(
+                    f"{rec.name}: 配比已补全（{_filled}），合计 100%，"
+                    "score/predicted 按补全后配方计算"
+                )
             scored.append(scored_form)
         except ValueError as exc:
             warnings.append(str(exc))
@@ -460,6 +545,27 @@ def finalize_recommendation_bundle(
 
     scored, gate_warnings = validate_formulations(scored, req=req)
     warnings.extend(gate_warnings)
+    # P1-3 (review 2026-11-26): RoHS 超限（check_compliance 判 infeasible）
+    # 的候选在推荐路径默认剔除，与 DOE 路径的硬性判定对齐（此前只警告、
+    # 照常返回并打分）。warn 级（SVHC / 低于限值）保持仅警告。只过滤
+    # scored：finalize 按 _src_idx 与原始 rec_formulas 配对，剔除的候选
+    # 自然不进入返回。validate_formulations 本身仍只警告（/validate、
+    # /manual 等人工校验入口需要看到配方本身），剔除只发生在推荐路径，
+    # 与项目红线过滤同款。
+    if scored:
+        from ..services.compliance_rules import check_compliance
+
+        _kept: list[Formulation] = []
+        for _form in scored:
+            _comp = check_compliance(_form)
+            if _comp.status == "infeasible":
+                warnings.append(
+                    f"{_form.name}: RoHS 受限物质超限"
+                    f"（{'；'.join(_comp.rohs_hits)}），候选已剔除"
+                )
+                continue
+            _kept.append(_form)
+        scored = _kept
     _rescore_with_shared_bounds(scored, objectives, process)
     for form in scored:
         warnings.extend(check_formulation_predictions(form, evidence))
@@ -471,13 +577,8 @@ def finalize_recommendation_bundle(
                 warnings.extend(validate_formula_chemistry(form))
         except Exception:
             pass
-    # N-5: 配比智能补全 —— 缺失配比时按成分类型默认分布补全
-    if settings.ratio_completion_enabled:
-        try:
-            for form in scored:
-                _complete_ratios(form)
-        except Exception:
-            pass
+    # N-5 配比补全已在评分前完成（见本函数开头的循环），此处不再补全：
+    # 评分后再补全会让 score/predicted 与返回配方脱节（P1-2，review 2026-11-26）。
     # O-4: 配比合理性评分 —— 异常配比警告
     try:
         for form in scored:

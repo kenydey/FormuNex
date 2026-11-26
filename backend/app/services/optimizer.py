@@ -8,7 +8,11 @@ Bayesian engine (BoTorch, Optuna) can be swapped in without changing callers.
 The default offline strategy is a lightweight Bayesian-style optimizer:
 Latin-hypercube exploration seeds a surrogate, then candidates are scored by an
 upper-confidence-bound over a nearest-neighbour Gaussian estimate. It uses only
-numpy and converges reliably for the low-dimensional formulation spaces here.
+numpy. The surrogate uncertainty is distance-dominated (it is maximal far from
+every observation and vanishes at an observed point), so the acquisition
+explores unseen regions instead of re-sampling the global y-spread; the kernel
+bandwidth shrinks with the observation count and dimension. ``suggest()`` also
+refuses near-duplicates of already observed points.
 """
 from __future__ import annotations
 
@@ -112,20 +116,61 @@ class BayesianOptimizer(_ObservedHistoryMixin):
     def _random_point(self) -> list[float]:
         return [self._rng.uniform(f.low, f.high) for f in self.factors]
 
-    def _surrogate(self, x: np.ndarray) -> tuple[float, float]:
-        """Distance-weighted mean and spread over observed points (a cheap GP stand-in)."""
-        if not self._X:
-            return 0.0, 1.0
+    def _normalised_distances(self, x: np.ndarray) -> np.ndarray:
+        """Euclidean distance from ``x`` to each observed point, per-factor normalised."""
         X = np.array(self._X)
         scales = np.array([f.high - f.low for f in self.factors])
         scales[scales == 0] = 1.0
-        d = np.linalg.norm((X - x) / scales, axis=1)
-        w = np.exp(-(d**2) / 0.5)
+        return np.linalg.norm((X - x) / scales, axis=1)
+
+    def _kernel_weights(self, x: np.ndarray) -> np.ndarray:
+        """Gaussian kernel weights of the observed points around ``x``.
+
+        Bandwidth adapts to the observation count and the dimension
+        (Silverman-style ``n**(-1/(d+4))`` shrinkage): with more data the mean
+        stays local instead of collapsing to the global average, which is what
+        lets the surrogate climb towards an optimum in higher dimensions.
+        """
+        d = self._normalised_distances(x)
+        h = 0.5 * len(self._X) ** (-1.0 / (len(self.factors) + 4))
+        return np.exp(-(d**2) / (2.0 * h * h))
+
+    def _is_near_observed(self, x: np.ndarray, tol: float = 0.01) -> bool:
+        """True when ``x`` is within ``tol`` (normalised distance) of an observed point."""
+        if not self._X:
+            return False
+        return bool(self._normalised_distances(x).min() < tol)
+
+    def _surrogate(self, x: np.ndarray) -> tuple[float, float]:
+        """Distance-weighted mean and distance-dominated spread (a cheap GP stand-in).
+
+        The uncertainty is ``sigma_y * (1 - w_max)`` where ``w_max`` is the
+        largest kernel weight of any observed point: 0 at an observed point,
+        ``sigma_y`` far from all data. The previous form added the *weighted
+        variance of y* — a global y-spread term of order the y range — plus a
+        distance term capped at 1.0, so the uncertainty barely varied with
+        distance and exploration was drowned out (review 2026-11-26, P1-1:
+        on a smooth 2D quadratic the old UCB averaged -2.95 over 24 rounds
+        versus -1.04 for pure random sampling). Normalised kernel weights must
+        never feed the spread term: far from the data they still normalise to a
+        distribution, so a weighted variance stays at the global spread
+        wherever the candidate is.
+        """
+        if not self._X:
+            return 0.0, 1.0
+        w = self._kernel_weights(x)
+        y = np.array(self._y)
+        sigma = float(np.std(y))
+        if sigma <= 0.0:
+            # All observations identical: y carries no signal, so the mean is
+            # flat and the only honest exploration bonus is distance. A unit
+            # scale keeps UCB a pure distance maximiser in that case.
+            sigma = 1.0
         if w.sum() < 1e-9:
-            return float(np.mean(self._y)), float(np.std(self._y) + 1.0)
-        mean = float(np.average(self._y, weights=w))
-        var = float(np.average((np.array(self._y) - mean) ** 2, weights=w))
-        uncertainty = (var**0.5) + 1.0 / (1.0 + w.sum())
+            # Far from every observation: global mean, maximal uncertainty.
+            return float(np.mean(y)), sigma
+        mean = float(np.average(y, weights=w))
+        uncertainty = sigma * (1.0 - float(np.max(w)))
         return mean, uncertainty
 
     def suggest(self, n_candidates: int = 64, kappa: float | None = None) -> list[float]:
@@ -133,6 +178,10 @@ class BayesianOptimizer(_ObservedHistoryMixin):
 
         kappa 默认来自寻优规则（Settings optimizer_ucb_kappa，可经
         /api/cockpit/optimizer-rules 调整），未配置时为 1.5。
+
+        Candidates landing within a normalised distance of 0.01 of an already
+        observed point are rejected, so no experiment is wasted re-measuring a
+        known point (review 2026-11-26, P1-1).
         """
         if kappa is None:
             from ..config import get_settings
@@ -145,10 +194,17 @@ class BayesianOptimizer(_ObservedHistoryMixin):
         best_x, best_acq = None, -np.inf
         for _ in range(n_candidates):
             cand = np.array(self._random_point())
+            if self._is_near_observed(cand):
+                continue
             mean, unc = self._surrogate(cand)
             acq = mean + kappa * unc
             if acq > best_acq:
                 best_acq, best_x = acq, cand
+        if best_x is None:
+            # Every candidate landed on an observed point (near-degenerate
+            # space): fall back to a fresh random draw rather than looping.
+            self.last_acquisition = None  # random draw: no acquisition value
+            return self._random_point()
         self.last_acquisition = float(best_acq)
         return [self.factors[i].clip(v) for i, v in enumerate(best_x)]
 

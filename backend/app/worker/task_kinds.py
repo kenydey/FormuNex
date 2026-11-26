@@ -47,7 +47,7 @@ KINDS: tuple[TaskKind, ...] = (
     TaskKind("recommend", "research_recommend", "formunex.recommend", "run_recommend_task"),
     TaskKind("deep_research", "research_deep", "formunex.deep_research", "run_deep_research_task"),
     TaskKind("optimize", "optimize", "formunex.optimize", "run_optimize_task"),
-    TaskKind("kb_ingest", None, "formunex.kb_ingest", "run_kb_ingest_task"),
+    TaskKind("kb_ingest", "kb_ingest", "formunex.kb_ingest", "run_kb_ingest_task"),
     TaskKind("toc_summaries", "toc_summaries", "formunex.toc_summaries", "run_toc_summaries_task"),
     TaskKind("pubchem_enrich", "pubchem_enrich", "formunex.pubchem_enrich", "run_pubchem_enrich_task"),
     TaskKind("file_ingest", None, "formunex.file_ingest", "run_file_ingest_task"),

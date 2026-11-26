@@ -143,12 +143,16 @@ def test_select_without_project_id_passes_everything(monkeypatch):
 
 def test_select_uses_query_anchor_when_project_missing(monkeypatch):
     # search API 不带 project 上下文 → query 即锚(2026-09-04 实际场景回放)
+    # 2026-11-26 审查 P1-3 批准的行为变更: 中文 topicality 改分词计分后,
+    # 旧 query "镁合金 钝化剂 树脂 乳液" 对磷化文仅得 0.375(旧单字计分为 0.50,
+    # 恰是本次修复的单字虚高)——本测试的契约是 query 锚回退, 不是旧计分,
+    # 故 query 改为与磷化文真实匹配的 "镁合金 磷化 转化膜", 断言不变。
     monkeypatch.setattr(kb_ingest, "_topic_anchor", lambda pid, q: ({"钝化", "树脂"}, {"镁"}))
     evs = [
         _ev("Tunable Hydrogen Storage in Magnesium Compounds"),
         _ev("磷化液pH 值对磷酸盐转化膜在镁合金AZ91D 表面的影响"),
     ]
-    out = kb_ingest.select_ingest_targets(evs, query="镁合金 钝化剂 树脂 乳液")
+    out = kb_ingest.select_ingest_targets(evs, query="镁合金 磷化 转化膜")
     assert len(out) == 1
     assert "磷化液" in out[0][0].title
 

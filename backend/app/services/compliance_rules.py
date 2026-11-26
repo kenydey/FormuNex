@@ -1,7 +1,8 @@
 """Compliance screening — RoHS heavy metals and EU REACH SVHC candidates.
 
 Deterministic, zero-LLM rule engine built on the raw-material catalog plus a
-curated name/CAS list. Used by the recommendation ranker (soft penalty) and
+curated name/CAS list. Used by the recommendation ranker (infeasible
+candidates are dropped from the recommendation bundle, with a warning) and
 the DOE generator (hard infeasible gate for definite heavy-metal hits).
 
 Design
@@ -9,8 +10,10 @@ Design
 * **RoHS restricted substances** (EU Directive 2011/65/EU): Pb, Cd, Hg, Cr(VI)
   (plus PBB/PBDE — not represented in the coating-material catalog). A
   formulation ingredient that matches one of these is a *hard* compliance
-  violation → ``infeasible`` in the DOE gate, and a strong penalty + warning
-  in the recommend path.
+  violation → ``infeasible`` in the DOE gate, and the candidate is dropped
+  (with a warning) in the recommend path
+  (``recommend_pipeline.finalize_recommendation_bundle``; review 2026-11-26
+  P1-3 — previously the recommend path only warned and kept scoring it).
 * **SVHC candidates** (REACH candidate list): broader, advisory list. Matches
   are ``warn``-level — the chemist must confirm regulatory status before
   commercialisation.

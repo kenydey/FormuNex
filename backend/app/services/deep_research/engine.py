@@ -127,7 +127,28 @@ class DeepResearchEngine:
         if self._settings.fulltext_enrich and evidence:
             from ..fulltext_fetcher import enrich_search_results
 
+            before = list(evidence)
             evidence, _report = enrich_search_results(evidence)
+            # P1-4 (2026-11-26 review): 调用方兜底 —— 无论 enrich 因何种原因
+            # 丢行, 深研结果都保留原摘要行 (has_fulltext=False), 不让摘要级
+            # 命中静默消失。成功行可能被展开为 chunk 行
+            # (identifier 为 "{原 identifier}#p{n}"), 故按"原行或其 chunk"
+            # 判定是否已保留。
+            enriched_ids = {e.identifier for e in evidence}
+            restored: list[Evidence] = []
+            for orig in before:
+                if orig.identifier in enriched_ids or any(
+                    eid.startswith(orig.identifier + "#") for eid in enriched_ids
+                ):
+                    continue
+                restored.append(orig.model_copy(update={"has_fulltext": False}))
+            if restored:
+                logger.warning(
+                    "deep research enrich dropped %d rows; restoring abstracts %s",
+                    len(restored),
+                    _report.as_dict(),
+                )
+                evidence = [*restored, *evidence]
             if progress_cb is not None:
                 try:
                     progress_cb(evidence)

@@ -2060,27 +2060,37 @@ def answer_question(
     recalled = store.query(_rerank_q, k=candidates_n) or sources[:candidates_n]
 
     relevant = recalled[: settings.chat_rerank_top_k]
-    if settings.chat_cross_encoder_enabled and recalled:
+    # QA-03：与流式共用 recall_and_rerank（单一开关语义：默认 CE-only，
+    # LLM 精排需显式开关；候选数截到 cross_encoder_max_candidates）。
+    # 开关关时 helper 原样返回 BM25 序，meta["applied"]=False。
+    if recalled:
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
-        timeout_s = float(settings.cross_encoder_timeout_s or 2.5)
+        # QA-03 回归修（审查 2026-11-26）：settings 桩可能只有部分属性
+        # （如测试的 SimpleNamespace），裸读 cross_encoder_timeout_s 会
+        # AttributeError；生产 settings 有该属性（config 默认 2.5）。
+        timeout_s = float(getattr(settings, "cross_encoder_timeout_s", 2.5) or 2.5)
         try:
-            from .rag import rerank_scored
-
-            max_cands = max(
-                1,
-                int(settings.cross_encoder_max_candidates or 30),
-            )
-            pool = recalled[:max_cands]
+            from .rag import recall_and_rerank
 
             def _ce():
-                return rerank_scored(
-                    question, pool, k=settings.chat_rerank_top_k, prefer="cross_encoder"
+                return recall_and_rerank(
+                    _rerank_q,
+                    recalled,
+                    k=settings.chat_rerank_top_k,
+                    settings=settings,
                 )
 
             with ThreadPoolExecutor(max_workers=1) as ex:
                 fut = ex.submit(_ce)
                 items, meta = fut.result(timeout=timeout_s)
+            log.debug(
+                "chat rerank: applied=%s backend=%s reason=%s candidates=%s",
+                meta.get("applied"),
+                meta.get("backend"),
+                meta.get("reason"),
+                meta.get("candidates"),
+            )
             if meta.get("applied") and items:
                 relevant = [it.evidence for it in items]
         except FuturesTimeout:

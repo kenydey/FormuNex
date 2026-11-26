@@ -143,10 +143,13 @@ def test_cross_project_path_collision_refuses(wiki_env):
 
 def test_list_pages_project_filter(wiki_env):
     _seed(wiki_env)
+    # B2（2026-11-26 全面审查，批准的行为变更）：项目过滤为项目 OR 全局，
+    # 与 chunk_store / entity_store 同口径；全局 legacy 页在项目内可见，
+    # 跨项目页仍不可见。
     paths_a = {r.path for r in wiki_env.list_pages(project_id="proj-A")}
-    assert paths_a == {"materials/epoxy-a.md"}
+    assert paths_a == {"materials/epoxy-a.md", "materials/legacy.md"}
     paths_b = {r.path for r in wiki_env.list_pages(project_id="proj-B")}
-    assert paths_b == {"materials/epoxy-b.md"}
+    assert paths_b == {"materials/epoxy-b.md", "materials/legacy.md"}
     # Unfiltered keeps back-compat.
     assert len(wiki_env.list_pages()) == 3
 
@@ -157,9 +160,11 @@ def test_search_wiki_project_filter(wiki_env):
     assert {h.identifier for h in hits_a} == {"wiki:materials/epoxy-a.md"}
     hits_b = search_wiki("环氧树脂", k=5, project_id="proj-B")
     assert {h.identifier for h in hits_b} == {"wiki:materials/epoxy-b.md"}
-    # Legacy NULL page is excluded from project-scoped retrieval.
+    # B2（2026-11-26 全面审查，批准的行为变更）：全局 legacy 页在项目内
+    # 关键词检索中可见（此前严格相等致项目内 Wiki 关键词臂恒为空）；
+    # 跨项目页仍不可见（上两断言已钉住）。
     hits_legacy = search_wiki("历史遗留", k=5, project_id="proj-A")
-    assert hits_legacy == []
+    assert {h.identifier for h in hits_legacy} == {"wiki:materials/legacy.md"}
 
 
 def test_blend_wiki_evidence_project_filter(wiki_env):

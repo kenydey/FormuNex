@@ -342,7 +342,15 @@ class WikiStore:
             if kind:
                 q = q.filter(WikiPage.kind == kind)
             if project_id:
-                q = q.filter(WikiPage.project_id == project_id)
+                # B2（2026-11-26 全面审查）：项目内检索须同时看到本项目页
+                # 与全局页（project_id IS NULL），与 chunk_store /
+                # entity_store 的“项目 OR 全局”口径一致；此前严格相等
+                # 导致项目内 Wiki 关键词臂恒为空。跨项目页仍不可见；
+                # upsert 的跨项目路径冲突 fail-closed 不受此改动影响。
+                q = q.filter(
+                    (WikiPage.project_id == project_id)
+                    | (WikiPage.project_id.is_(None))
+                )
             return q.offset(max(0, offset)).limit(min(500, max(1, limit))).all()
 
     def read_markdown(self, path: str) -> str | None:

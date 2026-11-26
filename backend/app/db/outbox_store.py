@@ -328,6 +328,54 @@ def record_cancelled(task_id: str) -> bool:
         return False
 
 
+def close_terminal_row(outbox_id: str | None, terminal_state: str, task_id: str, error: str | None = None) -> bool:
+    """Close a row whose task already reached a terminal snapshot, and free its id.
+
+    Own transaction, never raises. The update is conditional on the row
+    still carrying *task_id* — if another submission re-armed and claimed
+    the row in between, this touches zero rows and the caller re-reads.
+
+    X-P1-1 follow-up (review 2026-11-26, plm_ts regression): a task whose
+    persisted result is already visible may still sit on a PENDING row —
+    ``on_success`` lands after the result becomes visible (seconds of lag
+    in eager mode) — so a resubmission that reuses the row's id is mistaken
+    for a replay of the finished task (document generation's P1-A6 guard
+    then returns the old version instead of building a new one). The
+    submit path (services.dispatch) checks the task snapshot and calls
+    this to close the row from the snapshot and clear the id, so the new
+    submission mints a fresh id. Same close-from-snapshot semantics as
+    dispatcher.recover_stalled (SR-002 stopgap); the id-clear is what
+    turns "finished" into "re-armable" for the submit path. Returns True
+    when a row was updated.
+    """
+    status = {"completed": STATUS_DONE, "failed": STATUS_FAILED, "cancelled": STATUS_CANCELLED}.get(terminal_state)
+    if not outbox_id or not task_id or status is None:
+        return False
+    try:
+        from .database import default_session_factory
+        from .session_utils import commit_session
+
+        values: dict[str, object] = {
+            "status": status,
+            "task_id": None,
+            "claimed_by": None,
+            "claimed_at": None,
+            "updated_at": _utcnow(),
+        }
+        if terminal_state == "failed":
+            values["error"] = (error or "")[:500] or None
+        with commit_session(default_session_factory()) as session:
+            result = session.execute(
+                update(TaskOutbox)
+                .where(TaskOutbox.id == outbox_id, TaskOutbox.task_id == task_id)
+                .values(**values)
+            )
+            return bool(result.rowcount)
+    except Exception:
+        logger.exception("outbox close_terminal_row failed (non-fatal)")
+        return False
+
+
 # How often a running task refreshes its row. Recovery's cutoff is 30 minutes, so
 # one beat per minute leaves a wide margin for a slow database or a paused process.
 HEARTBEAT_INTERVAL_S = 60.0
@@ -389,8 +437,41 @@ def heartbeat(
         thread.join(timeout=2.0)
 
 
+def get_task_id(outbox_id: str | None) -> str | None:
+    """Read the Celery id recorded on an outbox row, if any. Own transaction, never raises.
+
+    X-P1-1 (review 2026-11-26): the submit path reads the row *before* fixing a
+    new id — a row that already carries a task id is a resubmission of work
+    already claimed, and the caller must reuse that id instead of minting
+    (and recording) a second one. Returns None for a missing row, a row
+    without an id, or any DB failure.
+    """
+    if not outbox_id:
+        return None
+    try:
+        from .database import default_session_factory
+        from .session_utils import commit_session
+
+        with commit_session(default_session_factory()) as session:
+            row = session.get(TaskOutbox, outbox_id)
+            return row.task_id if row is not None else None
+    except Exception as exc:
+        logger.warning("outbox task_id read failed (non-fatal): %s", exc)
+        return None
+
+
 def record_task_id(outbox_id: str | None, task_id: str) -> bool:
-    """Remember the Celery id handed to the client. Own transaction, never raises."""
+    """Remember the Celery id handed to the client. Own transaction, never raises.
+
+    X-P1-1 (review 2026-11-26, SR-015 prescribed fix): conditional write —
+    the id is recorded only when the row has none yet (``WHERE task_id IS
+    NULL``), so the first claim wins and a resubmission can no longer
+    overwrite the id of an already-running task. Returns False when the
+    row already carries an id (the caller re-reads it and reuses it — that
+    is NOT an error) or when the row is missing; only the missing-row /
+    DB-failure case is a dispatch failure (SR-088), distinguished by the
+    caller re-reading the row.
+    """
     if not outbox_id or not task_id:
         return False
     try:
@@ -400,7 +481,7 @@ def record_task_id(outbox_id: str | None, task_id: str) -> bool:
         with commit_session(default_session_factory()) as session:
             result = session.execute(
                 update(TaskOutbox)
-                .where(TaskOutbox.id == outbox_id)
+                .where(TaskOutbox.id == outbox_id, TaskOutbox.task_id.is_(None))
                 .values(task_id=task_id, updated_at=_utcnow())
             )
             return bool(result.rowcount)

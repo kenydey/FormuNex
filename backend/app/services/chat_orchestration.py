@@ -84,13 +84,37 @@ def _reviewer_failed(review) -> bool:
 
 
 
-def _reviewer_notices(reviewer) -> list[str]:
-    """v16 P3-11: reviewer fail-open 时给用户可见提示（不再静默）。"""
+def _reviewer_notices(reviewer) -> list[dict]:
+    """v16 P3-11: reviewer fail-open 时给用户可见提示（不再静默）。
+    QA-01：warning / failure 状态同样进 notices（用户可见），不再只
+    放在响应 JSON 里前端不看的字段上。
+    返回 {"code", "message"} dict，与门 notices / 退化 notices 同型
+    （ChatResponse.notices 是 list[dict]，str 会触发 pydantic 校验失败）。
+    """
     if _reviewer_failed(reviewer):
-        return ["证据评审未完成（reviewer 异常），回答未经第二轮校验"]
+        return [{
+            "code": "reviewer_error",
+            "message": "证据评审未完成（reviewer 异常），回答未经第二轮校验",
+        }]
     # P2: reviewer 为 None（跳过）时也明确告知，不再静默
     if reviewer is None:
-        return ["证据评审未运行（已跳过），回答未经第二轮校验"]
+        return [{
+            "code": "reviewer_skipped",
+            "message": "证据评审未运行（已跳过），回答未经第二轮校验",
+        }]
+    status = ""
+    if isinstance(reviewer, dict):
+        status = (reviewer.get("status") or "pass").lower()
+    if status == "failure":
+        return [{
+            "code": "reviewer_failure",
+            "message": "证据评审未通过：回答存在证据支撑问题，请谨慎采信",
+        }]
+    if status == "warning":
+        return [{
+            "code": "reviewer_warning",
+            "message": "证据评审提示：回答存在需要留意的证据问题，请谨慎采信",
+        }]
     return []
 
 
@@ -500,6 +524,20 @@ def _apply_answer_gates(
                 for sc in sourced_claims:
                     if _hit(sc.text) and sc.status in _NUMERIC_DOWNGRADE:
                         sc.status = _NUMERIC_DOWNGRADE[sc.status]
+    elif (
+        is_paperqa
+        and settings.chat_numeric_check_enabled
+        and citations
+    ):
+        # QA-05（二选一之②）：paperqa 引用格式无法映射为 [^n]，数值检查
+        # 会误报，故同步/流式两路统一跳过；跳过本身进 notices，不再静默。
+        # （真实 PaperQA 输出格式未经有 key 环境核实前，不选方案①。）
+        notices.append(
+            {
+                "code": "numeric_check_skipped",
+                "message": "PaperQA 路径数值一致性检查已跳过（引用格式与 [^n] 不兼容），答案中的数字未经核验，请自行确认关键数值。",
+            }
+        )
 
     # —— P2-3：conflicting 判词显式透出 ——
     if (
@@ -816,6 +854,8 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             )
         data_sources = _answer_data_sources(hybrid_out, sources)
 
+        # QA-05：同步 paperqa 答案同样跳过数值门（与流式对齐，二选一之②）。
+        is_paperqa_answer = False
         if req.response_format == "structured" and settings.chat_structured_enabled:
             structured, struct_err, eff_sources = generate_structured_answer(
                 question,
@@ -843,8 +883,12 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
                 answer = _ensure_answer(answer)
             _mark("answer")
         else:
+            # QA-05：同步 paperqa 答案同样跳过数值门（与流式 paperqa 分支
+            # 对齐，二选一之②）；answer_question 内置 paperqa tier 与此
+            # 无关——try_paperqa_answer 已先行尝试，同源失败时内置 tier 亦不可用。
             pq = try_paperqa_answer(question, sources) if use_evidence else None
             if pq:
+                is_paperqa_answer = True
                 answer, citations = pq
                 answer = _ensure_answer(answer)
             else:
@@ -964,6 +1008,34 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("reviewer fix-loop skipped: %s", exc)
 
+            # QA-01：warning-only 写影子 ReviewRun（不进 fix-loop）。
+            # fix-loop 关时 run_fix_loop 不写 run；此处补写，使 warning /
+            # failure 有可审计落盘记录；run_id 挂到 evidence_reviewer 上。
+            if (
+                evidence_reviewer
+                and isinstance(evidence_reviewer, dict)
+                and not _reviewer_failed(evidence_reviewer)
+                and (evidence_reviewer.get("status") or "pass") != "pass"
+                and (reviewer_fix is None or not reviewer_fix.get("run_id"))
+            ):
+                try:
+                    from ..services.reviewer_fix_loop import write_shadow_review_run
+
+                    _shadow = write_shadow_review_run(
+                        question=question,
+                        answer=answer,
+                        review=evidence_reviewer,
+                        settings=settings,
+                        project_id=req.project_id,
+                    )
+                    if _shadow is not None:
+                        evidence_reviewer = {
+                            **evidence_reviewer,
+                            "review_run_id": _shadow["run_id"],
+                        }
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("shadow review run skipped: %s", exc)
+
         # MCP skill-doc inject is handled in evidence_synthesis; optional tool call path
         if req.selected_mcp_servers:
             try:
@@ -995,6 +1067,7 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             settings=settings,
         )
         # P2 运行时门：数值检查 → 冲突透出 → 拒答硬门（决策 A：同步路径）。
+        # QA-05：paperqa 答案两路统一跳过数值门（is_paperqa=True）。
         answer, sourced_claims, _abstained, gate_notices = _apply_answer_gates(
             question,
             answer,
@@ -1002,8 +1075,14 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             sourced_claims,
             _verified,
             settings,
+            is_paperqa=is_paperqa_answer,
         )
-        notices = list(retrieval_notices) + list(gate_notices or [])
+        # QA-01：reviewer 状态（warning/failure/跳过/异常）进 notices，用户可见。
+        notices = (
+            list(retrieval_notices)
+            + list(gate_notices or [])
+            + _reviewer_notices(evidence_reviewer)
+        )
         try:
             from ..services.scholar_helpers import build_evidence_provenance
 
@@ -1075,8 +1154,9 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
 def _stream_answer_plan(req: "ChatRequest", settings):
     """同步准备: 改写/检索/澄清/召回 → (question, prompt, ctx)。
 
-    与 /api/chat 的准备逻辑一致(kb_augment + BM25 召回 top-k 直取,
-    不做 LLM 二次精排——2026-09-04 实测 rerank 30-76s/问, 收益边际)。
+    与 /api/chat 的准备逻辑一致(kb_augment + BM25 召回；精排与同步共用
+    recall_and_rerank，默认 CE-only、LLM 精排需显式开关——2026-09-04
+    实测 LLM 精排 30-76s/问，收益边际)。
     """
     from ..services import kb_index  # noqa: F401 (warm imports)
     from ..services.chat_context import rewrite_query, trim_history
@@ -1129,12 +1209,24 @@ def _stream_answer_plan(req: "ChatRequest", settings):
     store.ingest(sources)
     candidates_n = min(settings.chat_rerank_candidates, max(1, len(sources)))
     recalled = store.query(retrieval_query, k=candidates_n) or sources[:candidates_n]
-    # P1-d: cross-encoder 精排接入 —— BM25 粗排后精排，fail-open（模型未缓存则跳过）
+    # QA-03：与同步共用 recall_and_rerank（单一开关语义：默认 CE-only，
+    # LLM 精排需显式开关；候选数截到 cross_encoder_max_candidates）。
+    # 开关关时 helper 原样返回 BM25 序；meta 进 plan 供 done.meta 可观测。
+    rerank_meta: dict = {
+        "applied": False,
+        "backend": "none",
+        "reason": "not_run",
+        "candidates": len(recalled),
+        "truncated_to": candidates_n,
+        "prefer": "cross_encoder",
+    }
     try:
-        from ..services.rag import rerank_scored
+        from ..services.rag import recall_and_rerank
 
-        reranked, _meta = rerank_scored(retrieval_query, recalled, k=candidates_n)
-        if reranked:
+        reranked, rerank_meta = recall_and_rerank(
+            retrieval_query, recalled, k=candidates_n, settings=settings
+        )
+        if rerank_meta.get("applied") and reranked:
             recalled = [r.evidence for r in reranked]
     except Exception as exc:  # noqa: BLE001
         logger.debug("chat rerank skipped: %s", exc)
@@ -1198,6 +1290,7 @@ def _stream_answer_plan(req: "ChatRequest", settings):
         # stream done 的 citations 必须取同序的 relevant[:8]，
         # 否则 [^n] 与前端引用卡片错位。
         "relevant": relevant,
+        "rerank": rerank_meta,
         "kb_used": kb_used,
         "entity_resolution": entity_resolution,
         "kg_stats": kg_stats,
@@ -1360,7 +1453,87 @@ def _finalize_evidence_fields(
                         citation_binding = _rebound
             except Exception as exc:  # noqa: BLE001
                 logger.debug("stream fix-loop skipped: %s", exc)
+        # QA-01：warning-only 写影子 ReviewRun（不进 fix-loop）；run_id 挂到 reviewer 上。
+        if (
+            reviewer
+            and isinstance(reviewer, dict)
+            and not _reviewer_failed(reviewer)
+            and (reviewer.get("status") or "pass") != "pass"
+            and (reviewer_fix is None or not reviewer_fix.get("run_id"))
+        ):
+            try:
+                from ..services.reviewer_fix_loop import write_shadow_review_run
+
+                _shadow = write_shadow_review_run(
+                    question=question,
+                    answer=answer,
+                    review=reviewer,
+                    settings=settings,
+                    project_id=project_id,
+                )
+                if _shadow is not None:
+                    reviewer = {**reviewer, "review_run_id": _shadow["run_id"]}
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("stream shadow review run skipped: %s", exc)
     return answer, doi_results, reviewer, reviewer_fix, citation_expand, citations, citation_binding
+
+def _stream_done_payload(
+    *,
+    answer,
+    citations,
+    kb_used,
+    plan,
+    req,
+    claims=None,
+    sources_audit=None,
+    gate_notices=None,
+    doi_results=None,
+    citation_expand=None,
+    evidence_provenance=None,
+    reviewer=None,
+    reviewer_fix=None,
+    citation_binding=None,
+    tools_used=None,
+) -> dict:
+    """QA-02：三条流式收尾（化学工具失败 / 化学工具成功 / 主 token 流）
+    共用的 done 负载构造器，防再次漂移。
+
+    字段与主 token 流对齐：doi_results / citation_expand /
+    evidence_provenance / evidence_reviewer / reviewer_fix /
+    citation_binding / mode + 退化 notices + 门 notices + reviewer notices。
+    tools_used 仅化学工具路径传（主 token 流不含该键）。
+    """
+    payload: dict = {
+        "type": "done",
+        "answer": answer,
+        "citations": citations,
+        "rag_backend": active_rag_backend(),
+        "kb_chunks_used": kb_used,
+        "data_sources": plan.get("data_sources"),
+        "entity_resolution": plan["entity_resolution"],
+        "kg_retrieval_stats": plan["kg_stats"],
+        "clarification": plan["clarification"],
+        "rewritten_query": plan["rewritten_query"],
+        "sourced_claims": claims,
+        "sources_audit": sources_audit,
+        "mode": req.mode,
+        "doi_results": doi_results,
+        "citation_expand": citation_expand,
+        "evidence_provenance": evidence_provenance,
+        "evidence_reviewer": reviewer,
+        "reviewer_fix": reviewer_fix,
+        "citation_binding": citation_binding,
+        # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
+        "notices": (
+            list(_retrieval_degradation_notices(kb_used, req) or [])
+            + list(gate_notices or [])
+            + _reviewer_notices(reviewer)
+        ) or None,
+    }
+    if tools_used is not None:
+        payload["tools_used"] = tools_used
+    return payload
+
 
 def stream_chat_events(req: "ChatRequest", request: Request = None):
     # Stage 4 / SR-021: extracted from the route. Returns the event
@@ -1427,6 +1600,8 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                     "rewritten_query": plan["rewritten_query"],
                     "source_count": len(sources),
                     "mode": plan.get("mode") or req.mode,
+                    # QA-03：精排 applied/backend 可观测。
+                    "rerank": plan.get("rerank"),
                 }
             )
 
@@ -1724,6 +1899,31 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                                     pass
                         except Exception as exc:  # noqa: BLE001 - fail-open
                             logger.warning("chat/stream structured fix-loop: %s", exc)
+                    # QA-01：warning-only 写影子 ReviewRun（不进 fix-loop）。
+                    if (
+                        evidence_reviewer
+                        and isinstance(evidence_reviewer, dict)
+                        and not _reviewer_failed(evidence_reviewer)
+                        and (evidence_reviewer.get("status") or "pass") != "pass"
+                        and (reviewer_fix is None or not reviewer_fix.get("run_id"))
+                    ):
+                        try:
+                            from ..services.reviewer_fix_loop import write_shadow_review_run
+
+                            _shadow = write_shadow_review_run(
+                                question=question,
+                                answer=answer,
+                                review=evidence_reviewer,
+                                settings=settings,
+                                project_id=req.project_id,
+                            )
+                            if _shadow is not None:
+                                evidence_reviewer = {
+                                    **evidence_reviewer,
+                                    "review_run_id": _shadow["run_id"],
+                                }
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug("stream structured shadow run skipped: %s", exc)
                     _degr_notices = _retrieval_degradation_notices(kb_used, req) or []
                     # v21-fix: fix-loop 可能修改答案，重算 claims/audit（与同步路径对齐）。
                     # v22-fix: 用答案文本比较触发（"repaired" 键不存在，v21-5 死代码）。
@@ -1914,35 +2114,37 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                             _verified,
                             settings,
                         )
-                        done_payload = {
-                            "type": "done",
-                            "answer": answer,
-                            "citations": cites,
-                            "rag_backend": active_rag_backend(),
-                            "kb_chunks_used": kb_used,
-                            "data_sources": plan.get("data_sources"),
-                            "entity_resolution": plan["entity_resolution"],
-                            "kg_retrieval_stats": plan["kg_stats"],
-                            "clarification": plan["clarification"],
-                            "rewritten_query": plan["rewritten_query"],
-                            "sourced_claims": claims,
-                            "sources_audit": sources_audit,
-                            "tools_used": tools_used or result_holder.get("tools_used") or [],
-                            # v16: chem-tools 路径也带 reviewer/doi 字段（与主 token 流对齐）。
-                            "mode": req.mode,
-                            "doi_results": doi_results,
-                            "citation_expand": citation_expand,
-                            "evidence_reviewer": reviewer,
-                            "reviewer_fix": reviewer_fix,
-                            "citation_binding": citation_binding,
-                            # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
-                            "notices": (
-                                list(_retrieval_degradation_notices(kb_used, req) or [])
-                                + list(_gate_notices or [])
-                                + _reviewer_notices(reviewer)
-                            ) or None,
-                        }
-                        yield _sse(done_payload)
+                        evidence_provenance = None
+                        try:
+                            from ..services.scholar_helpers import build_evidence_provenance
+
+                            evidence_provenance = build_evidence_provenance(
+                                doi_results=doi_results,
+                                sourced_claims=claims,
+                                enabled=settings.evidence_provenance_enabled,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                        # QA-02：done 负载走三条收尾共用的构造器（与主 token 流对齐）。
+                        yield _sse(
+                            _stream_done_payload(
+                                answer=answer,
+                                citations=cites,
+                                kb_used=kb_used,
+                                plan=plan,
+                                req=req,
+                                claims=claims,
+                                sources_audit=sources_audit,
+                                gate_notices=_gate_notices,
+                                doi_results=doi_results,
+                                citation_expand=citation_expand,
+                                evidence_provenance=evidence_provenance,
+                                reviewer=reviewer,
+                                reviewer_fix=reviewer_fix,
+                                citation_binding=citation_binding,
+                                tools_used=tools_used or result_holder.get("tools_used") or [],
+                            )
+                        )
                         return
                 else:
                     answer = (result_holder.get("text") or "".join(parts)).strip()
@@ -1952,6 +2154,25 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                         sanitize_evidence(c)
                         for c in plan["relevant"]
                     ]
+                    # QA-02：成功分支此前缺收尾——补 _finalize_evidence_fields
+                    #（DOI / reviewer / fix-loop / 引用绑定），与失败分支对齐；
+                    # 取回重绑后的 citations 再跑 claims/gates。
+                    answer, doi_results, reviewer, reviewer_fix, citation_expand, cites, citation_binding = (
+                        await asyncio.to_thread(
+                            _finalize_evidence_fields,
+                            question,
+                            answer,
+                            cites,
+                            settings=settings,
+                            mode=req.mode,
+                            selected_skills=list(req.selected_skills or []),
+                            project_id=req.project_id,
+                            sources=list(plan["sources"]),
+                            domain=req.domain,
+                            history=list(req.history or []),
+                            structure=req.structure,
+                        )
+                    )
                     claims, sources_audit = None, None
                     try:
                         claims, sources_audit, _verified = await asyncio.to_thread(
@@ -1973,23 +2194,35 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                         _verified,
                         settings,
                     )
+                    evidence_provenance = None
+                    try:
+                        from ..services.scholar_helpers import build_evidence_provenance
+
+                        evidence_provenance = build_evidence_provenance(
+                            doi_results=doi_results,
+                            sourced_claims=claims,
+                            enabled=settings.evidence_provenance_enabled,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     yield _sse(
-                        {
-                            "type": "done",
-                            "answer": answer,
-                            "citations": cites,
-                            "rag_backend": active_rag_backend(),
-                            "kb_chunks_used": kb_used,
-                            "data_sources": plan.get("data_sources"),
-                            "entity_resolution": plan["entity_resolution"],
-                            "kg_retrieval_stats": plan["kg_stats"],
-                            "clarification": plan["clarification"],
-                            "rewritten_query": plan["rewritten_query"],
-                            "sourced_claims": claims,
-                            "sources_audit": sources_audit,
-                            "tools_used": tools_used,
-                            "notices": list(_gate_notices or []) or None,
-                        }
+                        _stream_done_payload(
+                            answer=answer,
+                            citations=cites,
+                            kb_used=kb_used,
+                            plan=plan,
+                            req=req,
+                            claims=claims,
+                            sources_audit=sources_audit,
+                            gate_notices=_gate_notices,
+                            doi_results=doi_results,
+                            citation_expand=citation_expand,
+                            evidence_provenance=evidence_provenance,
+                            reviewer=reviewer,
+                            reviewer_fix=reviewer_fix,
+                            citation_binding=citation_binding,
+                            tools_used=tools_used,
+                        )
                     )
                     return
 
@@ -2149,34 +2382,24 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
             except Exception:  # noqa: BLE001
                 pass
 
+            # QA-02：done 负载走三条收尾共用的构造器。
             yield _sse(
-                {
-                    "type": "done",
-                    "answer": answer,
-                    "citations": citations,
-                    "rag_backend": active_rag_backend(),
-                    "kb_chunks_used": kb_used,
-                    "data_sources": plan.get("data_sources"),
-                    "entity_resolution": plan["entity_resolution"],
-                    "kg_retrieval_stats": plan["kg_stats"],
-                    "clarification": plan["clarification"],
-                    "rewritten_query": plan["rewritten_query"],
-                    "sourced_claims": claims,
-                    "sources_audit": sources_audit,
-                    "mode": req.mode,
-                    "doi_results": doi_results,
-                    "citation_expand": citation_expand,
-                    "evidence_provenance": evidence_provenance,
-                    "evidence_reviewer": reviewer,
-                    "reviewer_fix": reviewer_fix,
-                    "citation_binding": citation_binding,
-                    # B-1: BM25-only 退化提示位 + P2 门 notices + v16 P3-11 reviewer fail-open。
-                    "notices": (
-                        list(_retrieval_degradation_notices(kb_used, req) or [])
-                        + list(_gate_notices or [])
-                        + _reviewer_notices(reviewer)
-                    ) or None,
-                }
+                _stream_done_payload(
+                    answer=answer,
+                    citations=citations,
+                    kb_used=kb_used,
+                    plan=plan,
+                    req=req,
+                    claims=claims,
+                    sources_audit=sources_audit,
+                    gate_notices=_gate_notices,
+                    doi_results=doi_results,
+                    citation_expand=citation_expand,
+                    evidence_provenance=evidence_provenance,
+                    reviewer=reviewer,
+                    reviewer_fix=reviewer_fix,
+                    citation_binding=citation_binding,
+                )
             )
             # W2-8 (P1-12): turn-stop 自动审计；evidence 路径已内联 review 的 turn 跳过。
             if reviewer is None:

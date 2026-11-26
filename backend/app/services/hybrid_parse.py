@@ -19,7 +19,7 @@ checkable rather than asserted.
 **What goes to the vision model, and what must not.** MinerU returns
 `equation` blocks already in LaTeX and `table` blocks already as HTML. Handing
 those to a vision model would replace a structured answer with a guess. Only
-`image` and `chart` blocks — and tables MinerU itself could not render — have
+`image`, `chart` and `figure` blocks — and tables MinerU itself could not render — have
 anything to gain from being looked at.
 
 **On chemical structures.** MinerU does not produce SMILES; it returns the
@@ -43,7 +43,11 @@ logger = logging.getLogger(__name__)
 # Block types that arrive structured and must not be second-guessed by a
 # vision model, and those that carry no text at all and must be looked at.
 _ALREADY_STRUCTURED = frozenset({"text", "title", "list", "code", "equation"})
-_VISUAL = frozenset({"image", "chart"})
+# P1-1 (review 2026-11-26): `figure` was missing here while
+# `mineru_structured._KIND_TO_BLOCK` already maps it to figure — a
+# figure block with empty text and an image fell through to the prose
+# branch and vanished silently. It is visual content, like image/chart.
+_VISUAL = frozenset({"image", "chart", "figure"})
 # Page furniture: repeating it in every chunk is noise that dilutes retrieval.
 _DISCARD = frozenset({"header", "footer", "page_number"})
 
@@ -200,6 +204,15 @@ def _render_blocks(blocks: list[mineru_cloud.MinerUBlock], *, page_label: str) -
             continue
 
         if kind in _VISUAL:
+            parts.append(_visual_markdown(block, page_label, can_see, vision_hint,
+                                          extract_image, image_markdown))
+            continue
+
+        # P1-1 (review 2026-11-26): an unknown block type carrying an
+        # image but no text is a figure by content, not prose — route it
+        # to vision instead of dropping it silently. Text-bearing unknown
+        # types keep the old path below (their text is preserved).
+        if block.image and not (block.text or "").strip():
             parts.append(_visual_markdown(block, page_label, can_see, vision_hint,
                                           extract_image, image_markdown))
             continue
@@ -588,10 +601,39 @@ def _parse_scanned(content: bytes, pages: list[pdf_local.LocalPage]) -> str | No
     by_page: dict[int, list[mineru_cloud.MinerUBlock]] = {}
     for block in document.blocks:
         by_page.setdefault(block.page_idx + 1, []).append(block)
-    rendered = [
-        (page_no, _render_blocks(blocks, page_label=f"p.{page_no}"))
-        for page_no, blocks in sorted(by_page.items())
-    ]
+    # P1-2 (review 2026-11-26): the whole-document MinerU path had no
+    # page-coverage check — a page MinerU returned zero blocks for
+    # vanished without a trace. Expected pages come from the local pass
+    # (`pages`); every expected page with no blocks gets a visible
+    # placeholder instead of disappearing. Pages MinerU reported beyond
+    # the expected range (should not happen) are kept, in order.
+    expected = [p.page_no for p in pages]
+    missing = sorted(set(expected) - set(by_page))
+    if missing:
+        logger.warning(
+            "hybrid: MinerU returned no blocks for page(s) %s of a %d-page scan",
+            ", ".join(str(n) for n in missing),
+            len(pages),
+        )
+        try:
+            from .parse_notices import note
+
+            note(
+                f"MinerU 未返回第 {', '.join(str(n) for n in missing)} 页内容，"
+                f"已用占位标记（共 {len(pages)} 页文档）"
+            )
+        except Exception:
+            pass
+    rendered = []
+    for page_no in sorted(set(expected) | set(by_page)):
+        if page_no in by_page:
+            rendered.append(
+                (page_no, _render_blocks(by_page[page_no], page_label=f"p.{page_no}"))
+            )
+        else:
+            rendered.append(
+                (page_no, f"> _（第 {page_no} 页 MinerU 未返回内容）_")
+            )
     return pdf_local.assemble(rendered) or None
 
 

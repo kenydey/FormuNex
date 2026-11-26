@@ -118,7 +118,7 @@ def _kb_ingest_impl(task_id: str, payload: dict) -> dict:
 
 
 
-@celery_app.task(bind=True, name="formunex.kb_ingest")
+@celery_app.task(bind=True, base=_OutboxTask, outbox_operation="kb_ingest", name="formunex.kb_ingest")
 def run_kb_ingest_task(self, payload: dict) -> dict:
     return _kb_ingest_impl(self.request.id, payload)
 
@@ -417,10 +417,20 @@ def dispatch_kb_ingest(
     job goes through Celery; in eager mode ``.delay()`` would run inline and
     stall the parent task, so a daemon thread provides the same non-blocking
     behaviour for single-process deployments.
+
+    P1-6 (2026-11-26 review): 与邻居任务对齐走 outbox —— 先写 durable
+    outbox 行 (``enqueue_outbox("kb_ingest", payload)``), 再经 dispatch
+    kernel (id-first  ordering, broker-down 显式失败) 分发; 任务本体接
+    ``_OutboxTask`` (``outbox_operation="kb_ingest"``), 终态时 outbox 行
+    被标 DONE/FAILED, worker 崩溃/硬超时后可由 ``recover_stalled`` 恢复
+    （dispatcher._HANDLERS 的 "kb_ingest" 入口已随同补齐，见
+    app/db/dispatcher.py）。
     """
+    from ...api._idempotency import enqueue_outbox
     from ...config import get_settings
     from ...domain.schemas import Evidence
     from ...services import kb_ingest
+    from ...services.dispatch import dispatch_task_kernel
 
     if not kb_ingest.ingest_enabled() or not evidence_dicts:
         return None
@@ -440,16 +450,30 @@ def dispatch_kb_ingest(
         "query": query,
         "domain": str(domain) if domain is not None else None,
     }
+    outbox_id = enqueue_outbox("kb_ingest", payload)
     if get_settings().celery_eager:
         task_id = f"kbingest-{uuid.uuid4().hex[:16]}"
         task_manager.register_celery_task(task_id, "kb_ingest")
-        from ..eager_pool import submit as _eager_submit
-
-        _eager_submit(_safe_kb_ingest, "kb-ingest", task_id, payload)
+        try:
+            dispatch_task_kernel(
+                run_kb_ingest_task, payload, "kb_ingest",
+                outbox_id=outbox_id, task_id=task_id,
+            )
+        except Exception:
+            logger.exception("kb_ingest eager dispatch failed")
+            return None
         return task_id
-    async_result = run_kb_ingest_task.delay(payload)
-    task_manager.register_celery_task(async_result.id, "kb_ingest")
-    return async_result.id
+    try:
+        task_id = dispatch_task_kernel(
+            run_kb_ingest_task, payload, "kb_ingest", outbox_id=outbox_id
+        )
+    except Exception as exc:
+        # Fire-and-forget: broker-down 等分发失败只记日志、不抛入调用方
+        # (检索/深研任务本身已成功), outbox 行保持 PENDING 待恢复重放。
+        logger.warning("kb_ingest dispatch failed: %s", exc)
+        return None
+    task_manager.register_celery_task(task_id, "kb_ingest")
+    return task_id
 
 
 

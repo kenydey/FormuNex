@@ -175,6 +175,14 @@ def design(components: list[Component], *, total: float = 100.0, n_runs: int | N
     F, terms = model.matrix(cands)
     p = F.shape[1]
     n = n_runs or (p + max(5, p // 2))  # parameters + a few degrees of freedom for lack of fit / error
+    capped = False
+    if n_runs is None and n > len(cands):
+        # D6-1: 默认 n 从未按候选集规模封顶 —— 2 组分二次混料默认 n=8，
+        # 候选集只有 7 个点，默认调用直接 422。显式 n_runs 不封顶（仍由
+        # select 按原分支报错），只有默认 n 才封顶到候选集规模；封顶后
+        # 若 n < p，仍由 select 抛“参数过多”（真不可估，非候选集不足）。
+        n = len(cands)
+        capped = True
     include = []
     centroid_idx = _centroid_index(cands, names) if (include_centroid and not process and not categorical) else None
     if centroid_idx is not None:
@@ -189,6 +197,8 @@ def design(components: list[Component], *, total: float = 100.0, n_runs: int | N
         for nme in names:
             r[nme] = round(float(r[nme]), 6)
     notes = []
+    if capped:
+        notes.append(f"默认试验次数按候选点封顶为 {n} 次（候选点共 {len(cands)} 个）")
     if replicate_centroid and not process and not categorical and centroid_idx is None:
         notes.append("未找到中心点候选，跳过中心点重复")
     tightened = [c.name for c, o in zip(comps, components, strict=True) if (c.low, c.high) != (o.low, o.high)]
@@ -211,6 +221,11 @@ def factorial_d_optimal(continuous: list[ContinuousFactor], categorical: list[Ca
     model = Model(continuous=continuous, process_order=order, categorical=categorical)
     F, terms = model.matrix(cands)
     n = n_runs or (F.shape[1] + max(4, F.shape[1] // 2))
+    if n_runs is None and n > len(cands):
+        # D6-5：与 D6-1 同根因 —— 单连续因子默认 n=6，3 水平网格只有
+        # 3 个候选点，默认调用直接 422。仅默认 n 封顶到候选集规模；
+        # 显式 n_runs 不封顶，封顶后 n < p 仍由 select 抛“参数过多”。
+        n = len(cands)
     sel = select(F, n, seed=seed, terms=terms)
     runs = [{**cands[i], "_run": k} for k, i in enumerate(sel.indices, start=1)]
     return {"runs": runs, "candidates": len(cands), "model": {"order": order, **sel.to_dict(), "runs": len(runs)}}

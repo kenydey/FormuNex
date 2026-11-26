@@ -66,9 +66,10 @@ def test_fetched_evidence_is_no_longer_clipped_to_600(monkeypatch):
 
 
 def test_chunk_cap_allows_a_long_document(monkeypatch):
-    """200 chunks × 1600 chars ≈ 320K was the only place a *successfully*
-    fetched full text was still silently truncated."""
-    assert get_settings().kb_max_chunks_per_source >= 600
+    """2000 chunks × 1600 chars ≈ 320 万字符才触顶：此前 600 的上限会静默
+    截断长专利尾部（2026-11-26 全面审查 B1）。
+    暂定值 2000 待 Cheng 定最终值；改最终值时同步改此处断言。"""
+    assert get_settings().kb_max_chunks_per_source >= 2000
 
 
 # ── vector honesty ───────────────────────────────────────────────────────────

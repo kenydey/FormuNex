@@ -1026,8 +1026,11 @@ class Settings(BaseSettings):
     prediction_bias_soft_correct: bool = False
     prediction_bias_soft_correct_min_n: int = 3
     # 每篇文档最多持久化多少切块。这是全文成功抓取之后**唯一**还会静默丢内容
-    # 的地方：200 × 1600 ≈ 32 万字符，长专利/综述会被截断。
-    kb_max_chunks_per_source: int = 600
+    # 的地方：2000 × 1600 ≈ 320 万字符，长专利/综述仍可能被截断；截断时
+    # prepare_chunk_rows 计入 chunk_cap_truncated 计数、写入库审计并在
+    # ingest 响应侧以 warnings 暴露（见 kb_index.last_chunk_cap_warning）。
+    # 暂定值 2000 待 Cheng 定最终值（2026-11-26 全面审查 B1），勿当最终口径。
+    kb_max_chunks_per_source: int = 2000
     kb_search_scan_limit: int = 5000
     # Post-A′ #3: when scan near cap OR recent hybrid p95 ≥ this (ms), cosine
     # runs only on top-N BM25 candidates (in-process; no Qdrant).

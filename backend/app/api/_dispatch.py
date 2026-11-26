@@ -26,6 +26,7 @@ from ..services.dispatch import (
     broker_reachable,
     dispatch_task_kernel,
     DispatchUnavailable,
+    get_outbox_task_id,
 )
 
 __all__ = [
@@ -100,6 +101,16 @@ def submit(
     head start on the caller, and a caller that reads state right after
     ``submit`` returns (pageindex scheduling asserts ``pending``) can lose
     that race to a thread that already ran the job to ``partial``.
+
+    X-P1-1 (review 2026-11-26, SR-015 prescribed fix): when the outbox row
+    already carries a task id, that id is reused for the 202 body — never
+    minted over or overwritten. The kernel still runs the probe + publish
+    under the reused id (a row cannot tell "published" from "recorded
+    then 503'd", so skipping the flow would turn a broker-down retry into
+    a false 202): a resubmission therefore gets the same 202 id twice and
+    the row keeps the first id, so a crash of the second execution cannot
+    orphan the row — the failure still marks it by operation×payload and
+    recovery still replays it under the one id.
     """
     from .tasks import accepted_response
     from ..worker.task_kinds import is_known_kind
@@ -112,7 +123,18 @@ def submit(
     if not is_known_kind(kind):
         raise HTTPException(status_code=400, detail=f"未知任务类型：{kind}")
 
-    task_id = str(uuid.uuid4())
+    # X-P1-1: read the row before minting an id — a resubmission reuses
+    # the claimed id instead of minting (and overwriting with) a new one.
+    existing_id = get_outbox_task_id(outbox_id) if outbox_id else None
+    task_id = existing_id or str(uuid.uuid4())
     response = accepted_response(task_id, kind, outbox_id=outbox_id, owner_id=owner_id)
-    dispatch_task(task, payload, kind, outbox_id=outbox_id, task_id=task_id)
+    dispatched_id = dispatch_task(task, payload, kind, outbox_id=outbox_id, task_id=task_id)
+    if dispatched_id != task_id:
+        # A concurrent resubmission lost the claim race between the read
+        # above and the kernel's conditional write: the row carries the
+        # winner's id, so the client must poll that one (registering it
+        # is idempotent and never moves a task backwards).
+        response = accepted_response(
+            dispatched_id, kind, outbox_id=outbox_id, owner_id=owner_id
+        )
     return response

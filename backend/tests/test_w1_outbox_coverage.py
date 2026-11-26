@@ -24,6 +24,8 @@ HANDLERS = [
     ("search", "run_search_task"),
     ("topic_sweep", "run_topic_sweep"),
     ("wiki_storm_report", "run_wiki_storm_report_task"),
+    # P1-6 (2026-11-26 review): kb_ingest wired to outbox.
+    ("kb_ingest", "run_kb_ingest_task"),
 ]
 
 

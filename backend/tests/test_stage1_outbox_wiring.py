@@ -39,6 +39,8 @@ WIRED = [
     ("document_generate", "run_document_generate_task"),
     ("wiki_lint_run", "run_wiki_lint_task"),
     ("wiki_lint_sweep", "run_wiki_lint_sweep_task"),
+    # P1-6 (2026-11-26 review): kb_ingest wired to outbox.
+    ("kb_ingest", "run_kb_ingest_task"),
 ]
 
 
