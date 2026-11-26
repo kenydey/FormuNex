@@ -570,7 +570,9 @@ def test_shard_cache_passes_pinned_parser(monkeypatch):
     assert put_shard(sha, 0, 1, 10, "markitdown", "CACHED <!-- page:1 --> body")
     result = parsing.parse_document(content, "pdf", prefer="mineru")
     assert "FRESH" in result.markdown and "CACHED" not in result.markdown
-    assert calls == [10, 2]
+    # P3-1 (wave 3): `calls` records tier invocations from pool threads —
+    # completion order, not shard order — so compare order-insensitively.
+    assert sorted(calls) == [2, 10]
 
     # Auto: no parser expectation, the cached row is a hit.
     assert put_shard(sha, 0, 1, 10, "markitdown", "CACHED <!-- page:1 --> body")

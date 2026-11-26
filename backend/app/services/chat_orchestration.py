@@ -502,6 +502,9 @@ def _apply_answer_gates(
     settings,
     # D P2-4: paperqa 路径的引用格式非 [^n]，数值检查会误报，跳过。
     is_paperqa: bool = False,
+    # QA-19: 结构化答案的 claim 计数以 key_findings 为准（与 _extract_claims
+    # 同源），调用方有 structured 时传入；无则按 answer 文本计数。
+    structured=None,
 ):
     """Apply P2-1/P2-3/P2-2 gates.
 
@@ -693,6 +696,36 @@ def _apply_answer_gates(
                 )
     except Exception as exc:  # noqa: BLE001
         logger.debug("wiki cap notice skipped: %s", exc)
+
+    # QA-19：超 _MAX_CLAIMS（20 句）未验证的尾部论断进 notices（用户可见），
+    # 不再只进 sources_audit JSON。只提示、不改拒答门分母、不改采样策略
+    # （门禁行为变更需决策）。拒答时 claims 已清空、答案已替换，不再追加；
+    # claim-check 关闭（verified is None）时无"已验证子集"概念，同样不追加。
+    # 计数用原始 answer（门控追加的数值注记/冲突段不是待验证论断）与调用方
+    # 传入的 structured，与 _extract_claims / _claim_sentence_count 同源。
+    # 2026-11-27 修正：未验证尾部 = 超出 cap 的句数（total − 20），不是
+    # total − len(verified)——verified 可能因核验未跑满而短于 total（如直接
+    # 调用的 paperqa 路径传 verified=[]），那不是"超出上限未验证"，旧式子
+    # 会对 1 句答案也误报 1 句未验证（test_qa05_paperqa_numeric_gate 回归）。
+    try:
+        if verified is not None and not abstained:
+            from ..pipeline.claim_checker import _MAX_CLAIMS
+            from ..services.chat_claims import _claim_sentence_count
+
+            _total = _claim_sentence_count(answer, structured)
+            _n_unverified = max(0, _total - _MAX_CLAIMS)
+            if _n_unverified:
+                notices.append(
+                    {
+                        "code": "claims_unverified",
+                        "message": (
+                            f"答案共 {_total} 句论断，其中 {_n_unverified} 句超出"
+                            "核验上限（20 句）未验证，请结合原始文献复核尾部内容。"
+                        ),
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("unverified claims notice skipped: %s", exc)
 
     return gated_answer, sourced_claims, abstained, notices
 
@@ -1157,6 +1190,7 @@ def run_chat(req: "ChatRequest", caller_id: str | None) -> ChatResponse:
             _verified,
             settings,
             is_paperqa=is_paperqa_answer,
+            structured=structured,
         )
         # QA-01：reviewer 状态（warning/failure/跳过/异常）进 notices，用户可见。
         # QA-06：citation_date guard 收尾（提示级）——答案脚注里的未来年份。
@@ -1889,6 +1923,7 @@ def stream_chat_events(req: "ChatRequest", request: Request = None):
                             _claims,
                             _verified,
                             settings,
+                            structured=structured,
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("chat/stream structured claims: %s", exc)

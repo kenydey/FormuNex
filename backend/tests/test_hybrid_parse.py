@@ -800,19 +800,26 @@ def test_rapidocr_is_preferred_over_the_layout_parser_ocr(
     monkeypatch.setattr(pdf_local, "extract_pages", lambda c, **kw: _scan_pages())
     monkeypatch.setattr(mineru_cloud, "mineru_available", lambda: (False, "未启用"))
 
-    from app.services import rapidocr_local
+    from app.services import rapidocr_local, tesseract_local
 
     called: list[str] = []
+    # B4 (wave 3): the body OCR runs inside hybrid_parse now — mock it at
+    # the per-page seam (render + ocr_png_scored) instead of at ocr_pdf.
+    monkeypatch.setattr(tesseract_local, "tesseract_available", lambda: False)
+    monkeypatch.setattr(pdf_local, "page_count", lambda c: 4)
+    monkeypatch.setattr(pdf_local, "page_as_png", lambda *a, **k: b"png")
+    monkeypatch.setattr(rapidocr_local, "rapidocr_available", lambda: (True, ""))
     monkeypatch.setattr(
-        rapidocr_local, "ocr_pdf", lambda c: called.append("rapid") or "RAPID TEXT"
+        rapidocr_local, "ocr_png_scored", lambda png: ("RAPID TEXT " * 20, 0.9)
     )
     monkeypatch.setattr(
         pdf_local, "ocr_markdown",
         lambda c, **kw: called.append("layout") or "LAYOUT TEXT",
     )
 
-    assert hybrid_parse.parse(b"%PDF scan") == "RAPID TEXT"
-    assert called == ["rapid"], "the backstop must not run once the first tier worked"
+    out = hybrid_parse.parse(b"%PDF scan")
+    assert out is not None and "RAPID TEXT" in out
+    assert called == [], "the backstop must not run once the first tier worked"
 
 
 def test_a_scan_is_not_lost_when_the_cloud_parser_times_out(
@@ -827,11 +834,19 @@ def test_a_scan_is_not_lost_when_the_cloud_parser_times_out(
     monkeypatch.setattr(mineru_cloud, "mineru_available", lambda: (True, ""))
     monkeypatch.setattr(mineru_cloud, "parse_bytes", lambda c, **kw: None)  # timeout
 
-    from app.services import rapidocr_local
+    from app.services import rapidocr_local, tesseract_local
 
-    monkeypatch.setattr(rapidocr_local, "ocr_pdf", lambda c: "RAPID TEXT")
+    # B4 (wave 3): same per-page seam as the test above.
+    monkeypatch.setattr(tesseract_local, "tesseract_available", lambda: False)
+    monkeypatch.setattr(pdf_local, "page_count", lambda c: 4)
+    monkeypatch.setattr(pdf_local, "page_as_png", lambda *a, **k: b"png")
+    monkeypatch.setattr(rapidocr_local, "rapidocr_available", lambda: (True, ""))
+    monkeypatch.setattr(
+        rapidocr_local, "ocr_png_scored", lambda png: ("RAPID TEXT " * 20, 0.9)
+    )
 
-    assert hybrid_parse.parse(b"%PDF scan") == "RAPID TEXT"
+    out = hybrid_parse.parse(b"%PDF scan")
+    assert out is not None and "RAPID TEXT" in out
 
 
 def test_rapidocr_off_skips_local_ocr_when_mineru_available(

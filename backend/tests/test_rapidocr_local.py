@@ -298,12 +298,24 @@ def test_a_scan_is_readable_without_any_cloud_parser(monkeypatch):
     )
     monkeypatch.setattr(pdf_local, "extract_pages", lambda c, **kw: [page])
     monkeypatch.setattr(pdf_local, "looks_scanned", lambda pages: True)
-    monkeypatch.setattr(pdf_local, "assemble", lambda parts: "")
     # No cloud parser configured — the situation that used to lose the document.
     monkeypatch.setattr(mineru_cloud, "mineru_available", lambda: (False, "未配置 Token"))
-    monkeypatch.setattr(ro, "ocr_pdf", lambda content: "<!-- page:1 -->\n\n扫描件正文")
+    # B4 (wave 3): the body OCR runs inside hybrid_parse now — mock it at
+    # the per-page seam instead of at ocr_pdf. The assemble mock is gone
+    # too: the body assembles its own page markers (the local-only "" is
+    # what the real assemble returns for an empty page).
+    from app.services import tesseract_local
 
-    assert hybrid_parse.parse(b"%PDF fake") == "<!-- page:1 -->\n\n扫描件正文"
+    monkeypatch.setattr(tesseract_local, "tesseract_available", lambda: False)
+    monkeypatch.setattr(pdf_local, "page_count", lambda c: 1)
+    monkeypatch.setattr(pdf_local, "page_as_png", lambda *a, **k: b"png")
+    monkeypatch.setattr(ro, "rapidocr_available", lambda: (True, ""))
+    monkeypatch.setattr(
+        ro, "ocr_png_scored", lambda png: ("扫描件正文" + "内容文字" * 30, 0.9)
+    )
+
+    out = hybrid_parse.parse(b"%PDF fake")
+    assert out is not None and "扫描件正文" in out
 
 
 def test_a_text_pdf_never_pays_for_ocr(monkeypatch):

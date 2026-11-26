@@ -28,6 +28,7 @@ import contextvars
 import io
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -1322,6 +1323,38 @@ _SHARD_OFFSET: contextvars.ContextVar[int] = contextvars.ContextVar(
 _MINERU_BUDGET: contextvars.ContextVar[tuple[int, list[int]] | None] = (
     contextvars.ContextVar("pdf_mineru_budget", default=None)
 )
+# P3-2 (review 2026-11-26, wave 3): the lock serialising every
+# check-and-reserve on a MinerU budget, and the per-shard allowance
+# decision. _MINERU_SLOT is True when the submitter reserved an
+# allowance for this shard (in shard order), False when the budget was
+# already exhausted at submit time, and None when no submitter made a
+# decision (a direct parse_document under a budget) — _apply then does
+# the atomic check-and-reserve itself under the same lock.
+_MINERU_BUDGET_LOCK = threading.Lock()
+_MINERU_SLOT: contextvars.ContextVar[bool | None] = contextvars.ContextVar(
+    "pdf_mineru_slot", default=None
+)
+
+
+def _reserve_mineru_slot() -> bool | None:
+    """Reserve one MinerU allowance for the next shard to submit.
+
+    Called on the submitting thread, in shard order, under
+    _MINERU_BUDGET_LOCK: the first `budget` submitted shards hold an
+    allowance and a later-submitted shard cannot take it from them,
+    however the pool threads happen to be scheduled. Returns None when
+    there is no budget context (unlimited) — the worker then leaves
+    the slot unset and _apply_mineru_budget takes the fallback path.
+    """
+    budget = _MINERU_BUDGET.get()
+    if budget is None:
+        return None
+    limit, used = budget
+    with _MINERU_BUDGET_LOCK:
+        if used[0] >= limit:
+            return False
+        used[0] += 1
+        return True
 
 
 def _shard_offset() -> int:
@@ -1331,25 +1364,43 @@ def _shard_offset() -> int:
 def _apply_mineru_budget(
     order: list[tuple[str, object]],
 ) -> list[tuple[str, object]]:
-    """按单篇 MinerU 预算过滤/计数 mineru tier；无预算上下文时原样返回。"""
+    """按单篇 MinerU 预算过滤 mineru tier；无预算上下文时原样返回。
+
+    P3-2 (review 2026-11-26, wave 3): the old shape checked
+    ``used >= limit`` and then counted actual mineru calls in a wrapper
+    — check-then-act across threads, so a whole window could pass the
+    check before any call incremented the counter and overshoot the
+    budget by up to workers-1 calls (the flake behind
+    test_sharded_default_budget_caps_mineru_calls). The budget is now
+    an allowance, reserved atomically: either the submitter reserved
+    one for this shard in shard order (_MINERU_SLOT True/False), or —
+    with no submitter decision — this function reserves one itself
+    under _MINERU_BUDGET_LOCK. A reserved allowance is spent even if
+    an earlier tier wins and mineru never runs, so the count is an
+    upper bound on calls, never an overrun; an allowance reserved for
+    a shard whose tier order has no mineru tier at all is released
+    again so a later window can still use the quota.
+    """
     budget = _MINERU_BUDGET.get()
     if budget is None:
         return order
     limit, used = budget
-    if used[0] >= limit:
+    slot = _MINERU_SLOT.get()
+    if slot is True:
+        if any(name == "mineru" for name, _ in order):
+            return list(order)
+        with _MINERU_BUDGET_LOCK:
+            used[0] -= 1
+        return list(order)
+    if slot is False:
         return [t for t in order if t[0] != "mineru"]
-    wrapped: list[tuple[str, object]] = []
-    for name, fn in order:
-        if name == "mineru":
-
-            def _counted(c, e, _fn=fn):  # type: ignore[no-untyped-def]
-                used[0] += 1
-                return _fn(c, e)  # type: ignore[operator]
-
-            wrapped.append((name, _counted))
-        else:
-            wrapped.append((name, fn))
-    return wrapped
+    if not any(name == "mineru" for name, _ in order):
+        return list(order)
+    with _MINERU_BUDGET_LOCK:
+        if used[0] >= limit:
+            return [t for t in order if t[0] != "mineru"]
+        used[0] += 1
+    return list(order)
 
 
 def _renumber_page_markers(text: str, offset: int) -> str:
@@ -1544,10 +1595,11 @@ def _parse_pdf_sharded(
     # per window, results flush to one StringIO accumulator in shard
     # order, and extras merge on the calling thread in order — peak is
     # the accumulator plus one window, never the whole parts list plus
-    # its joined copy. The MinerU budget is a soft cap under
-    # parallelism: the shared used-list propagates to workers through
-    # a copied context, but check-then-act across threads can overshoot
-    # by at most workers-1 calls per document.
+    # its joined copy. The MinerU budget is an allowance reserved in
+    # shard order on the submitting thread (P3-2, wave 3): the shared
+    # used-list propagates to workers through a copied context, but the
+    # reservation itself happens before pool.submit, so a later shard
+    # can never take an allowance from an earlier one.
     workers = max(1, int(settings.pdf_shard_workers or 4))
     merged_io = io.StringIO()
     wrote_any = False
@@ -1565,15 +1617,20 @@ def _parse_pdf_sharded(
         merged_io.write(markdown)
         wrote_any = True
 
-    def _parse_one(shard_bytes: bytes, start: int):
+    def _parse_one(shard_bytes: bytes, start: int, reserved: bool | None = None):
         # Runs under a copied context in a pool thread: the page offset
         # is per-shard (set here, visible only to this copy), while the
         # MinerU budget tuple is shared through the copy's reference to
-        # the same used-list.
+        # the same used-list. `reserved` is the allowance decision the
+        # submitter made in shard order (P3-2, wave 3); it travels as an
+        # argument because the decision must be made before submit, not
+        # raced for inside the worker.
         off = _SHARD_OFFSET.set(start - 1)
+        slot_token = _MINERU_SLOT.set(reserved)
         try:
             return parse_document(shard_bytes, "pdf", prefer=prefer)
         finally:
+            _MINERU_SLOT.reset(slot_token)
             _SHARD_OFFSET.reset(off)
 
     def _merge_result(idx: int, start: int, end: int, res) -> None:
@@ -1627,8 +1684,17 @@ def _parse_pdf_sharded(
                     if shard_bytes is None:
                         failed.append((start, end))
                         continue
+                    # P3-2 (wave 3): reserve the MinerU allowance here, in
+                    # shard order on the submitting thread — not inside the
+                    # worker, where scheduling decides who checks first.
+                    reserved = _reserve_mineru_slot()
                     ctx = contextvars.copy_context()
-                    pending[idx] = ("future", start, end, pool.submit(ctx.run, _parse_one, shard_bytes, start))
+                    pending[idx] = (
+                        "future",
+                        start,
+                        end,
+                        pool.submit(ctx.run, _parse_one, shard_bytes, start, reserved),
+                    )
                 for idx in sorted(pending):
                     entry = pending[idx]
                     if entry[0] == "cached":

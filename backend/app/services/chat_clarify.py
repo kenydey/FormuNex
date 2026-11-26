@@ -10,7 +10,11 @@ from .errors import degrade_return
 
 logger = logging.getLogger(__name__)
 
-_PRONOUN_ONLY = re.compile(r"^(那|它|这个|怎么样|如何)[？?]?$")
+# QA-20(a)：纯代词追问 —— 仅由代词（那/它/这个/那个/这）与轻疑问词
+# （怎么样/如何/呢/吗）组成、无任何实义成分的追问，如"它？"、"它怎么样？"、
+# "这个呢？"。旧模式只匹配单个 token，"它怎么样？""这个呢？"根本进不了
+# 该分支（直接落到 KG/词典路径返回 None）；现改为重复组合，覆盖任务示例。
+_PRONOUN_ONLY = re.compile(r"^(?:那|它|这个|那个|这|怎么样|如何|呢|吗)+[？?]?$")
 
 
 def detect_clarification(
@@ -25,8 +29,13 @@ def detect_clarification(
         return None
 
     q = (question or "").strip()
-    if not q or _PRONOUN_ONLY.match(q):
+    if not q:
         return None
+    # QA-20(a)：纯代词追问（"它怎么样？""这个呢？"）不再一律放行 —— 历史为空
+    # 或代词无先行词时返回澄清候选；有先行词时仍返回 None，交给 rewrite_query
+    # 的代词消解处理。
+    if _PRONOUN_ONLY.match(q):
+        return _clarify_pronoun_only(q, history, clarified_entities)
 
     resolved_terms = {(ce.term or "").strip() for ce in (clarified_entities or []) if ce.term}
 
@@ -55,6 +64,36 @@ def apply_assumption_to_structured(
     if assumption not in assumptions:
         assumptions.append(assumption)
     return structured.model_copy(update={"assumptions": assumptions})
+
+
+def _clarify_pronoun_only(
+    question: str,
+    history: list[ChatTurn] | None,
+    clarified_entities: list[ClarifiedEntity] | None,
+) -> ClarificationOption | None:
+    """QA-20(a)：纯代词追问的澄清候选。
+
+    历史中有可消解的先行词（CAS / 化学实体 / 文献标题，见
+    ``chat_context._antecedents``）时返回 None——代词消解能接住，不打断
+    用户；历史为空或无任何先行词时返回澄清候选（possible_meanings 为空：
+    指代对象未知，无法枚举候选，只能请用户明示）。Fail-open：先行词判定
+    异常时按"无先行词"处理（返回澄清候选，不静默放行）。
+    """
+    try:
+        from .chat_context import _antecedents
+
+        antecedents = _antecedents(list(history or []), list(clarified_entities or []))
+    except Exception as exc:  # noqa: BLE001 - fail-open: 判不出来就澄清
+        logger.debug("pronoun-only antecedent check failed: %s", exc)
+        antecedents = []
+    if antecedents:
+        return None
+    return ClarificationOption(
+        ambiguous_term=question,
+        possible_meanings=[],
+        question=f"你说的「{question}」是指什么？请说明具体指代对象。",
+        candidate_entity_ids=[],
+    )
 
 
 def _clarify_via_kg(

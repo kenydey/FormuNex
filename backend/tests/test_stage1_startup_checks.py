@@ -45,9 +45,10 @@ def test_missing_version_table_skips(tmp_path):
 
 
 def test_schema_drift_refuses(tmp_path):
-    # Stamped version must be the current head (0096 since deep-review batch 6):
+    # Stamped version must be the current head (0097 since review wave 3,
+    # migration 0097 D6-9 experiments.project nullable):
     # otherwise the version check refuses before drift is even examined.
-    url = _db(tmp_path, version="0096", tables=(
+    url = _db(tmp_path, version="0097", tables=(
         "CREATE TABLE regulatory_data_releases (id VARCHAR(36) PRIMARY KEY, status VARCHAR(16))",
     ))
     with pytest.raises(RuntimeError, match="schema drift"):
@@ -56,8 +57,9 @@ def test_schema_drift_refuses(tmp_path):
 
 def test_missing_builtin_role_rows_warn(tmp_path):
     # Same head bump: stamped 0092 would refuse as "not at head" before
-    # the role check can warn.
-    url = _db(tmp_path, version="0096", tables=(
+    # the role check can warn. Head is 0097 since review wave 3 (migration
+    # 0097, D6-9); the stamp below must track the current head.
+    url = _db(tmp_path, version="0097", tables=(
         "CREATE TABLE roles (code VARCHAR(40) PRIMARY KEY)",
         "INSERT INTO roles VALUES ('sys_admin')",
     ))

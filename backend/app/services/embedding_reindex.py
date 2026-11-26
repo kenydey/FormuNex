@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -11,6 +12,13 @@ from pathlib import Path
 from typing import Callable
 
 logger = logging.getLogger(__name__)
+
+# C2（2026-11-26 全面审查）：重嵌前 chunk 文本截断上限。超长 chunk 只取
+# 前 N 字符嵌向量（向量内容本身不变），截断事实必须可观测：逐 chunk 记
+# 入 chunk meta（`embedding_truncated` / `embedding_original_chars`，
+# 与 B3 的 `meta.page_no_source="approx"` 同口径），整轮汇总进返回 dict
+# 并记一条 warning 日志；未超长行不写任何标记。
+EMBEDDING_MAX_CHARS = 8000
 
 # 模型维度映射（API 层同样引用这一份）
 MODEL_DIMS = {
@@ -36,7 +44,14 @@ def _configured_db_path() -> Path:
 
 
 def _finalize_reindex(
-    *, total: int, migrated: int, elapsed_s: float, backup: str
+    *,
+    total: int,
+    migrated: int,
+    elapsed_s: float,
+    backup: str,
+    truncated_chunks: int = 0,
+    truncated_chars: int = 0,
+    max_original_chars: int = 0,
 ) -> dict:
     """B6（2026-11-26 全面审查）：重嵌收尾的失效信号。
 
@@ -79,6 +94,14 @@ def _finalize_reindex(
         "重建收尾失效信号: generation_bumped=%s ann_invalidated=%s l2_cleared=%s",
         generation_bumped, ann_invalidated, l2_cleared,
     )
+    if truncated_chunks:
+        logger.warning(
+            "重建截断: %d 个 chunk 文本超 %d 字符，仅前 %d 字符参与嵌向量"
+            "（共丢弃 %d 字符，最长原文 %d 字符）；截断行已在 chunk meta 记"
+            " embedding_truncated，详见返回 dict",
+            truncated_chunks, EMBEDDING_MAX_CHARS, EMBEDDING_MAX_CHARS,
+            truncated_chars, max_original_chars,
+        )
     return {
         "total": total,
         "migrated": migrated,
@@ -87,6 +110,11 @@ def _finalize_reindex(
         "ann_invalidated": ann_invalidated,
         "generation_bumped": generation_bumped,
         "l2_cache_cleared": l2_cleared,
+        # C2：本轮因超长被截断后嵌向量的 chunk 数 / 共丢弃字符数 /
+        # 最长原文字符数；无截断时三项均为 0（不标记）。
+        "truncated_chunks": truncated_chunks,
+        "truncated_chars": truncated_chars,
+        "max_original_chars": max_original_chars,
     }
 
 
@@ -99,7 +127,11 @@ def reindex_for_model(
     """为指定模型重建全库索引。
 
     流程：备份 → 加载模型 → 逐批重嵌 → 更新 embedding_model → 校验。
-    返回统计 dict。
+    返回统计 dict。超长 chunk 文本截断至 ``EMBEDDING_MAX_CHARS`` 字符后
+    嵌向量（向量内容本身不变）；截断事实逐 chunk 记入 chunk meta
+    （``embedding_truncated`` / ``embedding_original_chars``，C2），整轮
+    汇总为返回 dict 的 ``truncated_chunks`` / ``truncated_chars`` /
+    ``max_original_chars``，无截断时三项均为 0。
     """
     db_path = Path(db_path) if db_path is not None else _configured_db_path()
     if not db_path.exists():
@@ -154,6 +186,15 @@ def reindex_for_model(
         done = 0
         last_id = ""
         t0 = time.time()
+        # C2：meta 列是否存在决定能否写逐 chunk 截断标记（最小 schema 的
+        # 测试库可能无 meta 列；汇总计数与日志不受影响）。
+        has_meta = any(
+            row[1] == "meta"
+            for row in con.execute("PRAGMA table_info(document_chunks)").fetchall()
+        )
+        truncated_chunks = 0
+        truncated_chars = 0
+        max_original_chars = 0
         # C P2-4: 分页读取 —— 全表 fetchall 在 10 万 chunk 级内存爆炸。
         # 按 id 做 keyset 分页：不持有未读完的 SELECT 游标，逐批 UPDATE/COMMIT 不会打断读取。
         while True:
@@ -163,7 +204,17 @@ def reindex_for_model(
             ).fetchall()
             if not batch_rows:
                 break
-            texts = [(r[1] or "")[:8000] for r in batch_rows]
+            # C2：超长文本只取前 EMBEDDING_MAX_CHARS 字符嵌向量，并记截断。
+            texts: list[str] = []
+            truncated_rows: list[tuple[str, int]] = []
+            for cid, raw_text in batch_rows:
+                text = raw_text or ""
+                if len(text) > EMBEDDING_MAX_CHARS:
+                    truncated_rows.append((cid, len(text)))
+                    truncated_chunks += 1
+                    truncated_chars += len(text) - EMBEDDING_MAX_CHARS
+                    max_original_chars = max(max_original_chars, len(text))
+                texts.append(text[:EMBEDDING_MAX_CHARS])
             vecs = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
             con.executemany(
                 """UPDATE document_chunks
@@ -174,6 +225,30 @@ def reindex_for_model(
                     for (cid, _), vec in zip(batch_rows, vecs)
                 ],
             )
+            if truncated_rows and has_meta:
+                # 逐 chunk 截断标记写进 meta（与 B3 的 meta.page_no_source
+                # 同口径）；只动被截断的行，未截断行不写任何标记。meta
+                # 解析失败时跳过该行（汇总计数与日志仍保留事实），不
+                # 推翻已完成的重嵌。
+                for cid, orig_len in truncated_rows:
+                    try:
+                        raw_meta = con.execute(
+                            "SELECT meta FROM document_chunks WHERE id=?", (cid,)
+                        ).fetchone()[0]
+                        meta = json.loads(raw_meta) if raw_meta else {}
+                        if not isinstance(meta, dict):
+                            continue
+                        meta = {
+                            **meta,
+                            "embedding_truncated": True,
+                            "embedding_original_chars": orig_len,
+                        }
+                        con.execute(
+                            "UPDATE document_chunks SET meta=? WHERE id=?",
+                            (json.dumps(meta, ensure_ascii=False), cid),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - fail-open，见上
+                        logger.warning("重建截断: chunk %s 的 meta 标记写入失败: %s", cid, exc)
             con.commit()
             last_id = batch_rows[-1][0]
             done += len(batch_rows)
@@ -206,6 +281,13 @@ def reindex_for_model(
     logger.info("重建完成: %d chunks, %.0fs, 备份 %s", total, el, bak)
     # B6：收尾推进失效信号（bump generation + kb_ann.invalidate() +
     # 清空 L2 缓存），否则同模型重嵌后检索/去重继续服务旧向量。
+    # C2：截断汇总随返回 dict 带出（无截断时三项均为 0）。
     return _finalize_reindex(
-        total=total, migrated=migrated, elapsed_s=el, backup=str(bak)
+        total=total,
+        migrated=migrated,
+        elapsed_s=el,
+        backup=str(bak),
+        truncated_chunks=truncated_chunks,
+        truncated_chars=truncated_chars,
+        max_original_chars=max_original_chars,
     )

@@ -59,7 +59,9 @@ class ExperimentRow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     item_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     domain: Mapped[str] = mapped_column(String(64), index=True)
-    project_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    # D6-9: nullable since 0097 (mirrors P3-D1/0095 for doe_cycle_runs);
+    # unassigned experiments store NULL (was "").
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, default=None, index=True)
     owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True, default=None)
     # P1-A7 (2026-11-04 deep review): the DOE-cycle task that wrote this
     # row. A replayed / autoretried cycle deletes its own previous

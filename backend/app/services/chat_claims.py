@@ -134,6 +134,11 @@ def build_sourced_claims(
                 raw_verdict=str(getattr(v.verdict, "value", v.verdict))
                 if v.verdict is not None
                 else None,
+                # QA-17: 离线 verdict 标注 verifier="offline-overlap"，与 LLM
+                #  verdict 区分。SourcedClaim.verifier 字段本身见协调员 patch
+                # （domain/chat_schemas.py 不在本波文件清单内）；pydantic
+                #  默认忽略多余字段，故此行在字段落地前静默不起效、落地后生效。
+                verifier=getattr(v, "verifier", None),
             )
         )
     return out
@@ -164,6 +169,8 @@ def build_sources_audit(
                     "chunk_ids": chunk_ids,
                     "locators": _locators_for_chunks(chunk_ids, sources),
                     "note": (v.reason or "").strip()[:240] or None,
+                    # QA-17: 离线 verdict 标注核验器，与 LLM verdict 区分。
+                    "verifier": getattr(v, "verifier", None),
                 }
             )
     elif sourced_claims is not None:
@@ -176,6 +183,8 @@ def build_sources_audit(
                     "chunk_ids": list(sc.chunk_ids or []),
                     "locators": _locators_for_chunks(list(sc.chunk_ids or []), sources),
                     "note": None,
+                    # QA-17: 同上（SourcedClaim.verifier 字段落地前为 None）。
+                    "verifier": getattr(sc, "verifier", None),
                 }
             )
     else:

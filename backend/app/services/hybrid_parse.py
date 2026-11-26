@@ -754,6 +754,138 @@ def _scanned_density_ok(text: str, n_pages: int | None) -> bool:
     return len(stripped) / n_pages >= threshold
 
 
+def _tesseract_body(
+    content: bytes, vote_rasters: dict[int, bytes], n_pages: int | None
+) -> str | None:
+    """English body OCR, reusing the vote rasters for the sampled pages.
+
+    B4 (review 2026-11-26, wave 3): mirrors tesseract_local.ocr_pdf
+    (30-page cap, dpi 120, assemble, truncation note) except pages the
+    vote already rasterised are fed their vote PNG instead of being
+    rendered a second time. A vote raster is only reused when it is at
+    Tesseract's own DPI (rapidocr_dpi == 120, the default — see
+    test_stage5_ocr_same_source); at any other vote DPI the page is
+    rendered fresh at 120 exactly as ocr_pdf does, so the engine never
+    silently receives a different resolution than before.
+    """
+    from . import tesseract_local
+
+    if not tesseract_local.tesseract_available():
+        return None
+    total = n_pages or pdf_local.page_count(content)
+    if total <= 0:
+        return None
+    max_pages = 30
+    truncated = total > max_pages
+    orig_total = total
+    total = min(total, max_pages)
+    vote_dpi = get_settings().rapidocr_dpi
+    rendered: list[tuple[int, str]] = []
+    doc = None
+    try:
+        try:
+            doc = pdf_local._open(content)
+        except Exception:
+            doc = None
+        for page_no in range(1, total + 1):
+            png = vote_rasters.get(page_no) if vote_dpi == 120 else None
+            if png is None:
+                png = pdf_local.page_as_png(content, page_no, dpi=120, _doc=doc)
+            if not png:
+                continue
+            text = tesseract_local.ocr_png(png, lang="eng")
+            if text:
+                rendered.append((page_no, text))
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
+    if not rendered:
+        return None
+    result = pdf_local.assemble(rendered)
+    if truncated:
+        result = (result or "") + (
+            f"\n\n> 注：原文共 {orig_total} 页，仅 OCR 前 {max_pages} 页"
+            "（tesseract 页数上限）。"
+        )
+    return result
+
+
+def _rapidocr_body(
+    content: bytes,
+    vote_ocr: dict[int, tuple[str, float]],
+    n_pages: int | None,
+) -> str | None:
+    """Body OCR via RapidOCR, reusing the vote OCR results.
+
+    B4 (review 2026-11-26, wave 3): mirrors rapidocr_local.ocr_pdf
+    (rapidocr_max_pages cap, rapidocr_dpi, mean-confidence gate,
+    assemble, truncation note) except pages the vote already OCR'd are
+    taken from `vote_ocr` — same engine, same raster bytes, same
+    (text, confidence) — instead of being rendered and OCR'd a second
+    time. Only the pages the vote never saw are rendered here, so each
+    page is rasterised at most once across vote + body.
+    """
+    from . import rapidocr_local
+
+    ok, _hint = rapidocr_local.rapidocr_available()
+    if not ok:
+        return None
+    settings = get_settings()
+    total = n_pages or pdf_local.page_count(content)
+    if total <= 0:
+        return None
+    cap = settings.rapidocr_max_pages
+    if total > cap:
+        logger.warning(
+            "rapidocr: %d-page document capped at %d pages", total, cap
+        )
+        from .parse_notices import note
+
+        note(f"文档共 {total} 页，OCR 上限 {cap} 页，仅解析前 {cap} 页")
+    dpi = settings.rapidocr_dpi
+    rendered: list[tuple[int, str]] = []
+    scores: list[float] = []
+    for page_no in range(1, min(total, cap) + 1):
+        if page_no in vote_ocr:
+            text, score = vote_ocr[page_no]
+            rendered.append((page_no, text))
+            scores.append(score)
+            continue
+        png = pdf_local.page_as_png(content, page_no, dpi=dpi)
+        if not png:
+            continue
+        text, score = rapidocr_local.ocr_png_scored(png)
+        del png
+        if text:
+            rendered.append((page_no, text))
+            scores.append(score)
+    if not rendered:
+        return None
+    threshold = settings.rapidocr_min_confidence
+    if threshold > 0 and scores:
+        mean = sum(scores) / len(scores)
+        if mean < threshold:
+            logger.warning(
+                "rapidocr: mean confidence %.2f below %.2f — discarding whole-doc OCR",
+                mean,
+                threshold,
+            )
+            from .parse_notices import note
+
+            note(
+                f"文档 OCR 平均置信度 {mean:.2f} 低于门限 {threshold}，"
+                "该结果未入库（疑难片：请用 MinerU 或人工复核）"
+            )
+            return None
+    logger.info(
+        "rapidocr: %d/%d pages produced text", len(rendered), min(total, cap)
+    )
+    return pdf_local.assemble(rendered) or None
+
+
 def _scanned_without_cloud(content: bytes) -> str | None:
     """Read a document with no text layer, using only what is on this host.
 
@@ -769,11 +901,15 @@ def _scanned_without_cloud(content: bytes) -> str | None:
     same default DPI (rapidocr_dpi defaults to 120; the Tesseract body
     path hardcodes 120; the RapidOCR body path reads rapidocr_dpi).
     The vote's language judgment therefore transfers to the body pages.
-    Pages still OCR serially, deliberately: RapidOCR runs as a process
-    singleton whose creation — not inference — is locked, and both body
-    loops stream one PNG at a time to bound peak memory. Parallelizing
-    the page loops needs a proven thread-safe engine first, so it stays
-    a separate decision rather than a forced change here.
+    B4 (review 2026-11-26, wave 3): the vote rasters are now also
+    reused, not just re-rendered from the same source — each sampled
+    page is rasterised once and shared by vote + body (see
+    _tesseract_body / _rapidocr_body). Pages still OCR serially,
+    deliberately: RapidOCR runs as a process singleton whose creation
+    — not inference — is locked, and both body loops stream one PNG at
+    a time to bound peak memory. Parallelizing the page loops needs a
+    proven thread-safe engine first, so it stays a separate decision
+    rather than a forced change here.
     """
     from . import rapidocr_local, tesseract_local
 
@@ -783,6 +919,11 @@ def _scanned_without_cloud(content: bytes) -> str | None:
         n_pages = _pl.page_count(content) or None
     except Exception:
         n_pages = None
+
+    # B4 (wave 3): the vote's rasters + OCR results, kept for the body
+    # below. At most 3 pages; freed once the body OCR attempts are done.
+    vote_rasters: dict[int, bytes] = {}
+    vote_ocr: dict[int, tuple[str, float]] = {}
 
     if tesseract_local.tesseract_available():
         # v3 P0 M-10 真修：多页投票 —— 此前只看第一页，英文封面+中文正文
@@ -805,10 +946,13 @@ def _scanned_without_cloud(content: bytes) -> str | None:
                 )
                 if not png:
                     continue
-                txt, _conf = rapidocr_local.ocr_png_scored(png)
-                del png
+                # B4 (wave 3): keep the raster for the body OCR below
+                # instead of deleting it and re-rendering the page.
+                vote_rasters[pg] = png
+                txt, conf = rapidocr_local.ocr_png_scored(png)
                 if not txt:
                     continue
+                vote_ocr[pg] = (txt, conf)
                 if tesseract_local.cjk_ratio(txt) < 0.1:
                     votes_eng += 1
                 else:
@@ -823,7 +967,7 @@ def _scanned_without_cloud(content: bytes) -> str | None:
         # language judgment — require at least two English votes, else
         # fall through to RapidOCR.
         if votes_eng >= 2 and votes_eng > votes_chi:
-            eng = tesseract_local.ocr_pdf(content, lang="eng")
+            eng = _tesseract_body(content, vote_rasters, n_pages)
             if eng and _scanned_density_ok(eng, n_pages):
                 logger.info(
                     "hybrid: scanned document read by Tesseract (English, %d/%d 页投票)",
@@ -840,7 +984,12 @@ def _scanned_without_cloud(content: bytes) -> str | None:
                     len(eng.strip()), n_pages if n_pages else "?",
                 )
 
-    text = rapidocr_local.ocr_pdf(content)
+    text = _rapidocr_body(content, vote_ocr, n_pages)
+    # The vote rasters/results are spent: the layout-OCR fallthrough and
+    # the vision rescue below render their own pages, so drop the held
+    # PNGs here rather than carrying them through those slow paths.
+    vote_rasters.clear()
+    vote_ocr.clear()
     if text:
         logger.info("hybrid: scanned document read by local OCR (no cloud)")
         if _scanned_density_ok(text, n_pages):

@@ -44,7 +44,17 @@ def _surrogate_score(
 
     props = predictor.predict(form)
     mean = props.get(objective_metric, 0.0)
-    if objective_metric not in props:
+    if objective_metric not in props or mean is None:
+        # P3-3(b)：predictor 对不可算指标可能留 None（键存在但值为空）；
+        # 旧代码把 None 带进下面的 abs(mean) 抛 TypeError，整个
+        # suggest_next_experiments 崩掉。指标缺失/None 时记一条 warning
+        # （与 P2-7 的 warning 合并处理）；返回语义仍为 (0.0, 0.0)，是否
+        # 改返回/改 ai_suggested 标注是 P2-7 的范围，本项不动。
+        logger.warning(
+            "active learning: predictor has no value for objective metric "
+            f"{objective_metric!r} (domain={domain}); returning (0.0, 0.0), "
+            "EI will be 0 for this candidate"
+        )
         return 0.0, 0.0
 
     if len(existing) >= _MIN_TRAIN_SAMPLES:
@@ -85,10 +95,14 @@ def _ei_acquisition(
 ) -> float:
     """Expected Improvement acquisition (Gaussian, analytic).
 
-    Falls back to UCB = mean + kappa·std when scipy is unavailable.
+    Falls back to an improvement-magnitude approximation in EI units when
+    scipy is unavailable: ``max(0, mean - y_best) + kappa·std`` (maximize)
+    or ``max(0, y_best - mean) + kappa·std`` (minimize) — the fallback keeps
+    the EI semantics of "improvement over the current best" instead of the
+    old y_best-free UCB form.
 
     v27 P1-10: 支持 minimize —— 此时 improvement = y_best - mean
-   （y_best 为已观测最小值），UCB 回退用 -(mean - kappa·std) 使越大越好。
+   （y_best 为已观测最小值）。
     """
     if std < 1e-9:
         return 0.0
@@ -102,9 +116,12 @@ def _ei_acquisition(
         z = (mean - y_best) / std
         return float((mean - y_best) * stats.norm.cdf(z) + std * stats.norm.pdf(z))
     except Exception:
+        # P3-3(a)：无 scipy 时回退为与 EI 同量纲的改进量近似（含 y_best）；
+        # 旧回退与 y_best 无关（minimize 下回退值甚至不随历史最优变化），
+        # 与 EI“相对当前最优的改进量”语义脱节。maximize 对称处理。
         if minimize:
-            return float(kappa * std - mean)
-        return float(mean + kappa * std)
+            return float(max(0.0, y_best - mean) + kappa * std)
+        return float(max(0.0, mean - y_best) + kappa * std)
 
 
 def _known_failures(domain) -> list:

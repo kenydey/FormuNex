@@ -18,10 +18,55 @@ _FOLLOWUP_MARKERS = re.compile(
 _CHEM_TOKEN_RE = re.compile(
     r"(磷酸锌|环氧树脂|固化剂|防锈颜料|乳液|牌号|盐雾|添加量|wt%|实施例|[A-Za-z]{2,}[- ]?\d{2,4})"
 )
+# QA-20(b)：白名单改为配置化（rule_loader，规则表 chem_tokens，与
+# ambiguous_terms 同机制）。默认 patterns 与上面硬编码完全一致 ——
 # D P2-1 备注（2026-10-10）：曾尝试扩展白名单（锌黄/环氧底漆等），但导致
 # test_anaphora_substitutes_pronoun 失败 —— "环氧底漆"加入后，代词"它"被
 # 消解为最近提及的"环氧底漆"而非主题"磷酸锌"。白名单扩展需配合消解
 # 优先级调整（如主题优先于最近提及），暂回退，记为已知限制。
+# 故默认表刻意不含"环氧底漆"/"锌黄"；想扩展时改 TOML + 补回归测试。
+_DEFAULT_CHEM_TOKEN_PATTERNS = (
+    "磷酸锌",
+    "环氧树脂",
+    "固化剂",
+    "防锈颜料",
+    "乳液",
+    "牌号",
+    "盐雾",
+    "添加量",
+    "wt%",
+    "实施例",
+    r"[A-Za-z]{2,}[- ]?\d{2,4}",
+)
+
+
+def _chem_token_patterns() -> tuple[str, ...]:
+    """QA-20(b)：从规则表 chem_tokens 读白名单 patterns，失败时回退默认。
+
+    规则表未落地（KeyError）/ 文件缺失 / 解析失败时 load_rules 本身已
+    回退内置兜底；这里再兜一层默认，保证配置化永不破坏现有行为。
+    """
+    try:
+        from .rule_loader import load_rules
+
+        patterns = load_rules("chem_tokens").get("patterns") or []
+        if patterns:
+            return tuple(str(p) for p in patterns)
+    except Exception:  # noqa: BLE001 - 配置未落地或加载失败 → 内置默认
+        pass
+    return _DEFAULT_CHEM_TOKEN_PATTERNS
+
+
+def _chem_token_re() -> "re.Pattern[str]":
+    """QA-20(b)：按当前配置编译的化学词条正则（默认即 _CHEM_TOKEN_RE）。"""
+    patterns = _chem_token_patterns()
+    if patterns == _DEFAULT_CHEM_TOKEN_PATTERNS:
+        return _CHEM_TOKEN_RE
+    try:
+        return re.compile("(" + "|".join(patterns) + ")")
+    except re.error as exc:
+        logger.warning("chem_tokens patterns 无效 %r，回退内置默认: %s", patterns, exc)
+        return _CHEM_TOKEN_RE
 
 # P2: 可消解的代词 —— 排除"应该"（应+该）、"尤其"（尤+其）、
 # "其他/其它/其余/其中"（其+他/它/余/中，非指代）。
@@ -184,7 +229,7 @@ def _collect_context_terms(
             continue
         for cas in _CAS_RE.findall(text):
             terms.append(cas)
-        for tok in _CHEM_TOKEN_RE.findall(text):
+        for tok in _chem_token_re().findall(text):
             if tok and tok not in terms:
                 terms.append(tok)
         for ev in turn.citations or []:
@@ -218,7 +263,7 @@ def _antecedents(
         # 轮内按提及位置倒序 —— 代词指最近提及的实体。
         for cas in reversed(_CAS_RE.findall(text)):
             cands.append(cas)
-        for tok in reversed(_CHEM_TOKEN_RE.findall(text)):
+        for tok in reversed(_chem_token_re().findall(text)):
             if tok and tok not in _ANAPHORA_STOPWORDS:
                 cands.append(tok)
         cits = []

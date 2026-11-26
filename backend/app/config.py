@@ -1113,7 +1113,7 @@ class Settings(BaseSettings):
     pageindex_max_hops: int = 6
     pageindex_max_input_chars: int = 48000
     pageindex_max_input_tokens: int = 16000  # plan §5.1.1 budget: 16k input tokens per document walk
-    pageindex_colbert_rerank: bool = True  # plan §5.1.1: stage 1 = hybrid_search + ColBERT rerank
+    pageindex_colbert_rerank: bool = True  # plan §5.1.1: stage 1 = hybrid_search + ColBERT rerank（QA-16：历史命名；本路径经 rag.build_store() 取店——CPU 下为 BM25+FAISS 重打分，GPU 下 build_store() 回落 TF-IDF，从不跑真 ColBERT；真 ColBERT 只在 colbert_store.search() 直接调用时走。勿从开关名推断算法）
     # 融合升级批 3-1：deepen_documents 入口版本一致性校验（默认关，灰度开）。
     # 开时校验 tree.builder_version == BUILDER_VERSION 且树页数与现存 chunk
     # 页跨度一致；不一致先重建树，重建后仍不一致则 fail-open 降级 Stage 1。

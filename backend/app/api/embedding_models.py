@@ -133,7 +133,10 @@ def switch_model(req: SwitchRequest):
             from fastapi import HTTPException
 
             raise HTTPException(409, "已有切换任务在运行")
-        _SWITCH_TASK.update(status="running", progress=0.0, error=None)
+        _SWITCH_TASK.update(
+            status="running", progress=0.0, error=None,
+            truncated_chunks=0, truncated_chars=0, max_original_chars=0,
+        )
     thread = threading.Thread(
         target=_switch_worker, args=(req.model_id,), daemon=True, name="emb-switch"
     )
@@ -173,10 +176,18 @@ def _switch_worker(model_id: str) -> None:
                 # 5% ~ 95% 给重建
                 _SWITCH_TASK["progress"] = 5.0 + p * 0.9
 
-        reindex_for_model(model_id, progress_cb=_prog)
+        # C2 (wave 3): 透传重嵌截断汇总进 switch_status，否则截断标记只在
+        # 日志里可见、调用方查不到。
+        summary = reindex_for_model(model_id, progress_cb=_prog)
 
         with _SWITCH_LOCK:
-            _SWITCH_TASK.update(status="done", progress=100.0)
+            _SWITCH_TASK.update(
+                status="done",
+                progress=100.0,
+                truncated_chunks=summary.get("truncated_chunks", 0),
+                truncated_chars=summary.get("truncated_chars", 0),
+                max_original_chars=summary.get("max_original_chars", 0),
+            )
         logger.info("模型切换完成: %s", model_id)
     except Exception as exc:
         logger.warning("模型切换失败 %s: %s", model_id, exc)

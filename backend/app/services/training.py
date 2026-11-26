@@ -287,15 +287,32 @@ class ModelRegistry:
         with self._lock:
             return list(self._records)
 
-    def records_for(self, domain: ProductDomain, project_id: str = "") -> list[ExperimentRecord]:
-        """Return stored experiment records for a domain / project."""
+    def records_for(
+        self, domain: ProductDomain, project_id: str = "", *, measured_only: bool = False
+    ) -> list[ExperimentRecord]:
+        """Return stored experiment records for a domain / project.
+
+        D6-8: ``measured_only=True`` 时只返回已测量且来源可训练的记录
+        （``measured`` 非空且 ``source`` 在 ``TRAINABLE_SOURCES`` 内，
+        即 lab / workbench / csv-import），过滤未测量与虚拟源记录，
+        避免 ``prior_measurement_count`` / ``measured_count`` 虚高。
+        默认 ``False`` 保兼容：训练集等调用方仍用原口径。
+        """
         with self._lock:
             pid = project_id or domain.value
-            return [
+            records = [
                 rec
                 for rec in self._records
                 if rec.domain == domain
                 and (not project_id or rec.project_id in ("", pid, domain.value))
+            ]
+            if not measured_only:
+                return records
+            return [
+                rec
+                for rec in records
+                if rec.measured
+                and (getattr(rec, "source", None) or "lab") in TRAINABLE_SOURCES
             ]
 
     # --- training ------------------------------------------------------

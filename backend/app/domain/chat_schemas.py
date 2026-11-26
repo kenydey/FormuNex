@@ -61,6 +61,8 @@ class SourcedClaim(BaseModel):
     # P2-3: 原始核验判词（supported/unsupported/conflicting/insufficient），
     # status 保持 back-compat 映射不变，前端用此字段渲染冲突态。
     raw_verdict: str | None = None
+    # QA-17（wave 3）：判词来源 —— "offline-overlap"（词重叠启发式）或 "llm"。
+    verifier: str | None = None
 
 
 ChatMode = Literal["chat", "evidence"]

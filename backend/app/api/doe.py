@@ -340,7 +340,7 @@ def doe_cycle_runs(
 
         for d in ProductDomain:
             try:
-                measured_count += len(registry.records_for(d, project_id=project_id))
+                measured_count += len(registry.records_for(d, project_id=project_id, measured_only=True))
             except Exception:
                 continue
     except Exception as exc:

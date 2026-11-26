@@ -38,6 +38,10 @@ class VerifiedClaim(BaseModel):
     evidence_indices: list[int] = Field(default_factory=list)
     source_tags: list[str] = Field(default_factory=list)
     reason: str = ""
+    # QA-17: 判词来源 —— "offline-overlap"（词重叠启发式，见 verify_claim_offline）
+    # 或 "llm"（verify_claims_llm）。阈值 0.25/0.12 不动，只标注区分，
+    # 否则无 key 环境的浸泡日志/金标指标会被误读为 LLM 核验结果。
+    verifier: str | None = None
 
 
 class ClaimCheckResult(BaseModel):
@@ -148,12 +152,14 @@ def verify_claim_offline(claim: str, evidence: list[Evidence]) -> VerifiedClaim:
     claim_tokens = _token_set(claim)
     if not claim_tokens:
         return VerifiedClaim(
+            verifier="offline-overlap",
             text=claim,
             verdict=ClaimVerdict.insufficient,
             reason="empty claim",
         )
     if not evidence:
         return VerifiedClaim(
+            verifier="offline-overlap",
             text=claim,
             verdict=ClaimVerdict.unsupported,
             reason="no grounded evidence",
@@ -182,12 +188,14 @@ def verify_claim_offline(claim: str, evidence: list[Evidence]) -> VerifiedClaim:
         missing = claim_figures - set().union(*(_figures(f"{e.title} {e.snippet}") for e in evidence))
         if missing == claim_figures:
             return VerifiedClaim(
+                verifier="offline-overlap",
                 text=claim,
                 verdict=ClaimVerdict.unsupported,
                 reason=f"figures not in evidence: {', '.join(sorted(missing))}",
             )
         if missing and best_score >= _SUPPORTED_OVERLAP:
             return VerifiedClaim(
+                verifier="offline-overlap",
                 text=claim,
                 verdict=ClaimVerdict.insufficient,
                 evidence_indices=indices,
@@ -197,6 +205,7 @@ def verify_claim_offline(claim: str, evidence: list[Evidence]) -> VerifiedClaim:
 
     if best_score >= _SUPPORTED_OVERLAP:
         return VerifiedClaim(
+            verifier="offline-overlap",
             text=claim,
             verdict=ClaimVerdict.supported,
             evidence_indices=indices,
@@ -205,6 +214,7 @@ def verify_claim_offline(claim: str, evidence: list[Evidence]) -> VerifiedClaim:
         )
     if best_score >= _WEAK_OVERLAP:
         return VerifiedClaim(
+            verifier="offline-overlap",
             text=claim,
             verdict=ClaimVerdict.insufficient,
             evidence_indices=indices,
@@ -212,6 +222,7 @@ def verify_claim_offline(claim: str, evidence: list[Evidence]) -> VerifiedClaim:
             reason=f"weak overlap {best_score:.2f}",
         )
     return VerifiedClaim(
+        verifier="offline-overlap",
         text=claim,
         verdict=ClaimVerdict.unsupported,
         reason="no evidence overlap",
@@ -255,6 +266,7 @@ def verify_claims_llm(
             ]
             out.append(
                 VerifiedClaim(
+                    verifier="llm",
                     text=claims[idx] if 0 <= idx < len(claims) else "",
                     verdict=verdict,
                     evidence_indices=ev_indices,

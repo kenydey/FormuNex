@@ -118,6 +118,7 @@ def _plan(design: str, factors: list[dict[str, Any]], runs: list[dict[str, Any]]
           project_id: str | None):
     """Mirror the design into the existing ``DOEPlan`` store so worksheets / lab tasks can use it."""
     from ..domain.schemas import DOEFactor, DOEPlan, DOERun
+    from ..services.engines.adapters.doe_adapter import unit_to_coded
     from .doe import _persist_doe_plan
 
     fs = [DOEFactor(**f) for f in factors]
@@ -127,7 +128,12 @@ def _plan(design: str, factors: list[dict[str, Any]], runs: list[dict[str, Any]]
         coded = {}
         for f in fs:
             if f.kind == "discrete":
-                coded[f.name] = float(f.levels.index(natural[f.name]))
+                # D6-6: 离散因子 coded 与 native decode() 口径一致（[-1, 1]），
+                # 不再写水平索引 0,1,2…。单水平退化时 unit 取中点 0.5 → coded 0.0。
+                levels = list(f.levels or [])
+                idx = levels.index(natural[f.name])
+                unit = idx / (len(levels) - 1) if len(levels) > 1 else 0.5
+                coded[f.name] = unit_to_coded(unit)
             else:
                 half = (f.high - f.low) / 2 or 1.0
                 coded[f.name] = round((float(natural[f.name]) - (f.low + f.high) / 2) / half, 6)

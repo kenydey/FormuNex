@@ -461,11 +461,22 @@ def search_semantic_scholar(query: str, limit: int = 5, offset: int = 0, *, doma
     try:
         from ..domain.search_profiles import resolve_profile
         _prof = resolve_profile(domain)
-        _allowed = (
-            frozenset(x.lower() for x in _prof.s2_fields_of_study)
-            if _prof is not None
-            else _ALLOWED_S2_FIELDS
+        # P3-2 (2026-11-26 review): 空 profile 脆弱 —— profile 存在但
+        # s2_fields_of_study 为空时旧代码得到空集，所有带 fieldsOfStudy 的
+        # 论文全被滤掉，S2 恒返回 []。空（含仅空白条目）时回退默认集，与
+        # profile 为 None 时同口径；行为有定义且可观测（记 warning）。
+        _allowed = frozenset(
+            x.strip().lower()
+            for x in (_prof.s2_fields_of_study if _prof is not None else ())
+            if x and x.strip()
         )
+        if not _allowed:
+            if _prof is not None:
+                logger.warning(
+                    "S2 profile %s has empty s2_fields_of_study; falling back to default fields",
+                    _prof.domain,
+                )
+            _allowed = _ALLOWED_S2_FIELDS
         # 单次请求行数：S2 `limit` 上限 100；取 3 倍做过滤缓冲。
         page_limit = min(100, max(limit, 1) * 3)
         collected: list[dict] = []

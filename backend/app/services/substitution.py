@@ -31,6 +31,7 @@ from loguru import logger
 
 from ..domain.genome import FormulationGenome
 from ..domain.schemas import Requirement
+from .plm.ghs.label_elements import severity as _category_severity
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -374,46 +375,21 @@ def _light_screen_rows(rows: list[dict] | None) -> None:
             row["light_screen"] = {"checked": False, "reason": f"screen_error:{exc}"}
 
 
-def find_substitutes(
+def _catalog_layer(
     genome: FormulationGenome,
     slot_index: int,
-    req: Requirement | None = None,
+    req: Requirement | None,
     *,
-    limit: int = 10,
-    include_unavailable: bool = False,
-    include_external: bool = True,
-    external_limit: int = 8,
-    similarity_threshold: int = 85,
-    include_literature: bool = True,
-    literature_limit: int = 8,
-    include_surechembl: bool = True,
-    surechembl_limit: int = 8,
-    include_llm: bool | None = None,
-    llm_limit: int = 5,
-    session: Session | None = None,
-    classification_preview_limit: int = 5,
-) -> dict:
-    """Rank replacements for one slot, each with its predicted property delta.
+    session: Session | None,
+    include_unavailable: bool,
+) -> tuple[dict, list[dict], list[tuple[dict, object]], object, dict]:
+    """P3-2: L1 库内层 —— 召回同 substitute_group / 同 role 的库内材料，逐个换料重算
+    （结构分、指标 delta、可行性、供应标注、需求拟合），共享尺度重打分，项目红线标注，
+    按 feasible / requirement_fit / 红线 / stale / 结构分 / score_after 排序。
 
-    Layers (four-layer funnel + SureChEMBL patents):
-    - L1 catalog candidates with formula Δ (always)
-    - L2 literature/KG/kb_products advisory list (``include_literature``)
-    - L3 PubChem structure similars (``include_external``)
-    - SureChEMBL structure similars + patent docs (``include_surechembl``)
-    - L4 rules/LLM when L1 < 3 or ``include_llm`` forced (``include_llm``)
-
-    补齐计划 2-7: ``classification_preview_limit`` > 0 且传入 session 时，对排序后
-    前 N 个库内候选做替换后配方 GHS 重分类预览（``classification_before`` /
-    ``classification_after`` / ``classification_changed`` / ``classification_upgraded``）。
-    分类失败 fail-open（不附加预览键，候选照常返回）。
-
-    P2-2 (review 2026-11-26): 筛查契约 —— 只有 ``candidates``（库内 L1）
-    是已筛查候选（``screened: true``，带 ``feasible`` / ``blocking_reasons``，
-    有 session 时另带红线与 GHS 重分类预览）；``external`` / ``literature`` /
-    ``surechembl`` / ``llm`` 四层一律 ``screened: false`` / ``advisory: true``，
-    不带 ``feasible``，仅对有 CAS 的行附加 ``light_screen``（纯物质口径的
-    RoHS/SVHC 存在性检查，见 ``_light_screen_rows``），不作 GHS 预览。
-    调用方不得把外部行与已筛查候选等同采纳。
+    返回 ``(context, candidates, scored_forms, base_form, base_metrics)``；context
+    携带 orchestrator 与后续层共用的槽位信息（original / original_spec /
+    original_in_catalog / group / role / pool）。纯搬移，不改行为。
     """
     from ..domain import knowledge
     from ..pipeline import reconstruct
@@ -572,6 +548,34 @@ def find_substitutes(
         )
     )
 
+    return (
+        {
+            "original": original,
+            "original_spec": original_spec,
+            "original_in_catalog": original_in_catalog,
+            "group": group,
+            "role": role,
+            "pool": pool,
+        },
+        candidates,
+        scored_forms,
+        base_form,
+        base_metrics,
+    )
+
+
+def _classification_preview(
+    session: Session | None,
+    candidates: list[dict],
+    scored_forms: list[tuple[dict, object]],
+    base_form: object,
+    classification_preview_limit: int,
+) -> None:
+    """P3-2: 分类预览层 —— 对排序后前 N 个库内候选，用替换后配方重算 GHS 分类并与
+    替换前对比（``classification_before`` / ``classification_after`` /
+    ``classification_changed`` / ``classification_upgraded``）。仅 session 提供时做；
+    分类失败 fail-open（该候选无预览键）。纯搬移，不改行为。
+    """
     # 补齐计划 2-7: 替换后分类预览 —— 对排序后前 N 个库内候选，用替换后配方重算
     # GHS 分类并与替换前对比。仅 session 提供时做（build_and_classify 需要 session）；
     # 分类失败 fail-open（该候选无预览键）。外部/文献候选不在库内配方中，不做预览。
@@ -600,10 +604,23 @@ def find_substitutes(
         except Exception as exc:
             logger.debug("substitution classification preview skipped ({})", exc)
 
+
+def _external_layer(
+    original: str,
+    original_spec: dict,
+    role: str,
+    *,
+    include_external: bool,
+    external_limit: int,
+    similarity_threshold: int,
+) -> tuple[dict, list[dict], dict]:
+    """P3-2: L3 外部层 —— PubChem 结构相似物（``include_external``）。返回
+    ``(identity, external, external_meta)``；``layers_used`` 由 orchestrator 记。
+    纯搬移，不改行为。
+    """
     identity: dict
     external: list[dict] = []
     external_meta: dict
-    layers_used: list[str] = ["catalog"]
 
     if include_external:
         from .external_alternatives import fetch_external_alternatives
@@ -618,8 +635,6 @@ def find_substitutes(
         identity = ext["identity"]
         external = list(ext.get("external") or [])
         external_meta = dict(ext.get("external_meta") or {})
-        if external_meta.get("queried") and external:
-            layers_used.append("external")
     else:
         from .external_alternatives import resolve_slot_identity
 
@@ -632,6 +647,22 @@ def find_substitutes(
             "provider": "pubchem_fastsimilarity_2d",
         }
 
+    return identity, external, external_meta
+
+
+def _literature_layer(
+    original: str,
+    original_spec: dict,
+    role: str,
+    identity: dict,
+    *,
+    include_literature: bool,
+    literature_limit: int,
+) -> tuple[list[dict], dict]:
+    """P3-2: L2 文献层 —— 文献 / KG / kb_products 候选（``include_literature``）。
+    失败降级为 queried=False 的 meta，不抛错。返回 ``(literature, literature_meta)``；
+    ``layers_used`` 由 orchestrator 记。纯搬移，不改行为。
+    """
     literature: list[dict] = []
     literature_meta: dict
     if include_literature:
@@ -646,8 +677,6 @@ def find_substitutes(
             )
             literature = list(lit.get("literature") or [])
             literature_meta = dict(lit.get("literature_meta") or {})
-            if literature:
-                layers_used.append("literature")
         except Exception as exc:
             logger.warning("literature substitutes degraded ({})", exc)
             literature = []
@@ -667,6 +696,25 @@ def find_substitutes(
             "providers": [],
         }
 
+    return literature, literature_meta
+
+
+def _surechembl_layer(
+    original: str,
+    original_spec: dict,
+    role: str,
+    external: list[dict],
+    identity: dict,
+    *,
+    include_surechembl: bool,
+    surechembl_limit: int,
+    similarity_threshold: int,
+) -> tuple[list[dict], dict]:
+    """P3-2: SureChEMBL 层 —— 结构相似物 + 专利文档（``include_surechembl``），并按
+    SMILES / InChI key 与 PubChem 层轻去重。失败降级，不抛错。返回
+    ``(surechembl_rows, surechembl_meta)``；``layers_used`` 由 orchestrator 记。
+    纯搬移，不改行为。
+    """
     surechembl_rows: list[dict] = []
     surechembl_meta: dict
     if include_surechembl:
@@ -701,8 +749,6 @@ def find_substitutes(
                     and (str(r.get("inchi_key") or "").strip() not in ext_keys)
                 ]
                 surechembl_meta["count"] = len(surechembl_rows)
-            if surechembl_rows:
-                layers_used.append("surechembl")
         except Exception as exc:
             logger.warning("surechembl substitutes degraded ({})", exc)
             surechembl_rows = []
@@ -724,6 +770,25 @@ def find_substitutes(
             "search_hash": None,
         }
 
+    return surechembl_rows, surechembl_meta
+
+
+def _llm_layer(
+    original: str,
+    role: str,
+    candidates: list[dict],
+    literature: list[dict],
+    external: list[dict],
+    surechembl_rows: list[dict],
+    *,
+    include_llm: bool | None,
+    llm_limit: int,
+    limit: int,
+) -> tuple[list[dict], dict]:
+    """P3-2: L4 LLM 层 —— 库内命中 < 3 时自动跑，``include_llm`` 显式 true/false
+    覆盖。已知名（库内前 limit + 各层行名）用于去重提示。失败降级，不抛错。
+    返回 ``(llm_rows, llm_meta)``；``layers_used`` 由 orchestrator 记。纯搬移，不改行为。
+    """
     # L4: auto when catalog hits are scarce; explicit true/false overrides.
     catalog_hits = len(candidates[:limit])
     if include_llm is True:
@@ -753,8 +818,6 @@ def find_substitutes(
             llm_rows = list(out.get("llm") or [])
             llm_meta = dict(out.get("llm_meta") or {})
             llm_meta["mode"] = llm_mode
-            if llm_rows:
-                layers_used.append("llm")
         except Exception as exc:
             logger.warning("llm substitutes degraded ({})", exc)
             llm_rows = []
@@ -780,6 +843,97 @@ def find_substitutes(
             "mode": llm_mode,
             "providers": [],
         }
+
+    return llm_rows, llm_meta
+
+
+def find_substitutes(
+    genome: FormulationGenome,
+    slot_index: int,
+    req: Requirement | None = None,
+    *,
+    limit: int = 10,
+    include_unavailable: bool = False,
+    include_external: bool = True,
+    external_limit: int = 8,
+    similarity_threshold: int = 85,
+    include_literature: bool = True,
+    literature_limit: int = 8,
+    include_surechembl: bool = True,
+    surechembl_limit: int = 8,
+    include_llm: bool | None = None,
+    llm_limit: int = 5,
+    session: Session | None = None,
+    classification_preview_limit: int = 5,
+) -> dict:
+    """Rank replacements for one slot, each with its predicted property delta.
+
+    Layers (four-layer funnel + SureChEMBL patents):
+    - L1 catalog candidates with formula Δ (always)
+    - L2 literature/KG/kb_products advisory list (``include_literature``)
+    - L3 PubChem structure similars (``include_external``)
+    - SureChEMBL structure similars + patent docs (``include_surechembl``)
+    - L4 rules/LLM when L1 < 3 or ``include_llm`` forced (``include_llm``)
+
+    补齐计划 2-7: ``classification_preview_limit`` > 0 且传入 session 时，对排序后
+    前 N 个库内候选做替换后配方 GHS 重分类预览（``classification_before`` /
+    ``classification_after`` / ``classification_changed`` / ``classification_upgraded``）。
+    分类失败 fail-open（不附加预览键，候选照常返回）。
+
+    P2-2 (review 2026-11-26): 筛查契约 —— 只有 ``candidates``（库内 L1）
+    是已筛查候选（``screened: true``，带 ``feasible`` / ``blocking_reasons``，
+    有 session 时另带红线与 GHS 重分类预览）；``external`` / ``literature`` /
+    ``surechembl`` / ``llm`` 四层一律 ``screened: false`` / ``advisory: true``，
+    不带 ``feasible``，仅对有 CAS 的行附加 ``light_screen``（纯物质口径的
+    RoHS/SVHC 存在性检查，见 ``_light_screen_rows``），不作 GHS 预览。
+    调用方不得把外部行与已筛查候选等同采纳。
+    """
+    if not 0 <= slot_index < len(genome.slots):
+        raise IndexError(f"slot index {slot_index} out of range")
+
+    ctx, candidates, scored_forms, base_form, base_metrics = _catalog_layer(
+        genome, slot_index, req, session=session, include_unavailable=include_unavailable
+    )
+    original = ctx["original"]
+    original_spec = ctx["original_spec"]
+    original_in_catalog = ctx["original_in_catalog"]
+    group = ctx["group"]
+    role = ctx["role"]
+    pool = ctx["pool"]
+
+    _classification_preview(session, candidates, scored_forms, base_form, classification_preview_limit)
+
+    layers_used: list[str] = ["catalog"]
+
+    identity, external, external_meta = _external_layer(
+        original, original_spec, role,
+        include_external=include_external, external_limit=external_limit,
+        similarity_threshold=similarity_threshold,
+    )
+    if external_meta.get("queried") and external:
+        layers_used.append("external")
+
+    literature, literature_meta = _literature_layer(
+        original, original_spec, role, identity,
+        include_literature=include_literature, literature_limit=literature_limit,
+    )
+    if literature:
+        layers_used.append("literature")
+
+    surechembl_rows, surechembl_meta = _surechembl_layer(
+        original, original_spec, role, external, identity,
+        include_surechembl=include_surechembl, surechembl_limit=surechembl_limit,
+        similarity_threshold=similarity_threshold,
+    )
+    if surechembl_rows:
+        layers_used.append("surechembl")
+
+    llm_rows, llm_meta = _llm_layer(
+        original, role, candidates, literature, external, surechembl_rows,
+        include_llm=include_llm, llm_limit=llm_limit, limit=limit,
+    )
+    if llm_rows:
+        layers_used.append("llm")
 
     # P2-2: every non-catalog layer is advisory-only — stamp the
     # screened/advisory markers and run the CAS light screen (RoHS/SVHC
@@ -821,19 +975,56 @@ _SIGNAL_SEVERITY = {"危险": 2, "警告": 1, None: 0, "": 0}
 
 
 def _classification_summary(result: object) -> dict:
-    """Minimal classification fingerprint for before/after comparison."""
-    return {
+    """Minimal classification fingerprint for before/after comparison.
+
+    P3-1: ``categories``（H 代码 → 危害类别，如 ``{"H314": "1A"}``）只在结果携带
+    hazard outcomes（``result.hazards``，见 ``plm.ghs.model.HazardOutcome``）时出现；
+    同 H 代码的子类别变化靠它比较。无该数据的结果（旧基线、裸摘要）仍保持原有三键
+    形态，比较退回信号词 + H 代码口径。同一 H 代码若分属多类，取最严类别。
+    """
+    summary = {
         "signal_word": getattr(result, "signal_word", None),
         "h_codes": sorted(getattr(result, "h_codes", None) or []),
         "pictograms": sorted(p.get("code") for p in (getattr(result, "pictograms", None) or []) if p.get("code")),
     }
+    categories: dict[str, str] = {}
+    for outcome in getattr(result, "hazards", None) or []:
+        category = getattr(outcome, "category", None)
+        if not category:
+            continue
+        for h in getattr(outcome, "h_codes", None) or []:
+            prev = categories.get(h)
+            if prev is None or _category_severity(str(category)) < _category_severity(str(prev)):
+                categories[h] = str(category)
+    if categories:
+        summary["categories"] = categories
+    return summary
+
+
+def _category_changes(before: dict, after: dict) -> list[dict]:
+    """P3-1: 同 H 代码的子类别变化（前后摘要都带 ``categories`` 时才可比）。
+
+    任一侧缺失 ``categories`` 即返回 []（旧基线 fail-open，退回信号词 + H 代码口径）。
+    每项 ``{"h_code", "category_before", "category_after"}``；方向（变严 / 变松）由
+    调用方按 ``label_elements.severity`` 序判定（序值越小越严）。
+    """
+    cats_before = (before or {}).get("categories") or {}
+    cats_after = (after or {}).get("categories") or {}
+    out: list[dict] = []
+    for h in sorted(set(cats_before) & set(cats_after)):
+        cb, ca = str(cats_before[h]), str(cats_after[h])
+        if cb != ca:
+            out.append({"h_code": h, "category_before": cb, "category_after": ca})
+    return out
 
 
 def compare_classifications(before: dict, after: dict) -> dict:
     """Compare two classification summaries (2-6 classification_upgrade / 2-7 preview 共用).
 
-    upgraded = 信号词升级，或出现新增危害类别（H 代码）。changed = 任何差异
-    （含危害减少 / 信号词降级 —— 降级也是变化，但不是升级）。
+    upgraded = 信号词升级，或出现新增危害类别（H 代码），或同 H 代码子类别变严
+    （按 ``label_elements.severity`` 序，序值越小越严，如 1C→1A、2B→2A），或象形图
+    新增。changed = 任何差异（含危害减少 / 信号词降级 / 子类别变松 —— 变松也是
+    变化，但不是升级）。返回键保持 2-6 原状。
     """
     before = before or {}
     after = after or {}
@@ -843,8 +1034,20 @@ def compare_classifications(before: dict, after: dict) -> dict:
     h_after = set(after.get("h_codes") or [])
     added = sorted(h_after - h_before)
     removed = sorted(h_before - h_after)
-    upgraded = sig_after > sig_before or bool(added)
-    changed = upgraded or bool(removed) or sig_before != sig_after
+    cat_changes = _category_changes(before, after)
+    cat_upgraded = any(
+        _category_severity(c["category_after"]) < _category_severity(c["category_before"])
+        for c in cat_changes
+    )
+    pic_before = set(before.get("pictograms") or [])
+    pic_after = set(after.get("pictograms") or [])
+    added_pictos = sorted(pic_after - pic_before)
+    removed_pictos = sorted(pic_before - pic_after)
+    upgraded = sig_after > sig_before or bool(added) or cat_upgraded or bool(added_pictos)
+    changed = (
+        upgraded or bool(removed) or sig_before != sig_after
+        or bool(cat_changes) or bool(added_pictos) or bool(removed_pictos)
+    )
     return {
         "changed": changed,
         "upgraded": upgraded,
@@ -976,16 +1179,33 @@ def scan_substitution_triggers(
                 from .project_redlines import formulation_to_items
 
                 current, _ = build_and_classify(session, formulation_to_items(form))
-                cmp = compare_classifications(baseline, _classification_summary(current))
+                current_summary = _classification_summary(current)
+                cmp = compare_classifications(baseline, current_summary)
                 if cmp["upgraded"]:
+                    # P3-1: 子类别变严 / 象形图新增同样触发时，detail 须说清升级原因，
+                    # 否则触发只写信号词会让人误以为分类没变。
+                    cat_detail = "; ".join(
+                        f"{c['h_code']} 类别 {c['category_before']}→{c['category_after']}"
+                        for c in _category_changes(baseline, current_summary)
+                    )
+                    added_pictos = sorted(
+                        set(current_summary.get("pictograms") or [])
+                        - set(baseline.get("pictograms") or [])
+                    )
+                    before_summary = {"signal_word": baseline.get("signal_word"),
+                                      "h_codes": sorted(baseline.get("h_codes") or []),
+                                      "pictograms": sorted(baseline.get("pictograms") or [])}
+                    if baseline.get("categories"):
+                        before_summary["categories"] = dict(baseline.get("categories") or {})
                     triggers.append({
                         "type": "classification_upgrade", "formulation": label,
-                        "classification_before": {"signal_word": baseline.get("signal_word"),
-                                                  "h_codes": sorted(baseline.get("h_codes") or [])},
-                        "classification_after": _classification_summary(current),
+                        "classification_before": before_summary,
+                        "classification_after": current_summary,
                         "added_h_codes": cmp["added_h_codes"],
                         "detail": f"分类升级：信号词 {baseline.get('signal_word')} → {current.signal_word}"
-                                  + (f"，新增危害 {', '.join(cmp['added_h_codes'])}" if cmp["added_h_codes"] else ""),
+                                  + (f"，新增危害 {', '.join(cmp['added_h_codes'])}" if cmp["added_h_codes"] else "")
+                                  + (f"，子类别变严 {cat_detail}" if cat_detail else "")
+                                  + (f"，新增象形图 {', '.join(added_pictos)}" if added_pictos else ""),
                     })
             except Exception as exc:
                 logger.debug("substitution triggers: {} classification check failed ({})", label, exc)

@@ -77,7 +77,7 @@ export default function CompaniesPage() {
   return (
     <PageContainer>
       <ProTable<Company> rowKey="id" search={false} columns={columns} dataSource={companies.data} loading={companies.isLoading}
-        toolBarRender={() => [<Button key="import" onClick={() => setImportOpen(true)}>{t("plm.excel_import", "Excel 导入")}</Button>,
+        toolBarRender={() => [<Button key="import" disabled={!can("plm.document.write")} title={t("common.need_document_write", "需要权限：编制 SDS / TDS / 标签")} onClick={() => setImportOpen(true)}>{t("plm.excel_import", "Excel 导入")}</Button>,
           <Button key="new" type="primary" onClick={() => { form.resetFields(); setCreating(true); }}>{t("admin.new_company", "新建公司")}</Button>]}
         options={{ reload: () => void companies.refetch() }} />
       <ExcelImportModal open={importOpen} onClose={() => setImportOpen(false)} kind="companies" />

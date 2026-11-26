@@ -81,7 +81,7 @@ def load_prior_measurements(requirement: Requirement) -> list[ExperimentRecord]:
         from .training import registry
 
         records = registry.records_for(
-            requirement.domain, project_id=requirement.project_id or ""
+            requirement.domain, project_id=requirement.project_id or "", measured_only=True
         )
         logger.info("Loaded %d prior measurements for DOE cycle", len(records))
         return list(records)
@@ -302,7 +302,9 @@ def persist_experiments(
                 domain=requirement.domain.value,
                 doe_task_id=task_id,
                 workbench_campaign_id=workbench_campaign_id,
-                project_id=(requirement.project_id or ""),
+                # D6-9 (P3-D1 同款，换表）: 无项目 cycle 的实验行 project_id
+                # 写 NULL 而非 ""，否则在项目视图与"未归属"清单中双向查不到。
+                project_id=(requirement.project_id or None),
                 factors=base_factors,
                 cure_temperature_c=None,
                 measured={},

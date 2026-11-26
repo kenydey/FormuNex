@@ -105,7 +105,11 @@ def test_sharded_parse_merges_with_global_pages(monkeypatch, _tables):
     assert result.table_stats["pages"] == 12
     assert result.table_stats["parsed_pages"] == 12
     assert result.table_stats["failed_shards"] == []
-    assert calls == [10, 2]
+    # P3-1 (review 2026-11-26, wave 3): `calls` records tier invocations
+    # from pool threads, so its order is execution order, not shard
+    # order — compare as a sorted list. Merge order is pinned by the
+    # markers above, not by this list.
+    assert sorted(calls) == [2, 10]
 
 
 def test_small_doc_does_not_shard(monkeypatch):

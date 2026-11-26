@@ -494,6 +494,17 @@ def rerank_candidates(
     function still uses the in-memory store so a per-query rerank stays
     side-effect-free. Returns ``(reordered, meta)`` with ``meta["applied"]``
     False (and the input order) on any failure — never raises.
+
+    Naming (QA-16): "ColBERT" in this function name / the
+    ``pageindex_colbert_rerank`` switch is a historical name, not the
+    algorithm actually run. This function reranks via
+    ``rag.build_store()``: CPU 下为 BM25+FAISS 重打分；GPU 下
+    ``build_store()`` has no colbert/pylate branch and 回落 TF-IDF
+    (falls back to TF-IDF) — true ColBERT late-interaction never runs
+    (it only runs when ``colbert_store.search()`` is called directly).
+    ``meta["backend"]`` records the declared backend name from
+    :func:`active_backend` (``bm25_faiss`` / ``pylate`` / ``colbert``);
+    callers must not infer the algorithm from the name.
     """
     meta: dict = {"applied": False, "backend": active_backend(settings), "reason": ""}
     if not candidates:

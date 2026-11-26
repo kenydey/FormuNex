@@ -136,7 +136,7 @@ def test_cycle_runs_endpoint_shape(mem_session_factory, monkeypatch):
     monkeypatch.setattr(
         "app.db.database.default_session_factory", lambda: mem_session_factory
     )
-    stub_registry = SimpleNamespace(records_for=lambda d, project_id="": ["m"] * 7)
+    stub_registry = SimpleNamespace(records_for=lambda d, project_id="", measured_only=False: ["m"] * 7)
     monkeypatch.setattr("app.services.training.registry", stub_registry)
 
     resp = doe_api.doe_cycle_runs(project_id="proj-1", limit=20)
@@ -165,7 +165,7 @@ def test_cycle_runs_empty_project_returns_zeros(mem_session_factory, monkeypatch
     monkeypatch.setattr(
         "app.db.database.default_session_factory", lambda: mem_session_factory
     )
-    stub_registry = SimpleNamespace(records_for=lambda d, project_id="": [])
+    stub_registry = SimpleNamespace(records_for=lambda d, project_id="", measured_only=False: [])
     monkeypatch.setattr("app.services.training.registry", stub_registry)
 
     resp = doe_api.doe_cycle_runs(project_id="no-such", limit=20)
@@ -213,7 +213,7 @@ def test_cycle_runs_objective_tracking_fields(mem_session_factory, monkeypatch):
     monkeypatch.setattr(
         "app.db.database.default_session_factory", lambda: mem_session_factory
     )
-    stub_registry = SimpleNamespace(records_for=lambda d, project_id="": [])
+    stub_registry = SimpleNamespace(records_for=lambda d, project_id="", measured_only=False: [])
     monkeypatch.setattr("app.services.training.registry", stub_registry)
 
     resp = doe_api.doe_cycle_runs(project_id="proj-obj", limit=20)

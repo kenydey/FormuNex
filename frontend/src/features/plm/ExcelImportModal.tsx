@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { call, download } from "@/api/client";
+import { useSession } from "@/app/session";
 import { errorText } from "@/shared/feedback";
 
 interface ImportReport {
@@ -20,6 +21,7 @@ export default function ExcelImportModal({ open, onClose, kind }: {
 }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  const { can } = useSession();
   const qc = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [dryRun, setDryRun] = useState(true);
@@ -59,7 +61,11 @@ export default function ExcelImportModal({ open, onClose, kind }: {
         <Button type="link" onClick={() => void download(`/api/plm/import/templates/${kind}`, `${kind}_template.xlsx`)}>下载{label}模板</Button>
         <Checkbox checked={dryRun} onChange={(e) => setDryRun(e.target.checked)}>仅预览（不写入）</Checkbox>
         <Button onClick={() => { onClose(); setReport(null); setFile(null); }}>关闭</Button>
-        <Button type="primary" loading={busy} disabled={!file} onClick={() => void submit()}>{dryRun ? "预览" : "确认导入"}</Button>
+        {/* X-P3-2: the import POST requires plm.document.write on the
+            backend, but the page gate here is admin.companies — a
+            sys_admin holds admin.companies without plm.document.write,
+            so the submit itself must be disabled, not just the opener. */}
+        <Button type="primary" loading={busy} disabled={!file || !can("plm.document.write")} onClick={() => void submit()}>{dryRun ? "预览" : "确认导入"}</Button>
       </Space>}>
       <Upload accept=".xlsx" maxCount={1} beforeUpload={(f) => { setFile(f); return false; }}
         onRemove={() => setFile(null)}>

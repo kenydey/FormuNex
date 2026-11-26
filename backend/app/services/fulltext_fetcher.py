@@ -1053,11 +1053,13 @@ def enrich_search_results(
     through unchanged.  Strict no-op when ``fulltext_enrich`` is disabled
     (unless ``force=True``, used by Wave D literature OA enrich).
 
-    ``project_id`` scopes the per-project PDF quota: once a project has
-    ``kb_project_pdf_quota`` documents acquired via the download+parse path, the
-    PDF tiers are dropped for the rest of the run (see ``_fetch_literature_text``)
-    so the memory-bound path stays bounded. ``None`` = no project context, which
-    also means no quota (matching the legacy behaviour for ad-hoc ingest).
+    ``project_id`` scopes the per-project PDF quota (``kb_project_pdf_quota``):
+    the quota is monitor-only (v2 decision ②) — once a project has acquired
+    that many documents via the download+parse path, a warning is logged and
+    enrichment continues unchanged; the PDF tiers are NOT dropped, and
+    ``_fetch_literature_text`` performs no quota check. ``None`` = no project
+    context, which also means no quota lookup (matching the legacy behaviour
+    for ad-hoc ingest).
     """
     settings = get_settings()
     report = FulltextReport()

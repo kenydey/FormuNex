@@ -224,22 +224,36 @@ def test_p1_b8_scanned_density_gate():
 
 
 def _scan_env(monkeypatch, *, votes, tesseract_text, rapid_text, n_pages):
+    """Mock the scan at the per-page seam (B4, wave 3): the body OCR now
+    runs inside hybrid_parse, so ocr_pdf is no longer called — the mocks
+    live at ocr_png_scored / ocr_png / page_as_png instead. `votes` are
+    the RapidOCR texts returned for the first min(3, n_pages) calls (the
+    language vote); `tesseract_text` is the per-page Tesseract body
+    text; `rapid_text` is the per-page RapidOCR body text for pages the
+    vote did not already OCR."""
     from app.services import rapidocr_local, tesseract_local
 
     monkeypatch.setattr(tesseract_local, "tesseract_available", lambda: True)
     monkeypatch.setattr(pdf_local, "page_count", lambda content: n_pages)
     monkeypatch.setattr(pdf_local, "page_as_png", lambda *a, **k: b"png")
     vote_iter = iter(votes)
+    n_vote_calls = min(3, n_pages)
+    calls = {"n": 0}
 
     def _scored(png):
-        try:
-            return next(vote_iter), 0.9
-        except StopIteration:
-            return "", 0.0
+        calls["n"] += 1
+        if calls["n"] <= n_vote_calls:
+            try:
+                return next(vote_iter), 0.9
+            except StopIteration:
+                return "", 0.0
+        return rapid_text, 0.9
 
     monkeypatch.setattr(rapidocr_local, "ocr_png_scored", _scored)
-    monkeypatch.setattr(tesseract_local, "ocr_pdf", lambda *a, **k: tesseract_text)
-    monkeypatch.setattr(rapidocr_local, "ocr_pdf", lambda *a, **k: rapid_text)
+    monkeypatch.setattr(rapidocr_local, "rapidocr_available", lambda: (True, ""))
+    monkeypatch.setattr(
+        tesseract_local, "ocr_png", lambda png, lang="eng": tesseract_text
+    )
     monkeypatch.setattr(hybrid_parse, "_scanned_vision_fallback", lambda c: None)
     monkeypatch.setattr(pdf_local, "ocr_markdown", lambda *a, **k: None)
 
@@ -252,7 +266,9 @@ def test_p2_b11_single_english_vote_falls_back_to_rapidocr(monkeypatch):
         rapid_text="rapid output " * 50,
         n_pages=3,
     )
-    assert hybrid_parse._scanned_without_cloud(b"%PDF") == "rapid output " * 50
+    out = hybrid_parse._scanned_without_cloud(b"%PDF")
+    assert out is not None
+    assert "rapid output" in out and "eng output" not in out
 
 
 def test_p1_b8_sparse_tesseract_output_falls_back_to_rapidocr(monkeypatch):
@@ -263,7 +279,9 @@ def test_p1_b8_sparse_tesseract_output_falls_back_to_rapidocr(monkeypatch):
         rapid_text="rapid output " * 50,
         n_pages=3,
     )
-    assert hybrid_parse._scanned_without_cloud(b"%PDF") == "rapid output " * 50
+    out = hybrid_parse._scanned_without_cloud(b"%PDF")
+    assert out is not None
+    assert "rapid output" in out and "ab" not in out
 
 
 def test_p1_b8_sparse_rapidocr_output_is_not_shipped(monkeypatch):

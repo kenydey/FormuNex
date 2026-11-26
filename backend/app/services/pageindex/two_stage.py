@@ -384,6 +384,13 @@ def _schedule_summaries_if_eligible(source_id: str) -> None:
 def _colbert_rerank_stage1(query: str, stage1: list[Any]) -> tuple[list[Any], bool]:
     """Plan §5.1.1 stage 1 = hybrid_search + ColBERT rerank (existing colbert_store stack).
 
+    QA-16: "ColBERT" here is a historical name. This path reranks via
+    ``rag.build_store()``: CPU 下为 BM25+FAISS 重打分，GPU 下
+    ``build_store()`` 回落 TF-IDF，本路径不跑真 ColBERT（真 ColBERT
+    只在 ``colbert_store.search()`` 直接调用时走）。The backend
+    actually run is logged below from ``meta["backend"]`` (declared
+    name); do not infer the algorithm from this function / switch name.
+
     Fail-open: rerank off / empty / failure → original order, applied=False.
     """
     settings = get_settings()
@@ -402,6 +409,14 @@ def _colbert_rerank_stage1(query: str, stage1: list[Any]) -> tuple[list[Any], bo
             for c in stage1
         ]
         reordered, meta = rerank_candidates(query, candidates)
+        # QA-16: 调用方日志打印声明后端（CPU 下 bm25_faiss，GPU 下
+        # colbert/pylate——声明名；本路径经 build_store() 取店，GPU 下
+        # 实际为 TF-IDF，不从函数名/开关名推断重排算法）。
+        log.info(
+            "pageindex: stage-1 rerank backend=%s applied=%s",
+            meta.get("backend"),
+            meta.get("applied"),
+        )
         if not meta.get("applied"):
             return stage1, False
         order = [e.identifier for e in reordered]
